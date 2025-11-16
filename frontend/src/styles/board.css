@@ -45,6 +45,7 @@
 }
 
 .iot-board .edge-layer .edge-line {
+    fill: none;                           /* 关键：自环 path 不要填充，否则就会出现“黑洞” */
     stroke: var(--iot-color-edge);
     stroke-width: 2;
     stroke-linecap: round;
@@ -153,6 +154,7 @@
     flex-direction: column;
     overflow: hidden;
     font-size: var(--iot-font-base);
+    max-height: calc(100vh - 4rem);  /* 4rem≈上下各 2rem 的空隙 */
 }
 
 
@@ -202,6 +204,9 @@
 
 .iot-board .card-body {
     padding: var(--iot-space-md) var(--iot-space-md) var(--iot-space-lg);
+    flex: 1 1 auto;     /* 占据剩余空间 */
+    min-height: 0;      /* 与 flex 配合防止撑开 */
+    overflow-y: auto;   /* 内容超出时出现内部滚动条 */
 }
 
 /* 折叠面板统一样式 */

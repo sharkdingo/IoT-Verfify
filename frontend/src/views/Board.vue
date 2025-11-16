@@ -27,8 +27,8 @@ import type {
   PanelPositions
 } from '../types/board'
 
-import { getDeviceIconPath, getEndStateByApi } from '../utils/device'
-import { getLinkPoints } from '../utils/geometry'
+import { getDeviceIconPath, getNodeIcon } from '../utils/device'
+import { getLinkPoints, getSelfLoopPath } from '../utils/geometry'
 import {
   getUniqueLabel,
   updateEdgesForNode as updateEdgesByGeometry
@@ -241,13 +241,6 @@ const getTemplateInitIcon = (tpl: DeviceTemplate) => {
   return getDeviceIconPath(folder, initState)
 }
 
-/** 根据节点当前状态获取画布图标路径 */
-const getNodeIcon = (node: DeviceNode) => {
-  const folder = node.templateName
-  const state = node.state || 'Working'
-  return getDeviceIconPath(folder, state)
-}
-
 /**
  * 根据节点宽度缩放文字大小，防止缩放过大/过小导致标签溢出或过小
  */
@@ -332,6 +325,15 @@ const onNodePointerUp = () => {
   window.removeEventListener('pointermove', onNodePointerMove)
   window.removeEventListener('pointerup', onNodePointerUp)
 }
+
+// ========= 边 / 自环几何 =========
+
+const getSelfLoopD = (edge: DeviceEdge) => {
+  const node = nodes.value.find(n => n.id === edge.from)
+  if (!node) return ''
+  return getSelfLoopPath(node)
+}
+
 
 /* ----- 节点缩放（四角手柄） ----- */
 
@@ -488,17 +490,7 @@ const handleAddRule = (payload: RuleForm) => {
 
   const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
 
-  // 根据目标 API 更新目标节点的状态（例如 Turn_On -> Working）
-  const toEndState = getEndStateByApi(
-      deviceTemplates.value,
-      toNode.templateName,
-      toApi
-  )
-  if (toEndState) {
-    toNode.state = toEndState
-    saveNodes(nodes.value)
-  }
-
+  // 现在：不再根据 API 自动更新目标节点状态，只记录一条规则边
   edges.value.push({
     id: 'edge_' + Date.now(),
     from: fromNode.id,
@@ -507,7 +499,6 @@ const handleAddRule = (payload: RuleForm) => {
     toLabel: toNode.label,
     fromApi,
     toApi,
-    toState: toEndState,
     fromPos: fromPoint,
     toPos: toPoint
   })
@@ -774,23 +765,31 @@ onBeforeUnmount(() => {
                 refY="3"
                 orient="auto"
             >
-              <!-- 加 class，去掉 fill -->
-              <path class="edge-arrow" d="M0,0 L0,6 L9,3 z" />
+              <!-- 箭头颜色也改成跟变量一致 -->
+              <path d="M0,0 L0,6 L9,3 z" :fill="`var(--iot-color-edge)`"></path>
             </marker>
           </defs>
 
-          <line
-              v-for="edge in edges"
-              :key="edge.id"
-              class="edge-line"
-          :x1="edge.fromPos.x"
-          :y1="edge.fromPos.y"
-          :x2="edge.toPos.x"
-          :y2="edge.toPos.y"
-          marker-end="url(#arrow)"
-          />
+          <g v-for="edge in edges" :key="edge.id">
+            <!-- 自环：from === to，用 path -->
+            <path
+                v-if="edge.from === edge.to"
+                class="edge-line"
+                :d="getSelfLoopD(edge)"
+                marker-end="url(#arrow)"
+            />
+            <!-- 普通边：仍然用 line -->
+            <line
+                v-else
+                class="edge-line"
+                :x1="edge.fromPos.x"
+                :y1="edge.fromPos.y"
+                :x2="edge.toPos.x"
+                :y2="edge.toPos.y"
+                marker-end="url(#arrow)"
+            />
+          </g>
         </svg>
-
 
         <!-- 设备节点 -->
         <div

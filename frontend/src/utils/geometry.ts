@@ -1,17 +1,17 @@
 // src/utils/geometry.ts
-import type { DeviceNode } from '../types/board'
+import type {DeviceNode} from '../types/board'
 
 export const getNodeCenter = (node: DeviceNode) => {
     const w = node.width ?? 110
     const h = node.height ?? 90
     return {
         x: node.position.x + w / 2,
-        y: node.position.y + h / 2
+        y: node.position.y + h / 2,
     }
 }
 
 /**
- * 给两个节点，返回连线应该从哪个点出、在哪个点停（都在节点外框上）
+ * 普通两节点连线的端点（保持你原来的实现）
  */
 export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     const fromCenter = getNodeCenter(fromNode)
@@ -57,7 +57,7 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     }
     const fromPoint = {
         x: fromCenter.x + dx * tFrom,
-        y: fromCenter.y + dy * tFrom
+        y: fromCenter.y + dy * tFrom,
     }
 
     // 2) to (反向)
@@ -84,8 +84,39 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     }
     const toPoint = {
         x: toCenter.x + bdx * tTo,
-        y: toCenter.y + bdy * tTo
+        y: toCenter.y + bdy * tTo,
     }
 
     return { fromPoint, toPoint }
+}
+
+/**
+ * 自环连线（from === to）：
+ * 在节点右侧画一条“半椭圆”样式的 path，用于配合 marker 画出自指箭头。
+ * 会根据节点当前 width / height 自动缩放。
+ */
+export const getSelfLoopPath = (node: DeviceNode): string => {
+    const w = node.width ?? 110
+    const h = node.height ?? 90
+
+    const right = node.position.x + w // 右边界
+    const top = node.position.y
+
+    // 自环在右侧，大致占据节点高度的中间一段
+    const startY = top + h * 0.25        // 起点：右侧偏上
+    const endY   = top + h * 0.75        // 终点：右侧偏下（箭头指回节点）
+    const offsetX = Math.min(w, h) * 0.8 // 向右伸出去的弧度，跟节点大小一起缩放
+    const ctrlOffsetY = h * 0.2          // 控制点上下“拱”的高度
+
+    const startX = right                 // 起点就在节点右边界
+    const endX   = right                 // 终点也在右边界，方便箭头指回节点
+
+    const c1x = right + offsetX
+    const c1y = startY - ctrlOffsetY
+
+    const c2x = right + offsetX
+    const c2y = endY + ctrlOffsetY
+
+    // 标准三次贝塞尔曲线：M 起点 C 控制点1 控制点2 终点
+    return `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`
 }

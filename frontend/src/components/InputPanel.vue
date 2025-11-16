@@ -189,7 +189,7 @@ const onAddSpec = () => {
 </script>
 
 <template>
-  <el-collapse v-model="collapseActive" class="panel-collapse">
+  <el-collapse v-model="collapseActive" class="panel-collapse" expand-icon-position="left">
     <!-- 设备列表 -->
     <el-collapse-item name="devices">
       <template #title>

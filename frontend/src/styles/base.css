@@ -9,8 +9,8 @@
     --iot-color-grid: rgba(148, 163, 184, 0.10);
 
     /* 浮动卡片 */
-    --iot-color-card-bg: rgba(15, 23, 42, 0.94);
-    --iot-color-card-bg-strong: rgba(15, 23, 42, 0.9);
+    --iot-color-card-bg: rgba(15, 23, 42, 0.3);
+    --iot-color-card-bg-strong: rgba(15, 23, 42, 0.7);
     --iot-color-card-border: rgba(56, 189, 248, 0.75);
     --iot-color-card-shadow: 0 1.6rem 3.2rem rgba(15, 23, 42, 0.9);
     --iot-color-card-header-glow: rgba(56, 189, 248, 0.18);
@@ -130,8 +130,8 @@
     --iot-color-grid: rgba(148, 163, 184, 0.20);
 
     /* 浮动卡片 */
-    --iot-color-card-bg: rgba(255, 255, 255, 0.82);
-    --iot-color-card-bg-strong: rgba(255, 255, 255, 0.96);
+    --iot-color-card-bg: rgba(255, 255, 255, 0.30);
+    --iot-color-card-bg-strong: rgba(255, 255, 255, 0.70);
     --iot-color-card-border: rgba(148, 163, 184, 0.55);
     --iot-color-card-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
     --iot-color-card-header-glow: rgba(129, 140, 248, 0.24);

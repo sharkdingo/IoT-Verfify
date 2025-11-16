@@ -26,7 +26,7 @@ const collapseActive = computed({
 </script>
 
 <template>
-  <el-collapse v-model="collapseActive" class="panel-collapse">
+  <el-collapse v-model="collapseActive" class="panel-collapse" expand-icon-position="left">
     <!-- 当前设备 -->
     <el-collapse-item name="devices">
       <template #title>

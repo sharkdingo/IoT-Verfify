@@ -26,7 +26,6 @@ export interface DeviceEdge {
     toLabel: string
     fromApi: string
     toApi: string
-    toState: string | null
     fromPos: { x: number; y: number }
     toPos: { x: number; y: number }
 }

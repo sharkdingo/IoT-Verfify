@@ -1,9 +1,16 @@
 // src/utils/device.ts
 import type { DeviceTemplate } from '../types/device'
+import {DeviceNode} from "../types/board.ts";
 
 /** 拼出 /src/assets/{folder}/{state}.png 的路径 */
 export const getDeviceIconPath = (folder: string, state: string) => {
     return new URL(`../assets/${folder}/${state}.png`, import.meta.url).href
+}
+
+export const getNodeIcon = (node: DeviceNode) => {
+    const folder = node.templateName
+    const state = node.state || 'Working'
+    return getDeviceIconPath(folder, state)
 }
 
 /** 给定模板数组和设备模板名，查出某个 API 的 EndState */
