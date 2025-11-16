@@ -1,0 +1,71 @@
+# 通用忽略
+.DS_Store
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.~lock.*
+
+# IDE 相关
+.idea/
+.vscode/
+*.iml
+
+# Node.js 依赖
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.vite/
+
+# 前端构建产物
+dist/
+out/
+.cache/
+.temp/
+.env.local
+.env.*.local
+
+# 后端 Java 项目
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+
+# 依赖目录
+jspm_packages/
+
+# Maven 相关
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# 环境文件
+.env
+
+# Vite 相关
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Docker
+docker-compose.override.yml
+
+# 系统文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
