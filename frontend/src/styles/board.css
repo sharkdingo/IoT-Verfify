@@ -1,67 +1,5 @@
 /* src/styles/board.css */
 
-/* ========== 主题变量（dark 默认主题） ========== */
-:root {
-    /* 颜色：深海蓝 + 青色高光 */
-    --iot-color-bg-body: #020617;
-    --iot-color-bg-canvas: #020617;
-    --iot-color-grid: rgba(148, 163, 184, 0.10);
-
-    --iot-color-card-bg: rgba(15, 23, 42, 0.94);
-    --iot-color-card-border: rgba(56, 189, 248, 0.75);
-    --iot-color-card-shadow: 0 1.6rem 3.2rem rgba(15, 23, 42, 0.9);
-
-    --iot-color-node-bg: rgba(15, 23, 42, 0.98);
-    --iot-color-node-border: rgba(59, 130, 246, 0.9);
-
-    --iot-color-table-border: rgba(30, 64, 175, 0.75);
-    --iot-color-text: #e5e7eb;
-    --iot-color-text-muted: #94a3b8;
-
-    --iot-color-title: #f9fafb;
-    --iot-color-subtitle: #c7d2fe;
-
-    --iot-color-device-item-bg: rgba(15, 23, 42, 0.96);
-    --iot-color-device-item-bg-hover: linear-gradient(
-            135deg,
-            rgba(56, 189, 248, 0.28),
-            rgba(37, 99, 235, 0.42)
-    );
-    --iot-color-device-item-border: rgba(148, 163, 184, 0.45);
-    --iot-color-device-item-text: #e5e7eb;
-
-    /* 尺寸：字号、间距、圆角、宽度等 */
-    --iot-font-base: 1.2rem;
-    --iot-font-title: 1.5rem;
-    --iot-font-subtitle: 1.3rem;
-
-    --iot-radius-card: 1.125rem; /* 18px */
-    --iot-radius-node: 1.25rem;  /* 20px */
-    --iot-radius-input: 0.625rem;
-
-    --iot-space-2xs: 0.25rem;
-    --iot-space-xs: 0.375rem;
-    --iot-space-sm: 0.5rem;
-    --iot-space-md: 0.75rem;
-    --iot-space-lg: 1rem;
-
-    --iot-card-width: 32vw;
-    --iot-card-width-min: 20rem;
-    --iot-card-width-max: 32rem; /* 480px */
-
-    --iot-grid-size: 2rem;
-    --iot-canvas-size: 200%;
-
-    --iot-node-gap: 0.5rem;
-    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
-
-    --iot-resize-size: 0.7rem;
-    --iot-resize-offset: 0.25rem;
-
-    --iot-thumb-width: 3.5rem;
-    --iot-thumb-height: 2.6rem;
-}
-
 /* ========== 页面 & 画布 ========== */
 
 .iot-board {
@@ -106,11 +44,25 @@
     overflow: visible;
 }
 
+.iot-board .edge-layer .edge-line {
+    stroke: var(--iot-color-edge);
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+.iot-board .edge-layer .edge-arrow {
+    fill: var(--iot-color-edge);
+}
+
 /* ========== 节点 ========== */
 
 .iot-board .device-node {
     position: absolute;
-    background: radial-gradient(circle at top, rgba(30, 64, 175, 0.6), var(--iot-color-node-bg));
+    background: radial-gradient(
+            circle at top,
+            var(--iot-color-node-highlight),
+            var(--iot-color-node-bg)
+    );
     border-radius: var(--iot-radius-node);
     display: flex;
     flex-direction: column;
@@ -137,7 +89,7 @@
 .iot-board .device-label {
     font-weight: 600;
     text-align: center;
-    padding: 0.25rem 0.5rem 0.5rem;
+    padding: var(--iot-space-2xs) var(--iot-space-sm) var(--iot-space-sm);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -149,10 +101,10 @@
     position: absolute;
     width: var(--iot-resize-size);
     height: var(--iot-resize-size);
-    border-radius: 0.2rem;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    background: rgba(15, 23, 42, 0.9);
-    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
+    border-radius: var(--iot-radius-resize);
+    border: 1px solid var(--iot-color-resize-border);
+    background: var(--iot-color-resize-bg);
+    box-shadow: 0 0 0 1px var(--iot-color-resize-shadow);
     opacity: 0;
     transition: opacity 0.12s;
 }
@@ -189,7 +141,7 @@
     background: linear-gradient(
             145deg,
             var(--iot-color-card-bg),
-            rgba(15, 23, 42, 0.9)
+            var(--iot-color-card-bg-strong)
     );
     border-radius: var(--iot-radius-card);
     box-shadow:
@@ -203,19 +155,15 @@
     font-size: var(--iot-font-base);
 }
 
+
 /* 左侧 InputPanel / 状态卡片统一宽度 */
-.iot-board .left-card,
+.iot-board .input-card,
 .iot-board .status-card {
     width: clamp(
             var(--iot-card-width-min),
             var(--iot-card-width),
             var(--iot-card-width-max)
     );
-}
-
-/* 让左卡整体底色更贴近画布 */
-.iot-board .left-card {
-    background: rgba(2, 6, 23, 0.96);
 }
 
 /* 头部 */
@@ -226,7 +174,11 @@
     gap: var(--iot-space-sm);
     border-bottom: 1px solid var(--iot-color-card-border);
     cursor: move;
-    background: radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 60%);
+    background: radial-gradient(
+            circle at top left,
+            var(--iot-color-card-header-glow),
+            transparent 60%
+    );
 }
 
 .iot-board .card-title {
@@ -269,24 +221,24 @@
 
 /* ========== 让 InputPanel 内所有容器背景透明，露出卡片/画布 ========== */
 
-.iot-board .left-card .card-body {
+.iot-board .input-card .card-body {
     background-color: transparent;
 }
 
-.iot-board .left-card :deep(.panel-collapse),
-.iot-board .left-card :deep(.el-collapse),
-.iot-board .left-card :deep(.el-collapse-item__wrap),
-.iot-board .left-card :deep(.el-collapse-item__content),
-.iot-board .left-card :deep(.el-scrollbar__wrap),
-.iot-board .left-card :deep(.el-scrollbar__view),
-.iot-board .left-card :deep(.el-form),
-.iot-board .left-card :deep(.el-form-item) {
+.iot-board .input-card :deep(.panel-collapse),
+.iot-board .input-card :deep(.el-collapse),
+.iot-board .input-card :deep(.el-collapse-item__wrap),
+.iot-board .input-card :deep(.el-collapse-item__content),
+.iot-board .input-card :deep(.el-scrollbar__wrap),
+.iot-board .input-card :deep(.el-scrollbar__view),
+.iot-board .input-card :deep(.el-form),
+.iot-board .input-card :deep(.el-form-item) {
     background-color: transparent !important;
     box-shadow: none;
 }
 
-.iot-board .left-card :deep(.el-divider) {
-    border-color: rgba(37, 99, 235, 0.5);
+.iot-board .input-card :deep(.el-divider) {
+    border-color: var(--iot-color-divider);
 }
 
 /* ========== Devices 区域 ========== */
@@ -312,7 +264,7 @@
 
 .iot-board .device-item:hover {
     background: var(--iot-color-device-item-bg-hover);
-    box-shadow: 0 0.4rem 1rem rgba(15, 23, 42, 0.9);
+    box-shadow: var(--iot-shadow-device-hover);
     transform: translateY(-1px);
 }
 
@@ -335,10 +287,9 @@
 }
 
 .iot-board .device-thumb-label {
-    font-size: 0.875rem;
+    font-size: var(--iot-font-caption);
     word-break: break-all;
 }
-
 /* ========== 规约区域样式 ========== */
 
 .iot-board .spec-form {
@@ -352,10 +303,10 @@
     border-radius: var(--iot-radius-input);
     background: linear-gradient(
             135deg,
-            rgba(15, 23, 42, 0.98),
-            rgba(15, 23, 42, 0.94)
+            var(--iot-color-spec-bg),
+            var(--iot-color-spec-bg-strong)
     );
-    box-shadow: 0 0 0 1px rgba(30, 64, 175, 0.85);
+    box-shadow: 0 0 0 1px var(--iot-color-spec-border);
 }
 
 .iot-board .spec-section-header {
@@ -366,7 +317,7 @@
 }
 
 .iot-board .spec-section-title {
-    font-size: 0.8125rem;
+    font-size: var(--iot-font-caption);
     font-weight: 600;
     color: var(--iot-color-text-muted);
     letter-spacing: 0.08em;
@@ -383,6 +334,10 @@
     display: flex;
     align-items: center;
     gap: var(--iot-space-xs);
+}
+
+.iot-board .spec-add-button {
+    margin-top: var(--iot-space-sm); /* 0.5rem ≈ 8px */
 }
 
 .iot-board .spec-cond-device,
@@ -409,7 +364,7 @@
 }
 
 .iot-board .spec-then-text {
-    font-size: 0.8125rem;
+    font-size: var(--iot-font-caption);
     color: var(--iot-color-text-muted);
 }
 
@@ -417,14 +372,14 @@
 
 .iot-board .floating-card :deep(.el-input__wrapper),
 .iot-board .floating-card :deep(.el-select__wrapper) {
-    background-color: rgba(15, 23, 42, 0.96);
-    box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.55);
+    background-color: var(--iot-color-input-bg);
+    box-shadow: 0 0 0 1px var(--iot-color-input-border);
     border-radius: var(--iot-radius-input);
 }
 
 .iot-board .floating-card :deep(.el-textarea__inner) {
-    background-color: rgba(15, 23, 42, 0.96);
-    border: 1px solid rgba(148, 163, 184, 0.6);
+    background-color: var(--iot-color-input-bg);
+    border: 1px solid var(--iot-color-input-border-strong);
     border-radius: var(--iot-radius-input);
     color: var(--iot-color-text);
     font-size: var(--iot-font-base);
@@ -468,8 +423,26 @@
     font-weight: 500;
 }
 
+/* 单元格：不换行 + 溢出省略号 */
+.iot-board .status-card .el-table .cell {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* 悬停高亮统一样式：柔和一点的蓝色 */
 .iot-board .status-card .el-table__row:hover > td,
 .iot-board .floating-card :deep(.el-table__row:hover > td) {
-    background-color: rgba(56, 189, 248, 0.18) !important;
+    background-color: var(--iot-color-table-row-hover) !important;
 }
+
+/* ========== 设备信息弹窗 ========== */
+
+.iot-board :deep(.device-dialog-footer) {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    align-items: center;
+    gap: var(--iot-space-sm);
+}
+

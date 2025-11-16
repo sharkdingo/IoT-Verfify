@@ -1,5 +1,5 @@
 // src/utils/boardStorage.ts
-import type { DeviceNode, DeviceEdge, Specification, PanelPositions } from '../types/board'
+import type { DeviceNode, DeviceEdge, Specification, PanelPositions, PanelActive } from '../types/board'
 import type { DeviceTemplate } from '../types/device'
 
 export const STORAGE_KEYS = {
@@ -7,7 +7,8 @@ export const STORAGE_KEYS = {
     NODES: 'iot_nodes',
     EDGES: 'iot_edges',
     SPECS: 'iot_specs',
-    PANELS: 'iot_panels'
+    PANELS: 'iot_panels',
+    PANEL_ACTIVE: 'iot_panel_active'
 }
 
 // 通用 load/save
@@ -41,6 +42,10 @@ export function loadPanels(): PanelPositions | null {
     return loadFromSession<PanelPositions>(STORAGE_KEYS.PANELS)
 }
 
+export function loadPanelActive(): PanelActive | null {
+    return loadFromSession<PanelActive>(STORAGE_KEYS.PANEL_ACTIVE)
+}
+
 export function saveDeviceTemplates(devices: DeviceTemplate[]) {
     saveToSession(STORAGE_KEYS.DEVICES, devices)
 }
@@ -59,4 +64,8 @@ export function saveSpecs(specs: Specification[]) {
 
 export function savePanels(panels: PanelPositions) {
     saveToSession(STORAGE_KEYS.PANELS, panels)
+}
+
+export function savePanelActive(active: PanelActive) {
+    saveToSession(STORAGE_KEYS.PANEL_ACTIVE, active)
 }

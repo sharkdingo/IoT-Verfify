@@ -81,3 +81,8 @@ export interface PanelPositions {
     left: { x: number; y: number }
     status: { x: number; y: number }
 }
+
+export interface PanelActive {
+    input: string[]   // InputPanel: ['devices', 'rules', 'specs']
+    status: string[]  // StatusPanel: ['devices', 'edges', 'specs']
+}

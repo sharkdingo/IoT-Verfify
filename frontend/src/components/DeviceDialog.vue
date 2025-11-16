@@ -70,7 +70,7 @@ const onDelete = () => {
     </el-form>
 
     <template #footer>
-      <div style="display: flex; justify-content: space-between; width: 100%;">
+      <div class="device-dialog-footer">
         <el-button type="danger" @click="onDelete">
           {{ t('app.deleteDevice') || t('app.delete') }}
         </el-button>

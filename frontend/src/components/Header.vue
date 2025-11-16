@@ -1,32 +1,67 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { locale } = useI18n()
 
-// 用一个 computed 来表示“当前是不是中文”
+// 语言切换
 const isZh = computed({
   get: () => locale.value === 'zh-CN',
   set: (val: boolean) => {
     locale.value = val ? 'zh-CN' : 'en'
-    localStorage.setItem('locale', locale.value)  // 持久化一下，下次刷新保持语言
+    localStorage.setItem('locale', locale.value)
   }
 })
 
 const toggleLang = () => {
   isZh.value = !isZh.value
 }
+
+// 主题切换：dark / light
+const theme = ref<'dark' | 'light'>(
+    (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
+)
+
+const isDark = computed({
+  get: () => theme.value === 'dark',
+  set: (val: boolean) => {
+    theme.value = val ? 'dark' : 'light'
+    document.documentElement.setAttribute('data-theme', theme.value)
+    localStorage.setItem('theme', theme.value)
+  }
+})
+
+const toggleTheme = () => {
+  isDark.value = !isDark.value
+}
+
+onMounted(() => {
+  // 初始化时应用主题
+  document.documentElement.setAttribute('data-theme', theme.value)
+})
 </script>
 
 <template>
-  <el-header class="custom-header" height="10">
+  <el-header class="custom-header" height="12">
     <el-row :gutter="10" align="middle" style="width: 100%">
       <el-col :span="3" class="header-icon">
         <h1 class="header-text">IoT-Verify</h1>
       </el-col>
 
-      <!-- 右侧语言切换按钮 -->
       <el-col :span="3" :offset="18" class="header-lang">
+        <!-- 主题切换按钮 -->
+        <el-button
+            size="small"
+            round
+            class="lang-btn"
+            style="margin-right: 8px"
+            @click="toggleTheme"
+        >
+          <span v-if="isDark">🌙</span>
+          <span v-else>☀️</span>
+        </el-button>
+
+        <!-- 语言切换按钮 -->
         <el-button
             size="small"
             round
@@ -41,21 +76,20 @@ const toggleLang = () => {
   </el-header>
 </template>
 
+
 <style scoped>
 .custom-header {
-  background: radial-gradient(circle at top left,
-  rgba(15, 23, 42, 0.98),
-  rgba(15, 23, 42, 0.96));
-  border-bottom: 1px solid rgba(56, 189, 248, 0.55); /* 和卡片同色高光 */
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.9);
+  background: var(--iot-header-bg);
+  border-bottom: 1px solid var(--iot-header-border);
+  box-shadow: var(--iot-header-shadow);
   display: flex;
   flex-direction: column;
   padding: 0 16px;
 }
 
-/* 标题：稍微亮一点，和浮动卡片标题统一 */
+/* 标题：用主题的 title 颜色 */
 .header-text {
-  color: var(--iot-color-title, #f9fafb);
+  color: var(--iot-color-title);
   font-size: 1.4rem;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -64,7 +98,6 @@ const toggleLang = () => {
   margin-bottom: 12px;
 }
 
-/* 左侧 Logo 区 */
 .header-icon {
   display: flex;
   flex-direction: column;
@@ -72,41 +105,37 @@ const toggleLang = () => {
   justify-content: center;
 }
 
-/* 右侧语言按钮区域靠右对齐 */
 .header-lang {
   display: flex;
   justify-content: flex-end;
   align-items: center;
 }
 
-/* 语言按钮：青色描边 + 轻微渐变，悬停时填充高光 */
+/* 语言按钮：全部改用变量 */
 .lang-btn {
   font-weight: 600;
   letter-spacing: 1px;
   padding: 4px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(56, 189, 248, 0.9);
-  background: radial-gradient(circle at top,
-  rgba(15, 23, 42, 0.9),
-  rgba(15, 23, 42, 0.98));
-  color: #e0f2fe;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
-  transition: background 0.18s ease-out,
-  box-shadow 0.18s ease-out,
-  transform 0.12s ease-out;
+  border: 1px solid var(--iot-lang-btn-border);
+  background: var(--iot-lang-btn-bg);
+  color: var(--iot-lang-btn-text);
+  box-shadow: var(--iot-lang-btn-shadow);
+  transition:
+      background 0.18s ease-out,
+      box-shadow 0.18s ease-out,
+      transform 0.12s ease-out;
 }
 
 .lang-btn:hover {
-  background: linear-gradient(135deg,
-  rgba(56, 189, 248, 0.28),
-  rgba(37, 99, 235, 0.45));
-  box-shadow: 0 0.4rem 1.1rem rgba(15, 23, 42, 0.9);
+  background: var(--iot-lang-btn-hover-bg);
+  box-shadow: 0 0.4rem 1.1rem rgba(15, 23, 42, 0.3);
   transform: translateY(-1px);
 }
 
 .lang-btn:active {
   transform: translateY(0);
-  box-shadow: 0 0.1rem 0.6rem rgba(15, 23, 42, 0.9);
+  box-shadow: 0 0.1rem 0.6rem rgba(15, 23, 42, 0.3);
 }
 </style>
 

@@ -10,7 +10,7 @@
  * - 将输入侧(InputPanel)与状态侧(StatusPanel)串起来
  */
 
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 
@@ -39,11 +39,13 @@ import {
   loadEdges,
   loadSpecs,
   loadPanels,
+  loadPanelActive,
   saveDeviceTemplates,
   saveNodes,
   saveEdges,
   saveSpecs,
   savePanels,
+  savePanelActive,
 } from '../utils/boardStorage'
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
 import { defaultDeviceTemplates } from '../assets/config/deviceTemplates'
@@ -61,10 +63,10 @@ const { t } = useI18n()
 /** 浮动卡片距离视口边缘的默认间距（初始化时使用） */
 const DEFAULT_PANEL_PADDING = 8
 
-// 与 board.css 中 width: clamp(20rem, 32vw, 32rem) 对齐
-const CARD_WIDTH_MIN = 320 // 20rem * 16
-const CARD_WIDTH_MAX = 512 // 32rem * 16
-const CARD_WIDTH_RATIO = 0.32 // 32vw
+// 与 board.css 中 width: clamp(12rem, 22vw, 22rem) 对齐
+const CARD_WIDTH_MIN = 192 // 12rem * 16
+const CARD_WIDTH_MAX = 352 // 22rem * 16
+const CARD_WIDTH_RATIO = 0.22 // 22vw
 
 /** 设备与左侧 InputPanel 之间的水平间距 */
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
@@ -225,6 +227,8 @@ const edges = ref<DeviceEdge[]>([])
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
+/** InputPanel 折叠面板默认展开项 */
+const inputActive = ref<string[]>(['devices', 'rules', 'specs'])
 /** StatusPanel 折叠面板默认展开项 */
 const statusActive = ref<string[]>(['devices', 'edges', 'specs'])
 
@@ -711,8 +715,29 @@ onMounted(() => {
     panelPositions.status.y = DEFAULT_PANEL_PADDING
   }
 
+  const savedActive = loadPanelActive()
+  if (savedActive) {
+    if (Array.isArray(savedActive.input)) {
+      inputActive.value = savedActive.input
+    }
+    if (Array.isArray(savedActive.status)) {
+      statusActive.value = savedActive.status
+    }
+  }
+
   window.addEventListener('keydown', onGlobalKeydown)
 })
+
+watch(
+    () => ({
+      input: inputActive.value,
+      status: statusActive.value
+    }),
+    val => {
+      savePanelActive(val)
+    },
+    { deep: true }
+)
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
@@ -749,21 +774,23 @@ onBeforeUnmount(() => {
                 refY="3"
                 orient="auto"
             >
-              <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"></path>
+              <!-- 加 class，去掉 fill -->
+              <path class="edge-arrow" d="M0,0 L0,6 L9,3 z" />
             </marker>
           </defs>
+
           <line
               v-for="edge in edges"
               :key="edge.id"
-              :x1="edge.fromPos.x"
-              :y1="edge.fromPos.y"
-              :x2="edge.toPos.x"
-              :y2="edge.toPos.y"
-              stroke="#2563eb"
-              stroke-width="2"
-              marker-end="url(#arrow)"
+              class="edge-line"
+          :x1="edge.fromPos.x"
+          :y1="edge.fromPos.y"
+          :x2="edge.toPos.x"
+          :y2="edge.toPos.y"
+          marker-end="url(#arrow)"
           />
         </svg>
+
 
         <!-- 设备节点 -->
         <div
@@ -816,7 +843,7 @@ onBeforeUnmount(() => {
 
     <!-- ===== 左侧浮动卡片：输入（设备 / 规则 / 规约） ===== -->
     <div
-        class="floating-card left-card"
+        class="floating-card input-card"
         :style="{ left: panelPositions.left.x + 'px', top: panelPositions.left.y + 'px' }"
     >
       <div
@@ -827,6 +854,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="card-body">
         <InputPanel
+            v-model:active="inputActive"
             :device-templates="deviceTemplates"
             :nodes="nodes"
             :spec-templates="specTemplates"

@@ -28,6 +28,7 @@ const props = defineProps<{
   specTemplates: SpecTemplate[]
   // 让父组件传入一个函数用于获取初始图标
   getTemplateInitIcon: (tpl: DeviceTemplate) => string
+  active: string[]
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +43,7 @@ const emit = defineEmits<{
   }): void
   (e: 'device-drag-start', tpl: DeviceTemplate): void
   (e: 'device-drag-end'): void
+  (e: 'update:active', value: string[]): void
 }>()
 
 const { t } = useI18n()
@@ -50,12 +52,16 @@ const { t } = useI18n()
 
 const deviceViewMode = ref<'list' | 'icon'>('list')
 const deviceKeyword = ref('')
-const leftPanelActive = ref<string[]>(['devices', 'rules', 'specs'])
 
 const filteredDevices = computed(() => {
   if (!deviceKeyword.value) return props.deviceTemplates
   const kw = deviceKeyword.value.toLowerCase()
   return props.deviceTemplates.filter(d => d.name.toLowerCase().includes(kw))
+})
+
+const collapseActive = computed({
+  get: () => props.active,
+  set: (val: string[]) => emit('update:active', val)
 })
 
 const onSelectDevice = (tpl: DeviceTemplate) => {
@@ -183,7 +189,7 @@ const onAddSpec = () => {
 </script>
 
 <template>
-  <el-collapse v-model="leftPanelActive" class="panel-collapse">
+  <el-collapse v-model="collapseActive" class="panel-collapse">
     <!-- 设备列表 -->
     <el-collapse-item name="devices">
       <template #title>
@@ -640,7 +646,7 @@ const onAddSpec = () => {
       <el-button
           type="primary"
           size="default"
-          style="margin-top: 8px"
+          class="spec-add-button"
           @click="onAddSpec"
       >
         {{ t('app.addSpec') }}
