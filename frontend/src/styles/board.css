@@ -1,4 +1,11 @@
-/* src/styles/board.css */
+/* src/styles/board.css
+ * ===========================
+ * Board 页面全局样式：
+ * - 页面 & 画布 & 网格 & 连线
+ * - 设备节点 & 缩放手柄
+ * - 浮动卡片通用风格（Input / Status）
+ * - 浮动卡片中的 Element Plus 表单皮肤
+ * =========================== */
 
 /* ========== 页面 & 画布 ========== */
 
@@ -14,27 +21,30 @@
     font-size: var(--iot-font-base);
 }
 
-/* 背景画布 */
+/* 背景画布：负责撑满和裁剪，不再承担网格绘制 */
 .iot-board .canvas {
     position: absolute;
     inset: 0;
-    overflow: auto;
-    background-image:
-            linear-gradient(90deg, var(--iot-color-grid) 1px, transparent 0),
-            linear-gradient(180deg, var(--iot-color-grid) 1px, transparent 0);
-    background-size: var(--iot-grid-size) var(--iot-grid-size);
+    overflow: hidden; /* 避免浏览器自带滚动条 */
     background-color: var(--iot-color-bg-canvas);
 }
 
-/* 画布内部使用百分比尺寸，方便缩放与平移 */
+/* 画布内部：真正被平移 / 缩放的层，负责网格 + 节点 */
 .iot-board .canvas-inner {
     position: relative;
     width: var(--iot-canvas-size);
     height: var(--iot-canvas-size);
     min-width: 100%;
     min-height: 100%;
+
+    /* 网格背景：跟随 translate / scale 一起变化 */
+    background-image:
+            linear-gradient(90deg, var(--iot-color-grid) 1px, transparent 0),
+            linear-gradient(180deg, var(--iot-color-grid) 1px, transparent 0);
+    background-size: var(--iot-grid-size) var(--iot-grid-size);
 }
 
+/* 连线层（SVG） */
 .iot-board .edge-layer {
     position: absolute;
     inset: 0;
@@ -44,13 +54,15 @@
     overflow: visible;
 }
 
+/* 连线（包含自环 path 和普通 line） */
 .iot-board .edge-layer .edge-line {
-    fill: none;                           /* 关键：自环 path 不要填充，否则就会出现“黑洞” */
+    fill: none; /* 自环 path 不要填充，否则会出现“黑洞” */
     stroke: var(--iot-color-edge);
     stroke-width: 2;
     stroke-linecap: round;
 }
 
+/* 可选：如果你的箭头 marker 需要单独类名 */
 .iot-board .edge-layer .edge-arrow {
     fill: var(--iot-color-edge);
 }
@@ -82,11 +94,12 @@
     cursor: grabbing;
 }
 
+/* 节点图标图片：不响应鼠标事件，避免拖拽图片 */
 .iot-board .device-img {
     pointer-events: none;
 }
 
-/* 文字本身的基础样式；字体大小由 JS 动态控制更灵活 */
+/* 节点文字：基础排版，具体字号由 JS 控制 */
 .iot-board .device-label {
     font-weight: 600;
     text-align: center;
@@ -97,7 +110,9 @@
     color: var(--iot-color-title);
 }
 
-/* 缩放手柄：透明 + hover 时出现 */
+/* ========== 节点缩放手柄 ========== */
+/* 四角的缩放点：默认透明，hover 节点时出现 */
+
 .iot-board .resize-handle {
     position: absolute;
     width: var(--iot-resize-size);
@@ -114,21 +129,25 @@
     opacity: 1;
 }
 
+/* 四个方向的手柄位置 + 光标形状 */
 .iot-board .resize-handle.tl {
     left: var(--iot-resize-offset);
     top: var(--iot-resize-offset);
     cursor: nw-resize;
 }
+
 .iot-board .resize-handle.tr {
     right: var(--iot-resize-offset);
     top: var(--iot-resize-offset);
     cursor: ne-resize;
 }
+
 .iot-board .resize-handle.bl {
     left: var(--iot-resize-offset);
     bottom: var(--iot-resize-offset);
     cursor: sw-resize;
 }
+
 .iot-board .resize-handle.br {
     right: var(--iot-resize-offset);
     bottom: var(--iot-resize-offset);
@@ -154,11 +173,10 @@
     flex-direction: column;
     overflow: hidden;
     font-size: var(--iot-font-base);
-    max-height: calc(100vh - 4rem);  /* 4rem≈上下各 2rem 的空隙 */
+    max-height: calc(100vh - 6rem); /* 上下各留 2rem 空隙 */
 }
 
-
-/* 左侧 InputPanel / 状态卡片统一宽度 */
+/* 左侧输入面板 / 右侧状态面板统一宽度 */
 .iot-board .input-card,
 .iot-board .status-card {
     width: clamp(
@@ -168,7 +186,7 @@
     );
 }
 
-/* 头部 */
+/* 卡片头部：标题栏，可拖动 */
 .iot-board .card-header {
     padding: var(--iot-space-sm) var(--iot-space-md);
     display: flex;
@@ -183,6 +201,7 @@
     );
 }
 
+/* 大标题：Input / Status 等 */
 .iot-board .card-title {
     font-weight: 600;
     font-size: var(--iot-font-title);
@@ -190,32 +209,36 @@
     color: var(--iot-color-title);
 }
 
+/* 子标题：折叠项标题（Devices / Rules / Specs） */
 .iot-board .card-subtitle {
     font-size: var(--iot-font-subtitle);
     font-weight: 500;
     color: var(--iot-color-subtitle);
 }
 
+/* 标题右侧按钮（视图切换等） */
 .iot-board .card-header-actions {
     display: flex;
     align-items: center;
     gap: var(--iot-space-2xs);
 }
 
+/* 卡片主体内容区域：内部滚动 */
 .iot-board .card-body {
     padding: var(--iot-space-md) var(--iot-space-md) var(--iot-space-lg);
-    flex: 1 1 auto;     /* 占据剩余空间 */
-    min-height: 0;      /* 与 flex 配合防止撑开 */
-    overflow-y: auto;   /* 内容超出时出现内部滚动条 */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
-/* 折叠面板统一样式 */
+/* 折叠面板统一风格：背景透明，由卡片底色负责 */
 .iot-board .panel-collapse {
     --el-collapse-header-bg-color: transparent;
     --el-collapse-content-bg-color: transparent;
     font-size: var(--iot-font-base);
 }
 
+/* 折叠标题行：标题 + 右侧图标按钮 */
 .iot-board .collapse-title-row {
     display: flex;
     align-items: center;
@@ -224,165 +247,41 @@
     min-width: 0;
 }
 
-/* ========== 让 InputPanel 内所有容器背景透明，露出卡片/画布 ========== */
+/* ========== InputPanel 内部透明化（露出卡片 / 画布） ========== */
 
 .iot-board .input-card .card-body {
     background-color: transparent;
 }
 
-.iot-board .input-card :deep(.panel-collapse),
-.iot-board .input-card :deep(.el-collapse),
-.iot-board .input-card :deep(.el-collapse-item__wrap),
-.iot-board .input-card :deep(.el-collapse-item__content),
-.iot-board .input-card :deep(.el-scrollbar__wrap),
-.iot-board .input-card :deep(.el-scrollbar__view),
-.iot-board .input-card :deep(.el-form),
-.iot-board .input-card :deep(.el-form-item) {
+/* 让 Element Plus 的容器不再画白底 / 阴影，整体透出卡片背景 */
+.iot-board .input-card .panel-collapse,
+.iot-board .input-card .el-collapse,
+.iot-board .input-card .el-collapse-item__wrap,
+.iot-board .input-card .el-collapse-item__content,
+.iot-board .input-card .el-scrollbar__wrap,
+.iot-board .input-card .el-scrollbar__view,
+.iot-board .input-card .el-form,
+.iot-board .input-card .el-form-item {
     background-color: transparent !important;
     box-shadow: none;
 }
 
-.iot-board .input-card :deep(.el-divider) {
+/* 分割线颜色弱一点，避免喧宾夺主 */
+.iot-board .input-card .el-divider {
     border-color: var(--iot-color-divider);
 }
 
-/* ========== Devices 区域 ========== */
+/* ========== Element Plus 深色皮肤：输入 / 选择 / 表单 ========== */
+/* 对所有浮动卡片生效（InputCard + StatusCard），保证风格统一 */
 
-.iot-board .device-search {
-    margin-bottom: var(--iot-space-sm);
-}
-
-.iot-board .device-item {
-    background: var(--iot-color-device-item-bg);
-    border-radius: var(--iot-radius-input);
-    margin-bottom: var(--iot-space-sm);
-    padding: var(--iot-space-sm) var(--iot-space-md);
-    cursor: grab;
-    transition:
-            box-shadow 0.14s ease-out,
-            background 0.14s ease-out,
-            transform 0.12s ease-out;
-    border: 1px solid var(--iot-color-device-item-border);
-    color: var(--iot-color-device-item-text);
-    font-size: var(--iot-font-subtitle);
-}
-
-.iot-board .device-item:hover {
-    background: var(--iot-color-device-item-bg-hover);
-    box-shadow: var(--iot-shadow-device-hover);
-    transform: translateY(-1px);
-}
-
-/* 图标模式 */
-.iot-board .device-icon-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(6.25rem, 1fr)); /* 100px */
-    gap: var(--iot-space-sm);
-}
-
-.iot-board .device-item--icon {
-    text-align: center;
-}
-
-.iot-board .device-thumb {
-    width: var(--iot-thumb-width);
-    height: var(--iot-thumb-height);
-    object-fit: contain;
-    margin-bottom: var(--iot-space-2xs);
-}
-
-.iot-board .device-thumb-label {
-    font-size: var(--iot-font-caption);
-    word-break: break-all;
-}
-/* ========== 规约区域样式 ========== */
-
-.iot-board .spec-form {
-    margin-top: var(--iot-space-2xs);
-    margin-bottom: var(--iot-space-sm);
-}
-
-.iot-board .spec-section {
-    margin: var(--iot-space-sm) 0 var(--iot-space-xs);
-    padding: var(--iot-space-sm);
-    border-radius: var(--iot-radius-input);
-    background: linear-gradient(
-            135deg,
-            var(--iot-color-spec-bg),
-            var(--iot-color-spec-bg-strong)
-    );
-    box-shadow: 0 0 0 1px var(--iot-color-spec-border);
-}
-
-.iot-board .spec-section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--iot-space-xs);
-}
-
-.iot-board .spec-section-title {
-    font-size: var(--iot-font-caption);
-    font-weight: 600;
-    color: var(--iot-color-text-muted);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.iot-board .spec-section-group {
-    display: flex;
-    flex-direction: column;
-    gap: var(--iot-space-xs);
-}
-
-.iot-board .spec-condition-row {
-    display: flex;
-    align-items: center;
-    gap: var(--iot-space-xs);
-}
-
-.iot-board .spec-add-button {
-    margin-top: var(--iot-space-sm); /* 0.5rem ≈ 8px */
-}
-
-.iot-board .spec-cond-device,
-.iot-board .spec-cond-target,
-.iot-board .spec-cond-relation,
-.iot-board .spec-cond-value {
-    min-width: 5.625rem; /* 90px */
-}
-
-.iot-board .spec-cond-device {
-    flex: 1.1;
-}
-
-.iot-board .spec-cond-target {
-    flex: 1;
-}
-
-.iot-board .spec-cond-relation {
-    flex: 0.8;
-}
-
-.iot-board .spec-cond-value {
-    flex: 1;
-}
-
-.iot-board .spec-then-text {
-    font-size: var(--iot-font-caption);
-    color: var(--iot-color-text-muted);
-}
-
-/* ========== Element Plus 深色覆盖：输入 / 选择 / 表单 ========== */
-
-.iot-board .floating-card :deep(.el-input__wrapper),
-.iot-board .floating-card :deep(.el-select__wrapper) {
+.iot-board .floating-card .el-input__wrapper,
+.iot-board .floating-card .el-select__wrapper {
     background-color: var(--iot-color-input-bg);
     box-shadow: 0 0 0 1px var(--iot-color-input-border);
     border-radius: var(--iot-radius-input);
 }
 
-.iot-board .floating-card :deep(.el-textarea__inner) {
+.iot-board .floating-card .el-textarea__inner {
     background-color: var(--iot-color-input-bg);
     border: 1px solid var(--iot-color-input-border-strong);
     border-radius: var(--iot-radius-input);
@@ -390,64 +289,26 @@
     font-size: var(--iot-font-base);
 }
 
-.iot-board .floating-card :deep(.el-input__inner),
-.iot-board .floating-card :deep(.el-select__placeholder),
-.iot-board .floating-card :deep(.el-select__selected-item) {
+/* 真实输入值 / 已选择的选项：用正常文字颜色 */
+.iot-board .floating-card .el-input__inner,
+.iot-board .floating-card .el-select__selected-item {
     color: var(--iot-color-text);
     font-size: var(--iot-font-base);
 }
 
-.iot-board .floating-card :deep(.el-form-item__label) {
+/* 占位符：改成偏灰，提示“这是提示词，尚未输入” */
+.iot-board .floating-card .el-input__inner::placeholder,
+.iot-board .floating-card .el-select__placeholder {
     color: var(--iot-color-text-muted);
     font-size: var(--iot-font-base);
 }
 
-.iot-board .floating-card :deep(.el-form-item) {
+.iot-board .floating-card .el-form-item__label {
+    color: var(--iot-color-text-muted);
+    font-size: var(--iot-font-base);
+}
+
+/* 表单项之间默认间距 */
+.iot-board .floating-card .el-form-item {
     margin-bottom: 0.875rem;
 }
-
-/* ========== Status 卡片里的表格 ========== */
-
-.iot-board .status-card .el-table {
-    --el-table-bg-color: transparent;
-    --el-table-tr-bg-color: transparent;
-    --el-table-header-bg-color: transparent;
-    --el-table-border-color: var(--iot-color-table-border);
-    color: var(--iot-color-text);
-    background-color: transparent;
-    font-size: var(--iot-font-base);
-}
-
-.iot-board .status-card .el-table th,
-.iot-board .status-card .el-table td {
-    background-color: transparent !important;
-}
-
-.iot-board .status-card .el-table th .cell {
-    color: var(--iot-color-text-muted);
-    font-weight: 500;
-}
-
-/* 单元格：不换行 + 溢出省略号 */
-.iot-board .status-card .el-table .cell {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* 悬停高亮统一样式：柔和一点的蓝色 */
-.iot-board .status-card .el-table__row:hover > td,
-.iot-board .floating-card :deep(.el-table__row:hover > td) {
-    background-color: var(--iot-color-table-row-hover) !important;
-}
-
-/* ========== 设备信息弹窗 ========== */
-
-.iot-board :deep(.device-dialog-footer) {
-    display: flex;
-    justify-content: space-between;
-    width: 100%;
-    align-items: center;
-    gap: var(--iot-space-sm);
-}
-

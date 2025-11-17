@@ -1,4 +1,73 @@
-/* src/styles/base.css */
+/* src/styles/base.css
+ * ==========================================
+ * 全局主题变量（深色 / 亮色） + 通用组件皮肤
+ * - Board.vue 的布局、卡片、节点等都依赖这里的变量
+ * - Header、语言切换按钮、MessageBox 也共用这些变量
+ * ========================================== */
+
+/* ========== 公共变量：与主题无关的尺寸 / 排版 ========== */
+:root {
+    font-family: sans-serif;
+    /* 文本字号 */
+    --iot-font-base: 1rem;
+    --iot-font-title: 1.3rem;
+    --iot-font-subtitle: 1.1rem;
+    --iot-font-caption: 0.875rem;
+
+    /* 圆角 */
+    --iot-radius-card: 1.125rem;
+    --iot-radius-node: 1.25rem;
+    --iot-radius-input: 0.625rem;
+    --iot-radius-resize: 0.2rem;
+
+    /* 间距（基于 16px 根字号） */
+    --iot-space-2xs: 0.25rem;  /* 4px */
+    --iot-space-xs: 0.375rem;  /* 6px */
+    --iot-space-sm: 0.5rem;    /* 8px */
+    --iot-space-md: 0.75rem;   /* 12px */
+    --iot-space-lg: 1rem;      /* 16px */
+
+    /* 卡片宽度（Input / Status 浮动卡片） */
+    --iot-card-width: 24vw;
+    --iot-card-width-min: 12rem;
+    --iot-card-width-max: 24rem;
+
+    /* 画布网格尺寸 */
+    --iot-grid-size: 2rem;
+    --iot-canvas-size: 300%;
+
+    /* 节点间距 */
+    --iot-node-gap: 0.5rem;
+
+    /* 缩放手柄尺寸（节点四角的小圆点） */
+    --iot-resize-size: 0.7rem;
+    --iot-resize-offset: 0.25rem;
+
+    /* 设备图标缩略图 */
+    --iot-thumb-width: 3.5rem;
+    --iot-thumb-height: 2.6rem;
+
+    /* 连线颜色（深浅主题一致） */
+    --iot-color-edge: #2563eb;
+
+    /* Dialog 公共尺寸（设备详情弹窗等） */
+    --iot-dialog-width: 26rem;       /* 整体宽度 ≈ 416px */
+    --iot-dialog-label-width: 6rem;  /* 左侧 label 列宽 ≈ 96px */
+
+    /* MessageBox 公共尺寸（Element Plus MessageBox） */
+    --iot-messagebox-min-width: 22.5rem; /* 360px */
+    --iot-messagebox-max-width: 30rem;   /* 480px */
+    --iot-messagebox-padding-y: 1rem;    /* 上下内边距 16px */
+    --iot-messagebox-padding-x: 1.25rem; /* 左右内边距 20px */
+    --iot-messagebox-padding-bottom: 0.875rem; /* 底部稍微紧一点 ≈ 14px */
+
+    /* Toast（ElMessage）公共尺寸 */
+    --iot-toast-min-width: 16rem; /* 256px */
+    --iot-toast-max-width: 26rem; /* 416px */
+    --iot-toast-padding-y: 0.5rem;
+    --iot-toast-padding-x: 0.875rem;
+    --iot-toast-gap: 0.5rem;
+}
 
 /* ========== 深色主题（默认） ========== */
 :root[data-theme='dark'],
@@ -6,7 +75,7 @@
     /* 背景与网格 */
     --iot-color-bg-body: #020617;
     --iot-color-bg-canvas: #020617;
-    --iot-color-grid: rgba(148, 163, 184, 0.10);
+    --iot-color-grid: rgba(225, 226, 228, 0.31);
 
     /* 浮动卡片 */
     --iot-color-card-bg: rgba(15, 23, 42, 0.3);
@@ -19,11 +88,12 @@
     --iot-color-node-bg: rgba(15, 23, 42, 0.98);
     --iot-color-node-border: rgba(59, 130, 246, 0.9);
     --iot-color-node-highlight: rgba(30, 64, 175, 0.6);
+    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
 
     /* 表格与文字 */
     --iot-color-table-border: rgba(30, 64, 175, 0.75);
     --iot-color-text: #e5e7eb;
-    --iot-color-text-muted: #94a3b8;
+    --iot-color-text-muted: #767c87;
     --iot-color-title: #f9fafb;
     --iot-color-subtitle: #c7d2fe;
 
@@ -52,51 +122,10 @@
     --iot-color-divider: rgba(37, 99, 235, 0.5);
     --iot-color-table-row-hover: rgba(56, 189, 248, 0.18);
 
-    /* 文本字号 */
-    --iot-font-base: 1.0rem;
-    --iot-font-title: 1.3rem;
-    --iot-font-subtitle: 1.1rem;
-    --iot-font-caption: 0.875rem;
-
-    /* 圆角 */
-    --iot-radius-card: 1.125rem;
-    --iot-radius-node: 1.25rem;
-    --iot-radius-input: 0.625rem;
-    --iot-radius-resize: 0.2rem;
-
-    /* 间距 */
-    --iot-space-2xs: 0.25rem;
-    --iot-space-xs: 0.375rem;
-    --iot-space-sm: 0.5rem;
-    --iot-space-md: 0.75rem;
-    --iot-space-lg: 1rem;
-
-    /* 卡片宽度 */
-    --iot-card-width: 22vw;
-    --iot-card-width-min: 12rem;
-    --iot-card-width-max: 22rem;
-
-    /* 画布网格 */
-    --iot-grid-size: 2rem;
-    --iot-canvas-size: 200%;
-
-    /* 节点间距与阴影 */
-    --iot-node-gap: 0.5rem;
-    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.9);
-
-    /* 缩放手柄尺寸 */
-    --iot-resize-size: 0.7rem;
-    --iot-resize-offset: 0.25rem;
+    /* 缩放手柄配色 */
     --iot-color-resize-border: rgba(148, 163, 184, 0.35);
     --iot-color-resize-bg: rgba(15, 23, 42, 0.9);
     --iot-color-resize-shadow: rgba(15, 23, 42, 0.8);
-
-    /* 设备图标缩略图 */
-    --iot-thumb-width: 3.5rem;
-    --iot-thumb-height: 2.6rem;
-
-    /* 连线颜色 */
-    --iot-color-edge: #2563eb;
 
     /* Header 专用变量 */
     --iot-header-bg: radial-gradient(
@@ -127,11 +156,11 @@
     /* 背景与网格 */
     --iot-color-bg-body: #e9f0ff;
     --iot-color-bg-canvas: #f3f4ff;
-    --iot-color-grid: rgba(148, 163, 184, 0.20);
+    --iot-color-grid: rgba(131, 144, 161, 0.36);
 
     /* 浮动卡片 */
-    --iot-color-card-bg: rgba(255, 255, 255, 0.30);
-    --iot-color-card-bg-strong: rgba(255, 255, 255, 0.70);
+    --iot-color-card-bg: rgba(255, 255, 255, 0.3);
+    --iot-color-card-bg-strong: rgba(255, 255, 255, 0.7);
     --iot-color-card-border: rgba(148, 163, 184, 0.55);
     --iot-color-card-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
     --iot-color-card-header-glow: rgba(129, 140, 248, 0.24);
@@ -140,11 +169,12 @@
     --iot-color-node-bg: rgba(255, 255, 255, 0.9);
     --iot-color-node-border: rgba(129, 140, 248, 0.7);
     --iot-color-node-highlight: rgba(129, 140, 248, 0.55);
+    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.08);
 
     /* 表格与文字 */
-    --iot-color-table-border: rgba(148, 163, 184, 0.55);
+    --iot-color-table-border: rgba(148, 163, 184, 0.65);
     --iot-color-text: #0f172a;
-    --iot-color-text-muted: #6b7280;
+    --iot-color-text-muted: #2d3035;
     --iot-color-title: #111827;
     --iot-color-subtitle: #2563eb;
 
@@ -173,48 +203,15 @@
     --iot-color-divider: rgba(148, 163, 184, 0.6);
     --iot-color-table-row-hover: rgba(191, 219, 254, 0.9);
 
-    /* 字号 / 间距：沿用深色配置 */
-    --iot-font-base: 1.0rem;
-    --iot-font-title: 1.3rem;
-    --iot-font-subtitle: 1.1rem;
-    --iot-font-caption: 0.875rem;
-
-    --iot-radius-card: 1.125rem;
-    --iot-radius-node: 1.25rem;
-    --iot-radius-input: 0.625rem;
-    --iot-radius-resize: 0.2rem;
-
-    --iot-space-2xs: 0.25rem;
-    --iot-space-xs: 0.375rem;
-    --iot-space-sm: 0.5rem;
-    --iot-space-md: 0.75rem;
-    --iot-space-lg: 1rem;
-
-    --iot-card-width: 22vw;
-    --iot-card-width-min: 12rem;
-    --iot-card-width-max: 22rem;
-
-    --iot-grid-size: 2rem;
-    --iot-canvas-size: 200%;
-
-    --iot-node-gap: 0.5rem;
-    --iot-node-shadow: 0 1.25rem 2.375rem rgba(15, 23, 42, 0.08);
-
-    --iot-resize-size: 0.7rem;
-    --iot-resize-offset: 0.25rem;
+    /* 缩放手柄配色（浅色背景下更柔和） */
     --iot-color-resize-border: rgba(148, 163, 184, 0.5);
     --iot-color-resize-bg: rgba(255, 255, 255, 0.95);
     --iot-color-resize-shadow: rgba(148, 163, 184, 0.55);
 
-    --iot-thumb-width: 3.5rem;
-    --iot-thumb-height: 2.6rem;
-
-    --iot-color-edge: #2563eb;
-
     /* Header + 语言按钮的亮色版 */
     --iot-header-bg: linear-gradient(90deg, #eef2ff, #f9fafb);
     --iot-header-border: rgba(148, 163, 184, 0.55);
-    --iot-header-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
+    --iot-header-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
 
     --iot-lang-btn-border: rgba(59, 130, 246, 0.85);
     --iot-lang-btn-bg: radial-gradient(circle at top, #eff6ff, #ffffff);
@@ -225,4 +222,247 @@
             rgba(37, 99, 235, 0.28)
     );
     --iot-lang-btn-shadow: 0 0 0 1px rgba(191, 219, 254, 0.9);
+}
+
+/* ===================== Element Plus MessageBox & Message 统一风格 ===================== */
+/* 这部分是全局覆盖：
+ * - ElMessageBox（模态确认框）
+ * - ElMessage（右上角/顶部的小提示条）
+ * 与 Board 的浮动卡片保持同一视觉体系
+ */
+
+/* ---------- MessageBox 蒙层颜色（深/浅主题分别控制透明度） ---------- */
+
+:root[data-theme='dark'] .el-overlay.is-message-box {
+    background-color: rgba(15, 23, 42, 0.65);
+}
+
+:root[data-theme='light'] .el-overlay.is-message-box {
+    background-color: rgba(15, 23, 42, 0.25);
+}
+
+/* ---------- MessageBox 本体：圆角、投影、宽度、内边距 ---------- */
+/* 依赖变量：
+ * --iot-radius-card
+ * --iot-messagebox-min-width / max-width / padding-*
+ */
+
+.el-message-box {
+    border-radius: var(--iot-radius-card);
+    padding: var(--iot-messagebox-padding-y) var(--iot-messagebox-padding-x)
+    var(--iot-messagebox-padding-bottom);
+    min-width: var(--iot-messagebox-min-width);
+    max-width: var(--iot-messagebox-max-width);
+    box-shadow: var(--iot-color-card-shadow);
+    border: 1px solid var(--iot-color-card-border);
+    backdrop-filter: blur(18px);
+}
+
+/* 让 MessageBox 容器永远全屏居中 */
+.el-overlay-message-box {
+    position: fixed;
+    inset: 0; /* top:0 right:0 bottom:0 left:0 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+}
+
+/* 去掉 Element Plus 默认 margin / transform，避免跑到左上角 */
+.el-overlay-message-box .el-message-box {
+    margin: 0 !important;
+    transform: none !important;
+}
+
+/* 深色主题下的弹窗配色 */
+:root[data-theme='dark'] .el-message-box {
+    background: linear-gradient(
+            145deg,
+            var(--iot-color-card-bg),
+            var(--iot-color-card-bg-strong)
+    );
+    color: var(--iot-color-text);
+}
+
+/* 亮色主题下的弹窗配色 */
+:root[data-theme='light'] .el-message-box {
+    background: linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.96),
+            rgba(248, 250, 252, 0.96)
+    );
+    color: var(--iot-color-text);
+}
+
+/* 标题行：下边界弱一点 + 左右结构 */
+.el-message-box__header {
+    padding-bottom: var(--iot-space-xs);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.el-message-box__title {
+    font-size: var(--iot-font-title);
+    font-weight: 600;
+    color: var(--iot-color-title);
+    flex: 1;
+}
+
+/* 内容文本：与标题留一点呼吸空间 */
+.el-message-box__content {
+    padding-top: var(--iot-space-sm);
+    font-size: var(--iot-font-base);
+    color: var(--iot-color-text-muted);
+}
+
+/* 底部按钮区域 */
+.el-message-box__btns {
+    margin-top: 1.125rem; /* ≈18px，比普通间距略大一点 */
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--iot-space-xs);
+}
+
+/* 取消按钮：浅描边，透明背景 */
+.el-message-box__btns .el-button:not(.el-button--primary) {
+    border-radius: var(--iot-radius-card);
+    padding: 0.25rem 1rem;
+}
+
+/* 确认按钮：和整体蓝色高光保持一致 */
+.el-message-box__btns .el-button--primary {
+    border-radius: var(--iot-radius-card);
+    padding: 0.25rem 1.125rem;
+    border: none;
+    background: linear-gradient(135deg, #f838ab, #b325eb);
+    color: #f9fafb;
+    box-shadow: 0 0.5rem 1.125rem rgba(37, 99, 235, 0.45);
+}
+
+.el-message-box__btns .el-button--primary:hover {
+    filter: brightness(1.05);
+}
+
+/* 警告图标颜色（type='warning'） */
+.el-message-box__status.el-message-box__status--warning {
+    color: #f97316;
+}
+
+/* 关闭按钮：右上角圆形“小胶囊” */
+.el-message-box__headerbtn {
+    margin-left: var(--iot-space-sm);
+    /* 不再用 absolute，交给 flex header 布局即可 */
+    position: static;
+
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    cursor: pointer;
+    transition:
+            background-color 0.16s ease-out,
+            box-shadow 0.16s ease-out,
+            color 0.16s ease-out;
+}
+
+/* 图标大小稍微调大一点 */
+.el-message-box__headerbtn .el-message-box__close {
+    font-size: 1.1rem;
+}
+
+/* 深色主题下 hover 效果 */
+:root[data-theme='dark'] .el-message-box__headerbtn:hover {
+    background: rgba(148, 163, 184, 0.14);
+    box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.35);
+    color: var(--iot-color-title);
+}
+
+/* 亮色主题下 hover 效果 */
+:root[data-theme='light'] .el-message-box__headerbtn:hover {
+    background: rgba(148, 163, 184, 0.12);
+    box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.28);
+    color: var(--iot-color-title);
+}
+
+/* ---------- ElMessage（全局轻提示）统一风格 ---------- */
+/* 依赖变量（建议在 :root 里加）：
+ * --iot-toast-min-width / max-width / padding-x / padding-y / gap
+ */
+
+.el-message {
+    /* ① 先把定位钉死，强制回到窗口顶部居中 */
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    /* top 会被 Element Plus 通过行内样式设置（20px、40px…），这里不写也行 */
+
+    display: inline-flex;
+    align-items: center;
+    gap: var(--iot-toast-gap);
+
+    min-width: var(--iot-toast-min-width);
+    max-width: var(--iot-toast-max-width);
+    padding: var(--iot-toast-padding-y) var(--iot-toast-padding-x);
+
+    border-radius: var(--iot-radius-card);
+    border: 1px solid var(--iot-color-card-border);
+    box-shadow: var(--iot-color-card-shadow);
+    backdrop-filter: blur(14px);
+}
+
+/* 深色主题下的背景 / 字体颜色 */
+:root[data-theme='dark'] .el-message {
+    background: linear-gradient(
+            135deg,
+            rgba(15, 23, 42, 0.96),
+            rgba(15, 23, 42, 0.9)
+    );
+    color: var(--iot-color-text);
+}
+
+/* 亮色主题下的背景 / 字体颜色 */
+:root[data-theme='light'] .el-message {
+    background: linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.98),
+            rgba(248, 250, 252, 0.98)
+    );
+    color: var(--iot-color-text);
+}
+
+/* 文本：跟全局字号保持一致 */
+.el-message__content {
+    font-size: var(--iot-font-base);
+    line-height: 1.4;
+}
+
+/* ---------- warning 专用高亮（ElMessage.warning） ---------- */
+
+/* 左侧一条细竖条，暗示“警告”，同时不太打断整体蓝色主题 */
+.el-message--warning {
+    border-color: rgba(248, 180, 88, 0.9);
+    /* ⚠️ 不要再写 position 了 */
+    padding-left: calc(var(--iot-toast-padding-x) - 0.25rem);
+}
+
+.el-message--warning::before {
+    content: '';
+    display: block;
+    width: 0.25rem;
+    align-self: stretch;
+    border-radius: var(--iot-radius-card) 0 0 var(--iot-radius-card);
+    background: linear-gradient(180deg, #f97316, #fbbf24);
+    margin-right: var(--iot-space-xs);
+}
+
+.el-message--warning .el-message__icon {
+    color: #f97316;
 }

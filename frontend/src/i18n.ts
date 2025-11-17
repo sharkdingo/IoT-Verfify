@@ -34,7 +34,6 @@ const messages = {
             specTemplate: '规约模板',
             selectTemplate: '选择模板',
             naturalLanguage: '自然语言描述',
-            specPlaceholder: '请输入规约的自然语言描述，例如：空调开启后最终必须关闭。',
             addSpec: '添加规约',
             specTemplateShort: '模板',
             specText: '规约',
@@ -44,13 +43,17 @@ const messages = {
             addIfCondition: '添加 IF 条件',
             addThenCondition: '添加 THEN 条件',
             value: '值',
-            thenHappens: '',
-            currentSpecs: '当前规约',
+            specRowIncomplete: '存在未填完整的条件，请删除该行或补全所有字段。',
             selectAttrOrApi: '选择属性或 API',
+            specNeedA: '请至少配置一个事件 A 条件',
+            specNeedIf: '请先完成 IF 部分（事件 A 的条件）',
+            specNeedThen: '请先完成 THEN 部分（事件 B 的条件）',
 
             /* 右侧：状态面板 */
             currentDevices: '当前设备',
             currentRules: '当前规则',
+            currentSpecs: '当前规约',
+            specContent: '规约内容',
             device: '设备',
             state: '状态',
             actions: '操作',
@@ -62,10 +65,27 @@ const messages = {
                 '该设备存在与其他设备的规则（连线），删除设备将同时删除这些规则，是否继续？',
 
             /* 右键弹窗 */
-            deviceInfo: '设备信息',
-            description: '描述',
             name: '名称',
-            deleteDevice: '删除设备'
+            description: '描述',
+            deleteDevice: '删除设备',
+
+            deviceInfo: '设备信息',
+            deviceBasic: '基本信息',
+            deviceVariables: '变量',
+            deviceStates: '状态',
+            deviceApis: 'API',
+
+            instanceName: '实例名称',
+            initState: '初始状态',
+            impactedVariables: '受影响变量',
+
+            trust: '可信度',
+            from: '起始状态',
+            to: '结束状态',
+
+            relatedRules: '相关 IFTTT 规则',
+            relatedSpecs: '相关规约',
+            renameDevice: '重命名设备',
         }
     },
 
@@ -91,26 +111,27 @@ const messages = {
             targetDevice: 'Target Device',
             targetApi: 'Target API',
             addRule: 'Add Rule',
+            specNeedA: 'Please configure at least one condition for event A.',
+            specNeedIf: 'Please complete the IF part (conditions for event A).',
+            specNeedThen: 'Please complete the THEN part (conditions for event B).',
 
             /* left panel: specifications */
             specifications: 'Specifications',
             specTemplate: 'Specification Template',
             selectTemplate: 'Select Template',
             naturalLanguage: 'Natural Language',
-            specPlaceholder:
-                'Please enter the natural-language description of the specification, e.g., "After the AC is turned on, it must eventually be turned off."',
             addSpec: 'Add Specification',
             specTemplateShort: 'Template',
-            specText: 'Specification',
+            specContent: 'Specification',
             noSpecYet: 'No specification yet. Please add one.',
             fillAllSpecFields: 'Please select a template and enter the specification description',
             addACondition: 'Add Condition',
             addIfCondition: 'Add IF Condition',
             addThenCondition: 'Add THEN Condition',
             value: 'Value',
-            thenHappens: '',
             currentSpecs: 'Current Specifications',
             selectAttrOrApi: 'Select attribute or API',
+            specRowIncomplete: 'There is an incomplete condition row. Please either delete it or fill in all fields.',
 
             /* right panel */
             currentDevices: 'Current Devices',
@@ -126,10 +147,27 @@ const messages = {
                 'This device has rules (edges) with other devices. Deleting it will also delete those rules. Continue?',
 
             /* dialog */
-            deviceInfo: 'Device Info',
-            description: 'Description',
             name: 'Name',
-            deleteDevice: 'Delete Device'
+            description: 'Description',
+            deleteDevice: 'Delete Device',
+
+            deviceInfo: 'Device Info',
+            deviceBasic: 'Basic',
+            deviceVariables: 'Variables',
+            deviceStates: 'States',
+            deviceApis: 'APIs',
+
+            instanceName: 'Instance',
+            initState: 'Initial State',
+            impactedVariables: 'Impacted Variables',
+
+            trust: 'Trust',
+            from: 'From',
+            to: 'To',
+
+            relatedRules: 'Related IFTTT Rules',
+            relatedSpecs: 'Related Specifications',
+            renameDevice: 'Rename Device',
         }
     }
 }

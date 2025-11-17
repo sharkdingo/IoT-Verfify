@@ -189,7 +189,11 @@ const onAddSpec = () => {
 </script>
 
 <template>
-  <el-collapse v-model="collapseActive" class="panel-collapse" expand-icon-position="left">
+  <el-collapse
+      v-model="collapseActive"
+      class="panel-collapse"
+      expand-icon-position="left"
+  >
     <!-- 设备列表 -->
     <el-collapse-item name="devices">
       <template #title>
@@ -267,9 +271,14 @@ const onAddSpec = () => {
         <span class="card-subtitle">{{ t('app.rules') }}</span>
       </template>
 
-      <el-form :model="ruleForm" label-width="70px" size="default">
-        <el-form-item :label="t('app.sourceDevice')">
-          <el-select v-model="ruleForm.fromId" :placeholder="t('app.sourceDevice')">
+      <div class="ipt-rule-block">
+        <div class="ipt-row">
+          <span class="ipt-label">{{ t('app.sourceDevice') }}</span>
+          <el-select
+              v-model="ruleForm.fromId"
+              class="ipt-select"
+              :placeholder="t('app.sourceDevice')"
+          >
             <el-option
                 v-for="n in nodes"
                 :key="n.id"
@@ -277,9 +286,15 @@ const onAddSpec = () => {
                 :value="n.id"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item :label="t('app.sourceApi')">
-          <el-select v-model="ruleForm.fromApi" :placeholder="t('app.sourceApi')">
+        </div>
+
+        <div class="ipt-row">
+          <span class="ipt-label">{{ t('app.sourceApi') }}</span>
+          <el-select
+              v-model="ruleForm.fromApi"
+              class="ipt-select"
+              :placeholder="t('app.sourceApi')"
+          >
             <el-option
                 v-for="api in fromApis"
                 :key="api.Name"
@@ -287,9 +302,15 @@ const onAddSpec = () => {
                 :value="api.Name"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item :label="t('app.targetDevice')">
-          <el-select v-model="ruleForm.toId" :placeholder="t('app.targetDevice')">
+        </div>
+
+        <div class="ipt-row">
+          <span class="ipt-label">{{ t('app.targetDevice') }}</span>
+          <el-select
+              v-model="ruleForm.toId"
+              class="ipt-select"
+              :placeholder="t('app.targetDevice')"
+          >
             <el-option
                 v-for="n in nodes"
                 :key="n.id"
@@ -297,9 +318,15 @@ const onAddSpec = () => {
                 :value="n.id"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item :label="t('app.targetApi')">
-          <el-select v-model="ruleForm.toApi" :placeholder="t('app.targetApi')">
+        </div>
+
+        <div class="ipt-row">
+          <span class="ipt-label">{{ t('app.targetApi') }}</span>
+          <el-select
+              v-model="ruleForm.toApi"
+              class="ipt-select"
+              :placeholder="t('app.targetApi')"
+          >
             <el-option
                 v-for="api in toApis"
                 :key="api.Name"
@@ -307,13 +334,15 @@ const onAddSpec = () => {
                 :value="api.Name"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item>
+        </div>
+
+        <div class="ipt-row ipt-row-actions">
+          <span class="ipt-label"></span>
           <el-button type="primary" size="default" @click="onAddRule">
             {{ t('app.addRule') }}
           </el-button>
-        </el-form-item>
-      </el-form>
+        </div>
+      </div>
     </el-collapse-item>
 
     <!-- 规约输入 -->
@@ -322,10 +351,13 @@ const onAddSpec = () => {
         <span class="card-subtitle">{{ t('app.specifications') }}</span>
       </template>
 
-      <el-form :model="specForm" label-width="90px" size="default" class="spec-form">
-        <el-form-item :label="t('app.specTemplate')">
+      <!-- 模板选择 -->
+      <div class="spec-form">
+        <div class="ipt-row">
+          <span class="ipt-label">{{ t('app.specTemplate') }}</span>
           <el-select
               v-model="specForm.templateId"
+              class="ipt-select"
               :placeholder="t('app.selectTemplate')"
               filterable
           >
@@ -336,8 +368,8 @@ const onAddSpec = () => {
                 :value="tpl.id"
             />
           </el-select>
-        </el-form-item>
-      </el-form>
+        </div>
+      </div>
 
       <!-- A-only 模式 -->
       <div v-if="specMode === 'single'" class="spec-section">
@@ -544,7 +576,7 @@ const onAddSpec = () => {
           </div>
         </div>
 
-        <!-- THEN 区（B，和 IF 完全相同的结构） -->
+        <!-- THEN 区 -->
         <div class="spec-section">
           <div class="spec-section-header">
             <span class="spec-section-title">THEN</span>
@@ -654,3 +686,189 @@ const onAddSpec = () => {
     </el-collapse-item>
   </el-collapse>
 </template>
+
+<style scoped>
+/* ===========================
+ * InputPanel：设备列表 / 规约编辑
+ * =========================== */
+
+/* ---- 设备搜索框 ---- */
+.device-search {
+  margin-bottom: var(--iot-space-sm);
+}
+
+/* ---- 设备条目（列表模式 + 图标模式通用） ---- */
+.device-item {
+  background: var(--iot-color-device-item-bg);
+  border-radius: var(--iot-radius-input);
+  margin-bottom: var(--iot-space-sm);
+  padding: var(--iot-space-sm) var(--iot-space-md);
+  cursor: grab;
+  transition:
+      box-shadow 0.14s ease-out,
+      background 0.14s ease-out,
+      transform 0.12s ease-out;
+  border: 1px solid var(--iot-color-device-item-border);
+  color: var(--iot-color-device-item-text);
+  font-size: var(--iot-font-subtitle);
+}
+
+.device-item:hover {
+  background: var(--iot-color-device-item-bg-hover);
+  box-shadow: var(--iot-shadow-device-hover);
+  transform: translateY(-1px);
+}
+
+/* ---- 设备条目：图标模式下的栅格布局 ---- */
+.device-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.25rem, 1fr)); /* ≈100px */
+  gap: var(--iot-space-sm);
+}
+
+/* 图标模式：文字居中 */
+.device-item--icon {
+  text-align: center;
+}
+
+/* 设备缩略图 */
+.device-thumb {
+  width: var(--iot-thumb-width);
+  height: var(--iot-thumb-height);
+  object-fit: contain;
+  margin-bottom: var(--iot-space-2xs);
+}
+
+/* 缩略图下设备名称 */
+.device-thumb-label {
+  font-size: var(--iot-font-caption);
+  word-break: break-all;
+}
+
+/* ===========================
+ * IFTTT / Spec 公共行布局
+ * =========================== */
+
+.ipt-rule-block {
+  margin-top: var(--iot-space-xs);
+}
+
+.ipt-row {
+  display: grid;
+  grid-template-columns: max-content 1fr; /* 左 label 自适应，右侧组件占满 */
+  column-gap: var(--iot-space-sm);
+  align-items: center;
+  margin-bottom: var(--iot-space-sm);
+  overflow: visible;
+}
+
+.ipt-row-actions {
+  margin-top: var(--iot-space-xs);
+}
+
+.ipt-label {
+  min-width: 7.5rem; /* 大约 120px，根据需要可以再调 */
+  white-space: nowrap;
+  overflow: visible;
+  flex-shrink: 0;
+  font-size: var(--iot-font-base);
+  color: var(--iot-color-text);
+}
+
+.ipt-select {
+  width: 100%;
+}
+
+/* ===========================
+ * 规约输入区域（Specs）
+ * =========================== */
+
+.spec-form {
+  margin-top: var(--iot-space-2xs);
+  margin-bottom: var(--iot-space-sm);
+}
+
+/* A / IF / THEN 外框容器 */
+.spec-section {
+  margin: var(--iot-space-sm) 0 var(--iot-space-xs);
+  padding: var(--iot-space-sm);
+  border-radius: var(--iot-radius-input);
+  background: linear-gradient(
+      135deg,
+      var(--iot-color-spec-bg),
+      var(--iot-color-spec-bg-strong)
+  );
+  box-shadow: 0 0 0 1px var(--iot-color-spec-border);
+}
+
+/* 小标题行：左标题 + 右侧按钮（添加条件） */
+.spec-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--iot-space-xs);
+}
+
+/* “A / IF / THEN” 标识 */
+.spec-section-title {
+  font-size: var(--iot-font-caption);
+  font-weight: 600;
+  color: var(--iot-color-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* 每一行条件：设备 + 属性/API + 关系 + 值 + 删除按钮 */
+.spec-condition-row {
+  display: flex;
+  flex-wrap: wrap; /* 四块时允许换行成两排 */
+  align-items: center;
+  gap: var(--iot-space-xs);
+}
+
+.spec-condition-row + .spec-condition-row {
+  margin-top: var(--iot-space-sm); /* 条件之间垂直间距 */
+  padding-top: var(--iot-space-sm); /* 分隔线与内容之间缓冲 */
+  border-top: 2px dashed var(--iot-color-spec-border);
+}
+
+/* 底部 “添加规约” 按钮与内容留一点间距 */
+.spec-add-button {
+  margin-top: var(--iot-space-sm);
+}
+
+/* 宽度控制：允许收缩，也允许在窄屏下换行 */
+.spec-cond-device,
+.spec-cond-target,
+.spec-cond-relation,
+.spec-cond-value {
+  min-width: 7rem;
+  flex: 1 1 7rem;
+}
+
+/* 设备名通常最长，稍微给多一点初始比例 */
+.spec-cond-device {
+  flex: 1.2 1 8rem;
+}
+
+.spec-cond-target {
+  flex: 1 1 7rem;
+}
+
+/* 关系通常是 <=、== 等短字符串，占用稍微少一点 */
+.spec-cond-relation {
+  flex: 0.8 1 6rem;
+}
+
+.spec-cond-value {
+  flex: 1 1 7rem;
+}
+
+/* ===========================
+ * 其他表单 label：不换行
+ * =========================== */
+
+:deep(.el-form-item__label) {
+  white-space: nowrap;
+}
+</style>

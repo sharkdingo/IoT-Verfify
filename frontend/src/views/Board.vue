@@ -1,20 +1,9 @@
 <script setup lang="ts">
-/**
- * Board.vue
- * -----------
- * 负责整个“画布 + 左右浮动卡片”的顶层编排：
- * - 管理设备节点 / 边 / 规约的核心数据
- * - 处理画布缩放 & 平移
- * - 处理浮动卡片拖拽与位置持久化
- * - 处理设备节点的创建 / 拖拽 / 缩放
- * - 将输入侧(InputPanel)与状态侧(StatusPanel)串起来
- */
-
 import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 
-import type { DeviceTemplate } from '../types/device'
+import type {DeviceManifest, DeviceTemplate} from '../types/device'
 import type {
   CanvasPan,
   DeviceNode,
@@ -63,10 +52,9 @@ const { t } = useI18n()
 /** 浮动卡片距离视口边缘的默认间距（初始化时使用） */
 const DEFAULT_PANEL_PADDING = 8
 
-// 与 board.css 中 width: clamp(12rem, 22vw, 22rem) 对齐
-const CARD_WIDTH_MIN = 192 // 12rem * 16
-const CARD_WIDTH_MAX = 352 // 22rem * 16
-const CARD_WIDTH_RATIO = 0.22 // 22vw
+const CARD_WIDTH_MIN = 12 * 16 // 12rem * 16
+const CARD_WIDTH_MAX = 24 * 16 // 24rem * 16
+const CARD_WIDTH_RATIO = 0.24// 22vw
 
 /** 设备与左侧 InputPanel 之间的水平间距 */
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
@@ -85,6 +73,11 @@ const ZOOM_STEP = 0.1
 /** 节点标签缩放参考值（用于根据节点宽度调整字体大小） */
 const BASE_NODE_WIDTH = 160
 const BASE_FONT_SIZE = 16
+
+// 单事件规约：只用 A（1,2,3,7）
+const SINGLE_SPEC_IDS: SpecTemplateId[] = ['1', '2', '3', '7']
+// A-B 规约：需要 IF(A) 和 THEN(B)（4,5,6）
+const AB_SPEC_IDS: SpecTemplateId[] = ['4', '5', '6']
 
 /* ========= 画布缩放 / 平移 ========= */
 
@@ -217,6 +210,26 @@ const onPanelPointerUp = () => {
   draggingPanel = null
   window.removeEventListener('pointermove', onPanelPointerMove)
   window.removeEventListener('pointerup', onPanelPointerUp)
+}
+
+// 判断点击目标是否在可交互控件上（按钮、输入框等）
+const isInteractiveTarget = (el: HTMLElement | null): boolean => {
+  if (!el) return false
+  const interactiveSelectors =
+      'input, textarea, select, button, a, [role="button"],' +
+      '.el-input, .el-select, .el-button, .el-checkbox, .el-radio,' +
+      '.el-switch, .el-slider, .el-table, .el-scrollbar'
+  return !!el.closest(interactiveSelectors)
+}
+
+// 卡片整体的 pointerdown 包装：过滤交互控件后再真正开始拖拽
+const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
+  const target = e.target as HTMLElement | null
+  if (isInteractiveTarget(target)) {
+    // 点在表单/按钮上时，不拖拽
+    return
+  }
+  onPanelPointerDown(e, key)
 }
 
 /* ========= 核心数据 ========= */
@@ -506,8 +519,65 @@ const handleAddRule = (payload: RuleForm) => {
 }
 
 /* ========= 规约（来自 InputPanel） ========= */
+/** 一行条件是否“完全空”的判断 */
+const isEmptyCondition = (c: SpecCondition) => {
+  return (
+      !c.deviceId &&
+      !c.targetType &&
+      !c.key &&
+      !c.relation &&
+      !c.value
+  )
+}
 
-const deepClone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
+/** 一行条件是否“完整” —— 严格按照表单渲染逻辑来 */
+const isCompleteCondition = (c: SpecCondition) => {
+  if (isEmptyCondition(c)) return false
+
+  // 没选设备 / 类型 / 目标键，一定不完整
+  if (!c.deviceId || !c.targetType || !c.key) return false
+
+  // ① API：设备 + 类型(api) + key 就够了
+  if (c.targetType === 'api') {
+    return true
+  }
+
+  // ② state / variable：还必须要有 relation + value
+  if (c.targetType === 'state' || c.targetType === 'variable') {
+    return !!c.relation && !!c.value
+  }
+
+  // 其他未知类型，一律当不完整处理（防御性）
+  return false
+}
+
+/**
+ * 对某一侧（A / IF / THEN）的条件做校验并去掉“完全空”的行
+ * - 完全空行：丢弃
+ * - 非空但不完整：标记 hasIncomplete = true
+ * - 完整：进入 cleaned
+ */
+const validateAndCleanConditions = (conds: SpecCondition[]) => {
+  const cleaned: SpecCondition[] = []
+  let hasIncomplete = false
+
+  for (const c of conds) {
+    if (isEmptyCondition(c)) {
+      // 完全空行 → 直接忽略
+      continue
+    }
+
+    if (!isCompleteCondition(c)) {
+      // 有内容，但没填完 → 整体标记为不完整
+      hasIncomplete = true
+      break
+    }
+
+    cleaned.push(c)
+  }
+
+  return { cleaned, hasIncomplete }
+}
 
 /**
  * 将 InputPanel 中配置好的规约实例化为一条 Specification 并存储
@@ -524,23 +594,85 @@ const handleAddSpec = (payload: {
     return
   }
 
-  const tplLabel =
-      specTemplates.value.find(t => t.id === payload.templateId)?.label ||
-      payload.templateId
+  const tplId = payload.templateId as SpecTemplateId
 
-  const cloned = deepClone(payload)
+  // 先对三侧分别做“去空行 + 检查是否有半残行”
+  const aCheck = validateAndCleanConditions(payload.aConditions)
+  const ifCheck = validateAndCleanConditions(payload.ifConditions)
+  const thenCheck = validateAndCleanConditions(payload.thenConditions)
 
-  const item: Specification = {
-    id: 'spec_' + Date.now(),
-    templateId: cloned.templateId as SpecTemplateId,
-    templateLabel: tplLabel,
-    aConditions: cloned.mode === 'single' ? cloned.aConditions : [],
-    ifConditions: cloned.mode === 'ifThen' ? cloned.ifConditions : [],
-    thenConditions: cloned.mode === 'ifThen' ? cloned.thenConditions : []
+  if (aCheck.hasIncomplete || ifCheck.hasIncomplete || thenCheck.hasIncomplete) {
+    ElMessage.warning(
+        t('app.specRowIncomplete') ||
+        '存在未填完整的条件，请删除该行或补全所有字段'
+    )
+    return
   }
 
-  specifications.value.push(item)
-  saveSpecs(specifications.value)
+  const aConds = aCheck.cleaned
+  const ifConds = ifCheck.cleaned
+  const thenConds = thenCheck.cleaned
+
+  // ① 单事件规约：1 / 2 / 3 / 7
+  if (SINGLE_SPEC_IDS.includes(tplId)) {
+    if (!aConds.length) {
+      ElMessage.warning(
+          t('app.specNeedA') || '请至少配置一个事件 A 条件'
+      )
+      return
+    }
+
+    const tplLabel =
+        specTemplates.value.find(t => t.id === tplId)?.label || tplId
+
+    const item: Specification = {
+      id: 'spec_' + Date.now(),
+      templateId: tplId,
+      templateLabel: tplLabel,
+      aConditions: aConds,
+      ifConditions: [],
+      thenConditions: []
+    }
+
+    specifications.value.push(item)
+    saveSpecs(specifications.value)
+    return
+  }
+
+  // ② A-B 规约：4 / 5 / 6
+  if (AB_SPEC_IDS.includes(tplId)) {
+    if (!ifConds.length) {
+      ElMessage.warning(
+          t('app.specNeedIf') || '请先完成 IF 部分（事件 A 的条件）'
+      )
+      return
+    }
+    if (!thenConds.length) {
+      ElMessage.warning(
+          t('app.specNeedThen') || '请先完成 THEN 部分（事件 B 的条件）'
+      )
+      return
+    }
+
+    const tplLabel =
+        specTemplates.value.find(t => t.id === tplId)?.label || tplId
+
+    const item: Specification = {
+      id: 'spec_' + Date.now(),
+      templateId: tplId,
+      templateLabel: tplLabel,
+      aConditions: [],
+      ifConditions: ifConds,
+      thenConditions: thenConds
+    }
+
+    specifications.value.push(item)
+    saveSpecs(specifications.value)
+    return
+  }
+
+  // 理论不会走到这里，防御性代码
+  ElMessage.error('Unknown specification template id: ' + tplId)
 }
 
 /** 从 StatusPanel 删除某条规约 */
@@ -552,11 +684,22 @@ const deleteSpecification = (id: string) => {
 /* ========= 右键设备弹窗 ========= */
 
 const dialogVisible = ref(false)
-const dialogMeta = reactive({
+const dialogMeta = reactive<{
+  nodeId: string
+  deviceName: string
+  description: string
+  label: string
+  manifest: DeviceManifest | null
+  rules: DeviceEdge[]
+  specs: Specification[]
+}>({
   nodeId: '',
   deviceName: '',
   description: '',
-  label: ''
+  label: '',
+  manifest: null,
+  rules: [],
+  specs: []
 })
 
 /**
@@ -564,13 +707,26 @@ const dialogMeta = reactive({
  */
 const onNodeContext = (node: DeviceNode) => {
   const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
+
   dialogMeta.nodeId = node.id
   dialogMeta.label = node.label
   dialogMeta.deviceName = tpl ? tpl.manifest.Name : node.templateName
   dialogMeta.description = tpl ? tpl.manifest.Description : ''
+  dialogMeta.manifest = tpl ? tpl.manifest : null
+
+  // 与该节点相关的 IFTTT 规则（连线）
+  dialogMeta.rules = edges.value.filter(
+      e => e.from === node.id || e.to === node.id
+  )
+
+  // 与该节点相关的规约：
+  // 这里先用简单策略：自然语言里包含设备实例名即可视为“相关”
+  // dialogMeta.specs = specifications.value.filter(spec =>
+  //     (spec.naturalLanguage ?? '').includes(node.label)
+  // )
+
   dialogVisible.value = true
 }
-
 /**
  * 当设备重命名时，更新所有相关边的 fromLabel / toLabel
  */
@@ -844,11 +1000,9 @@ onBeforeUnmount(() => {
     <div
         class="floating-card input-card"
         :style="{ left: panelPositions.left.x + 'px', top: panelPositions.left.y + 'px' }"
+        @pointerdown="onPanelPointerDownWrapper($event, 'left')"
     >
-      <div
-          class="card-header"
-          @pointerdown.stop="onPanelPointerDown($event, 'left')"
-      >
+      <div class="card-header">
         <span class="card-title">{{ t('app.input') }}</span>
       </div>
       <div class="card-body">
@@ -870,15 +1024,10 @@ onBeforeUnmount(() => {
     <!-- ===== 右侧浮动卡片：状态（当前设备 / 规则 / 规约） ===== -->
     <div
         class="floating-card status-card"
-        :style="{
-        left: panelPositions.status.x + 'px',
-        top: panelPositions.status.y + 'px'
-      }"
+        :style="{ left: panelPositions.status.x + 'px', top: panelPositions.status.y + 'px' }"
+        @pointerdown="onPanelPointerDownWrapper($event, 'status')"
     >
-      <div
-          class="card-header"
-          @pointerdown.stop="onPanelPointerDown($event, 'status')"
-      >
+      <div class="card-header">
         <span class="card-title">{{ t('app.status') }}</span>
       </div>
       <div class="card-body">
@@ -900,6 +1049,9 @@ onBeforeUnmount(() => {
         :device-name="dialogMeta.deviceName"
         :description="dialogMeta.description"
         :label="dialogMeta.label"
+        :manifest="dialogMeta.manifest"
+        :rules="dialogMeta.rules"
+        :specs="dialogMeta.specs"
         @update:visible="dialogVisible = $event"
         @save="handleDialogSave"
         @delete="handleDialogDelete"

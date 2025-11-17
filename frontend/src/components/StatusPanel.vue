@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DeviceNode, DeviceEdge, Specification } from '../types/board'
+import type {DeviceNode, DeviceEdge, Specification, SpecCondition} from '../types/board'
 
 const props = defineProps<{
   nodes: DeviceNode[]
@@ -23,6 +23,49 @@ const collapseActive = computed({
   get: () => props.active,
   set: (val: string[]) => emit('update:active', val)
 })
+
+// 构造单个条件的短语
+const describeCondition = (c: SpecCondition): string => {
+  const target =
+      c.targetType === 'state'
+          ? 'state'
+          : c.key || ''  // variable/api 用 key
+  // 统一用 "relation value" 的形式
+  return `'${c.deviceLabel}' ${target} ${c.relation} '${c.value}'`
+}
+
+// 根据 templateId 把整条规约串成一句话
+const buildSpecText = (spec: Specification): string => {
+  const aPart = spec.aConditions.map(describeCondition).join(' and ')
+  const ifPart = spec.ifConditions.map(describeCondition).join(' and ')
+  const thenPart = spec.thenConditions.map(describeCondition).join(' and ')
+
+  switch (spec.templateId) {
+    case '1':
+      // A holds forever
+      return `${aPart} holds forever`
+    case '2':
+      // A will happen later
+      return `${aPart} will happen later`
+    case '3':
+      // A never happens
+      return `${aPart} never happens`
+    case '4':
+      // IF A happens, B should happen at the same time
+      return `If ${ifPart} happens, then ${thenPart} should happen at the same time`
+    case '5':
+      // IF A happens, B should happen later
+      return `If ${ifPart} happens, then ${thenPart} should happen later`
+    case '6':
+      // IF A happens, B should happen later and last forever
+      return `If ${ifPart} happens, then ${thenPart} should happen later and last forever`
+    case '7':
+      // A will not happen because of something untrusted
+      return `${aPart} will not happen because of something untrusted`
+    default:
+      return spec.templateLabel
+  }
+}
 </script>
 
 <template>
@@ -128,6 +171,7 @@ const collapseActive = computed({
       <template #title>
         <span class="card-subtitle">{{ t('app.currentSpecs') }}</span>
       </template>
+
       <el-table
           :data="props.specifications"
           size="small"
@@ -136,17 +180,22 @@ const collapseActive = computed({
           :fit="false"
       >
         <el-table-column
-            prop="templateLabel"
-            :label="t('app.specTemplateShort')"
-            min-width="160"
-            show-overflow-tooltip
-        />
-        <el-table-column
-            prop="naturalLanguage"
-            :label="t('app.specText')"
-            min-width="220"
-            show-overflow-tooltip
-        />
+            :label="t('app.specContent')"
+            min-width="260"
+        >
+          <template #default="scope">
+            <el-tooltip
+                placement="top"
+                :content="buildSpecText(scope.row)"
+                effect="dark"
+            >
+        <span class="spec-cell-text">
+          {{ buildSpecText(scope.row) }}
+        </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+
         <el-table-column
             :label="t('app.actions')"
             min-width="80"
@@ -166,3 +215,55 @@ const collapseActive = computed({
     </el-collapse-item>
   </el-collapse>
 </template>
+
+<style scoped>
+/* ===========================
+ * StatusPanel：三张状态表
+ * 当前设备 / 规则 / 规约
+ * 主要做统一的深色表格皮肤
+ * =========================== */
+.spec-cell-text {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 表格整体：透明背景 + 统一边框与文字风格 */
+:deep(.el-table) {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: transparent;
+  --el-table-border-color: var(--iot-color-table-border);
+
+  background-color: transparent;
+  color: var(--iot-color-text);
+  font-size: var(--iot-font-base);
+}
+
+/* 表头 / 单元格：去掉默认白底 */
+:deep(.el-table th),
+:deep(.el-table td) {
+  background-color: transparent !important;
+}
+
+/* 表头文字稍弱一些做层次 */
+:deep(.el-table th .cell) {
+  color: var(--iot-color-text-muted);
+  font-weight: 500;
+}
+
+/* 单元格：单行显示 + 溢出省略号，避免长文本撑爆布局 */
+:deep(.el-table .cell) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 悬停高亮行：柔和的蓝色底，视觉上不太“炸” */
+:deep(.el-table__row:hover > td) {
+  background-color: var(--iot-color-table-row-hover) !important;
+}
+</style>
+
