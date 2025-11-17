@@ -5,6 +5,6 @@ import './styles/board.css'
 import App from './App.vue'
 import {router} from './router';
 import ElementPlus from 'element-plus';
-import { i18n } from './i18n'
+import { i18n } from './assets/i18n.ts'
 
 createApp(App).use(ElementPlus).use(router).use(i18n).mount('#app');
