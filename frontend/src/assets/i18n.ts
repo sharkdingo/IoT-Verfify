@@ -48,6 +48,7 @@ const messages = {
             specNeedA: '请至少配置一个事件 A 条件',
             specNeedIf: '请先完成 IF 部分（事件 A 的条件）',
             specNeedThen: '请先完成 THEN 部分（事件 B 的条件）',
+            specDuplicate: '已经存在一条内容完全相同的规约',
 
             /* 右侧：状态面板 */
             currentDevices: '当前设备',
@@ -132,6 +133,7 @@ const messages = {
             currentSpecs: 'Current Specifications',
             selectAttrOrApi: 'Select attribute or API',
             specRowIncomplete: 'There is an incomplete condition row. Please either delete it or fill in all fields.',
+            specDuplicate: 'An identical specification already exists',
 
             /* right panel */
             currentDevices: 'Current Devices',

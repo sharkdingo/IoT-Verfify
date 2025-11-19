@@ -688,10 +688,6 @@ const onAddSpec = () => {
 </template>
 
 <style scoped>
-/* ===========================
- * InputPanel：设备列表 / 规约编辑
- * =========================== */
-
 /* ---- 设备搜索框 ---- */
 .device-search {
   margin-bottom: var(--iot-space-sm);
