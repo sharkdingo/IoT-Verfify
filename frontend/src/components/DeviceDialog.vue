@@ -3,7 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DeviceManifest } from '../types/device'
-import type { DeviceEdge } from '../types/board'
+import type { DeviceEdge } from '../types/edge'
 import type { Specification } from '../types/spec'
 import { buildSpecText } from "../utils/spec.ts"
 import {

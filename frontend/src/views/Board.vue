@@ -3,20 +3,16 @@ import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 
-import type {DeviceDialogMeta, DeviceTemplate} from '../types/device'
-import type {
-  CanvasPan,
-  DeviceNode,
-  DeviceEdge,
-  RuleForm,
-  PanelPositions
-} from '../types/board'
+import type { DeviceDialogMeta, DeviceTemplate } from '../types/device'
+import type { CanvasPan } from '../types/canvas'
+import type { DeviceNode } from '../types/node'
+import type { DeviceEdge } from '../types/edge'
+import type { RuleForm } from '../types/rule'
+import type { PanelPositions } from '../types/panel'
 
 import { getDeviceIconPath, getNodeIcon } from '../utils/device'
-import {
-  getUniqueLabel,
-  updateEdgesForNode as updateEdgesByGeometry
-} from '../utils/boardLayout'
+import { getUniqueLabel } from '../utils/canvas/nodeCreate'
+
 import {
   loadDeviceTemplates,
   loadNodes,
@@ -29,13 +25,16 @@ import {
   saveEdges,
   saveSpecs,
   savePanels,
-  savePanelActive,
+  savePanelActive
 } from '../utils/boardStorage'
 
 import {
   getSpecMode,
   validateAndCleanConditions,
-  isSameSpecification, isSpecRelatedToNode, removeSpecsForNode, updateSpecsForNodeRename
+  isSameSpecification,
+  isSpecRelatedToNode,
+  removeSpecsForNode,
+  updateSpecsForNodeRename
 } from '../utils/spec'
 
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -44,10 +43,19 @@ import { defaultDeviceTemplates } from '../assets/config/deviceTemplates'
 import InputPanel from '../components/InputPanel.vue'
 import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
+import CanvasBoard from '../components/CanvasBoard.vue'
 
 import '../styles/board.css'
-import {SpecCondition, Specification, SpecTemplate, SpecTemplateId} from "../types/spec.ts";
-import { updateRulesForNodeRename, getLinkPoints, getSelfLoopPath } from "../utils/rule.ts";
+import {
+  SpecCondition,
+  Specification,
+  SpecTemplate,
+  SpecTemplateId
+} from '../types/spec'
+import {
+  updateRulesForNodeRename,
+  getLinkPoints,
+} from '../utils/rule'
 
 const { t } = useI18n()
 
@@ -58,7 +66,7 @@ const DEFAULT_PANEL_PADDING = 8
 
 const CARD_WIDTH_MIN = 12 * 16 // 12rem * 16
 const CARD_WIDTH_MAX = 24 * 16 // 24rem * 16
-const CARD_WIDTH_RATIO = 0.24// 22vw
+const CARD_WIDTH_RATIO = 0.24 // 24vw
 
 /** 设备与左侧 InputPanel 之间的水平间距 */
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
@@ -125,8 +133,11 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
 
 /**
  * 按住鼠标左键在空白画布上拖拽，实现平移
+ * （由 CanvasBoard 通过 @canvas-pointerdown 调用）
  */
 const onCanvasPointerDown = (e: PointerEvent) => {
+  // 只处理左键
+  if (e.button !== 0) return
   isPanning = true
   panStart = { x: e.clientX, y: e.clientY }
   panOrigin = { x: canvasPan.value.x, y: canvasPan.value.y }
@@ -290,134 +301,6 @@ const getNextNodePosition = (): { x: number; y: number } => {
   return { x: baseX, y: baseY }
 }
 
-/* ========= 节点拖拽 / 缩放 ========= */
-
-let dragNode: DeviceNode | null = null
-let dragStart = { x: 0, y: 0 }
-let nodeStart = { x: 0, y: 0 }
-
-/** 调用通用的 geometry 工具，更新与某个节点有关的所有边的端点坐标 */
-const updateEdgesForNode = (nodeId: string) => {
-  updateEdgesByGeometry(nodeId, nodes.value, edges.value)
-}
-
-/**
- * 节点拖拽开始
- */
-const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
-  e.preventDefault()
-  dragNode = node
-  dragStart = { x: e.clientX, y: e.clientY }
-  nodeStart = { x: node.position.x, y: node.position.y }
-  window.addEventListener('pointermove', onNodePointerMove)
-  window.addEventListener('pointerup', onNodePointerUp)
-}
-
-/**
- * 节点拖拽过程：更新 position 并刷新连线
- */
-const onNodePointerMove = (e: PointerEvent) => {
-  if (!dragNode) return
-  const dx = e.clientX - dragStart.x
-  const dy = e.clientY - dragStart.y
-  dragNode.position.x = nodeStart.x + dx
-  dragNode.position.y = nodeStart.y + dy
-  updateEdgesForNode(dragNode.id)
-}
-
-/**
- * 节点拖拽结束：保存节点 & 边数据
- */
-const onNodePointerUp = () => {
-  if (dragNode) {
-    saveNodes(nodes.value)
-    saveEdges(edges.value)
-  }
-  dragNode = null
-  window.removeEventListener('pointermove', onNodePointerMove)
-  window.removeEventListener('pointerup', onNodePointerUp)
-}
-
-// ========= 边 / 自环几何 =========
-
-const getSelfLoopD = (edge: DeviceEdge) => {
-  const node = nodes.value.find(n => n.id === edge.from)
-  if (!node) return ''
-  return getSelfLoopPath(node)
-}
-
-/* ----- 节点缩放（四角手柄） ----- */
-
-let resizingNode: DeviceNode | null = null
-let resizeStart = { x: 0, y: 0 }
-let startSize = { w: 0, h: 0 }
-let startPos = { x: 0, y: 0 }
-let resizeDir: 'tl' | 'tr' | 'bl' | 'br' = 'br'
-
-const onPointerDownResize = (
-    e: PointerEvent,
-    node: DeviceNode,
-    dir: 'tl' | 'tr' | 'bl' | 'br' = 'br'
-) => {
-  e.stopPropagation()
-  e.preventDefault()
-  resizingNode = node
-  resizeDir = dir
-  resizeStart = { x: e.clientX, y: e.clientY }
-  startSize = { w: node.width, h: node.height }
-  startPos = { x: node.position.x, y: node.position.y }
-  window.addEventListener('pointermove', onPointerMoveResize)
-  window.addEventListener('pointerup', onPointerUpResize)
-}
-
-const onPointerMoveResize = (e: PointerEvent) => {
-  if (!resizingNode) return
-  const dx = e.clientX - resizeStart.x
-  const dy = e.clientY - resizeStart.y
-  const minW = 80
-  const minH = 60
-
-  let newW = startSize.w
-  let newH = startSize.h
-  let newX = startPos.x
-  let newY = startPos.y
-
-  if (resizeDir === 'br') {
-    newW = Math.max(minW, startSize.w + dx)
-    newH = Math.max(minH, startSize.h + dy)
-  } else if (resizeDir === 'bl') {
-    newW = Math.max(minW, startSize.w - dx)
-    newH = Math.max(minH, startSize.h + dy)
-    newX = startPos.x + (startSize.w - newW)
-  } else if (resizeDir === 'tr') {
-    newW = Math.max(minW, startSize.w + dx)
-    newH = Math.max(minH, startSize.h - dy)
-    newY = startPos.y + (startSize.h - newH)
-  } else if (resizeDir === 'tl') {
-    newW = Math.max(minW, startSize.w - dx)
-    newH = Math.max(minH, startSize.h - dy)
-    newX = startPos.x + (startSize.w - newW)
-    newY = startPos.y + (startSize.h - newH)
-  }
-
-  resizingNode.width = newW
-  resizingNode.height = newH
-  resizingNode.position.x = newX
-  resizingNode.position.y = newY
-
-  updateEdgesForNode(resizingNode.id)
-}
-
-const onPointerUpResize = () => {
-  if (resizingNode) {
-    saveNodes(nodes.value)
-    saveEdges(edges.value)
-  }
-  resizingNode = null
-  window.removeEventListener('pointermove', onPointerMoveResize)
-  window.removeEventListener('pointerup', onPointerUpResize)
-}
-
 /* ========= 设备创建 / 拖拽 ========= */
 
 /**
@@ -461,11 +344,15 @@ const onDeviceDragEnd = () => {
   draggingTplName.value = null
 }
 
+/**
+ * CanvasBoard 通过 @canvas-dragover -> 交给此函数
+ */
 const onCanvasDragOver = (e: DragEvent) => {
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
 }
 
 /**
+ * CanvasBoard 通过 @canvas-drop -> 交给此函数
  * 支持从左侧列表拖拽到画布任意位置放置设备
  */
 const onCanvasDrop = (e: DragEvent) => {
@@ -501,7 +388,7 @@ const handleAddRule = (payload: RuleForm) => {
 
   const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
 
-  // 现在：不再根据 API 自动更新目标节点状态，只记录一条规则边
+  // 不再根据 API 自动更新目标节点状态，只记录一条规则边
   edges.value.push({
     id: 'edge_' + Date.now(),
     from: fromNode.id,
@@ -534,7 +421,7 @@ const handleAddSpec = (payload: {
 
   const tplId = payload.templateId as SpecTemplateId
 
-  // 先对三侧分别做“去空行 + 检查是否有半残行”
+  // 三侧分别做“去空行 + 检查是否有半残行”
   const aCheck = validateAndCleanConditions(payload.aConditions)
   const ifCheck = validateAndCleanConditions(payload.ifConditions)
   const thenCheck = validateAndCleanConditions(payload.thenConditions)
@@ -578,8 +465,7 @@ const handleAddSpec = (payload: {
     )
     if (exists) {
       ElMessage.warning(
-          t('app.specDuplicate') ||
-          '已经存在一条内容完全相同的规约'
+          t('app.specDuplicate') || '已经存在一条内容完全相同的规约'
       )
       return
     }
@@ -614,8 +500,7 @@ const handleAddSpec = (payload: {
     )
     if (exists) {
       ElMessage.warning(
-          t('app.specDuplicate') ||
-          '已经存在一条内容完全相同的规约'
+          t('app.specDuplicate') || '已经存在一条内容完全相同的规约'
       )
       return
     }
@@ -648,6 +533,7 @@ const dialogMeta = reactive<DeviceDialogMeta>({
 
 /**
  * 右键点击设备节点，打开设备信息弹窗
+ * （由 CanvasBoard 通过 @node-context 调用）
  */
 const onNodeContext = (node: DeviceNode) => {
   const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
@@ -660,7 +546,7 @@ const onNodeContext = (node: DeviceNode) => {
   dialogMeta.rules = edges.value.filter(
       e => e.from === node.id || e.to === node.id
   )
-  // 与该节点相关的规约（统一用 utils/spec.ts 的逻辑）
+  // 与该节点相关的规约
   dialogMeta.specs = specifications.value.filter(spec =>
       isSpecRelatedToNode(spec, node.id)
   )
@@ -688,11 +574,7 @@ const handleDialogSave = (newLabel: string) => {
   node.label = newLabel
   saveNodes(nodes.value)
   // 3) 同步规则（边）上的标签
-  const rulesChanged = updateRulesForNodeRename(
-      edges.value,
-      node.id,
-      newLabel
-  )
+  const rulesChanged = updateRulesForNodeRename(edges.value, node.id, newLabel)
   if (rulesChanged) {
     saveEdges(edges.value)
   }
@@ -773,6 +655,7 @@ const handleDialogDelete = () => {
   if (!dialogMeta.nodeId) return
   deleteCurrentNodeWithConfirm(dialogMeta.nodeId)
 }
+
 /* ========= StatusPanel 删除回调 ========= */
 
 const deleteNodeFromStatus = (nodeId: string) => {
@@ -781,6 +664,14 @@ const deleteNodeFromStatus = (nodeId: string) => {
 
 const deleteEdgeFromStatus = (edgeId: string) => {
   edges.value = edges.value.filter(e => e.id !== edgeId)
+  saveEdges(edges.value)
+}
+
+/* ========= CanvasBoard 回调：节点移动 / 缩放完成 ========= */
+
+const handleNodeMovedOrResized = () => {
+  // 这里目前只需要持久化；如后面要做“自动排版”等逻辑也可以在这里加
+  saveNodes(nodes.value)
   saveEdges(edges.value)
 }
 
@@ -852,115 +743,32 @@ watch(
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('pointermove', onCanvasPointerMove)
+  window.removeEventListener('pointerup', onCanvasPointerUp)
 })
 </script>
 
 <template>
   <div class="iot-board">
-    <!-- ===== 背景画布（节点 + 连线） ===== -->
-    <div
-        class="canvas"
-        @pointerdown="onCanvasPointerDown"
-        @dragover.prevent="onCanvasDragOver"
-        @drop.prevent="onCanvasDrop"
-        @mouseenter="onCanvasEnter"
-        @mouseleave="onCanvasLeave"
-        @wheel="onCanvasWheel"
-    >
-      <div
-          class="canvas-inner"
-          :style="{
-          transform: `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${canvasZoom})`,
-          transformOrigin: '0 0'
-        }"
-      >
-        <!-- 连线层 -->
-        <svg class="edge-layer">
-          <defs>
-            <marker
-                id="arrow"
-                markerWidth="10"
-                markerHeight="10"
-                refX="10"
-                refY="3"
-                orient="auto"
-            >
-              <!-- 箭头颜色也改成跟变量一致 -->
-              <path d="M0,0 L0,6 L9,3 z" :fill="`var(--iot-color-edge)`"></path>
-            </marker>
-          </defs>
+    <!-- ===== 背景画布（节点 + 连线）抽离为 CanvasBoard ===== -->
+    <CanvasBoard
+        :nodes="nodes"
+        :edges="edges"
+        :pan="canvasPan"
+        :zoom="canvasZoom"
+        :get-node-icon="getNodeIcon"
+        :get-node-label-style="getNodeLabelStyle"
+        @canvas-pointerdown="onCanvasPointerDown"
+        @canvas-dragover="onCanvasDragOver"
+        @canvas-drop="onCanvasDrop"
+        @canvas-enter="onCanvasEnter"
+        @canvas-leave="onCanvasLeave"
+        @canvas-wheel="onCanvasWheel"
+        @node-context="onNodeContext"
+        @node-moved-or-resized="handleNodeMovedOrResized"
+    />
 
-          <g v-for="edge in edges" :key="edge.id">
-            <!-- 自环：from === to，用 path -->
-            <path
-                v-if="edge.from === edge.to"
-                class="edge-line"
-                :d="getSelfLoopD(edge)"
-                marker-end="url(#arrow)"
-            />
-            <!-- 普通边：仍然用 line -->
-            <line
-                v-else
-                class="edge-line"
-                :x1="edge.fromPos.x"
-                :y1="edge.fromPos.y"
-                :x2="edge.toPos.x"
-                :y2="edge.toPos.y"
-                marker-end="url(#arrow)"
-            />
-          </g>
-        </svg>
-
-        <!-- 设备节点 -->
-        <div
-            v-for="node in nodes"
-            :key="node.id"
-            class="device-node"
-            :style="{
-            left: node.position.x + 'px',
-            top: node.position.y + 'px',
-            width: node.width + 'px',
-            height: node.height + 'px'
-          }"
-            @pointerdown.stop="onNodePointerDown($event, node)"
-            @contextmenu.prevent="onNodeContext(node)"
-        >
-          <img
-              class="device-img"
-              :src="getNodeIcon(node)"
-              :alt="node.label"
-              draggable="false"
-              :style="{
-              width: node.width * 0.55 + 'px',
-              height: node.height * 0.35 + 'px'
-            }"
-          />
-          <div class="device-label" :style="getNodeLabelStyle(node)">
-            {{ node.label }}
-          </div>
-
-          <!-- 四角缩放手柄 -->
-          <div
-              class="resize-handle tl"
-              @pointerdown.stop="onPointerDownResize($event, node, 'tl')"
-          ></div>
-          <div
-              class="resize-handle tr"
-              @pointerdown.stop="onPointerDownResize($event, node, 'tr')"
-          ></div>
-          <div
-              class="resize-handle bl"
-              @pointerdown.stop="onPointerDownResize($event, node, 'bl')"
-          ></div>
-          <div
-              class="resize-handle br"
-              @pointerdown.stop="onPointerDownResize($event, node, 'br')"
-          ></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===== 左侧浮动卡片：输入（设备 / 规则 / 规约） ===== -->
+    <!-- ===== 浮动卡片：输入（设备 / 规则 / 规约） ===== -->
     <div
         class="floating-card input-card"
         :style="{ left: panelPositions.left.x + 'px', top: panelPositions.left.y + 'px' }"
@@ -985,7 +793,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- ===== 右侧浮动卡片：状态（当前设备 / 规则 / 规约） ===== -->
+    <!-- ===== 浮动卡片：状态（当前设备 / 规则 / 规约） ===== -->
     <div
         class="floating-card status-card"
         :style="{ left: panelPositions.status.x + 'px', top: panelPositions.status.y + 'px' }"

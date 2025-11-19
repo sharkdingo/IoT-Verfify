@@ -1,7 +1,7 @@
 // src/types/device.ts
 
 import {Specification} from "./spec.ts";
-import {DeviceEdge} from "./board.ts";
+import { DeviceEdge } from "./edge.ts";
 
 export interface DeviceAPI {
     Name: string

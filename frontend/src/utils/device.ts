@@ -7,7 +7,7 @@ import type {
     DeviceTemplate,
     DeviceVariableView
 } from '../types/device'
-import {DeviceNode} from "../types/board.ts";
+import {DeviceNode} from "../types/node.ts";
 
 /** 拼出 /src/assets/{folder}/{state}.png 的路径 */
 export const getDeviceIconPath = (folder: string, state: string) => {

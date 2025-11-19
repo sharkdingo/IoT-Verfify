@@ -1,5 +1,7 @@
 // src/utils/boardStorage.ts
-import type { DeviceNode, DeviceEdge, PanelPositions, PanelActive } from '../types/board'
+import type { DeviceNode } from '../types/node.ts'
+import type { DeviceEdge } from '../types/edge.ts'
+import type { PanelPositions, PanelActive } from '../types/panel.ts'
 import type { DeviceTemplate } from '../types/device'
 import { Specification } from "../types/spec";
 

@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { List, Picture } from '@element-plus/icons-vue'
 
 import type { DeviceTemplate } from '../types/device'
-import type { DeviceNode, RuleForm } from '../types/board'
+import type { DeviceNode } from '../types/node'
+import type { RuleForm } from "../types/rule"
 import type {
   SpecTemplate,
   SpecForm,
@@ -20,6 +21,7 @@ import {
   getRelationOptions,
   getValueOptions
 } from '../utils/spec'
+import {ElMessage} from "element-plus";
 
 const props = defineProps<{
   deviceTemplates: DeviceTemplate[]
@@ -107,7 +109,7 @@ const specForm = reactive<SpecForm>({
   thenConditions: [createEmptyCondition('then')]
 })
 
-const specMode = computed<'single' | 'ifThen'>(() =>
+const specMode = computed<'single' | 'ifThen' | null>(() =>
     getSpecMode(specForm.templateId)
 )
 
@@ -171,9 +173,13 @@ const removeThenCondition = (id: string) => {
 }
 
 const onAddSpec = () => {
+  if (!specMode.value) {
+    ElMessage.warning(t('app.selectTemplate') || '请选择规约模板')
+    return
+  }
   emit('add-spec', {
     templateId: specForm.templateId,
-    mode: getSpecMode(specForm.templateId),
+    mode: specMode.value,
     aConditions: specMode.value === 'single' ? specForm.aConditions : [],
     ifConditions: specMode.value === 'ifThen' ? specForm.ifConditions : [],
     thenConditions: specMode.value === 'ifThen' ? specForm.thenConditions : []
@@ -476,7 +482,7 @@ const onAddSpec = () => {
       </div>
 
       <!-- IF / THEN 模式 -->
-      <div v-else>
+      <div v-else-if="specMode === 'ifThen'">
         <!-- IF 区 -->
         <div class="spec-section">
           <div class="spec-section-header">

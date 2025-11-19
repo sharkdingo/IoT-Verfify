@@ -1,5 +1,6 @@
 // src/utils/rule.ts
-import type {DeviceEdge, DeviceNode} from '../types/board'
+import type {DeviceEdge} from '../types/edge.ts'
+import type {DeviceNode} from '../types/node.ts'
 
 /**
  * 节点重命名时：更新所有相关规则（边）上的 fromLabel / toLabel

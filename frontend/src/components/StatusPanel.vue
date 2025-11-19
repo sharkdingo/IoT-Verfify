@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DeviceNode, DeviceEdge } from '../types/board'
+import type { DeviceNode } from '../types/node'
 import type { Specification } from '../types/spec'
 import { buildSpecText } from "../utils/spec.ts";
+import { DeviceEdge } from "../types/edge";
 
 const props = defineProps<{
   nodes: DeviceNode[]

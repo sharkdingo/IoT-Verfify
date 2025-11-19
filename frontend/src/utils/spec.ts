@@ -1,5 +1,5 @@
 // src/utils/spec.ts
-import type { DeviceNode } from '../types/board'
+import type { DeviceNode } from '../types/node.ts'
 import type {
     SpecSide,
     SpecCondition,
@@ -8,7 +8,7 @@ import type {
     Specification
 } from '../types/spec'
 import type { DeviceTemplate } from '../types/device'
-import { getTemplateByNodeId } from './boardLayout'
+import { getTemplateByNodeId } from './canvas/template.ts'
 
 /* =========================================
  * 小常量：关系运算符选项（避免魔法字符串）
@@ -43,8 +43,8 @@ export function createEmptyCondition(side: SpecSide): SpecCondition {
  * - 1,2,3,7 => single
  * - 4,5,6   => ifThen
  */
-export function getSpecMode(templateId: SpecTemplateId | ''): 'single' | 'ifThen' {
-    if (!templateId) return 'single'
+export function getSpecMode(templateId: SpecTemplateId | '' | null): 'single' | 'ifThen' | null{
+    if (!templateId) return null
     const num = Number(templateId)
     return num >= 4 && num !== 7 ? 'ifThen' : 'single'
 }

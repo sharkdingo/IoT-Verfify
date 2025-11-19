@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
     DeviceDialog: typeof import('./src/components/DeviceDialog.vue')['default']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']
