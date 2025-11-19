@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 
 import type { DeviceManifest } from '../types/device'
 import type { DeviceEdge, Specification } from '../types/board'
+import { buildSpecText } from "../utils/spec.ts"
 
 const props = defineProps<{
   visible: boolean
@@ -134,7 +135,7 @@ const apis = computed(() => {
 const relatedRules = computed<DeviceEdge[]>(() => props.rules ?? [])
 
 /** 当前节点相关规约 */
-// const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
+const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
 </script>
 
 <template>
@@ -303,37 +304,37 @@ const relatedRules = computed<DeviceEdge[]>(() => props.rules ?? [])
           </table>
         </section>
 
-<!--        &lt;!&ndash; 相关规约 &ndash;&gt;-->
-<!--        <section v-if="relatedSpecs.length" class="dd-section">-->
-<!--          <div class="dd-section-title">-->
-<!--            {{ t('app.relatedSpecs') || 'Related Specifications' }}-->
-<!--          </div>-->
-<!--          <table class="dd-table">-->
-<!--            <thead>-->
-<!--            <tr>-->
-<!--              <th>{{ t('app.specTemplateShort') || 'Template' }}</th>-->
-<!--              <th>{{ t('app.specText') || 'Text' }}</th>-->
-<!--            </tr>-->
-<!--            </thead>-->
-<!--            <tbody>-->
-<!--            <tr v-for="s in relatedSpecs" :key="s.id">-->
-<!--              <td><span class="dd-ellipsis">{{ s.templateLabel }}</span></td>-->
-<!--              <td class="dd-col-desc">-->
-<!--                <el-tooltip-->
-<!--                    v-if="s.naturalLanguage"-->
-<!--                    :content="s.naturalLanguage"-->
-<!--                    placement="top"-->
-<!--                >-->
-<!--                    <span class="dd-ellipsis">-->
-<!--                      {{ s.naturalLanguage }}-->
-<!--                    </span>-->
-<!--                </el-tooltip>-->
-<!--                <span v-else class="dd-ellipsis">-</span>-->
-<!--              </td>-->
-<!--            </tr>-->
-<!--            </tbody>-->
-<!--          </table>-->
-<!--        </section>-->
+        <!-- 相关规约 -->
+        <section v-if="relatedSpecs.length" class="dd-section">
+          <div class="dd-section-title">
+            {{ t('app.relatedSpecs') || 'Related Specifications' }}
+          </div>
+          <table class="dd-table">
+            <thead>
+            <tr>
+              <th>{{ t('app.specTemplateShort') || 'Template' }}</th>
+              <th>{{ t('app.specText') || 'Text' }}</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="s in relatedSpecs" :key="s.id">
+              <td>
+                <span class="dd-ellipsis">{{ s.templateLabel }}</span>
+              </td>
+              <td class="dd-col-desc">
+                <el-tooltip
+                    :content="buildSpecText(s)"
+                    placement="top"
+                >
+            <span class="dd-ellipsis">
+              {{ buildSpecText(s) }}
+            </span>
+                </el-tooltip>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+        </section>
       </div>
 
       <!-- 下半部：重命名区域（固定在表格下方，不参与 dd-body-scroll 的滚动） -->

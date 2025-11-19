@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type {DeviceNode, DeviceEdge, Specification, SpecCondition} from '../types/board'
+import type {DeviceNode, DeviceEdge, Specification } from '../types/board'
+import { buildSpecText } from "../utils/spec.ts";
 
 const props = defineProps<{
   nodes: DeviceNode[]
@@ -23,49 +24,6 @@ const collapseActive = computed({
   get: () => props.active,
   set: (val: string[]) => emit('update:active', val)
 })
-
-// 构造单个条件的短语
-const describeCondition = (c: SpecCondition): string => {
-  const target =
-      c.targetType === 'state'
-          ? 'state'
-          : c.key || ''  // variable/api 用 key
-  // 统一用 "relation value" 的形式
-  return `'${c.deviceLabel}' ${target} ${c.relation} '${c.value}'`
-}
-
-// 根据 templateId 把整条规约串成一句话
-const buildSpecText = (spec: Specification): string => {
-  const aPart = spec.aConditions.map(describeCondition).join(' and ')
-  const ifPart = spec.ifConditions.map(describeCondition).join(' and ')
-  const thenPart = spec.thenConditions.map(describeCondition).join(' and ')
-
-  switch (spec.templateId) {
-    case '1':
-      // A holds forever
-      return `${aPart} holds forever`
-    case '2':
-      // A will happen later
-      return `${aPart} will happen later`
-    case '3':
-      // A never happens
-      return `${aPart} never happens`
-    case '4':
-      // IF A happens, B should happen at the same time
-      return `If ${ifPart} happens, then ${thenPart} should happen at the same time`
-    case '5':
-      // IF A happens, B should happen later
-      return `If ${ifPart} happens, then ${thenPart} should happen later`
-    case '6':
-      // IF A happens, B should happen later and last forever
-      return `If ${ifPart} happens, then ${thenPart} should happen later and last forever`
-    case '7':
-      // A will not happen because of something untrusted
-      return `${aPart} will not happen because of something untrusted`
-    default:
-      return spec.templateLabel
-  }
-}
 </script>
 
 <template>

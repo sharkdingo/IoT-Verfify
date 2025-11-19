@@ -73,7 +73,6 @@ export interface Specification {
     aConditions: SpecCondition[]
     ifConditions: SpecCondition[]
     thenConditions: SpecCondition[]
-    // naturalLanguage 你后面要加的话可以在这里扩展
 }
 
 export interface PanelPositions {

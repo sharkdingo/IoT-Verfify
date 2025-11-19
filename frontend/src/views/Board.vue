@@ -593,14 +593,11 @@ const handleAddSpec = (payload: {
     ElMessage.warning(t('app.selectTemplate') || '请选择规约模板')
     return
   }
-
   const tplId = payload.templateId as SpecTemplateId
-
   // 先对三侧分别做“去空行 + 检查是否有半残行”
   const aCheck = validateAndCleanConditions(payload.aConditions)
   const ifCheck = validateAndCleanConditions(payload.ifConditions)
   const thenCheck = validateAndCleanConditions(payload.thenConditions)
-
   if (aCheck.hasIncomplete || ifCheck.hasIncomplete || thenCheck.hasIncomplete) {
     ElMessage.warning(
         t('app.specRowIncomplete') ||
@@ -608,11 +605,9 @@ const handleAddSpec = (payload: {
     )
     return
   }
-
   const aConds = aCheck.cleaned
   const ifConds = ifCheck.cleaned
   const thenConds = thenCheck.cleaned
-
   // ① 单事件规约：1 / 2 / 3 / 7
   if (SINGLE_SPEC_IDS.includes(tplId)) {
     if (!aConds.length) {
@@ -621,10 +616,7 @@ const handleAddSpec = (payload: {
       )
       return
     }
-
-    const tplLabel =
-        specTemplates.value.find(t => t.id === tplId)?.label || tplId
-
+    const tplLabel = specTemplates.value.find(t => t.id === tplId)?.label || tplId
     const item: Specification = {
       id: 'spec_' + Date.now(),
       templateId: tplId,
@@ -633,12 +625,10 @@ const handleAddSpec = (payload: {
       ifConditions: [],
       thenConditions: []
     }
-
     specifications.value.push(item)
     saveSpecs(specifications.value)
     return
   }
-
   // ② A-B 规约：4 / 5 / 6
   if (AB_SPEC_IDS.includes(tplId)) {
     if (!ifConds.length) {
@@ -653,10 +643,7 @@ const handleAddSpec = (payload: {
       )
       return
     }
-
-    const tplLabel =
-        specTemplates.value.find(t => t.id === tplId)?.label || tplId
-
+    const tplLabel = specTemplates.value.find(t => t.id === tplId)?.label || tplId
     const item: Specification = {
       id: 'spec_' + Date.now(),
       templateId: tplId,
@@ -665,13 +652,10 @@ const handleAddSpec = (payload: {
       ifConditions: ifConds,
       thenConditions: thenConds
     }
-
     specifications.value.push(item)
     saveSpecs(specifications.value)
     return
   }
-
-  // 理论不会走到这里，防御性代码
   ElMessage.error('Unknown specification template id: ' + tplId)
 }
 
@@ -707,24 +691,30 @@ const dialogMeta = reactive<{
  */
 const onNodeContext = (node: DeviceNode) => {
   const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
-
   dialogMeta.nodeId = node.id
   dialogMeta.label = node.label
   dialogMeta.deviceName = tpl ? tpl.manifest.Name : node.templateName
   dialogMeta.description = tpl ? tpl.manifest.Description : ''
   dialogMeta.manifest = tpl ? tpl.manifest : null
-
   // 与该节点相关的 IFTTT 规则（连线）
   dialogMeta.rules = edges.value.filter(
       e => e.from === node.id || e.to === node.id
   )
+  // 计算与此节点相关的规约
+  const isSpecRelatedToNode = (spec: Specification, nodeId: string, nodeLabel: string) => {
+    const check = (conds: SpecCondition[]) =>
+        conds.some(c => c.deviceId === nodeId || c.deviceLabel === nodeLabel)
 
-  // 与该节点相关的规约：
-  // 这里先用简单策略：自然语言里包含设备实例名即可视为“相关”
-  // dialogMeta.specs = specifications.value.filter(spec =>
-  //     (spec.naturalLanguage ?? '').includes(node.label)
-  // )
+    return (
+        check(spec.aConditions) ||
+        check(spec.ifConditions) ||
+        check(spec.thenConditions)
+    )
+  }
 
+  dialogMeta.specs = specifications.value.filter(spec =>
+      isSpecRelatedToNode(spec, node.id, node.label)
+  )
   dialogVisible.value = true
 }
 /**

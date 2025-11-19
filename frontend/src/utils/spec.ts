@@ -3,7 +3,7 @@ import type {
     SpecSide,
     SpecCondition,
     SpecTargetType,
-    SpecTemplateId
+    SpecTemplateId, Specification
 } from '../types/board'
 import type { DeviceNode } from '../types/board'
 import type { DeviceTemplate } from '../types/device'
@@ -90,4 +90,53 @@ export function getValueOptions(
         return (tpl.manifest?.APIs ?? []).map(api => api.Name)
     }
     return []
+}
+
+/**
+ * 把单个条件转成一个短语：
+ *  - state 类型：'AC_Cooler' state in 'Working'
+ *  - variable/api：'AC_Cooler' <key> <relation> '<value>'
+ */
+const describeCondition = (c: SpecCondition): string => {
+    const target = c.targetType === 'state'
+        ? 'state'
+        : c.key || ''
+
+    return `'${c.deviceLabel}' ${target} ${c.relation} '${c.value}'`
+}
+
+/**
+ * 根据 templateId 把整条规约串成一句英文描述
+ * 与之前 StatusPanel 中的逻辑保持完全一致
+ */
+export const buildSpecText = (spec: Specification): string => {
+    const aPart = spec.aConditions.map(describeCondition).join(' and ')
+    const ifPart = spec.ifConditions.map(describeCondition).join(' and ')
+    const thenPart = spec.thenConditions.map(describeCondition).join(' and ')
+
+    switch (spec.templateId) {
+        case '1':
+            // A holds forever
+            return `${aPart} holds forever`
+        case '2':
+            // A will happen later
+            return `${aPart} will happen later`
+        case '3':
+            // A never happens
+            return `${aPart} never happens`
+        case '4':
+            // IF A happens, B should happen at the same time
+            return `If ${ifPart} happens, then ${thenPart} should happen at the same time`
+        case '5':
+            // IF A happens, B should happen later
+            return `If ${ifPart} happens, then ${thenPart} should happen later`
+        case '6':
+            // IF A happens, B should happen later and last forever
+            return `If ${ifPart} happens, then ${thenPart} should happen later and last forever`
+        case '7':
+            // A will not happen because of something untrusted
+            return `${aPart} will not happen because of something untrusted`
+        default:
+            return spec.templateLabel
+    }
 }
