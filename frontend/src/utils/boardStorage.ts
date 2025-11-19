@@ -1,6 +1,7 @@
 // src/utils/boardStorage.ts
-import type { DeviceNode, DeviceEdge, Specification, PanelPositions, PanelActive } from '../types/board'
+import type { DeviceNode, DeviceEdge, PanelPositions, PanelActive } from '../types/board'
 import type { DeviceTemplate } from '../types/device'
+import { Specification } from "../types/spec";
 
 export const STORAGE_KEYS = {
     DEVICES: 'iot_devices',

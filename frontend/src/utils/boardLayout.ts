@@ -1,7 +1,7 @@
 // src/utils/boardLayout.ts
 import type { DeviceNode, DeviceEdge } from '../types/board'
 import type { DeviceTemplate } from '../types/device'
-import { getLinkPoints } from './geometry'
+import { getLinkPoints } from './rule'
 
 /**
  * 根据基础名称和已有节点，生成唯一 label

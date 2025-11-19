@@ -4,14 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { List, Picture } from '@element-plus/icons-vue'
 
 import type { DeviceTemplate } from '../types/device'
+import type { DeviceNode, RuleForm } from '../types/board'
 import type {
-  DeviceNode,
-  RuleForm,
   SpecTemplate,
   SpecForm,
   SpecCondition,
   SpecTemplateId
-} from '../types/board'
+} from '../types/spec'
 
 import {
   createEmptyCondition,
@@ -48,6 +47,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
+const collapseActive = computed({
+  get: () => props.active,
+  set: (val: string[]) => emit('update:active', val)
+})
+
 /* ========= 设备列表 ========= */
 
 const deviceViewMode = ref<'list' | 'icon'>('list')
@@ -57,11 +61,6 @@ const filteredDevices = computed(() => {
   if (!deviceKeyword.value) return props.deviceTemplates
   const kw = deviceKeyword.value.toLowerCase()
   return props.deviceTemplates.filter(d => d.name.toLowerCase().includes(kw))
-})
-
-const collapseActive = computed({
-  get: () => props.active,
-  set: (val: string[]) => emit('update:active', val)
 })
 
 const onSelectDevice = (tpl: DeviceTemplate) => {

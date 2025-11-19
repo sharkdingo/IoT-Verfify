@@ -1,12 +1,12 @@
 // src/utils/spec.ts
+import type { DeviceNode } from '../types/board'
 import type {
     SpecSide,
     SpecCondition,
     SpecTargetType,
     SpecTemplateId,
-    Specification,
-    DeviceNode
-} from '../types/board'
+    Specification
+} from '../types/spec'
 import type { DeviceTemplate } from '../types/device'
 import { getTemplateByNodeId } from './boardLayout'
 
@@ -311,4 +311,62 @@ export const isSameSpecification = (a: Specification, b: Specification): boolean
         sameCondArray(a.ifConditions, b.ifConditions) &&
         sameCondArray(a.thenConditions, b.thenConditions)
     )
+}
+
+/**
+ * 节点重命名时：同步更新所有规约里该节点对应条件的 deviceLabel
+ * @returns 是否发生了修改
+ */
+export const updateSpecsForNodeRename = (
+    specs: Specification[],
+    nodeId: string,
+    newLabel: string
+): boolean => {
+    let changed = false
+    const updateSide = (conds: SpecCondition[]) => {
+        conds.forEach(c => {
+            if (c.deviceId === nodeId && c.deviceLabel !== newLabel) {
+                c.deviceLabel = newLabel
+                changed = true
+            }
+        })
+    }
+    specs.forEach(spec => {
+        updateSide(spec.aConditions)
+        updateSide(spec.ifConditions)
+        updateSide(spec.thenConditions)
+    })
+    return changed
+}
+
+// 计算与此节点相关的规约
+export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
+    const check = (conds: SpecCondition[]) =>
+        conds.some(c => c.deviceId === nodeId)
+    return (
+        check(spec.aConditions) ||
+        check(spec.ifConditions) ||
+        check(spec.thenConditions)
+    )
+}
+
+/**
+ * 删除节点时：过滤掉所有“涉及该节点”的规约
+ */
+export const removeSpecsForNode = (
+    specs: Specification[],
+    nodeId: string,
+): { nextSpecs: Specification[]; removed: Specification[] } => {
+    const next: Specification[] = []
+    const removed: Specification[] = []
+
+    specs.forEach(spec => {
+        if (isSpecRelatedToNode(spec, nodeId)) {
+            removed.push(spec)
+        } else {
+            next.push(spec)
+        }
+    })
+
+    return { nextSpecs: next, removed }
 }

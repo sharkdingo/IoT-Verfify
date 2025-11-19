@@ -3,21 +3,16 @@ import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 
-import type {DeviceManifest, DeviceTemplate} from '../types/device'
+import type {DeviceDialogMeta, DeviceTemplate} from '../types/device'
 import type {
   CanvasPan,
   DeviceNode,
   DeviceEdge,
   RuleForm,
-  SpecTemplate,
-  Specification,
-  SpecCondition,
-  SpecTemplateId,
   PanelPositions
 } from '../types/board'
 
 import { getDeviceIconPath, getNodeIcon } from '../utils/device'
-import { getLinkPoints, getSelfLoopPath } from '../utils/geometry'
 import {
   getUniqueLabel,
   updateEdgesForNode as updateEdgesByGeometry
@@ -40,7 +35,7 @@ import {
 import {
   getSpecMode,
   validateAndCleanConditions,
-  isSameSpecification
+  isSameSpecification, isSpecRelatedToNode, removeSpecsForNode, updateSpecsForNodeRename
 } from '../utils/spec'
 
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -51,6 +46,8 @@ import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
 
 import '../styles/board.css'
+import {SpecCondition, Specification, SpecTemplate, SpecTemplateId} from "../types/spec.ts";
+import { updateRulesForNodeRename, getLinkPoints, getSelfLoopPath } from "../utils/rule.ts";
 
 const { t } = useI18n()
 
@@ -349,7 +346,6 @@ const getSelfLoopD = (edge: DeviceEdge) => {
   return getSelfLoopPath(node)
 }
 
-
 /* ----- 节点缩放（四角手柄） ----- */
 
 let resizingNode: DeviceNode | null = null
@@ -640,15 +636,7 @@ const deleteSpecification = (id: string) => {
 /* ========= 右键设备弹窗 ========= */
 
 const dialogVisible = ref(false)
-const dialogMeta = reactive<{
-  nodeId: string
-  deviceName: string
-  description: string
-  label: string
-  manifest: DeviceManifest | null
-  rules: DeviceEdge[]
-  specs: Specification[]
-}>({
+const dialogMeta = reactive<DeviceDialogMeta>({
   nodeId: '',
   deviceName: '',
   description: '',
@@ -672,45 +660,18 @@ const onNodeContext = (node: DeviceNode) => {
   dialogMeta.rules = edges.value.filter(
       e => e.from === node.id || e.to === node.id
   )
-  // 计算与此节点相关的规约
-  const isSpecRelatedToNode = (spec: Specification, nodeId: string, nodeLabel: string) => {
-    const check = (conds: SpecCondition[]) =>
-        conds.some(c => c.deviceId === nodeId || c.deviceLabel === nodeLabel)
-
-    return (
-        check(spec.aConditions) ||
-        check(spec.ifConditions) ||
-        check(spec.thenConditions)
-    )
-  }
-
+  // 与该节点相关的规约（统一用 utils/spec.ts 的逻辑）
   dialogMeta.specs = specifications.value.filter(spec =>
-      isSpecRelatedToNode(spec, node.id, node.label)
+      isSpecRelatedToNode(spec, node.id)
   )
   dialogVisible.value = true
 }
-/**
- * 当设备重命名时，更新所有相关边的 fromLabel / toLabel
- */
-const refreshEdgeLabelsForNode = (nodeId: string, newLabel: string) => {
-  let changed = false
-  edges.value.forEach(e => {
-    if (e.from === nodeId && e.fromLabel !== newLabel) {
-      e.fromLabel = newLabel
-      changed = true
-    }
-    if (e.to === nodeId && e.toLabel !== newLabel) {
-      e.toLabel = newLabel
-      changed = true
-    }
-  })
-  if (changed) saveEdges(edges.value)
-}
 
 /**
- * 弹窗保存：校验重名 -> 写回节点列表 -> 同步连线标签
+ * 弹窗保存：校验重名 -> 写回节点列表 -> 同步连线标签 & 规约里的 deviceLabel
  */
 const handleDialogSave = (newLabel: string) => {
+  // 1) 重名校验
   const exists = nodes.value.some(
       n => n.label === newLabel && n.id !== dialogMeta.nodeId
   )
@@ -719,41 +680,83 @@ const handleDialogSave = (newLabel: string) => {
     return
   }
   const node = nodes.value.find(n => n.id === dialogMeta.nodeId)
-  if (node) {
-    node.label = newLabel
-    saveNodes(nodes.value)
-    refreshEdgeLabelsForNode(node.id, node.label)
+  if (!node) {
+    dialogVisible.value = false
+    return
   }
+  // 2) 更新节点本身名字
+  node.label = newLabel
+  saveNodes(nodes.value)
+  // 3) 同步规则（边）上的标签
+  const rulesChanged = updateRulesForNodeRename(
+      edges.value,
+      node.id,
+      newLabel
+  )
+  if (rulesChanged) {
+    saveEdges(edges.value)
+  }
+  // 4) 同步规约里的 deviceLabel（通过 deviceId == node.id 判断）
+  const specChanged = updateSpecsForNodeRename(
+      specifications.value,
+      node.id,
+      newLabel
+  )
+  if (specChanged) {
+    saveSpecs(specifications.value)
+  }
+  // 5) 更新弹窗里的显示数据
   dialogMeta.label = newLabel
+  dialogMeta.specs = specifications.value.filter(spec =>
+      isSpecRelatedToNode(spec, node.id)
+  )
   dialogVisible.value = false
 }
 
-/** 真正删除节点 + 相关连线（不弹窗） */
+/** 真正删除节点 + 相关连线 + 相关规约（不再弹窗确认） */
 const forceDeleteNode = (nodeId: string) => {
+  // 1) 删节点
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
+  // 2) 删连线
   edges.value = edges.value.filter(e => e.from !== nodeId && e.to !== nodeId)
+  // 3) 删规约（所有涉及该节点的规约）
+  const { nextSpecs, removed } = removeSpecsForNode(
+      specifications.value,
+      nodeId
+  )
+  specifications.value = nextSpecs
+  // 4) 持久化
   saveNodes(nodes.value)
   saveEdges(edges.value)
+  saveSpecs(specifications.value)
+  // 5) 如有规约被删，给出提示
+  if (removed.length > 0) {
+    ElMessage.info(
+        t('app.specsDeletedWithNode') || '已同时删除与该设备相关的规约'
+    )
+  }
 }
 
 /**
- * 删除节点前检查是否有关联连线，必要时弹出确认框
+ * 删除节点前检查是否有关联连线 / 规约，必要时弹出确认框
  */
 const deleteCurrentNodeWithConfirm = (nodeId: string) => {
   const hasEdges = edges.value.some(e => e.from === nodeId || e.to === nodeId)
+  const hasSpecs = specifications.value.some(spec =>
+      isSpecRelatedToNode(spec, nodeId)
+  )
   const doDelete = () => {
     forceDeleteNode(nodeId)
     dialogVisible.value = false
   }
-
-  if (!hasEdges) {
+  // 既没有边也没有规约，直接删
+  if (!hasEdges && !hasSpecs) {
     doDelete()
     return
   }
-
   ElMessageBox.confirm(
-      t('app.deleteNodeWithEdgesConfirm') ||
-      '该设备存在与其他设备的规则（连线），删除设备将同时删除这些规则，是否继续？',
+      t('app.deleteNodeWithRelationsConfirm') ||
+      '该设备存在与其他设备的规则（连线）或已参与规约，删除设备将同时删除这些规则和相关规约，是否继续？',
       t('app.warning') || '警告',
       {
         type: 'warning',
@@ -770,7 +773,6 @@ const handleDialogDelete = () => {
   if (!dialogMeta.nodeId) return
   deleteCurrentNodeWithConfirm(dialogMeta.nodeId)
 }
-
 /* ========= StatusPanel 删除回调 ========= */
 
 const deleteNodeFromStatus = (nodeId: string) => {

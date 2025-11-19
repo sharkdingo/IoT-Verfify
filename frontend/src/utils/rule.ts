@@ -1,5 +1,31 @@
-// src/utils/geometry.ts
-import type {DeviceNode} from '../types/board'
+// src/utils/rule.ts
+import type {DeviceEdge, DeviceNode} from '../types/board'
+
+/**
+ * 节点重命名时：更新所有相关规则（边）上的 fromLabel / toLabel
+ * @returns 是否发生了修改
+ */
+export const updateRulesForNodeRename = (
+    rules: DeviceEdge[],
+    nodeId: string,
+    newLabel: string
+): boolean => {
+    let changed = false
+
+    rules.forEach(edge => {
+        if (edge.from === nodeId && edge.fromLabel !== newLabel) {
+            edge.fromLabel = newLabel
+            changed = true
+        }
+        if (edge.to === nodeId && edge.toLabel !== newLabel) {
+            edge.toLabel = newLabel
+            changed = true
+        }
+    })
+
+    return changed
+}
+
 
 export const getNodeCenter = (node: DeviceNode) => {
     const w = node.width ?? 110

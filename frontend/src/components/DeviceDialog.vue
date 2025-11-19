@@ -3,8 +3,15 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DeviceManifest } from '../types/device'
-import type { DeviceEdge, Specification } from '../types/board'
+import type { DeviceEdge } from '../types/board'
+import type { Specification } from '../types/spec'
 import { buildSpecText } from "../utils/spec.ts"
+import {
+  extractBasicDeviceInfo,
+  extractDeviceVariables,
+  extractDeviceStates,
+  extractDeviceApis
+} from '../utils/device'
 
 const props = defineProps<{
   visible: boolean
@@ -27,7 +34,7 @@ const { t } = useI18n()
 const innerVisible = ref(props.visible)
 const innerLabel   = ref(props.label)
 
-/* 同步外部值 */
+/* 同步外部值 -> 内部状态 */
 watch(() => props.visible, v => (innerVisible.value = v))
 watch(() => props.label,   v => (innerLabel.value   = v))
 
@@ -39,97 +46,57 @@ const close = () => {
 const onSave   = () => emit('save', innerLabel.value)
 const onDelete = () => emit('delete')
 
-/* ---------- 根据 manifest 生成展示数据 ---------- */
+/* ---------- manifest 相关的展示数据，全走 utils/device ---------- */
 
 const manifest = computed<DeviceManifest | null>(() => props.manifest ?? null)
 
-/** Basic 区域行 */
-const basicRows = computed(() => {
-  const m = manifest.value
-  const impacted =
-      m && m.ImpactedVariables && m.ImpactedVariables.length
-          ? m.ImpactedVariables.join(', ')
-          : ''
+/** 基本信息区：再加上 i18n 标签，最终变成表格行 */
+const basicInfo = computed(() =>
+    extractBasicDeviceInfo(
+        manifest.value,
+        props.deviceName || props.label,
+        props.label,
+        props.description
+    )
+)
 
+const basicRows = computed(() => {
+  const info = basicInfo.value
   const rows = [
     {
       key: 'name',
       label: t('app.name') || 'Name',
-      value: m?.Name ?? props.deviceName ?? props.label
+      value: info.name
     },
     {
       key: 'instance',
       label: t('app.instanceName') || 'Instance',
-      value: props.label
+      value: info.instanceLabel
     },
     {
       key: 'description',
       label: t('app.description') || 'Description',
-      value: m?.Description ?? props.description
+      value: info.description
     },
     {
       key: 'initState',
       label: t('app.initState') || 'Initial State',
-      value: m?.InitState ?? ''
+      value: info.initState
     },
     {
       key: 'impacted',
       label: t('app.impactedVariables') || 'Impacted Variables',
-      value: impacted
+      value: info.impactedVariables.join(', ')
     }
   ]
-
+  // 只保留有值的行
   return rows.filter(r => r.value !== '' && r.value != null)
 })
 
-/** Variables：优先 InternalVariables，没有就用 ImpactedVariables 占位 */
-const variables = computed(() => {
-  const m = manifest.value
-  if (!m) return [] as { name: string; value: string; trust: string }[]
-
-  if (Array.isArray(m.InternalVariables) && m.InternalVariables.length) {
-    return m.InternalVariables
-        .map((v: any) => ({
-          name: v.Name ?? v.VariableName ?? '',
-          value: v.InitialValue ?? v.Value ?? '',
-          trust: v.Trust ?? ''
-        }))
-        .filter(v => v.name)
-  }
-
-  if (Array.isArray(m.ImpactedVariables) && m.ImpactedVariables.length) {
-    return m.ImpactedVariables.map((name: string) => ({
-      name,
-      value: '',
-      trust: ''
-    }))
-  }
-
-  return []
-})
-
-/** States：来自 WorkingStates */
-const states = computed(() => {
-  const m = manifest.value
-  if (!m || !Array.isArray(m.WorkingStates)) return []
-  return m.WorkingStates.map(ws => ({
-    name: ws.Name,
-    description: ws.Description,
-    trust: ws.Trust
-  }))
-})
-
-/** APIs：来自 APIs */
-const apis = computed(() => {
-  const m = manifest.value
-  if (!m || !Array.isArray(m.APIs)) return []
-  return m.APIs.map(api => ({
-    name: api.Name,
-    from: api.StartState,
-    to: api.EndState,
-    description: api.Description ?? ''
-  }))
-})
+/** Variables / States / APIs 列表：直接交给 utils 做数据清洗 */
+const variables = computed(() => extractDeviceVariables(manifest.value))
+const states    = computed(() => extractDeviceStates(manifest.value))
+const apis      = computed(() => extractDeviceApis(manifest.value))
 
 /** 当前节点相关 IFTTT 规则（Board.vue 已经筛好传进来） */
 const relatedRules = computed<DeviceEdge[]>(() => props.rules ?? [])
