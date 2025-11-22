@@ -172,11 +172,11 @@ const getCardWidth = () => {
 
 /* ========= 浮动卡片位置（可拖拽 + 持久化） ========= */
 
-type PanelKey = 'left' | 'status'
+type PanelKey = 'input' | 'status'
 
 /** 当前两张浮动卡片的位置（像素） */
 const panelPositions = reactive<Record<PanelKey, { x: number; y: number }>>({
-  left: { x: 24, y: 24 },
+  input: { x: 24, y: 24 },
   status: { x: 1040, y: 80 }
 })
 
@@ -212,7 +212,7 @@ const onPanelPointerMove = (e: PointerEvent) => {
  */
 const onPanelPointerUp = () => {
   const panelsToSave: PanelPositions = {
-    left: { ...panelPositions.left },
+    input: { ...panelPositions.input },
     status: { ...panelPositions.status }
   }
   savePanels(panelsToSave)
@@ -292,7 +292,7 @@ const getNextNodePosition = (): { x: number; y: number } => {
   const row = Math.floor(count / NODE_GRID_COLS)
 
   const baseX =
-      panelPositions.left.x +
+      panelPositions.input.x +
       getCardWidth() +
       NODE_MARGIN_RIGHT_OF_PANEL +
       col * NODE_SPACING_X
@@ -701,14 +701,14 @@ onMounted(() => {
   // 恢复浮动卡片位置；如果没有存储，则使用“左上角 / 右上角”默认布局
   const savedPanels = loadPanels()
   if (savedPanels) {
-    panelPositions.left.x = savedPanels.left.x
-    panelPositions.left.y = savedPanels.left.y
+    panelPositions.input.x = savedPanels.input.x
+    panelPositions.input.y = savedPanels.input.y
     panelPositions.status.x = savedPanels.status.x
     panelPositions.status.y = savedPanels.status.y
   } else {
     // 左边：左上角留一个 DEFAULT_PANEL_PADDING 的内边距
-    panelPositions.left.x = DEFAULT_PANEL_PADDING
-    panelPositions.left.y = DEFAULT_PANEL_PADDING
+    panelPositions.input.x = DEFAULT_PANEL_PADDING
+    panelPositions.input.y = DEFAULT_PANEL_PADDING
 
     // 右边：根据真实卡片宽度贴到右侧
     const cardWidth = getCardWidth()
@@ -771,8 +771,8 @@ onBeforeUnmount(() => {
     <!-- ===== 浮动卡片：输入（设备 / 规则 / 规约） ===== -->
     <div
         class="floating-card input-card"
-        :style="{ left: panelPositions.left.x + 'px', top: panelPositions.left.y + 'px' }"
-        @pointerdown="onPanelPointerDownWrapper($event, 'left')"
+        :style="{ left: panelPositions.input.x + 'px', top: panelPositions.input.y + 'px' }"
+        @pointerdown="onPanelPointerDownWrapper($event, 'input')"
     >
       <div class="card-header">
         <span class="card-title">{{ t('app.input') }}</span>
