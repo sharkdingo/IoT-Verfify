@@ -8,29 +8,10 @@ import type { CanvasPan } from '../types/canvas'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
-import type { PanelPositions } from '../types/panel'
+import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
 
 import { getDeviceIconPath, getNodeIcon } from '../utils/device'
 import { getUniqueLabel } from '../utils/canvas/nodeCreate'
-
-import {
-  loadDeviceTemplates,
-  loadNodes,
-  loadEdges,
-  loadSpecs,
-  loadPanels,
-  loadPanelActive,
-  loadCanvasPan,
-  loadCanvasZoom,
-  saveDeviceTemplates,
-  saveNodes,
-  saveEdges,
-  saveSpecs,
-  savePanels,
-  savePanelActive,
-  saveCanvasPan,
-  saveCanvasZoom,
-} from '../utils/boardStorage'
 
 import {
   getSpecMode,
@@ -44,49 +25,40 @@ import {
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
 import { defaultDeviceTemplates } from '../assets/config/deviceTemplates'
 
+// 设备模板仍然用 sessionStorage
+import { loadDeviceTemplates, saveDeviceTemplates } from '../utils/boardStorage'
+
+// === 与后端交互的 API（请确保有 src/api/board.ts 并默认导出这些方法） ===
+import boardApi from '@/api/board'
+
 import InputPanel from '../components/InputPanel.vue'
 import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
 import CanvasBoard from '../components/CanvasBoard.vue'
 
 import '../styles/board.css'
-import {
-  SpecCondition,
-  Specification,
-  SpecTemplate,
-  SpecTemplateId
-} from '../types/spec'
-import {
-  updateRulesForNodeRename,
-  getLinkPoints,
-} from '../utils/rule'
 
 const { t } = useI18n()
 
 /* ========= 常量区域 ========= */
 
-/** 浮动卡片距离视口边缘的默认间距（初始化时使用） */
 const DEFAULT_PANEL_PADDING = 8
 
-const CARD_WIDTH_MIN = 12 * 16 // 12rem * 16
-const CARD_WIDTH_MAX = 24 * 16 // 24rem * 16
-const CARD_WIDTH_RATIO = 0.24 // 24vw
+const CARD_WIDTH_MIN = 12 * 16 // 12rem
+const CARD_WIDTH_MAX = 24 * 16 // 24rem
+const CARD_WIDTH_RATIO = 0.24    // 24vw
 
-/** 设备与左侧 InputPanel 之间的水平间距 */
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
 
-/** 节点网格布局：列数 & 间距（用于连续创建设备时的排布） */
 const NODE_GRID_COLS = 4
 const NODE_SPACING_X = 160
 const NODE_SPACING_Y = 120
 const NODE_START_Y = 140
 
-/** 画布缩放配置 */
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2
 const ZOOM_STEP = 0.1
 
-/** 节点标签缩放参考值（用于根据节点宽度调整字体大小） */
 const BASE_NODE_WIDTH = 160
 const BASE_FONT_SIZE = 16
 
@@ -103,9 +75,6 @@ let panOrigin = { x: 0, y: 0 }
 const onCanvasEnter = () => (isCanvasHovered.value = true)
 const onCanvasLeave = () => (isCanvasHovered.value = false)
 
-/**
- * Ctrl + 滚轮 缩放画布
- */
 const onCanvasWheel = (e: WheelEvent) => {
   if (!isCanvasHovered.value) return
   if (!e.ctrlKey) return
@@ -118,9 +87,6 @@ const onCanvasWheel = (e: WheelEvent) => {
   }
 }
 
-/**
- * Ctrl + (= / + / - / 0) 键盘缩放
- */
 const onGlobalKeydown = (e: KeyboardEvent) => {
   if (!isCanvasHovered.value) return
   if (!e.ctrlKey) return
@@ -135,12 +101,7 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
   }
 }
 
-/**
- * 按住鼠标左键在空白画布上拖拽，实现平移
- * （由 CanvasBoard 通过 @canvas-pointerdown 调用）
- */
 const onCanvasPointerDown = (e: PointerEvent) => {
-  // 只处理左键
   if (e.button !== 0) return
   isPanning = true
   panStart = { x: e.clientX, y: e.clientY }
@@ -159,28 +120,17 @@ const onCanvasPointerMove = (e: PointerEvent) => {
   }
 }
 
-const onCanvasPointerUp = () => {
+const onCanvasPointerUp = async () => {
   isPanning = false
-  saveCanvasPan(canvasPan.value)
+  await saveLayoutToServer()
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
-}
-
-
-/**
- * 根据当前视口宽度按 clamp 规则计算浮动卡片宽度
- * 与 CSS 的 width: clamp(20rem, 32vw, 32rem) 保持一致
- */
-const getCardWidth = () => {
-  const w = window.innerWidth * CARD_WIDTH_RATIO
-  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, w))
 }
 
 /* ========= 浮动卡片位置（可拖拽 + 持久化） ========= */
 
 type PanelKey = 'input' | 'status'
 
-/** 当前两张浮动卡片的位置（像素） */
 const panelPositions = reactive<Record<PanelKey, { x: number; y: number }>>({
   input: { x: 24, y: 24 },
   status: { x: 1040, y: 80 }
@@ -190,9 +140,6 @@ let draggingPanel: PanelKey | null = null
 let panelDragStart = { x: 0, y: 0 }
 let panelStartPos = { x: 0, y: 0 }
 
-/**
- * 按住卡片头部开始拖拽
- */
 const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
   draggingPanel = key
   panelDragStart = { x: e.clientX, y: e.clientY }
@@ -201,9 +148,6 @@ const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
   window.addEventListener('pointerup', onPanelPointerUp)
 }
 
-/**
- * 拖拽过程持续更新卡片位置
- */
 const onPanelPointerMove = (e: PointerEvent) => {
   if (!draggingPanel) return
   const dx = e.clientX - panelDragStart.x
@@ -213,22 +157,13 @@ const onPanelPointerMove = (e: PointerEvent) => {
   pos.y = panelStartPos.y + dy
 }
 
-/**
- * 拖拽结束：移除监听并将最新位置写入 sessionStorage
- */
-const onPanelPointerUp = () => {
-  const panelsToSave: PanelPositions = {
-    input: { ...panelPositions.input },
-    status: { ...panelPositions.status }
-  }
-  savePanels(panelsToSave)
-
+const onPanelPointerUp = async () => {
   draggingPanel = null
   window.removeEventListener('pointermove', onPanelPointerMove)
   window.removeEventListener('pointerup', onPanelPointerUp)
+  await saveLayoutToServer()
 }
 
-// 判断点击目标是否在可交互控件上（按钮、输入框等）
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
   const interactiveSelectors =
@@ -238,14 +173,17 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   return !!el.closest(interactiveSelectors)
 }
 
-// 卡片整体的 pointerdown 包装：过滤交互控件后再真正开始拖拽
 const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
   const target = e.target as HTMLElement | null
-  if (isInteractiveTarget(target)) {
-    // 点在表单/按钮上时，不拖拽
-    return
-  }
+  if (isInteractiveTarget(target)) return
   onPanelPointerDown(e, key)
+}
+
+/* ========= 计算卡片宽度 ========= */
+
+const getCardWidth = () => {
+  const w = window.innerWidth * CARD_WIDTH_RATIO
+  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, w))
 }
 
 /* ========= 核心数据 ========= */
@@ -256,66 +194,97 @@ const edges = ref<DeviceEdge[]>([])
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
-/** InputPanel 折叠面板默认展开项 */
 const inputActive = ref<string[]>(['devices', 'rules', 'specs'])
-/** StatusPanel 折叠面板默认展开项 */
 const statusActive = ref<string[]>(['devices', 'edges', 'specs'])
 
 /* ========= 节点图标 / 标签样式 ========= */
 
-/** 根据模板初始状态获取侧栏图标路径 */
 const getTemplateInitIcon = (tpl: DeviceTemplate) => {
   const folder = tpl.name
   const initState = tpl.manifest?.InitState || 'Working'
   return getDeviceIconPath(folder, initState)
 }
 
-/**
- * 根据节点宽度缩放文字大小，防止缩放过大/过小导致标签溢出或过小
- */
 const getNodeLabelStyle = (node: DeviceNode) => {
   const ratio = node.width / BASE_NODE_WIDTH
   const scale = Math.min(Math.max(ratio, 0.75), 1.5)
   const fontSize = BASE_FONT_SIZE * scale
-
   return {
     fontSize: fontSize + 'px',
-    maxWidth: node.width - 16 + 'px' // 给左右留一点内边距
+    maxWidth: node.width - 16 + 'px'
   }
 }
 
 /* ========= 节点布局：避免重叠 & 远离左面板 ========= */
 
-/**
- * 创建新设备节点时的默认位置：
- * - X 方向：从左侧面板右侧开始，向右偏移 NODE_MARGIN_RIGHT_OF_PANEL，再按列增量
- * - Y 方向：从 NODE_START_Y 开始按行增量
- * 这样既不会盖住 InputPanel，又能避免多个节点重叠。
- */
 const getNextNodePosition = (): { x: number; y: number } => {
   const count = nodes.value.length
   const col = count % NODE_GRID_COLS
   const row = Math.floor(count / NODE_GRID_COLS)
 
-  const baseX =
+  const screenX =
       panelPositions.input.x +
       getCardWidth() +
       NODE_MARGIN_RIGHT_OF_PANEL +
       col * NODE_SPACING_X
 
-  const baseY = NODE_START_Y + row * NODE_SPACING_Y
-  return { x: baseX, y: baseY }
+  const screenY = NODE_START_Y + row * NODE_SPACING_Y
+
+  // 转换到画布内部坐标（极其关键）
+  const x = (screenX - canvasPan.value.x) / canvasZoom.value
+  const y = (screenY - canvasPan.value.y) / canvasZoom.value
+
+  return { x, y }
+}
+
+/* ========= 与后端交互的一些小封装 ========= */
+
+const saveLayoutToServer = async () => {
+  const payload = {
+    input: { x: panelPositions.input.x, y: panelPositions.input.y },
+    status: { x: panelPositions.status.x, y: panelPositions.status.y },
+    canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
+    canvasZoom: canvasZoom.value
+  }
+  try {
+    await boardApi.saveLayout(payload)
+  } catch (e) {
+    console.error('saveLayout error', e)
+    ElMessage.error(t('app.saveLayoutFailed') || '保存画布布局失败')
+  }
+}
+
+
+const saveNodesToServer = async () => {
+  try {
+    await boardApi.saveNodes(nodes.value)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
+  }
+}
+
+const saveEdgesToServer = async () => {
+  try {
+    await boardApi.saveEdges(edges.value)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.saveEdgesFailed') || '保存规则连线失败')
+  }
+}
+
+const saveSpecsToServer = async () => {
+  try {
+    await boardApi.saveSpecs(specifications.value)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败')
+  }
 }
 
 /* ========= 设备创建 / 拖拽 ========= */
 
-/**
- * 在指定位置基于模板创建设备节点
- */
-const createDeviceInstanceAt = (
-    tpl: DeviceTemplate,
-    pos: { x: number; y: number }
-) => {
+const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
   const uniqueLabel = getUniqueLabel(tpl.name, nodes.value)
   const node: DeviceNode = {
     id: uniqueLabel,
@@ -327,18 +296,13 @@ const createDeviceInstanceAt = (
     height: 90
   }
   nodes.value.push(node)
-  saveNodes(nodes.value)
+  await saveNodesToServer()
 }
 
-/**
- * 左键点击 InputPanel 中的设备模板时，在画布上创建一个新节点
- */
-const handleCreateDevice = (tpl: DeviceTemplate) => {
+const handleCreateDevice = async (tpl: DeviceTemplate) => {
   const pos = getNextNodePosition()
-  createDeviceInstanceAt(tpl, pos)
+  await createDeviceInstanceAt(tpl, pos)
 }
-
-/* ----- 侧栏拖拽创建设备 ----- */
 
 const draggingTplName = ref<string | null>(null)
 
@@ -350,51 +314,36 @@ const onDeviceDragEnd = () => {
   draggingTplName.value = null
 }
 
-/**
- * CanvasBoard 通过 @canvas-dragover -> 交给此函数
- */
 const onCanvasDragOver = (e: DragEvent) => {
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
 }
 
-/**
- * CanvasBoard 通过 @canvas-drop -> 交给此函数
- * 支持从左侧列表拖拽到画布任意位置放置设备
- */
-const onCanvasDrop = (e: DragEvent) => {
+const onCanvasDrop = async (e: DragEvent) => {
   if (!draggingTplName.value) return
   const tpl = deviceTemplates.value.find(d => d.name === draggingTplName.value)
   if (!tpl) return
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  // 指针在外层 .canvas 中的像素坐标
-  const offsetX = e.clientX - rect.left
-  const offsetY = e.clientY - rect.top
+  const Sx = e.clientX - rect.left
+  const Sy = e.clientY - rect.top
 
-  // CanvasBoard 里对 inner 使用的是：
-  // transform: translate(canvasPan.x, canvasPan.y) scale(canvasZoom)
-  // 对应关系：screen = (inner * zoom) + pan  ⇒ inner = (screen - pan) / zoom
-  const x =
-      (offsetX - canvasPan.value.x * canvasZoom.value) / canvasZoom.value
-  const y =
-      (offsetY - canvasPan.value.y * canvasZoom.value) / canvasZoom.value
+  // 正确公式：I = (S - P) / Z
+  const x = (Sx - canvasPan.value.x) / canvasZoom.value
+  const y = (Sy - canvasPan.value.y) / canvasZoom.value
 
-  createDeviceInstanceAt(tpl, { x, y })
-
+  await createDeviceInstanceAt(tpl, { x, y })
   draggingTplName.value = null
 }
 
+
 /* ========= IFTTT 规则（来自 InputPanel） ========= */
 
-/**
- * 由 InputPanel 触发，添加一条 IFTTT 规则 + 画布上的连线
- */
-const handleAddRule = (payload: RuleForm) => {
+import { getLinkPoints, updateRulesForNodeRename } from '../utils/rule'
+
+const handleAddRule = async (payload: RuleForm) => {
   const { fromId, fromApi, toId, toApi } = payload
   if (!fromId || !fromApi || !toId || !toApi) {
-    ElMessage.warning(
-        t('app.fillAllRuleFields') || '请完整选择源/目标设备及 API'
-    )
+    ElMessage.warning(t('app.fillAllRuleFields') || '请完整选择源/目标设备及 API')
     return
   }
 
@@ -404,7 +353,6 @@ const handleAddRule = (payload: RuleForm) => {
 
   const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
 
-  // 不再根据 API 自动更新目标节点状态，只记录一条规则边
   edges.value.push({
     id: 'edge_' + Date.now(),
     from: fromNode.id,
@@ -416,14 +364,12 @@ const handleAddRule = (payload: RuleForm) => {
     fromPos: fromPoint,
     toPos: toPoint
   })
-  saveEdges(edges.value)
+  await saveEdgesToServer()
 }
 
 /* ========= 规约（来自 InputPanel） ========= */
-/**
- * 将 InputPanel 中配置好的规约实例化为一条 Specification 并存储
- */
-const handleAddSpec = (payload: {
+
+const handleAddSpec = async (payload: {
   templateId: SpecTemplateId | ''
   mode: 'single' | 'ifThen'
   aConditions: SpecCondition[]
@@ -437,15 +383,13 @@ const handleAddSpec = (payload: {
 
   const tplId = payload.templateId as SpecTemplateId
 
-  // 三侧分别做“去空行 + 检查是否有半残行”
   const aCheck = validateAndCleanConditions(payload.aConditions)
   const ifCheck = validateAndCleanConditions(payload.ifConditions)
   const thenCheck = validateAndCleanConditions(payload.thenConditions)
 
   if (aCheck.hasIncomplete || ifCheck.hasIncomplete || thenCheck.hasIncomplete) {
     ElMessage.warning(
-        t('app.specRowIncomplete') ||
-        '存在未填完整的条件，请删除该行或补全所有字段'
+        t('app.specRowIncomplete') || '存在未填完整的条件，请删除该行或补全所有字段'
     )
     return
   }
@@ -454,17 +398,12 @@ const handleAddSpec = (payload: {
   const ifConds = ifCheck.cleaned
   const thenConds = thenCheck.cleaned
 
-  // 根据模板 id 判定是单事件规约还是 IF/THEN 规约
   const mode = getSpecMode(tplId)
-  const tplLabel =
-      specTemplates.value.find(t => t.id === tplId)?.label || tplId
+  const tplLabel = specTemplates.value.find(t => t.id === tplId)?.label || tplId
 
-  // ① 单事件规约：1 / 2 / 3 / 7
   if (mode === 'single') {
     if (!aConds.length) {
-      ElMessage.warning(
-          t('app.specNeedA') || '请至少配置一个事件 A 条件'
-      )
+      ElMessage.warning(t('app.specNeedA') || '请至少配置一个事件 A 条件')
       return
     }
 
@@ -476,33 +415,26 @@ const handleAddSpec = (payload: {
       ifConditions: [],
       thenConditions: []
     }
-    const exists = specifications.value.some(spec =>
-        isSameSpecification(spec, item)
-    )
+    const exists = specifications.value.some(spec => isSameSpecification(spec, item))
     if (exists) {
-      ElMessage.warning(
-          t('app.specDuplicate') || '已经存在一条内容完全相同的规约'
-      )
+      ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
       return
     }
     specifications.value.push(item)
-    saveSpecs(specifications.value)
+    await saveSpecsToServer()
     return
   }
-  // ② A-B 规约：4 / 5 / 6
+
   if (mode === 'ifThen') {
     if (!ifConds.length) {
-      ElMessage.warning(
-          t('app.specNeedIf') || '请先完成 IF 部分（事件 A 的条件）'
-      )
+      ElMessage.warning(t('app.specNeedIf') || '请先完成 IF 部分（事件 A 的条件）')
       return
     }
     if (!thenConds.length) {
-      ElMessage.warning(
-          t('app.specNeedThen') || '请先完成 THEN 部分（事件 B 的条件）'
-      )
+      ElMessage.warning(t('app.specNeedThen') || '请先完成 THEN 部分（事件 B 的条件）')
       return
     }
+
     const item: Specification = {
       id: 'spec_' + Date.now(),
       templateId: tplId,
@@ -511,27 +443,22 @@ const handleAddSpec = (payload: {
       ifConditions: ifConds,
       thenConditions: thenConds
     }
-    const exists = specifications.value.some(spec =>
-        isSameSpecification(spec, item)
-    )
+    const exists = specifications.value.some(spec => isSameSpecification(spec, item))
     if (exists) {
-      ElMessage.warning(
-          t('app.specDuplicate') || '已经存在一条内容完全相同的规约'
-      )
+      ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
       return
     }
     specifications.value.push(item)
-    saveSpecs(specifications.value)
+    await saveSpecsToServer()
     return
   }
-  // 理论上不会走到这里，防御性兜底
+
   ElMessage.error('Unknown specification template id: ' + tplId)
 }
 
-/** 从 StatusPanel 删除某条规约 */
-const deleteSpecification = (id: string) => {
+const deleteSpecification = async (id: string) => {
   specifications.value = specifications.value.filter(s => s.id !== id)
-  saveSpecs(specifications.value)
+  await saveSpecsToServer()
 }
 
 /* ========= 右键设备弹窗 ========= */
@@ -547,10 +474,6 @@ const dialogMeta = reactive<DeviceDialogMeta>({
   specs: []
 })
 
-/**
- * 右键点击设备节点，打开设备信息弹窗
- * （由 CanvasBoard 通过 @node-context 调用）
- */
 const onNodeContext = (node: DeviceNode) => {
   const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
   dialogMeta.nodeId = node.id
@@ -558,22 +481,12 @@ const onNodeContext = (node: DeviceNode) => {
   dialogMeta.deviceName = tpl ? tpl.manifest.Name : node.templateName
   dialogMeta.description = tpl ? tpl.manifest.Description : ''
   dialogMeta.manifest = tpl ? tpl.manifest : null
-  // 与该节点相关的 IFTTT 规则（连线）
-  dialogMeta.rules = edges.value.filter(
-      e => e.from === node.id || e.to === node.id
-  )
-  // 与该节点相关的规约
-  dialogMeta.specs = specifications.value.filter(spec =>
-      isSpecRelatedToNode(spec, node.id)
-  )
+  dialogMeta.rules = edges.value.filter(e => e.from === node.id || e.to === node.id)
+  dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
   dialogVisible.value = true
 }
 
-/**
- * 弹窗保存：校验重名 -> 写回节点列表 -> 同步连线标签 & 规约里的 deviceLabel
- */
-const handleDialogSave = (newLabel: string) => {
-  // 1) 重名校验
+const handleDialogSave = async (newLabel: string) => {
   const exists = nodes.value.some(
       n => n.label === newLabel && n.id !== dialogMeta.nodeId
   )
@@ -586,48 +499,42 @@ const handleDialogSave = (newLabel: string) => {
     dialogVisible.value = false
     return
   }
-  // 2) 更新节点本身名字
+
   node.label = newLabel
-  saveNodes(nodes.value)
-  // 3) 同步规则（边）上的标签
+  await saveNodesToServer()
+
   const rulesChanged = updateRulesForNodeRename(edges.value, node.id, newLabel)
   if (rulesChanged) {
-    saveEdges(edges.value)
+    await saveEdgesToServer()
   }
-  // 4) 同步规约里的 deviceLabel（通过 deviceId == node.id 判断）
+
   const specChanged = updateSpecsForNodeRename(
       specifications.value,
       node.id,
       newLabel
   )
   if (specChanged) {
-    saveSpecs(specifications.value)
+    await saveSpecsToServer()
   }
-  // 5) 更新弹窗里的显示数据
+
   dialogMeta.label = newLabel
-  dialogMeta.specs = specifications.value.filter(spec =>
-      isSpecRelatedToNode(spec, node.id)
-  )
+  dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
   dialogVisible.value = false
 }
 
-/** 真正删除节点 + 相关连线 + 相关规约（不再弹窗确认） */
-const forceDeleteNode = (nodeId: string) => {
-  // 1) 删节点
+/* ========= 删除节点 ========= */
+
+const forceDeleteNode = async (nodeId: string) => {
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
-  // 2) 删连线
   edges.value = edges.value.filter(e => e.from !== nodeId && e.to !== nodeId)
-  // 3) 删规约（所有涉及该节点的规约）
-  const { nextSpecs, removed } = removeSpecsForNode(
-      specifications.value,
-      nodeId
-  )
+
+  const { nextSpecs, removed } = removeSpecsForNode(specifications.value, nodeId)
   specifications.value = nextSpecs
-  // 4) 持久化
-  saveNodes(nodes.value)
-  saveEdges(edges.value)
-  saveSpecs(specifications.value)
-  // 5) 如有规约被删，给出提示
+
+  await saveNodesToServer()
+  await saveEdgesToServer()
+  await saveSpecsToServer()
+
   if (removed.length > 0) {
     ElMessage.info(
         t('app.specsDeletedWithNode') || '已同时删除与该设备相关的规约'
@@ -635,23 +542,20 @@ const forceDeleteNode = (nodeId: string) => {
   }
 }
 
-/**
- * 删除节点前检查是否有关联连线 / 规约，必要时弹出确认框
- */
 const deleteCurrentNodeWithConfirm = (nodeId: string) => {
   const hasEdges = edges.value.some(e => e.from === nodeId || e.to === nodeId)
-  const hasSpecs = specifications.value.some(spec =>
-      isSpecRelatedToNode(spec, nodeId)
-  )
-  const doDelete = () => {
-    forceDeleteNode(nodeId)
+  const hasSpecs = specifications.value.some(spec => isSpecRelatedToNode(spec, nodeId))
+
+  const doDelete = async () => {
+    await forceDeleteNode(nodeId)
     dialogVisible.value = false
   }
-  // 既没有边也没有规约，直接删
+
   if (!hasEdges && !hasSpecs) {
-    doDelete()
+    void doDelete()
     return
   }
+
   ElMessageBox.confirm(
       t('app.deleteNodeWithRelationsConfirm') ||
       '该设备存在与其他设备的规则（连线）或已参与规约，删除设备将同时删除这些规则和相关规约，是否继续？',
@@ -666,7 +570,6 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
       .catch(() => {})
 }
 
-/** 弹窗中的“删除设备”按钮 */
 const handleDialogDelete = () => {
   if (!dialogMeta.nodeId) return
   deleteCurrentNodeWithConfirm(dialogMeta.nodeId)
@@ -678,26 +581,20 @@ const deleteNodeFromStatus = (nodeId: string) => {
   deleteCurrentNodeWithConfirm(nodeId)
 }
 
-const deleteEdgeFromStatus = (edgeId: string) => {
+const deleteEdgeFromStatus = async (edgeId: string) => {
   edges.value = edges.value.filter(e => e.id !== edgeId)
-  saveEdges(edges.value)
+  await saveEdgesToServer()
 }
 
 /* ========= CanvasBoard 回调：节点移动 / 缩放完成 ========= */
 
-const handleNodeMovedOrResized = () => {
-  // 这里目前只需要持久化；如后面要做“自动排版”等逻辑也可以在这里加
-  saveNodes(nodes.value)
-  saveEdges(edges.value)
+const handleNodeMovedOrResized = async () => {
+  await saveNodesToServer()
+  await saveEdgesToServer()
 }
 
 /* ========= 初始化 ========= */
 
-/**
- * 设备模板初始化：
- * - 若 sessionStorage 中已有缓存，直接使用；
- * - 否则使用 assets/config 中的默认模板并写入缓存。
- */
 const initDefaultDevices = () => {
   const cached = loadDeviceTemplates()
   if (cached.length) {
@@ -708,71 +605,95 @@ const initDefaultDevices = () => {
   saveDeviceTemplates(defaultDeviceTemplates)
 }
 
-onMounted(() => {
+onMounted(async () => {
   initDefaultDevices()
-  nodes.value = loadNodes()
-  edges.value = loadEdges()
-  specifications.value = loadSpecs()
 
-  // 恢复画布平移
-  const savedPan = loadCanvasPan()
-  if (savedPan) {
-    canvasPan.value = savedPan
+  try {
+    const res = await boardApi.getNodes()
+    nodes.value = res.data
+  } catch {
+    nodes.value = []
   }
-  // 恢复画布缩放
-  const savedZoom = loadCanvasZoom()
-  if (typeof savedZoom === 'number' && !Number.isNaN(savedZoom)) {
-    // 顺便做一下 clamp，避免存了奇怪的值
-    canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, savedZoom))
+
+  try {
+    const res = await boardApi.getEdges()
+    edges.value = res.data
+  } catch {
+    edges.value = []
   }
-  // 恢复浮动卡片位置；如果没有存储，则使用“左上角 / 右上角”默认布局
-  const savedPanels = loadPanels()
-  if (savedPanels) {
-    panelPositions.input.x = savedPanels.input.x
-    panelPositions.input.y = savedPanels.input.y
-    panelPositions.status.x = savedPanels.status.x
-    panelPositions.status.y = savedPanels.status.y
-  } else {
-    // 左边：左上角留一个 DEFAULT_PANEL_PADDING 的内边距
+
+  try {
+    const res = await boardApi.getSpecs()
+    specifications.value = res.data
+  } catch {
+    specifications.value = []
+  }
+
+  try {
+    const res = await boardApi.getLayout()
+    const layout = res.data
+    if (layout?.input && layout?.status) {
+      panelPositions.input.x = layout.input.x
+      panelPositions.input.y = layout.input.y
+      panelPositions.status.x = layout.status.x
+      panelPositions.status.y = layout.status.y
+    } else {
+      // 没有数据时使用默认布局
+      panelPositions.input.x = DEFAULT_PANEL_PADDING
+      panelPositions.input.y = DEFAULT_PANEL_PADDING
+
+      const cardWidth = getCardWidth()
+      panelPositions.status.x =
+          window.innerWidth - cardWidth - DEFAULT_PANEL_PADDING
+      panelPositions.status.y = DEFAULT_PANEL_PADDING
+    }
+    if (layout?.canvasPan) {
+      canvasPan.value = layout.canvasPan
+    }
+    if (typeof layout?.canvasZoom === 'number') {
+      canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
+    }
+  } catch {
+    // 布局加载失败：使用默认值
     panelPositions.input.x = DEFAULT_PANEL_PADDING
     panelPositions.input.y = DEFAULT_PANEL_PADDING
-
-    // 右边：根据真实卡片宽度贴到右侧
     const cardWidth = getCardWidth()
     panelPositions.status.x =
         window.innerWidth - cardWidth - DEFAULT_PANEL_PADDING
     panelPositions.status.y = DEFAULT_PANEL_PADDING
   }
 
-  const savedActive = loadPanelActive()
-  if (savedActive) {
-    if (Array.isArray(savedActive.input)) {
-      inputActive.value = savedActive.input
+  try {
+    const res = await boardApi.getActive()
+    if (Array.isArray(res.data?.input)) {
+      inputActive.value = res.data.input
     }
-    if (Array.isArray(savedActive.status)) {
-      statusActive.value = savedActive.status
+    if (Array.isArray(res.data?.status)) {
+      statusActive.value = res.data.status
     }
+  } catch {
+    // 折叠状态失败就用默认
   }
 
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
 watch(
-    () => ({
-      input: inputActive.value,
-      status: statusActive.value
-    }),
-    val => {
-      savePanelActive(val)
+    () => ({ input: inputActive.value, status: statusActive.value }),
+    async val => {
+      try {
+        await boardApi.saveActive(val)
+      } catch (e) {
+        console.error(e)
+        ElMessage.error(t('app.saveActiveFailed') || '保存折叠面板状态失败')
+      }
     },
     { deep: true }
 )
-watch(
-    canvasZoom,
-    (z) => {
-      saveCanvasZoom(z)
-    }
-)
+
+watch(canvasZoom, () => {
+  void saveLayoutToServer()
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
@@ -783,7 +704,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="iot-board">
-    <!-- ===== 背景画布（节点 + 连线）抽离为 CanvasBoard ===== -->
+    <!-- 画布：节点 + 连线 -->
     <CanvasBoard
         :nodes="nodes"
         :edges="edges"
@@ -801,7 +722,7 @@ onBeforeUnmount(() => {
         @node-moved-or-resized="handleNodeMovedOrResized"
     />
 
-    <!-- ===== 浮动卡片：输入（设备 / 规则 / 规约） ===== -->
+    <!-- 左侧输入卡片 -->
     <div
         class="floating-card input-card"
         :style="{ left: panelPositions.input.x + 'px', top: panelPositions.input.y + 'px' }"
@@ -826,7 +747,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- ===== 浮动卡片：状态（当前设备 / 规则 / 规约） ===== -->
+    <!-- 右侧状态卡片 -->
     <div
         class="floating-card status-card"
         :style="{ left: panelPositions.status.x + 'px', top: panelPositions.status.y + 'px' }"
@@ -848,7 +769,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- ===== 右键设备信息弹窗 ===== -->
+    <!-- 右键弹出的设备详情对话框 -->
     <DeviceDialog
         :visible="dialogVisible"
         :device-name="dialogMeta.deviceName"

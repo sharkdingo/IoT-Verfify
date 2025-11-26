@@ -21,13 +21,10 @@ export default defineConfig({
     server: {
         port: 3000,   // 前端端口保持不变
         open: true,
-        // ⭐ 关键：把 /api 代理到 Spring Boot
         proxy: {
             '/api': {
                 target: 'http://localhost:8080', // 你的后端地址
                 changeOrigin: true,
-                // 如果将来后端不带 /api 前缀，可以用 rewrite 做路径重写
-                // rewrite: path => path.replace(/^\/api/, ''),
             },
         },
     },

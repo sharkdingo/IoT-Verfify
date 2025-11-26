@@ -1,0 +1,39 @@
+// src/main/java/cn/edu/nju/Iot_Verify/po/BoardLayoutPo.java
+package cn.edu.nju.Iot_Verify.po;
+
+import jakarta.persistence.*;
+import lombok.*;
+
+@Entity
+@Table(name = "board_layout")
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class BoardLayoutPo {
+
+    @Id
+    @Column(name = "id")
+    private Byte id;   // 固定用 1 作为唯一一条记录
+
+    @Column(name = "input_x")
+    private Double inputX;
+
+    @Column(name = "input_y")
+    private Double inputY;
+
+    @Column(name = "status_x")
+    private Double statusX;
+
+    @Column(name = "status_y")
+    private Double statusY;
+
+    @Column(name = "canvas_pan_x")
+    private Double canvasPanX;
+
+    @Column(name = "canvas_pan_y")
+    private Double canvasPanY;
+
+    @Column(name = "canvas_zoom")
+    private Double canvasZoom;
+}
