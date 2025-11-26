@@ -20,12 +20,16 @@ import {
   loadSpecs,
   loadPanels,
   loadPanelActive,
+  loadCanvasPan,
+  loadCanvasZoom,
   saveDeviceTemplates,
   saveNodes,
   saveEdges,
   saveSpecs,
   savePanels,
-  savePanelActive
+  savePanelActive,
+  saveCanvasPan,
+  saveCanvasZoom,
 } from '../utils/boardStorage'
 
 import {
@@ -157,9 +161,11 @@ const onCanvasPointerMove = (e: PointerEvent) => {
 
 const onCanvasPointerUp = () => {
   isPanning = false
+  saveCanvasPan(canvasPan.value)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
 }
+
 
 /**
  * 根据当前视口宽度按 clamp 规则计算浮动卡片宽度
@@ -361,8 +367,18 @@ const onCanvasDrop = (e: DragEvent) => {
   if (!tpl) return
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const y = e.clientY - rect.top
+  // 指针在外层 .canvas 中的像素坐标
+  const offsetX = e.clientX - rect.left
+  const offsetY = e.clientY - rect.top
+
+  // CanvasBoard 里对 inner 使用的是：
+  // transform: translate(canvasPan.x, canvasPan.y) scale(canvasZoom)
+  // 对应关系：screen = (inner * zoom) + pan  ⇒ inner = (screen - pan) / zoom
+  const x =
+      (offsetX - canvasPan.value.x * canvasZoom.value) / canvasZoom.value
+  const y =
+      (offsetY - canvasPan.value.y * canvasZoom.value) / canvasZoom.value
+
   createDeviceInstanceAt(tpl, { x, y })
 
   draggingTplName.value = null
@@ -698,6 +714,17 @@ onMounted(() => {
   edges.value = loadEdges()
   specifications.value = loadSpecs()
 
+  // 恢复画布平移
+  const savedPan = loadCanvasPan()
+  if (savedPan) {
+    canvasPan.value = savedPan
+  }
+  // 恢复画布缩放
+  const savedZoom = loadCanvasZoom()
+  if (typeof savedZoom === 'number' && !Number.isNaN(savedZoom)) {
+    // 顺便做一下 clamp，避免存了奇怪的值
+    canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, savedZoom))
+  }
   // 恢复浮动卡片位置；如果没有存储，则使用“左上角 / 右上角”默认布局
   const savedPanels = loadPanels()
   if (savedPanels) {
@@ -739,6 +766,12 @@ watch(
       savePanelActive(val)
     },
     { deep: true }
+)
+watch(
+    canvasZoom,
+    (z) => {
+      saveCanvasZoom(z)
+    }
 )
 
 onBeforeUnmount(() => {

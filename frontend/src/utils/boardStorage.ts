@@ -2,8 +2,9 @@
 import type { DeviceNode } from '../types/node.ts'
 import type { DeviceEdge } from '../types/edge.ts'
 import type { PanelPositions, PanelActive } from '../types/panel.ts'
-import type { DeviceTemplate } from '../types/device'
-import { Specification } from "../types/spec";
+import type { DeviceTemplate } from '../types/device.ts'
+import { Specification } from "../types/spec.ts";
+import { CanvasPan } from "@/types/canvas.ts";
 
 export const STORAGE_KEYS = {
     DEVICES: 'iot_devices',
@@ -11,7 +12,9 @@ export const STORAGE_KEYS = {
     EDGES: 'iot_edges',
     SPECS: 'iot_specs',
     PANELS: 'iot_panels',
-    PANEL_ACTIVE: 'iot_panel_active'
+    PANEL_ACTIVE: 'iot_panel_active',
+    CANVAS_PAN: 'iot_canvas_pan',
+    CANVAS_ZOOM: 'iot_canvas_zoom',
 }
 
 // 通用 load/save
@@ -49,6 +52,14 @@ export function loadPanelActive(): PanelActive | null {
     return loadFromSession<PanelActive>(STORAGE_KEYS.PANEL_ACTIVE)
 }
 
+export function loadCanvasPan(): CanvasPan | null {
+    return loadFromSession<CanvasPan>(STORAGE_KEYS.CANVAS_PAN)
+}
+
+export function loadCanvasZoom(): number | null {
+    return loadFromSession<number>(STORAGE_KEYS.CANVAS_ZOOM)
+}
+
 export function saveDeviceTemplates(devices: DeviceTemplate[]) {
     saveToSession(STORAGE_KEYS.DEVICES, devices)
 }
@@ -71,4 +82,12 @@ export function savePanels(panels: PanelPositions) {
 
 export function savePanelActive(active: PanelActive) {
     saveToSession(STORAGE_KEYS.PANEL_ACTIVE, active)
+}
+
+export function saveCanvasPan(pan: CanvasPan) {
+    saveToSession(STORAGE_KEYS.CANVAS_PAN, pan)
+}
+
+export function saveCanvasZoom(zoom: number) {
+    saveToSession<number>(STORAGE_KEYS.CANVAS_ZOOM, zoom)
 }
