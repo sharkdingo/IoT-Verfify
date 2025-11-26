@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Header from "./components/Header.vue";
+import ChatbotBall from "@/components/ChatbotBall.vue";
 </script>
 
 <template>
@@ -10,6 +11,7 @@ import Header from "./components/Header.vue";
 
     <main class="app-main">
       <router-view />
+      <ChatbotBall />
     </main>
   </div>
 </template>

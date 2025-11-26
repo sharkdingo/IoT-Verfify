@@ -3,7 +3,7 @@ spring:
     name: iot-verify
 
   datasource:
-    url: jdbc:mysql://localhost:3306/iot_verify?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8
+    url: jdbc:mysql://localhost:3306/iot_verify?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8&allowPublicKeyRetrieval=true
     username: root
     password: sharkdingo123
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -22,3 +22,9 @@ server:
   error:
     include-message: always
     include-binding-errors: always
+
+ark:
+  api-key: 8f3151df-403e-4f3d-b559-b35a7618393b
+  model-id: ep-20251125202752-bhwbw   # doubao-seed-1-6-251015 对应的 Endpoint ID
+  base-url: https://ark.cn-beijing.volces.com/api/v3
+
