@@ -194,8 +194,8 @@ const edges = ref<DeviceEdge[]>([])
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
-const inputActive = ref<string[]>(['devices', 'rules', 'specs'])
-const statusActive = ref<string[]>(['devices', 'edges', 'specs'])
+const inputActive = ref<string[]>([])
+const statusActive = ref<string[]>([])
 
 /* ========= 节点图标 / 标签样式 ========= */
 

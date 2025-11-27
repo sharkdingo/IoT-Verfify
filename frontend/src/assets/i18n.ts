@@ -64,6 +64,11 @@ const messages = {
             fillAllRuleFields: '请完整选择源/目标设备及 API',
             deleteNodeWithRelationsConfirm: '该设备存在与其他设备的规则（连线）或已参与规约，删除设备将同时删除这些规则和相关规约，是否继续？',
             specsDeletedWithNode: '已同时删除与该设备相关的规约。',
+            saveLayoutFailed: '保存画布布局失败',
+            saveNodesFailed: '保存设备节点失败',
+            saveEdgesFailed: '保存规则连线失败',
+            saveSpecsFailed: '保存规约失败',
+            saveActiveFailed: '保存折叠面板状态失败',
 
             /* 右键弹窗 */
             name: '名称',
@@ -147,6 +152,12 @@ const messages = {
             fillAllRuleFields: 'Please select source/target device and API completely',
             deleteNodeWithRelationsConfirm: 'This device has rules (edges) or is involved in specifications. Deleting it will also remove those rules and related specifications. Continue?',
             specsDeletedWithNode: 'Specifications related to this device have been removed as well.',
+            saveLayoutFailed: 'Failed to retrieve layout',
+            saveNodesFailed: 'Failed to retrieve nodes',
+            saveEdgesFailed: 'Failed to retrieve edges',
+            saveSpecsFailed: 'Failed to retrieve specs',
+            saveActiveFailed: 'Failed to retrieve panel active status',
+
             /* dialog */
             name: 'Name',
             description: 'Description',

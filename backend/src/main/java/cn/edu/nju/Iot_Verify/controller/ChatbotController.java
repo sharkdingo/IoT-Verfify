@@ -37,7 +37,7 @@ public class ChatbotController {
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("Connection", "keep-alive");
-        response.setHeader("Access-Control-Allow-Origin", "*");
+//        response.setHeader("Access-Control-Allow-Origin", "*");
 
         try (PrintWriter writer = response.getWriter()) {
 
