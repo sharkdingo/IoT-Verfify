@@ -6,6 +6,7 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { Specification } from '../types/spec'
 import type { BoardLayoutDto, PanelActive } from '../types/panel'
+import { DeviceTemplate } from "@/types/device.ts";
 
 export default {
     // ==== 节点 ====
@@ -26,5 +27,9 @@ export default {
 
     // ==== 折叠面板（展开/收起的内容项） ====
     getActive: () => api.get<PanelActive>('/board/active'),
-    saveActive: (active: PanelActive) => api.post('/board/active', active)
+    saveActive: (active: PanelActive) => api.post('/board/active', active),
+
+    // ==== 设备模板 ====
+    getDeviceTemplates: () => api.get<DeviceTemplate[]>('/board/templates'),
+    addDeviceTemplate: (tpl: DeviceTemplate) => api.post('/board/templates', tpl)
 }

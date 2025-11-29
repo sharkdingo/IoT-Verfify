@@ -9,17 +9,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Platform, Close } from '@element-plus/icons-vue'
 
 // Types
-import type { DeviceDialogMeta, DeviceTemplate } from '../types/device'
+import type {DeviceDialogMeta, DeviceTemplate} from '../types/device'
 import type { CanvasPan } from '../types/canvas'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
-// [Updated] 引入新的 Panel 类型定义
 import type { DockSide, DockState, PanelKey, PanelPosition, BoardLayoutDto } from '@/types/panel'
 
 // Utils
-import { getDeviceIconPath, getNodeIcon } from '../utils/device'
+import {getDeviceIconPath, getNodeIcon} from '../utils/device'
 import { getUniqueLabel } from '../utils/canvas/nodeCreate'
 import {
   getSpecMode,
@@ -30,11 +29,9 @@ import {
   updateSpecsForNodeRename
 } from '../utils/spec'
 import { getLinkPoints, updateRulesForNodeRename } from '../utils/rule'
-import { loadDeviceTemplates, saveDeviceTemplates } from '../utils/boardStorage'
 
 // Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
-import { defaultDeviceTemplates } from '../assets/config/deviceTemplates'
 
 // API
 import boardApi from '@/api/board'
@@ -44,6 +41,7 @@ import InputPanel from '../components/InputPanel.vue'
 import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
 import CanvasBoard from '../components/CanvasBoard.vue'
+import AddTemplateDialog from '../components/AddTemplateDialog.vue'
 
 // Styles
 import '../styles/board.css'
@@ -54,8 +52,8 @@ const { t } = useI18n()
  * 2. Constants & Configuration
  * ================================================================================= */
 
-const DEFAULT_PANEL_PADDING = 5
-const DOCK_SNAP_THRESHOLD = -1 // 拖拽到边缘多少像素内自动吸附
+const DEFAULT_PANEL_PADDING = 10 // 稍微增加一点间距比较美观
+const DOCK_SNAP_THRESHOLD = 1  // [Fix] 恢复阈值，否则无法自动吸附
 const DOCK_ICON_SIZE = 48
 
 const CARD_WIDTH_MIN = 192 // 12rem
@@ -158,7 +156,6 @@ const getNodeLabelStyle = (node: DeviceNode) => {
   }
 }
 
-// [Fix] CSS 类绑定：添加 is-dragging 用于禁用过渡
 const getCardClasses = (key: PanelKey) => {
   const state = panelDockState[key]
   return {
@@ -175,7 +172,8 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   const interactiveSelectors =
       'input, textarea, select, button, a, [role="button"],' +
       '.el-input, .el-select, .el-button, .el-checkbox, .el-radio,' +
-      '.el-switch, .el-slider, .el-table, .el-scrollbar, .dock-close-btn'
+      '.el-switch, .el-slider, .el-table, .el-scrollbar, .dock-close-btn,' +
+      '.el-dialog'
   return !!el.closest(interactiveSelectors)
 }
 
@@ -190,7 +188,6 @@ const clampPanelsToScreen = () => {
     const dock = panelDockState[key]
 
     // [Crucial Fix] 如果是停靠状态，必须根据当前窗口尺寸重置位置
-    // 否则如果之前保存的坐标在当前屏幕外（例如底部停靠时 y 很大），面板就会消失
     if (dock.isDocked && dock.side) {
       switch (dock.side) {
         case 'left':
@@ -222,10 +219,8 @@ const clampPanelsToScreen = () => {
  * 5. Canvas Interaction (Zoom & Pan)
  * ================================================================================= */
 
-// [Fix] 拦截浏览器默认缩放，只改变 canvasZoom
 const onBoardWheel = (e: WheelEvent) => {
   if (e.ctrlKey) {
-    // 阻止浏览器默认缩放行为 (template 中已加 .prevent，这里是逻辑处理)
     if (e.deltaY > 0) {
       canvasZoom.value = Math.max(MIN_ZOOM, canvasZoom.value - ZOOM_STEP)
     } else {
@@ -237,11 +232,10 @@ const onBoardWheel = (e: WheelEvent) => {
 const onCanvasEnter = () => (isCanvasHovered.value = true)
 const onCanvasLeave = () => (isCanvasHovered.value = false)
 
-// [Fix] 全局按键拦截：拦截 Ctrl + +/-/0 防止浏览器缩放快捷键
 const onGlobalKeydown = (e: KeyboardEvent) => {
   if (e.ctrlKey) {
     if (['=', '+', '-', '0'].includes(e.key)) {
-      e.preventDefault() // 关键！阻止浏览器菜单缩放
+      e.preventDefault()
 
       if (e.key === '=' || e.key === '+') {
         canvasZoom.value = Math.min(MAX_ZOOM, canvasZoom.value + ZOOM_STEP)
@@ -260,7 +254,6 @@ const onCanvasPointerDown = (e: PointerEvent) => {
   panStart = { x: e.clientX, y: e.clientY }
   panOrigin = { x: canvasPan.value.x, y: canvasPan.value.y }
 
-  // 捕获指针，拖动体验更好
   const target = e.currentTarget as HTMLElement
   if (target && target.setPointerCapture) {
     target.setPointerCapture(e.pointerId)
@@ -297,26 +290,22 @@ const onCanvasPointerUp = async (e: PointerEvent) => {
  * 6. Panel Interaction (Move, Dock, Restore)
  * ================================================================================= */
 
-// --- 6.1 Event Handlers ---
-
 const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
   const target = e.target as HTMLElement | null
+  // 这里的异常之前会由于语法错误而抛出，现在修复了
   if (isInteractiveTarget(target)) return
   onPanelPointerDown(e, key)
 }
 
 const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
-  // 如果已停靠，点击即恢复
   if (panelDockState[key].isDocked) {
     restorePanel(key)
     return
   }
 
-  // 1. 设置拖拽状态 -> 激活 CSS 的 no-transition (关键：解决拖拽延迟)
   draggingPanel = key
   draggingState[key] = true
 
-  // 2. 捕获指针，防止快速拖动时鼠标移出元素导致失焦
   const target = e.currentTarget as HTMLElement
   if (target && target.setPointerCapture) {
     target.setPointerCapture(e.pointerId)
@@ -331,7 +320,6 @@ const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
 
 const onPanelPointerMove = (e: PointerEvent) => {
   if (!draggingPanel) return
-  // 纯粹的位置更新，因为有 is-dragging 类，这里会非常流畅
   const dx = e.clientX - panelDragStart.x
   const dy = e.clientY - panelDragStart.y
   const pos = panelPositions[draggingPanel]
@@ -344,17 +332,13 @@ const onPanelPointerUp = async (e: PointerEvent) => {
 
   const key = draggingPanel
 
-  // 释放指针捕获
   const target = e.target as HTMLElement
   if (target && target.releasePointerCapture) {
     try { target.releasePointerCapture(e.pointerId) } catch(err){}
   }
 
-  // 3. 检查是否需要自动吸附
   checkAutoDock(key)
 
-  // 4. 清除拖拽状态
-  // 使用 requestAnimationFrame 延迟一帧，确保吸附动画(transition)能平滑接管
   requestAnimationFrame(() => {
     draggingState[key] = false
     draggingPanel = null
@@ -400,7 +384,6 @@ const handleManualDock = (key: PanelKey) => {
   const el = document.querySelector(`.${key}-card`) as HTMLElement
   if (!el) return
   const rect = el.getBoundingClientRect()
-  // 手动点击 X 时，寻找绝对最近的边缘直接停靠
   const { side } = getNearestEdge(rect.x, rect.y, rect.width, rect.height)
   dockPanel(key, side)
 }
@@ -415,7 +398,6 @@ const dockPanel = (key: PanelKey, side: DockSide) => {
   const winW = window.innerWidth
   const winH = window.innerHeight
 
-  // 设置吸附位置（配合 CSS transition 实现飞入效果）
   if (side === 'left') {
     panelPositions[key].x = 0
   } else if (side === 'right') {
@@ -429,49 +411,38 @@ const dockPanel = (key: PanelKey, side: DockSide) => {
   void saveLayoutToServer()
 }
 
-// [Fix] 智能恢复逻辑：紧贴边缘完全展示
 const restorePanel = (key: PanelKey) => {
   const side = panelDockState[key].side
   const padding = DEFAULT_PANEL_PADDING
   const headerHeight = 60
-
-  // 获取当前卡片展开后的理论宽度
   const currentCardWidth = getCardWidth()
-
   const winW = window.innerWidth
   const winH = window.innerHeight
 
   let newX = panelPositions[key].x
   let newY = panelPositions[key].y
 
-  // 根据停靠方向计算“完美展示位置”
   if (side === 'left') {
-    // 停靠在左 -> 恢复到左侧 padding 处
     newX = padding
     newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
   } else if (side === 'right') {
-    // 停靠在右 -> 恢复到右侧边缘内侧
     newX = winW - currentCardWidth - padding
     newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
   } else if (side === 'top') {
-    // 停靠在上 -> 恢复到顶部
     newY = padding
     newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
   } else if (side === 'bottom') {
-    // 停靠在下 -> 恢复到大概位置
     if (panelPositions[key].y > winH - 200) {
-      newY = winH - 500 // 假设一个合理高度
+      newY = winH - 500
     } else {
       newY = Math.max(padding, panelPositions[key].y)
     }
     newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
   } else {
-    // 异常回退
     newX = panelDockState[key].lastPos.x
     newY = panelDockState[key].lastPos.y
   }
 
-  // 安全边界钳位，防止出界
   newX = Math.min(Math.max(0, newX), winW - 100)
   newY = Math.min(Math.max(0, newY), winH - headerHeight)
 
@@ -488,7 +459,6 @@ const restorePanel = (key: PanelKey) => {
  * 7. Node / Edge / Spec Management
  * ================================================================================= */
 
-// --- Node Positioning ---
 const getNextNodePosition = (): { x: number; y: number } => {
   const count = nodes.value.length
   const col = count % NODE_GRID_COLS
@@ -508,12 +478,11 @@ const getNextNodePosition = (): { x: number; y: number } => {
   return { x, y }
 }
 
-// --- Creation ---
 const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
-  const uniqueLabel = getUniqueLabel(tpl.name, nodes.value)
+  const uniqueLabel = getUniqueLabel(tpl.manifest.Name, nodes.value)
   const node: DeviceNode = {
     id: uniqueLabel,
-    templateName: tpl.name,
+    templateName: tpl.manifest.Name,
     label: uniqueLabel,
     position: pos,
     state: tpl.manifest.InitState || 'Off',
@@ -529,9 +498,8 @@ const handleCreateDevice = async (tpl: DeviceTemplate) => {
   await createDeviceInstanceAt(tpl, pos)
 }
 
-// --- Drag & Drop Devices ---
 const onDeviceDragStart = (tpl: DeviceTemplate) => {
-  draggingTplName.value = tpl.name
+  draggingTplName.value = tpl.manifest.Name
 }
 
 const onDeviceDragEnd = () => {
@@ -544,7 +512,7 @@ const onCanvasDragOver = (e: DragEvent) => {
 
 const onCanvasDrop = async (e: DragEvent) => {
   if (!draggingTplName.value) return
-  const tpl = deviceTemplates.value.find(d => d.name === draggingTplName.value)
+  const tpl = deviceTemplates.value.find(d => d.manifest.Name === draggingTplName.value)
   if (!tpl) return
 
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -558,13 +526,11 @@ const onCanvasDrop = async (e: DragEvent) => {
   draggingTplName.value = null
 }
 
-// --- Canvas Board Events ---
 const handleNodeMovedOrResized = async () => {
   await saveNodesToServer()
   await saveEdgesToServer()
 }
 
-// --- Rules (InputPanel) ---
 const handleAddRule = async (payload: RuleForm) => {
   const { fromId, fromApi, toId, toApi } = payload
   if (!fromId || !fromApi || !toId || !toApi) {
@@ -592,7 +558,6 @@ const handleAddRule = async (payload: RuleForm) => {
   await saveEdgesToServer()
 }
 
-// --- Specs (InputPanel) ---
 const handleAddSpec = async (payload: {
   templateId: SpecTemplateId | ''
   mode: 'single' | 'ifThen'
@@ -677,7 +642,7 @@ const deleteSpecification = async (id: string) => {
  * ================================================================================= */
 
 const onNodeContext = (node: DeviceNode) => {
-  const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
+  const tpl = deviceTemplates.value.find(t => t.manifest.Name === node.templateName)
   dialogMeta.nodeId = node.id
   dialogMeta.label = node.label
   dialogMeta.deviceName = tpl ? tpl.manifest.Name : node.templateName
@@ -801,22 +766,48 @@ const saveSpecsToServer = async () => {
   catch (e) { ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败') }
 }
 
+const addTemplateVisible = ref(false)
+const refreshDeviceTemplates = async () => {
+  try {
+    const res = await boardApi.getDeviceTemplates()
+    deviceTemplates.value = res.data || []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.loadTemplatesFailed') || '加载设备模板失败')
+  }
+}
+
+// 接收来自 InputPanel 的 "打开弹窗" 信号
+const openAddTemplateDialog = () => {
+  addTemplateVisible.value = true
+}
+
+// 处理 AddTemplateDialog 的保存事件
+const handleSaveTemplate = async (newTpl: DeviceTemplate) => {
+  // 查重逻辑（可选，后端也会查）
+  if (deviceTemplates.value.some(d => d.manifest.Name === newTpl.manifest.Name)) {
+    ElMessage.warning(t('app.nameExists') || '该设备名称已存在')
+    return
+  }
+
+  try {
+    await boardApi.addDeviceTemplate(newTpl)
+    ElMessage.success(t('app.addTemplateSuccess') || '添加设备模板成功')
+
+    addTemplateVisible.value = false // 成功后关闭弹窗
+    await refreshDeviceTemplates()
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t('app.addTemplateFailed') || '添加设备模板失败')
+  }
+}
+
 /* =================================================================================
  * 10. Lifecycle & Watchers
  * ================================================================================= */
 
-const initDefaultDevices = () => {
-  const cached = loadDeviceTemplates()
-  if (cached.length) {
-    deviceTemplates.value = cached
-    return
-  }
-  deviceTemplates.value = defaultDeviceTemplates
-  saveDeviceTemplates(defaultDeviceTemplates)
-}
-
 onMounted(async () => {
-  initDefaultDevices()
+  await refreshDeviceTemplates()
 
   // Load Data
   try { nodes.value = (await boardApi.getNodes()).data } catch { nodes.value = [] }
@@ -948,6 +939,7 @@ onBeforeUnmount(() => {
             @add-spec="handleAddSpec"
             @device-drag-start="onDeviceDragStart"
             @device-drag-end="onDeviceDragEnd"
+            @open-add-template-dialog="openAddTemplateDialog"
             :get-template-init-icon="getTemplateInitIcon"
         />
       </div>
@@ -1002,6 +994,11 @@ onBeforeUnmount(() => {
         @update:visible="dialogVisible = $event"
         @save="handleDialogSave"
         @delete="handleDialogDelete"
+    />
+
+    <AddTemplateDialog
+        v-model:visible="addTemplateVisible"
+        @save="handleSaveTemplate"
     />
   </div>
 </template>

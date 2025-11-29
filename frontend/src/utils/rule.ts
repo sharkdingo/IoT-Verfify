@@ -1,6 +1,6 @@
 // src/utils/rule.ts
-import type {DeviceEdge} from '../types/edge.ts'
-import type {DeviceNode} from '../types/node.ts'
+import type { DeviceEdge } from '../types/edge'
+import type { DeviceNode } from '../types/node'
 
 /**
  * 节点重命名时：更新所有相关规则（边）上的 fromLabel / toLabel
@@ -27,10 +27,12 @@ export const updateRulesForNodeRename = (
     return changed
 }
 
-
+/**
+ * 获取节点中心点坐标
+ */
 export const getNodeCenter = (node: DeviceNode) => {
-    const w = node.width ?? 110
-    const h = node.height ?? 90
+    const w = node.width || 110
+    const h = node.height || 90
     return {
         x: node.position.x + w / 2,
         y: node.position.y + h / 2,
@@ -38,21 +40,22 @@ export const getNodeCenter = (node: DeviceNode) => {
 }
 
 /**
- * 普通两节点连线的端点（保持你原来的实现）
+ * 计算两个节点之间连线的端点（切点）
+ * 使得连线看起来是从节点边缘出发，而不是从中心出发
  */
 export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     const fromCenter = getNodeCenter(fromNode)
     const toCenter = getNodeCenter(toNode)
 
-    const fw = fromNode.width ?? 110
-    const fh = fromNode.height ?? 90
+    const fw = fromNode.width || 110
+    const fh = fromNode.height || 90
     const fx1 = fromNode.position.x
     const fy1 = fromNode.position.y
     const fx2 = fx1 + fw
     const fy2 = fy1 + fh
 
-    const tw = toNode.width ?? 110
-    const th = toNode.height ?? 90
+    const tw = toNode.width || 110
+    const th = toNode.height || 90
     const tx1 = toNode.position.x
     const ty1 = toNode.position.y
     const tx2 = tx1 + tw
@@ -62,22 +65,26 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     const dy = toCenter.y - fromCenter.y
     const EPS = 1e-6
 
-    // 1) from
+    // 1) 计算起始点 (Intersection with From Node)
     let tFrom = 1
     if (Math.abs(dx) > EPS) {
+        // Left edge
         const tL = (fx1 - fromCenter.x) / dx
         const yL = fromCenter.y + tL * dy
         if (tL > 0 && yL >= fy1 && yL <= fy2) tFrom = Math.min(tFrom, tL)
 
+        // Right edge
         const tR = (fx2 - fromCenter.x) / dx
         const yR = fromCenter.y + tR * dy
         if (tR > 0 && yR >= fy1 && yR <= fy2) tFrom = Math.min(tFrom, tR)
     }
     if (Math.abs(dy) > EPS) {
+        // Top edge
         const tT = (fy1 - fromCenter.y) / dy
         const xT = fromCenter.x + tT * dx
         if (tT > 0 && xT >= fx1 && xT <= fx2) tFrom = Math.min(tFrom, tT)
 
+        // Bottom edge
         const tB = (fy2 - fromCenter.y) / dy
         const xB = fromCenter.x + tB * dx
         if (tB > 0 && xB >= fx1 && xB <= fx2) tFrom = Math.min(tFrom, tB)
@@ -87,7 +94,8 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
         y: fromCenter.y + dy * tFrom,
     }
 
-    // 2) to (反向)
+    // 2) 计算终点 (Intersection with To Node)
+    // 反向向量
     const bdx = fromCenter.x - toCenter.x
     const bdy = fromCenter.y - toCenter.y
     let tTo = 1
@@ -119,24 +127,22 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
 
 /**
  * 自环连线（from === to）：
- * 在节点右侧画一条“半椭圆”样式的 path，用于配合 marker 画出自指箭头。
- * 会根据节点当前 width / height 自动缩放。
+ * 在节点右侧画一条“半椭圆”样式的 path
  */
 export const getSelfLoopPath = (node: DeviceNode): string => {
-    const w = node.width ?? 110
-    const h = node.height ?? 90
+    const w = node.width || 110
+    const h = node.height || 90
 
-    const right = node.position.x + w // 右边界
+    const right = node.position.x + w
     const top = node.position.y
 
-    // 自环在右侧，大致占据节点高度的中间一段
-    const startY = top + h * 0.25        // 起点：右侧偏上
-    const endY   = top + h * 0.75        // 终点：右侧偏下（箭头指回节点）
-    const offsetX = Math.min(w, h) * 0.8 // 向右伸出去的弧度，跟节点大小一起缩放
-    const ctrlOffsetY = h * 0.2          // 控制点上下“拱”的高度
+    const startY = top + h * 0.25
+    const endY   = top + h * 0.75
+    const offsetX = Math.min(w, h) * 0.8
+    const ctrlOffsetY = h * 0.2
 
-    const startX = right                 // 起点就在节点右边界
-    const endX   = right                 // 终点也在右边界，方便箭头指回节点
+    const startX = right
+    const endX   = right
 
     const c1x = right + offsetX
     const c1y = startY - ctrlOffsetY
@@ -144,6 +150,5 @@ export const getSelfLoopPath = (node: DeviceNode): string => {
     const c2x = right + offsetX
     const c2y = endY + ctrlOffsetY
 
-    // 标准三次贝塞尔曲线：M 起点 C 控制点1 控制点2 终点
     return `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`
 }

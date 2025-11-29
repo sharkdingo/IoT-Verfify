@@ -2,19 +2,23 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.*;
+import cn.edu.nju.Iot_Verify.dto.manifest.DeviceManifest;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -25,6 +29,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final SpecificationRepository specRepo;
     private final BoardLayoutRepository layoutRepo;
     private final BoardActiveRepository activeRepo;
+    private final DeviceTemplateRepository deviceTemplateRepo;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -237,6 +242,57 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .statusTabsJson(writeStringList(active.getStatus()))
                 .build();
         activeRepo.save(po);
+    }
+
+    // ================= 设备模板实现 =================
+
+    @Override
+    public List<DeviceTemplateDto> getDeviceTemplates() {
+        List<DeviceTemplatePo> poList = deviceTemplateRepo.findAll();
+
+        return poList.stream().map(po -> {
+            DeviceTemplateDto dto = new DeviceTemplateDto();
+            dto.setId(po.getId().toString());
+            dto.setName(po.getName());
+
+            // 反序列化：String JSON -> DeviceManifest Object
+            if (po.getManifestJson() != null && !po.getManifestJson().isEmpty()) {
+                try {
+                    // [Modified] 使用 DeviceManifest.class
+                    DeviceManifest manifest = MAPPER.readValue(po.getManifestJson(), DeviceManifest.class);
+                    dto.setManifest(manifest);
+                } catch (JsonProcessingException e) {
+                    e.printStackTrace();
+                    // 容错：如果解析失败，返回 null 或空对象，防止接口崩溃
+                    dto.setManifest(new DeviceManifest());
+                }
+            }
+            return dto;
+        }).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public void addDeviceTemplate(DeviceTemplateDto dto) {
+        // 校验名称唯一性
+        if (deviceTemplateRepo.existsByName(dto.getName())) {
+            throw new RuntimeException("Device template name '" + dto.getName() + "' already exists.");
+        }
+
+        try {
+            // 序列化：DeviceManifest Object -> String JSON
+            // [Modified] Jackson 会根据 DeviceManifest 的注解自动处理
+            String json = MAPPER.writeValueAsString(dto.getManifest());
+
+            DeviceTemplatePo po = DeviceTemplatePo.builder()
+                    .name(dto.getName())
+                    .manifestJson(json)
+                    .build();
+
+            deviceTemplateRepo.save(po);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize manifest JSON", e);
+        }
     }
 
     /* ===================== JSON 小工具 ===================== */

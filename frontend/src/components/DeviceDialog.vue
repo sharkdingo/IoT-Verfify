@@ -1,17 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import {ref, watch, computed} from 'vue'
+import {useI18n} from 'vue-i18n'
 
-import type { DeviceManifest } from '../types/device'
-import type { DeviceEdge } from '../types/edge'
-import type { Specification } from '../types/spec'
-import { buildSpecText } from "../utils/spec.ts"
-import {
-  extractBasicDeviceInfo,
-  extractDeviceVariables,
-  extractDeviceStates,
-  extractDeviceApis
-} from '../utils/device'
+import type {DeviceManifest} from '../types/device'
+import type {DeviceEdge} from '../types/edge'
+import type {Specification} from '../types/spec'
+import {buildSpecText} from "../utils/spec"
 
 const props = defineProps<{
   visible: boolean
@@ -29,79 +23,115 @@ const emit = defineEmits<{
   (e: 'delete'): void
 }>()
 
-const { t } = useI18n()
+const {t} = useI18n()
 
 const innerVisible = ref(props.visible)
-const innerLabel   = ref(props.label)
+const innerLabel = ref(props.label)
 
-/* 同步外部值 -> 内部状态 */
+/* 同步 props -> local state */
 watch(() => props.visible, v => (innerVisible.value = v))
-watch(() => props.label,   v => (innerLabel.value   = v))
+watch(() => props.label, v => (innerLabel.value = v))
 
 const close = () => {
   innerVisible.value = false
   emit('update:visible', false)
 }
 
-const onSave   = () => emit('save', innerLabel.value)
+const onSave = () => emit('save', innerLabel.value)
 const onDelete = () => emit('delete')
 
-/* ---------- manifest 相关的展示数据，全走 utils/device ---------- */
+/* ---------- 核心展示数据提取 ---------- */
 
 const manifest = computed<DeviceManifest | null>(() => props.manifest ?? null)
 
-/** 基本信息区：再加上 i18n 标签，最终变成表格行 */
-const basicInfo = computed(() =>
-    extractBasicDeviceInfo(
-        manifest.value,
-        props.deviceName || props.label,
-        props.label,
-        props.description
-    )
-)
-
+// 1. 基础信息表格数据
 const basicRows = computed(() => {
-  const info = basicInfo.value
+  const m = manifest.value
+  if (!m) return []
+
   const rows = [
-    {
-      key: 'name',
-      label: t('app.name') || 'Name',
-      value: info.name
-    },
-    {
-      key: 'instance',
-      label: t('app.instanceName') || 'Instance',
-      value: info.instanceLabel
-    },
-    {
-      key: 'description',
-      label: t('app.description') || 'Description',
-      value: info.description
-    },
-    {
-      key: 'initState',
-      label: t('app.initState') || 'Initial State',
-      value: info.initState
-    },
-    {
-      key: 'impacted',
-      label: t('app.impactedVariables') || 'Impacted Variables',
-      value: info.impactedVariables.join(', ')
-    }
+    {label: t('app.name') || 'Name', value: m.Name},
+    {label: t('app.instanceName') || 'Instance', value: props.label},
+    {label: t('app.description') || 'Description', value: m.Description || props.description || t('app.null')},
+    {label: t('app.initState') || 'Initial State', value: m.InitState},
+    {label: t('app.modes') || 'Modes', value: m.Modes?.join(', ')},
+    {label: t('app.impactedVariables') || 'Impacted Variables', value: m.ImpactedVariables?.join(', ')}
   ]
-  // 只保留有值的行
+  // 过滤掉空值行
   return rows.filter(r => r.value !== '' && r.value != null)
 })
 
-/** Variables / States / APIs 列表：直接交给 utils 做数据清洗 */
-const variables = computed(() => extractDeviceVariables(manifest.value))
-const states    = computed(() => extractDeviceStates(manifest.value))
-const apis      = computed(() => extractDeviceApis(manifest.value))
+// 2. 变量列表 (合并 Internal 和 Impacted，并展示隐私/信任)
+const variables = computed(() => {
+  const m = manifest.value
+  if (!m) return []
+  const list: any[] = []
 
-/** 当前节点相关 IFTTT 规则（Board.vue 已经筛好传进来） */
+  // Internal Variables (完整对象)
+  if (m.InternalVariables) {
+    m.InternalVariables.forEach(iv => {
+      // 智能格式化 Value 列：显示枚举值 或 数值范围
+      let valDisplay = ''
+      if (iv.Values && iv.Values.length) valDisplay = iv.Values.join(' / ')
+      else if (iv.LowerBound !== undefined && iv.UpperBound !== undefined) valDisplay = `[${iv.LowerBound}, ${iv.UpperBound}]`
+
+      list.push({
+        name: iv.Name,
+        value: valDisplay,
+        trust: iv.Trust,
+        privacy: iv.Privacy, // [New]
+        type: 'Internal'
+      })
+    })
+  }
+
+  // Impacted Variables (外部引用)
+  if (m.ImpactedVariables) {
+    m.ImpactedVariables.forEach(vName => {
+      // 避免重复显示
+      if (!list.some(item => item.name === vName)) {
+        list.push({
+          name: vName,
+          value: '(External)',
+          trust: '-',
+          privacy: '-',
+          type: 'Impacted'
+        })
+      }
+    })
+  }
+  return list
+})
+
+// 3. 状态列表 (展示隐私、不变式)
+const states = computed(() => {
+  const m = manifest.value
+  if (!m || !m.WorkingStates) return []
+  return m.WorkingStates.map(s => ({
+    name: s.Name,
+    description: s.Description,
+    trust: s.Trust,
+    privacy: s.Privacy,     // [New]
+    invariant: s.Invariant, // [New]
+    hasDynamics: s.Dynamics && s.Dynamics.length > 0
+  }))
+})
+
+// 4. API 列表 (展示 Signal)
+const apis = computed(() => {
+  const m = manifest.value
+  if (!m || !m.APIs) return []
+  return m.APIs.map(api => ({
+    name: api.Name,
+    from: api.StartState,
+    to: api.EndState,
+    signal: api.Signal,     // [New]
+    description: api.Description
+  }))
+})
+
+// 关联数据
 const relatedRules = computed<DeviceEdge[]>(() => props.rules ?? [])
-
-/** 当前节点相关规约 */
 const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
 </script>
 
@@ -110,193 +140,185 @@ const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
       v-model="innerVisible"
       class="device-dialog"
       :title="t('app.deviceInfo')"
-      :width="'38rem'"
+      :width="'42rem'"
       :draggable="true"
       @close="close"
   >
-    <!-- ===== Header：标题 + 设备名 ===== -->
+    <!-- Header -->
     <template #header>
       <div class="dd-header">
         <div class="dd-header-main">
-          <div class="dd-title">
-            {{ t('app.deviceInfo') }}
-          </div>
-          <div class="dd-subtitle">
-            {{ deviceName || label }}
-          </div>
+          <div class="dd-title">{{ t('app.deviceInfo') || 'Device Details' }}</div>
+          <div class="dd-subtitle">{{ deviceName || label }}</div>
         </div>
       </div>
     </template>
 
-    <!-- ===== Body：上半部滚动区域 + 下半部重命名区域 ===== -->
+    <!-- Body -->
     <div class="dd-body">
-      <!-- 上半部：所有表格，固定高度后内部滚动 -->
       <div class="dd-body-scroll">
-        <!-- Basic -->
+
+        <!-- Basic Info -->
         <section class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.deviceBasic') || 'Basic' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.deviceBasic') || 'Basic Information' }}</div>
           <table class="dd-table dd-table-basic">
             <tbody>
-            <tr v-for="row in basicRows" :key="row.key">
-              <th class="dd-th-label">
-                {{ row.label }}
-              </th>
-              <td class="dd-td-value">
-                  <span class="dd-ellipsis">
-                    {{ row.value || '-' }}
-                  </span>
-              </td>
+            <tr v-for="row in basicRows" :key="row.label">
+              <th class="dd-th-label">{{ row.label }}</th>
+              <td class="dd-td-value"><span class="dd-ellipsis" :title="String(row.value)">{{ row.value || '' }}</span></td>
             </tr>
             </tbody>
           </table>
         </section>
 
-        <!-- Variables -->
+        <!-- Variables (Enhanced) -->
         <section v-if="variables.length" class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.deviceVariables') || 'Variables' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.deviceVariables') || 'Variables' }}</div>
           <table class="dd-table">
             <thead>
             <tr>
-              <th>{{ t('app.name') || 'Name' }}</th>
-              <th>{{ t('app.value') || 'Value' }}</th>
-              <th>{{ t('app.trust') || 'Trust' }}</th>
+              <th width="25%">{{ t('app.name') }}</th>
+              <th width="30%">{{ t('app.range') }}</th>
+              <th width="15%">{{ t('app.trust') }}</th>
+              <th width="15%">{{ t('app.privacy') }}</th> <!-- [New] Column -->
+              <th width="15%">{{ t('app.type') }}</th>
             </tr>
             </thead>
             <tbody>
             <tr v-for="(v, idx) in variables" :key="idx">
-              <td><span class="dd-ellipsis">{{ v.name || '-' }}</span></td>
-              <td><span class="dd-ellipsis">{{ v.value || '-' }}</span></td>
-              <td><span class="dd-ellipsis">{{ v.trust || '-' }}</span></td>
+              <td><span class="dd-ellipsis" :title="v.name">{{ v.name }}</span></td>
+              <td><span class="dd-ellipsis" :title="v.value">{{ v.value }}</span></td>
+              <td>
+                <span :class="['dd-tag', v.trust === 'trusted' ? 'tag-success' : 'tag-warning']"
+                      v-if="v.trust && v.trust !== '-'">
+                  {{ v.trust }}
+                </span>
+                <span v-else>-</span>
+              </td>
+              <td>
+                <!-- [New] Privacy Tag -->
+                <span :class="['dd-tag', v.privacy === 'private' ? 'tag-danger' : 'tag-info']"
+                      v-if="v.privacy && v.privacy !== '-'">
+                  {{ v.privacy }}
+                </span>
+                <span v-else>-</span>
+              </td>
+              <td class="dd-text-muted">{{ v.type }}</td>
             </tr>
             </tbody>
           </table>
         </section>
 
-        <!-- States -->
+        <!-- States (Enhanced) -->
         <section v-if="states.length" class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.deviceStates') || 'States' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.deviceStates') || 'Working States' }}</div>
           <table class="dd-table">
             <thead>
             <tr>
-              <th>{{ t('app.name') || 'Name' }}</th>
-              <th>{{ t('app.description') || 'Description' }}</th>
-              <th>{{ t('app.trust') || 'Trust' }}</th>
+              <th width="20%">{{ t('app.name') }}</th>
+              <th width="30%">{{ t('app.description') }}</th>
+              <th width="20%">{{ t('app.invariant') }}</th>
+              <th width="15%">{{ t('app.trust') }}</th>
+              <th width="15%">{{ t('app.privacy') }}</th> <!-- [New] Column -->
             </tr>
             </thead>
             <tbody>
             <tr v-for="(s, idx) in states" :key="idx">
-              <td><span class="dd-ellipsis">{{ s.name || '-' }}</span></td>
+              <td><span class="dd-ellipsis font-bold">{{ s.name }}</span></td>
               <td class="dd-col-desc">
-                <el-tooltip
-                    v-if="s.description"
-                    :content="s.description"
-                    placement="top"
-                >
-                    <span class="dd-ellipsis">
-                      {{ s.description }}
-                    </span>
+                <el-tooltip v-if="s.description" :content="s.description" placement="top">
+                  <span class="dd-ellipsis">{{ s.description }}</span>
                 </el-tooltip>
-                <span v-else class="dd-ellipsis">-</span>
+                <span v-else>-</span>
               </td>
-              <td><span class="dd-ellipsis">{{ s.trust || '-' }}</span></td>
+              <td><span class="dd-ellipsis code-font">{{ s.invariant }}</span></td>
+              <td>
+                <span :class="['dd-tag', s.trust === 'trusted' ? 'tag-success' : 'tag-warning']">{{ s.trust }}</span>
+              </td>
+              <td>
+                <span :class="['dd-tag', s.privacy === 'private' ? 'tag-danger' : 'tag-info']"
+                      v-if="s.privacy">{{ s.privacy }}</span>
+              </td>
             </tr>
             </tbody>
           </table>
         </section>
 
-        <!-- APIs -->
+        <!-- APIs (Enhanced) -->
         <section v-if="apis.length" class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.deviceApis') || 'APIs' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.deviceApis') || 'APIs' }}</div>
           <table class="dd-table">
             <thead>
             <tr>
-              <th>{{ t('app.name') || 'Name' }}</th>
-              <th>{{ t('app.from') || 'From' }}</th>
-              <th>{{ t('app.to') || 'To' }}</th>
-              <th>{{ t('app.description') || 'Description' }}</th>
+              <th width="25%">{{ t('app.name') }}</th>
+              <th width="10%">{{ t('app.signal') }}</th> <!-- [New] Column -->
+              <th width="25%">{{ t('app.transition') }}</th>
+              <th width="40%">{{ t('app.description') }}</th>
             </tr>
             </thead>
             <tbody>
             <tr v-for="(api, idx) in apis" :key="idx">
-              <td><span class="dd-ellipsis">{{ api.name || '-' }}</span></td>
-              <td><span class="dd-ellipsis">{{ api.from || '-' }}</span></td>
-              <td><span class="dd-ellipsis">{{ api.to || '-' }}</span></td>
+              <td><span class="dd-ellipsis font-bold">{{ api.name }}</span></td>
+              <td>
+                <span v-if="api.signal" class="dd-tag tag-primary">Sig</span>
+                <span v-else class="dd-text-muted">-</span>
+              </td>
+              <td>
+                <span class="dd-flow" v-if="api.from || api.to">
+                  {{ api.from || '*' }} <span class="arrow">→</span> {{ api.to || '*' }}
+                </span>
+              </td>
               <td class="dd-col-desc">
-                <el-tooltip
-                    v-if="api.description"
-                    :content="api.description"
-                    placement="top"
-                >
-                    <span class="dd-ellipsis">
-                      {{ api.description }}
-                    </span>
+                <el-tooltip v-if="api.description" :content="api.description" placement="top">
+                  <span class="dd-ellipsis">{{ api.description }}</span>
                 </el-tooltip>
-                <span v-else class="dd-ellipsis">-</span>
+                <span v-else>-</span>
               </td>
             </tr>
             </tbody>
           </table>
         </section>
 
-        <!-- 相关 IFTTT 规则 -->
+        <!-- Rules (Unchanged) -->
         <section v-if="relatedRules.length" class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.relatedRules') || 'Related IFTTT Rules' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.relatedRules') || 'Related Rules' }}</div>
           <table class="dd-table">
             <thead>
             <tr>
-              <th>{{ t('app.sourceDevice') || 'From Device' }}</th>
-              <th>{{ t('app.sourceApi') || 'From API' }}</th>
-              <th>{{ t('app.targetDevice') || 'To Device' }}</th>
-              <th>{{ t('app.targetApi') || 'To API' }}</th>
+              <th>{{ t('app.sourceDevice') }}</th>
+              <th>{{ t('app.sourceApi') }}</th>
+              <th>{{ t('app.targetDevice') }}</th>
+              <th>{{ t('app.targetApi') }}</th>
             </tr>
             </thead>
             <tbody>
             <tr v-for="r in relatedRules" :key="r.id">
-              <td><span class="dd-ellipsis">{{ r.fromLabel }}</span></td>
-              <td><span class="dd-ellipsis">{{ r.fromApi }}</span></td>
-              <td><span class="dd-ellipsis">{{ r.toLabel }}</span></td>
-              <td><span class="dd-ellipsis">{{ r.toApi }}</span></td>
+              <td>{{ r.fromLabel }}</td>
+              <td>{{ r.fromApi }}</td>
+              <td>{{ r.toLabel }}</td>
+              <td>{{ r.toApi }}</td>
             </tr>
             </tbody>
           </table>
         </section>
 
-        <!-- 相关规约 -->
+        <!-- Specs (Unchanged) -->
         <section v-if="relatedSpecs.length" class="dd-section">
-          <div class="dd-section-title">
-            {{ t('app.relatedSpecs') || 'Related Specifications' }}
-          </div>
+          <div class="dd-section-title">{{ t('app.relatedSpecs') || 'Specifications' }}</div>
           <table class="dd-table">
             <thead>
             <tr>
-              <th>{{ t('app.specTemplateShort') || 'Template' }}</th>
-              <th>{{ t('app.specText') || 'Text' }}</th>
+              <th>{{ t('app.specTemplate') }}</th>
+              <th>{{ t('app.specContent') }}</th>
             </tr>
             </thead>
             <tbody>
             <tr v-for="s in relatedSpecs" :key="s.id">
+              <td>{{ s.templateLabel }}</td>
               <td>
-                <span class="dd-ellipsis">{{ s.templateLabel }}</span>
-              </td>
-              <td class="dd-col-desc">
-                <el-tooltip
-                    :content="buildSpecText(s)"
-                    placement="top"
-                >
-            <span class="dd-ellipsis">
-              {{ buildSpecText(s) }}
-            </span>
-                </el-tooltip>
+                <el-tooltip :content="buildSpecText(s)" placement="top"><span class="dd-ellipsis">{{
+                    buildSpecText(s)
+                  }}</span></el-tooltip>
               </td>
             </tr>
             </tbody>
@@ -304,31 +326,24 @@ const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
         </section>
       </div>
 
-      <!-- 下半部：重命名区域（固定在表格下方，不参与 dd-body-scroll 的滚动） -->
+      <!-- Rename Section -->
       <section class="dd-section dd-section-rename">
-        <div class="dd-section-title">
-          {{ t('app.renameDevice') || 'Rename Device' }}
-        </div>
-        <el-form label-width="var(--iot-dialog-label-width)">
+        <div class="dd-section-title">{{ t('app.renameDevice') || 'Rename Device' }}</div>
+        <el-form label-width="80px">
           <el-form-item :label="t('app.name')">
-            <el-input v-model="innerLabel" />
+            <el-input v-model="innerLabel"/>
           </el-form-item>
         </el-form>
       </section>
     </div>
 
-    <!-- ===== Footer：删除 / 取消 / 保存 ===== -->
+    <!-- Footer -->
     <template #footer>
       <div class="dd-footer">
-        <el-button type="danger" @click="onDelete">
-          {{ t('app.deleteDevice') }}
-        </el-button>
-
+        <el-button type="danger" @click="onDelete">{{ t('app.deleteDevice') }}</el-button>
         <div class="dd-footer-right">
           <el-button @click="close">{{ t('app.cancel') }}</el-button>
-          <el-button type="primary" @click="onSave">
-            {{ t('app.save') }}
-          </el-button>
+          <el-button type="primary" @click="onSave">{{ t('app.save') }}</el-button>
         </div>
       </div>
     </template>
@@ -336,12 +351,7 @@ const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
 </template>
 
 <style scoped>
-/* ===========================
- * DeviceDialog：设备信息表格面板
- * =========================== */
-
-/* 覆盖 Element Plus 的白色对话框外壳 */
-/* 头部：标题 + 副标题始终可见 */
+/* Dialog Base Style */
 .dd-header {
   display: flex;
   align-items: center;
@@ -351,158 +361,183 @@ const relatedSpecs = computed<Specification[]>(() => props.specs ?? [])
 .dd-header-main {
   display: flex;
   flex-direction: column;
-  gap: var(--iot-space-2xs);
+  gap: 4px;
 }
 
 .dd-title {
-  font-size: var(--iot-font-title);
+  font-size: 1.25rem;
   font-weight: 600;
-  color: #121d39;
+  color: #111827;
 }
 
 .dd-subtitle {
-  font-size: var(--iot-font-subtitle);
-  color: #121d39;
+  font-size: 0.95rem;
+  color: #2d3035;
 }
 
 .dd-body {
   display: flex;
   flex-direction: column;
-  gap: var(--iot-space-md);
+  gap: 16px;
 }
 
-/* 上半滚动区：所有表格都在这里滚动 */
 .dd-body-scroll {
-  max-height: 60vh;        /* 真正滚动区域高度（比 70vh 略小一点，为 header/footer 腾空间） */
+  max-height: 60vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--iot-space-md);
-  padding-right: 0.15rem;  /* 给滚动条一点余地 */
+  gap: 20px;
+  padding-right: 4px;
 }
 
-/* Section 标题：深色主题下要明显 */
 .dd-section {
   display: flex;
   flex-direction: column;
-  gap: var(--iot-space-xs);
-  color: #121d39;
+  gap: 8px;
 }
 
 .dd-section-title {
-  font-size: var(--iot-font-subtitle);
+  font-size: 1rem;
   font-weight: 600;
+  color: #0f172a;
+  border-left: 4px solid var(--iot-color-edge);
+  padding-left: 8px;
 }
 
-/* 表格通用样式（兼容黑白主题） */
+/* Table Styles */
 .dd-table {
   width: 100%;
   border-collapse: collapse;
-  border-spacing: 0;
-  font-size: var(--iot-font-base);
-
+  font-size: 0.9rem;
+  table-layout: fixed;
 }
 
-/* 基本信息表左列宽度固定一点 */
-.dd-table-basic th.dd-th-label {
-  width: 32%;
-}
-
-/* 表头行 */
-.dd-table thead th {
-  padding: 0.35rem 0.6rem;
+.dd-table th {
   text-align: left;
-  font-weight: 600;
-  color: #4b515a;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.4);
-  background: linear-gradient(
-      180deg,
-      rgba(148, 163, 184, 0.22),
-      rgba(148, 163, 184, 0.06)
-  );
-}
-
-/* 表格内容行 */
-.dd-table tbody th,
-.dd-table tbody td {
-  padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
-}
-
-/* Basic 表左列 label */
-.dd-th-label {
-  text-align: left;
-  font-weight: 500;
-  color: #4b515a;
-  border-right: 1px solid rgba(148, 163, 184, 0.35);
-}
-
-.dd-td-value {
-  color: #121d39;
+  padding: 6px 10px;
+  color: #2d3035;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(0, 0, 0, 0.02);
   font-weight: 600;
 }
 
-/* 单元格文本省略号 + tooltip */
+.dd-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  color: #0f172a;
+  vertical-align: middle;
+}
+
+.dd-table-basic th {
+  width: 30%;
+  background: transparent;
+  border-right: 1px solid rgba(148, 163, 184, 0.6);
+}
+
+.dd-table tbody tr:hover td {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+/* Helper Classes */
 .dd-ellipsis {
-  display: inline-block;
-  max-width: 100%;
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.dd-text-muted {
+  color: #2d3035;
+  font-size: 0.85rem;
+}
+
+.font-bold {
+  font-weight: 600;
+}
+
+.code-font {
+  font-family: monospace;
+  font-size: 0.85rem;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 4px;
+  border-radius: 3px;
 }
 
 .dd-col-desc {
   cursor: help;
 }
 
-/* hover 行柔和高亮 */
-.dd-table tbody tr:hover td,
-.dd-table tbody tr:hover th {
-  background-color: rgba(148, 163, 184, 0.08);
+/* Status Tags */
+.dd-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  border: 1px solid transparent;
 }
 
-/* 重命名区域：固定在底部，不跟着上半部分滚动 */
+.tag-success {
+  background: #f0fdf4;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.tag-warning {
+  background: #fefce8;
+  color: #854d0e;
+  border-color: #fef08a;
+}
+
+.tag-danger {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+.tag-info {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.tag-primary {
+  background: #eff6ff;
+  color: #1e40af;
+  border-color: #bfdbfe;
+}
+
+/* Transition Arrow */
+.dd-flow {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #2d3035;
+}
+
+.arrow {
+  color: var(--iot-color-edge);
+  font-weight: bold;
+}
+
+/* Footer & Rename */
 .dd-section-rename {
-  padding-top: var(--iot-space-sm);
-  margin-top: var(--iot-space-xs);
-  border-top: 1px dashed rgba(148, 163, 184, 0.4);
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.6);
 }
 
-/* 重命名输入框：使用统一输入皮肤，避免白底白字 */
-.dd-section-rename :deep(.el-input__wrapper) {
-  border-radius: var(--iot-radius-input);
-}
-
-/* Footer：结构和按钮样式 */
 .dd-footer {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: var(--iot-space-sm);
-  padding: 0 var(--iot-space-lg);
-  padding-top: var(--iot-space-sm);
-  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.6);
 }
 
 .dd-footer-right {
   display: flex;
-  gap: var(--iot-space-xs);
-}
-
-/* 按钮统一胶囊形状 */
-.dd-footer :deep(.el-button--danger),
-.dd-footer :deep(.el-button--primary),
-.dd-footer :deep(.el-button:not(.el-button--danger):not(.el-button--primary)) {
-  border-radius: 999px;
-}
-
-.dd-footer :deep(.el-button--danger),
-.dd-footer :deep(.el-button--primary) {
-  padding-inline: 1.5rem;
-}
-
-.dd-footer :deep(.el-button:not(.el-button--danger):not(.el-button--primary)) {
-  padding-inline: 1.25rem;
+  gap: 8px;
 }
 </style>
-

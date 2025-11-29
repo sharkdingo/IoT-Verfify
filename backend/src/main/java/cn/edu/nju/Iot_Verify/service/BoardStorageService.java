@@ -19,4 +19,7 @@ public interface BoardStorageService {
 
     BoardActiveDto getActive();
     void saveActive(BoardActiveDto active);
+
+    List<DeviceTemplateDto> getDeviceTemplates();
+    void addDeviceTemplate(DeviceTemplateDto templateDto);
 }

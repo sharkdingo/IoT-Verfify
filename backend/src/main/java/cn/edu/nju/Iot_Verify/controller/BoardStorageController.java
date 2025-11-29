@@ -11,7 +11,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/board")
 @RequiredArgsConstructor
-@CrossOrigin // 前后端端口不一样时允许跨域
 public class BoardStorageController {
 
     private final BoardStorageService boardService;
@@ -64,5 +63,15 @@ public class BoardStorageController {
     @PostMapping("/active")
     public void saveActive(@RequestBody BoardActiveDto active) {
         boardService.saveActive(active);
+    }
+
+    @GetMapping("/templates")
+    public List<DeviceTemplateDto> getTemplates() {
+        return boardService.getDeviceTemplates();
+    }
+
+    @PostMapping("/templates")
+    public void addTemplate(@RequestBody DeviceTemplateDto dto) {
+        boardService.addDeviceTemplate(dto);
     }
 }

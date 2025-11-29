@@ -86,25 +86,25 @@ const collapseActive = computed({
       >
         <el-table-column
             prop="fromLabel"
-            label="from"
+            :label="t('app.sourceDevice')"
             min-width="120"
             show-overflow-tooltip
         />
         <el-table-column
             prop="fromApi"
-            label="API"
+            :label="t('app.sourceApi')"
             min-width="110"
             show-overflow-tooltip
         />
         <el-table-column
             prop="toLabel"
-            label="to"
+            :label="t('app.targetDevice')"
             min-width="120"
             show-overflow-tooltip
         />
         <el-table-column
             prop="toApi"
-            label="API"
+            :label="t('app.targetApi')"
             min-width="110"
             show-overflow-tooltip
         />

@@ -1,5 +1,4 @@
-// src/utils/spec.ts
-import type { DeviceNode } from '../types/node.ts'
+import type { DeviceNode } from '../types/node'
 import type {
     SpecSide,
     SpecCondition,
@@ -10,20 +9,16 @@ import type {
 import type { DeviceTemplate } from '../types/device'
 
 /* =========================================
- * 小常量：关系运算符选项（避免魔法字符串）
+ * 小常量：关系运算符选项
  * =======================================*/
 
 const STATE_RELATIONS = ['in', 'not in'] as const
-const VARIABLE_RELATIONS = ['>=', '>', '<=', '<', '==', '!='] as const
-const API_RELATIONS = [''] as const
-
+// 数值型关系
+const NUMERIC_RELATIONS = ['>=', '>', '<=', '<', '==', '!='] as const
 /* =========================================
  * 条件创建 & 模式判断
  * =======================================*/
 
-/**
- * 创建一个空条件（A / IF / THEN 通用）
- */
 export function createEmptyCondition(side: SpecSide): SpecCondition {
     return {
         id: `cond_${side}_${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -37,36 +32,30 @@ export function createEmptyCondition(side: SpecSide): SpecCondition {
     }
 }
 
-/**
- * 根据模板 id 判断当前是单 A 规约还是 IF/THEN 规约
- * - 1,2,3,7 => single
- * - 4,5,6   => ifThen
- */
-export function getSpecMode(templateId: SpecTemplateId | '' | null): 'single' | 'ifThen' | null{
+export function getSpecMode(templateId: SpecTemplateId | '' | null): 'single' | 'ifThen' | null {
     if (!templateId) return null
     const num = Number(templateId)
+    // 假设 1,2,3,7 是单句，4,5,6 是 IF/THEN
     return num >= 4 && num !== 7 ? 'ifThen' : 'single'
 }
 
-/**
- * 根据 nodeId 找到对应的模板定义（templateName 匹配模板 name）
- */
 export function getTemplateByNodeId(
     nodeId: string,
     nodes: DeviceNode[],
     templates: DeviceTemplate[]
 ): DeviceTemplate | undefined {
-    const n= nodes.find(n => n.id === nodeId)
+    const n = nodes.find(n => n.id === nodeId)
     if (!n) return undefined
-    return templates.find(t => t.name === n.templateName)
+    return templates.find(t => t.manifest.Name === n.templateName)
 }
 
 /* =========================================
- * 目标字段（State / 变量 / API）相关
+ * 目标字段（Target）逻辑
  * =======================================*/
 
 /**
- * A/B 里的第二个下拉：State / 变量 / API 列表
+ * 获取“属性/API”下拉框的选项
+ * 包括：'State'、ImpactedVariables、InternalVariables、APIs
  */
 export function getTargetOptions(
     cond: SpecCondition,
@@ -74,22 +63,42 @@ export function getTargetOptions(
     templates: DeviceTemplate[]
 ) {
     const tpl = getTemplateByNodeId(cond.deviceId, nodes, templates)
-    if (!tpl) {
-        // 没找到模板时至少给一个 State
+    if (!tpl || !tpl.manifest) {
         return [{ label: 'State', value: 'State' }]
     }
 
-    const vars =
-        tpl.manifest?.ImpactedVariables?.map(v => ({ label: v, value: v })) ?? []
+    const options = [{ label: 'State', value: 'State' }]
 
-    const apis =
-        tpl.manifest?.APIs?.map(api => ({ label: api.Name, value: api.Name })) ?? []
+    // 1. Impacted Variables (String[])
+    if (Array.isArray(tpl.manifest.ImpactedVariables)) {
+        tpl.manifest.ImpactedVariables.forEach(v => {
+            options.push({ label: v, value: v })
+        })
+    }
 
-    return [{ label: 'State', value: 'State' }, ...vars, ...apis]
+    // 2. [New] Internal Variables (Object[]) -> 提取 Name
+    if (Array.isArray(tpl.manifest.InternalVariables)) {
+        tpl.manifest.InternalVariables.forEach(iv => {
+            if (iv.Name) {
+                options.push({ label: iv.Name, value: iv.Name })
+            }
+        })
+    }
+
+    // 3. APIs
+    if (Array.isArray(tpl.manifest.APIs)) {
+        tpl.manifest.APIs.forEach(api => {
+            if (api.Name) {
+                options.push({ label: `${api.Name}`, value: api.Name })
+            }
+        })
+    }
+
+    return options
 }
 
 /**
- * 根据选中的 key 推断 targetType（state / variable / api）
+ * 根据选中的 key 推断 targetType
  */
 export function resolveTargetTypeByKey(
     cond: SpecCondition,
@@ -100,34 +109,39 @@ export function resolveTargetTypeByKey(
     if (key === 'State') return 'state'
 
     const tpl = getTemplateByNodeId(cond.deviceId, nodes, templates)
-    if (!tpl) return 'variable' // 保守处理
+    if (!tpl || !tpl.manifest) return 'variable'
 
-    const isVar = tpl.manifest?.ImpactedVariables?.includes(key)
-    if (isVar) return 'variable'
-
-    const isApi = (tpl.manifest?.APIs ?? []).some(api => api.Name === key)
+    // 检查是否是 API
+    const isApi = (tpl.manifest.APIs || []).some(api => api.Name === key)
     if (isApi) return 'api'
 
-    // 兜底：当成普通变量处理
+    // 默认为变量 (无论是 Impacted 还是 Internal)
     return 'variable'
 }
 
 /* =========================================
- * 关系运算符 & 值枚举
+ * 关系运算符 & 值选项
  * =======================================*/
 
 /**
- * 关系运算符选项
+ * 获取关系运算符
+ * [优化] 根据变量类型（是否枚举）返回不同的运算符
  */
 export function getRelationOptions(cond: SpecCondition): string[] {
     if (cond.targetType === 'state') return [...STATE_RELATIONS]
-    if (cond.targetType === 'variable') return [...VARIABLE_RELATIONS]
-    // api
-    return [...API_RELATIONS]
+    if (cond.targetType === 'api') return [''] // API 通常不需要关系符，或者用 'happens'
+
+    // Variable 类型：尝试判断是否为枚举
+    // 注意：这里需要传入更多上下文才能精确判断，暂且根据是否能获取到 values 来判断
+    // 但 getRelationOptions 在 UI 中通常是直接调用的。
+    // 为了简单起见，变量默认给所有运算符。如果要做精细控制，需要重构调用处传入 context。
+    // 这里我们返回全集，由用户自己选。
+    return [...NUMERIC_RELATIONS]
 }
 
 /**
- * value 下拉选项（State / API 对应的枚举值）
+ * 获取 Value 下拉框的选项
+ * [New] 支持从 InternalVariable.Values 中提取枚举值
  */
 export function getValueOptions(
     cond: SpecCondition,
@@ -135,50 +149,47 @@ export function getValueOptions(
     templates: DeviceTemplate[]
 ): string[] {
     const tpl = getTemplateByNodeId(cond.deviceId, nodes, templates)
-    if (!tpl) return []
+    if (!tpl || !tpl.manifest) return []
 
+    // 1. State: 返回 WorkingStates
     if (cond.targetType === 'state') {
-        return (tpl.manifest?.WorkingStates ?? []).map(ws => ws.Name)
+        return (tpl.manifest.WorkingStates || []).map(ws => ws.Name)
     }
-    if (cond.targetType === 'api') {
-        // 当前你的逻辑是让 API 也能选具体的 API 名作为 value
-        return (tpl.manifest?.APIs ?? []).map(api => api.Name)
+
+    // 2. Variable: 检查是否有定义好的枚举值 (InternalVariables)
+    if (cond.targetType === 'variable') {
+        const iv = (tpl.manifest.InternalVariables || []).find(v => v.Name === cond.key)
+        if (iv && Array.isArray(iv.Values) && iv.Values.length > 0) {
+            return iv.Values
+        }
+        // ImpactedVariables 通常没有定义 Values，返回空数组（前端显示输入框）
     }
-    // variable：自由输入，不提供枚举
+
+    // 3. API: 之前逻辑是让 API 选 API 名？通常 API 不需要 value，除非是参数
+    // 这里保持兼容，返回空
     return []
 }
 
 /* =========================================
- * 规约转自然语言（StatusPanel / DeviceDialog 共用）
+ * 描述生成 (Natural Language)
  * =======================================*/
 
-/**
- * 把单个条件转成一个短语：
- *  - state：   'AC_Cooler' state in 'Working'
- *  - variable：'AC_Cooler' temp >= '25'
- *  - api：     'AC_Cooler' Turn_On happens
- */
 const describeCondition = (c: SpecCondition): string => {
     const device = c.deviceLabel || c.deviceId || '<?>'
+    const target = c.targetType === 'state' ? 'state' : c.key || ''
 
-    const target =
-        c.targetType === 'state'
-            ? 'state'
-            : c.key || '' // variable / api 都用 key 展示
+    // 优化 API 显示
+    if (c.targetType === 'api') {
+        return `'${device}' executes '${target}'`
+    }
 
     const relation = c.relation || ''
-
-    // value 可能为空（例如 api happens 时），则不加引号
     const value = c.value?.trim()
     const valuePart = value ? ` '${value}'` : ''
 
     return `'${device}' ${target} ${relation}${valuePart}`
 }
 
-/**
- * 根据 templateId 把整条规约串成一句英文描述
- * 与 StatusPanel / DeviceDialog 中展示逻辑保持一致
- */
 export const buildSpecText = (spec: Specification): string => {
     const aPart = spec.aConditions.map(describeCondition).join(' and ')
     const ifPart = spec.ifConditions.map(describeCondition).join(' and ')
@@ -188,106 +199,44 @@ export const buildSpecText = (spec: Specification): string => {
         text && text.trim().length > 0 ? text : spec.templateLabel
 
     switch (spec.templateId) {
-        case '1':
-            // A holds forever
-            return ensureNonEmpty(aPart ? `${aPart} holds forever` : '')
-        case '2':
-            // A will happen later
-            return ensureNonEmpty(aPart ? `${aPart} will happen later` : '')
-        case '3':
-            // A never happens
-            return ensureNonEmpty(aPart ? `${aPart} never happens` : '')
-        case '4':
-            // IF A happens, B should happen at the same time
-            return ensureNonEmpty(
-                ifPart && thenPart
-                    ? `If ${ifPart} happens, then ${thenPart} should happen at the same time`
-                    : ''
-            )
-        case '5':
-            // IF A happens, B should happen later
-            return ensureNonEmpty(
-                ifPart && thenPart
-                    ? `If ${ifPart} happens, then ${thenPart} should happen later`
-                    : ''
-            )
-        case '6':
-            // IF A happens, B should happen later and last forever
-            return ensureNonEmpty(
-                ifPart && thenPart
-                    ? `If ${ifPart} happens, then ${thenPart} should happen later and last forever`
-                    : ''
-            )
-        case '7':
-            // A will not happen because of something untrusted
-            return ensureNonEmpty(
-                aPart ? `${aPart} will not happen because of something untrusted` : ''
-            )
-        default:
-            return spec.templateLabel
+        case '1': return ensureNonEmpty(aPart ? `${aPart} holds forever` : '')
+        case '2': return ensureNonEmpty(aPart ? `${aPart} will happen later` : '')
+        case '3': return ensureNonEmpty(aPart ? `${aPart} never happens` : '')
+        case '4': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} immediately` : '')
+        case '5': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} later` : '')
+        case '6': return ensureNonEmpty(ifPart && thenPart ? `If ${ifPart}, then ${thenPart} later and forever` : '')
+        case '7': return ensureNonEmpty(aPart ? `${aPart} fails due to untrusted` : '')
+        default: return spec.templateLabel
     }
 }
 
 /* =========================================
- * 条件完整性校验：空行 / 半残行 / 完整行
+ * 校验与清洗
  * =======================================*/
 
-/**
- * 一行条件是否“完全空”
- * 只看用户真正会改动的字段：
- * - 没选设备
- * - 没选 key（State / 变量 / API）
- * - 没填 value
- * relation 默认值（例如 'in'）不算“有内容”
- */
 export const isEmptyCondition = (c: SpecCondition): boolean => {
-    const hasDevice = !!c.deviceId
-    const hasKey = !!c.key
-    const hasValue = !!(c.value && c.value.toString().trim())
-    // 只要三者都是空，就认为这一行是“完全空白”，可以被忽略
-    return !hasDevice && !hasKey && !hasValue
+    return !c.deviceId && !c.key && (!c.value || !c.value.toString().trim())
 }
 
-/**
- * 一行条件是否“完整”
- * 与表单渲染逻辑严格对应：
- *  - API：device + targetType = 'api' + key 即可
- *  - state / variable：还必须有 relation + value
- */
 export const isCompleteCondition = (c: SpecCondition): boolean => {
     if (isEmptyCondition(c)) return false
-    // 没选设备 / 类型 / 目标键，一定不完整
     if (!c.deviceId || !c.targetType || !c.key) return false
-    // ① API：设备 + 类型(api) + key 就够了
-    if (c.targetType === 'api') {
-        return true
-    }
-    // ② state / variable：还必须要有 relation + value
-    if (c.targetType === 'state' || c.targetType === 'variable') {
-        return !!c.relation && !!(c.value && c.value.toString().trim())
-    }
-    // 其他未知类型，一律当不完整处理（防御性）
-    return false
+
+    // API 只需要选了 key 就算完整
+    if (c.targetType === 'api') return true
+
+    // State / Variable 需要 relation 和 value
+    return !!c.relation && !!(c.value && c.value.toString().trim())
 }
 
-/**
- * 对某一侧（A / IF / THEN）的条件做校验并去掉“完全空”的行
- * - 完全空行：丢弃
- * - 非空但不完整：标记 hasIncomplete = true
- * - 完整：进入 cleaned
- */
 export const validateAndCleanConditions = (
     conds: SpecCondition[]
 ): { cleaned: SpecCondition[]; hasIncomplete: boolean } => {
     const cleaned: SpecCondition[] = []
     let hasIncomplete = false
     for (const c of conds) {
-        if (isEmptyCondition(c)) {
-            // 完全空行 → 直接忽略
-            continue
-        }
+        if (isEmptyCondition(c)) continue
         if (!isCompleteCondition(c)) {
-            // 有内容，但没填完 → 整体标记为不完整
             hasIncomplete = true
             break
         }
@@ -296,89 +245,55 @@ export const validateAndCleanConditions = (
     return { cleaned, hasIncomplete }
 }
 
-/**
- * 比较两条规约在“模板 + 条件列表”维度上是否完全相同
- */
 export const isSameSpecification = (a: Specification, b: Specification): boolean => {
     if (a.templateId !== b.templateId) return false
-
-    const sameCondArray = (xs: SpecCondition[], ys: SpecCondition[]) => {
+    const sameConds = (xs: SpecCondition[], ys: SpecCondition[]) => {
         if (xs.length !== ys.length) return false
-        return xs.every((c, i) => {
-            const d = ys[i]
-            return (
-                c.side === d.side &&
-                c.deviceId === d.deviceId &&
-                c.deviceLabel === d.deviceLabel &&
-                c.targetType === d.targetType &&
-                c.key === d.key &&
-                c.relation === d.relation &&
-                String(c.value) === String(d.value)
-            )
+        return xs.every((x, i) => {
+            const y = ys[i]
+            return x.deviceId === y.deviceId &&
+                x.key === y.key &&
+                x.relation === y.relation &&
+                x.value === y.value
         })
     }
-
-    return (
-        sameCondArray(a.aConditions, b.aConditions) &&
-        sameCondArray(a.ifConditions, b.ifConditions) &&
-        sameCondArray(a.thenConditions, b.thenConditions)
-    )
+    return sameConds(a.aConditions, b.aConditions) &&
+        sameConds(a.ifConditions, b.ifConditions) &&
+        sameConds(a.thenConditions, b.thenConditions)
 }
 
-/**
- * 节点重命名时：同步更新所有规约里该节点对应条件的 deviceLabel
- * @returns 是否发生了修改
- */
 export const updateSpecsForNodeRename = (
     specs: Specification[],
     nodeId: string,
     newLabel: string
 ): boolean => {
     let changed = false
-    const updateSide = (conds: SpecCondition[]) => {
-        conds.forEach(c => {
+    const update = (list: SpecCondition[]) => {
+        list.forEach(c => {
             if (c.deviceId === nodeId && c.deviceLabel !== newLabel) {
                 c.deviceLabel = newLabel
                 changed = true
             }
         })
     }
-    specs.forEach(spec => {
-        updateSide(spec.aConditions)
-        updateSide(spec.ifConditions)
-        updateSide(spec.thenConditions)
-    })
+    specs.forEach(s => { update(s.aConditions); update(s.ifConditions); update(s.thenConditions) })
     return changed
 }
 
-// 计算与此节点相关的规约
 export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
-    const check = (conds: SpecCondition[]) =>
-        conds.some(c => c.deviceId === nodeId)
-    return (
-        check(spec.aConditions) ||
-        check(spec.ifConditions) ||
-        check(spec.thenConditions)
-    )
+    const check = (list: SpecCondition[]) => list.some(c => c.deviceId === nodeId)
+    return check(spec.aConditions) || check(spec.ifConditions) || check(spec.thenConditions)
 }
 
-/**
- * 删除节点时：过滤掉所有“涉及该节点”的规约
- */
 export const removeSpecsForNode = (
     specs: Specification[],
     nodeId: string,
 ): { nextSpecs: Specification[]; removed: Specification[] } => {
     const next: Specification[] = []
     const removed: Specification[] = []
-
-    specs.forEach(spec => {
-        if (isSpecRelatedToNode(spec, nodeId)) {
-            removed.push(spec)
-        } else {
-            next.push(spec)
-        }
+    specs.forEach(s => {
+        if (isSpecRelatedToNode(s, nodeId)) removed.push(s)
+        else next.push(s)
     })
-
     return { nextSpecs: next, removed }
 }

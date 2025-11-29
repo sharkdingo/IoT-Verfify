@@ -1,5 +1,5 @@
 // src/utils/canvas/nodeCreate.ts
-import type { DeviceNode } from '../../types/node'
+import type { DeviceNode } from '@/types/node.ts'
 
 /**
  * 根据基础名称和已有节点，生成唯一 label。

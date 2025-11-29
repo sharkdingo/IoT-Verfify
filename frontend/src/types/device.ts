@@ -1,7 +1,38 @@
 // src/types/device.ts
 
-import {Specification} from "./spec.ts";
-import { DeviceEdge } from "./edge.ts";
+import type { DeviceEdge } from "./edge"
+import type { Specification } from "./spec"
+
+// ==== 核心 Manifest 结构 ====
+
+export interface InternalVariable {
+    Name: string
+    Description?: string
+    IsInside?: boolean
+    PublicVisible?: boolean
+    Trust?: string          // "trusted" | "untrusted"
+    Privacy?: string        // "public" | "private"
+    // 数值型属性
+    LowerBound?: number
+    UpperBound?: number
+    NaturalChangeRate?: string
+    // 枚举型属性
+    Values?: string[]
+}
+
+export interface Dynamic {
+    VariableName: string
+    ChangeRate: string
+}
+
+export interface WorkingState {
+    Name: string
+    Dynamics: Dynamic[]
+    Invariant: string
+    Description: string
+    Trust: string           // "trusted" | "untrusted"
+    Privacy?: string        // "public" | "private"
+}
 
 export interface DeviceAPI {
     Name: string
@@ -13,63 +44,46 @@ export interface DeviceAPI {
     Description?: string
 }
 
-export interface DeviceWorkingState {
-    Name: string
-    Dynamics: Array<{
-        VariableName: string
-        ChangeRate: string
-    }>
-    Invariant: string
-    Description: string
-    Trust: string
-}
-
 export interface DeviceManifest {
     Name: string
     Description: string
-    InternalVariables: any[]
+    Modes?: string[]
+    InternalVariables: InternalVariable[]
     ImpactedVariables: string[]
     InitState: string
-    WorkingStates: DeviceWorkingState[]
+    WorkingStates: WorkingState[]
     Transitions?: any[]
     APIs: DeviceAPI[]
 }
 
 export interface DeviceTemplate {
     id: string
-    name: string           // 用来对应 assets/{name}/
+    name: string
     manifest: DeviceManifest
 }
 
-/* ======================================================
- *  以下是给 DeviceDialog.vue 用的“展示数据整理”工具函数
- *  只负责把 manifest / props 里的原始结构，整理成扁平数据
- * ====================================================== */
+// ==== 视图辅助类型 (View Models) ====
 
-/** 基本信息区的数据结构 */
 export interface BasicDeviceInfo {
     name: string
     instanceLabel: string
     description: string
     initState: string
-    impactedVariables: string[]   // 保留为数组，展示时你可以 join
+    impactedVariables: string[]
 }
 
-/** Variables 区展示结构 */
 export interface DeviceVariableView {
     name: string
     value: string
     trust: string
 }
 
-/** States 区展示结构 */
 export interface DeviceStateView {
     name: string
     description: string
     trust: string
 }
 
-/** APIs 区展示结构 */
 export interface DeviceApiView {
     name: string
     from: string
@@ -77,7 +91,6 @@ export interface DeviceApiView {
     description: string
 }
 
-// 对话框元数据类型
 export interface DeviceDialogMeta {
     nodeId: string
     deviceName: string

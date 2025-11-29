@@ -1,4 +1,3 @@
-// src/utils/device.ts
 import type {
     BasicDeviceInfo,
     DeviceApiView,
@@ -7,20 +6,22 @@ import type {
     DeviceTemplate,
     DeviceVariableView
 } from '../types/device'
-import {DeviceNode} from "../types/node.ts";
+import type { DeviceNode } from '../types/node'
 
-/** 拼出 /src/assets/{folder}/{state}.png 的路径 */
+// --- 图标与路径 ---
+
 export const getDeviceIconPath = (folder: string, state: string) => {
-    return new URL(`../assets/${folder}/${state}.png`, import.meta.url).href
+    return new URL(`../assets/${folder}/${state}.svg`, import.meta.url).href
 }
 
 export const getNodeIcon = (node: DeviceNode) => {
-    const folder = node.templateName
+    const folder = node.templateName.replace(/ /g, '_')
     const state = node.state || 'Working'
     return getDeviceIconPath(folder, state)
 }
 
-/** 给定模板数组和设备模板名，查出某个 API 的 EndState */
+// --- 状态查找 ---
+
 export const getEndStateByApi = (
     templates: DeviceTemplate[],
     templateName: string,
@@ -32,29 +33,18 @@ export const getEndStateByApi = (
     return api ? api.EndState : null
 }
 
-/**
- * 从 manifest + 兜底的 props 信息中，整理出基本信息
- */
+// --- 信息提取 (用于 DeviceDialog 展示) ---
+
 export const extractBasicDeviceInfo = (
     manifest: DeviceManifest | null | undefined,
     fallbackName: string,
     instanceLabel: string,
     fallbackDescription: string
 ): BasicDeviceInfo => {
-    const name =
-        manifest?.Name ??
-        fallbackName
-
-    const description =
-        manifest?.Description ??
-        fallbackDescription
-
+    const name = manifest?.Name ?? fallbackName
+    const description = manifest?.Description ?? fallbackDescription
     const initState = manifest?.InitState ?? ''
-
-    const impacted =
-        Array.isArray(manifest?.ImpactedVariables)
-            ? manifest!.ImpactedVariables
-            : []
+    const impacted = Array.isArray(manifest?.ImpactedVariables) ? manifest!.ImpactedVariables : []
 
     return {
         name,
@@ -65,44 +55,38 @@ export const extractBasicDeviceInfo = (
     }
 }
 
-/**
- * Variables 区：
- * - 优先使用 InternalVariables
- * - 如果没有 InternalVariables，就用 ImpactedVariables 填占位
- */
 export const extractDeviceVariables = (
     manifest: DeviceManifest | null | undefined
 ): DeviceVariableView[] => {
     if (!manifest) return []
+    const views: DeviceVariableView[] = []
 
-    const internal = manifest.InternalVariables
-    if (Array.isArray(internal) && internal.length) {
-        return internal
-            .map((v: any) => ({
-                name: v.Name ?? v.VariableName ?? '',
-                value:
-                    v.InitialValue ??
-                    v.Value ??
-                    '',
+    // 1. Internal Variables
+    if (Array.isArray(manifest.InternalVariables)) {
+        manifest.InternalVariables.forEach(v => {
+            let valStr = ''
+            if (v.Values && v.Values.length) valStr = v.Values.join(' / ')
+            else if (v.LowerBound !== undefined && v.UpperBound !== undefined) valStr = `[${v.LowerBound}, ${v.UpperBound}]`
+
+            views.push({
+                name: v.Name,
+                value: valStr, // 这里展示类型或范围
                 trust: v.Trust ?? ''
-            }))
-            .filter(v => v.name)
+            })
+        })
     }
 
-    if (Array.isArray(manifest.ImpactedVariables) && manifest.ImpactedVariables.length) {
-        return manifest.ImpactedVariables.map(name => ({
-            name,
-            value: '',
-            trust: ''
-        }))
+    // 2. Impacted Variables
+    if (Array.isArray(manifest.ImpactedVariables)) {
+        manifest.ImpactedVariables.forEach(name => {
+            if (!views.some(v => v.name === name)) {
+                views.push({ name, value: '(External)', trust: '' })
+            }
+        })
     }
-
-    return []
+    return views
 }
 
-/**
- * States 区：来自 WorkingStates
- */
 export const extractDeviceStates = (
     manifest: DeviceManifest | null | undefined
 ): DeviceStateView[] => {
@@ -114,9 +98,6 @@ export const extractDeviceStates = (
     }))
 }
 
-/**
- * APIs 区：来自 APIs
- */
 export const extractDeviceApis = (
     manifest: DeviceManifest | null | undefined
 ): DeviceApiView[] => {
@@ -127,4 +108,30 @@ export const extractDeviceApis = (
         to: api.EndState,
         description: api.Description ?? ''
     }))
+}
+
+// --- 校验逻辑 ---
+
+export const validateManifest = (obj: any): { valid: boolean; msg?: string } => {
+    if (!obj || typeof obj !== 'object') return { valid: false, msg: 'Invalid JSON object' }
+
+    // 必填字段检查
+    if (!obj.Name) return { valid: false, msg: 'Missing field "Name"' }
+    if (obj.InitState === undefined) return { valid: false, msg: 'Missing field "InitState"' }
+
+    // 数组类型检查
+    if (!Array.isArray(obj.InternalVariables)) return { valid: false, msg: '"InternalVariables" must be an array' }
+    if (!Array.isArray(obj.WorkingStates)) return { valid: false, msg: '"WorkingStates" must be an array' }
+    if (!Array.isArray(obj.APIs)) return { valid: false, msg: '"APIs" must be an array' }
+
+    // 逻辑一致性检查
+    // 1. InitState 必须存在于 WorkingStates 中 (或者是空字符串，某些设备允许)
+    if (obj.InitState !== '' && obj.WorkingStates.length > 0) {
+        const stateNames = obj.WorkingStates.map((s: any) => s.Name)
+        if (!stateNames.includes(obj.InitState)) {
+            return { valid: false, msg: `InitState "${obj.InitState}" is not defined in WorkingStates` }
+        }
+    }
+
+    return { valid: true }
 }

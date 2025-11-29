@@ -14,6 +14,9 @@ const messages = {
             delete: '删除',
             cancel: '取消',
             save: '保存',
+            select: '请选择',
+            null: '空',
+            type: '类型',
 
             /* Board 页标题 */
             input: '输入',
@@ -71,6 +74,9 @@ const messages = {
             saveEdgesFailed: '保存规则连线失败',
             saveSpecsFailed: '保存规约失败',
             saveActiveFailed: '保存折叠面板状态失败',
+            loadTemplatesFailed: '加载设备模板失败',
+            addTemplateSuccess: '添加设备模板成功',
+            addTemplateFailed: '添加设备模板失败',
 
             /* 右键弹窗 */
             name: '名称',
@@ -81,19 +87,45 @@ const messages = {
             deviceBasic: '基本信息',
             deviceVariables: '变量',
             deviceStates: '状态',
-            deviceApis: 'API',
+            deviceApis: 'APIs',
 
             instanceName: '实例名称',
             initState: '初始状态',
             impactedVariables: '受影响变量',
-
+            modes: '模式',
+            invariant: '不变量',
+            range: '范围',
             trust: '可信度',
+            privacy: '隐私度',
             from: '起始状态',
             to: '结束状态',
+            signal: '信号',
+            transition: '转变',
 
             relatedRules: '相关 IFTTT 规则',
             relatedSpecs: '相关规约',
             renameDevice: '重命名设备',
+
+            // AddTemplateDialog
+            jsonParseError: 'JSON 格式错误，无法切换回表单',
+            inputVarName: "变量名称是必需的",
+            inputDeviceName: "设备名称是必需的",
+            addDeviceTemplate: "添加设备模板",
+            basicMode: "引导模式",
+            jsonMode: "JSON 模式",
+            basicInfo: "基本信息",
+            deviceName: "设备名称",
+            variables: "变量",
+            internalVariables: "内部变量",
+            add: "添加",
+            noInternalVars: "未定义内部变量",
+            workingStates: "工作状态",
+            addState: "添加状态",
+            addApi: "添加 API",
+            editInternalVar: "编辑内部变量",
+            varName: "变量名称",
+            isInside: "是否在内部",
+            publicVisible: "公开可见"
         }
     },
 
@@ -105,6 +137,9 @@ const messages = {
             delete: 'Delete',
             cancel: 'Cancel',
             save: 'Save',
+            select: 'Please select',
+            null: 'Null',
+            type: 'Type',
 
             /* Board titles */
             input: 'Input',
@@ -161,6 +196,9 @@ const messages = {
             saveEdgesFailed: 'Failed to retrieve edges',
             saveSpecsFailed: 'Failed to retrieve specs',
             saveActiveFailed: 'Failed to retrieve panel active status',
+            loadTemplatesFailed: 'Failed to retrieve device templates',
+            addTemplateSuccess: 'Successfully added a device template',
+            addTemplateFailed: 'Failed to retrieve device template',
 
             /* dialog */
             name: 'Name',
@@ -176,14 +214,41 @@ const messages = {
             instanceName: 'Instance',
             initState: 'Initial State',
             impactedVariables: 'Impacted Variables',
-
+            modes: 'Modes',
+            invariant: 'Invariant',
+            range: 'Range / Enum',
             trust: 'Trust',
+            privacy: 'Privacy',
             from: 'From',
             to: 'To',
+            signal: 'Signal',
+            transition: 'Transition',
 
             relatedRules: 'Related IFTTT Rules',
             relatedSpecs: 'Related Specifications',
             renameDevice: 'Rename Device',
+
+            // AddTemplateDialog
+            jsonParseError: 'JSON Syntax Error',
+            inputVarName: 'Variable Name is required',
+            inputDeviceName: 'Device Name is required',
+            addDeviceTemplate: 'Add Device Template',
+            basicMode: 'Guided Mode',
+            jsonMode: 'JSON Mode',
+            basicInfo: 'Basic Info',
+            deviceName: 'Device Name',
+            variables: 'Variables',
+            internalVariables: 'Internal Variables',
+            add: 'Add',
+            noInternalVars: 'No internal variables defined',
+            workingStates: 'Working States',
+            addState: 'Add State',
+            addApi: 'Add API',
+            editInternalVar: 'Edit Internal Variable',
+            varName: 'Variable Name',
+            isInside: 'Is Inside',
+            publicVisible: 'Public Visible',
+
         }
     }
 }

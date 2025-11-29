@@ -1,5 +1,5 @@
 // src/assets/config/specTemplates.ts
-import type { SpecTemplate } from '../../types/spec'
+import type { SpecTemplate } from '@/types/spec.ts'
 
 export const defaultSpecTemplates: SpecTemplate[] = [
     { id: '1', label: 'A holds forever' },
