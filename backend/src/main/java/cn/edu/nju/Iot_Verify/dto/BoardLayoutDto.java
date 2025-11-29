@@ -9,6 +9,7 @@ public class BoardLayoutDto {
     private PanelPosition status;
     private CanvasPan canvasPan;
     private Double canvasZoom;
+    private DockStateWrapper dockState;
 
     @Data
     public static class PanelPosition {
@@ -20,5 +21,18 @@ public class BoardLayoutDto {
     public static class CanvasPan {
         private Double x;
         private Double y;
+    }
+
+    @Data
+    public static class DockStateWrapper {
+        private DockState input;
+        private DockState status;
+    }
+
+    @Data
+    public static class DockState {
+        private Boolean isDocked;
+        private String side; // "left", "right", "top", "bottom" or null
+        private PanelPosition lastPos;
     }
 }

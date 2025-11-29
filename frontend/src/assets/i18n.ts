@@ -18,6 +18,8 @@ const messages = {
             /* Board 页标题 */
             input: '输入',
             status: '状态',
+            restoreInput: '点击恢复输入面板',
+            restoreStatus: '点击恢复状态面板',
 
             /* 左侧：设备列表 & 规则 */
             devices: '设备列表',
@@ -105,8 +107,10 @@ const messages = {
             save: 'Save',
 
             /* Board titles */
-            input: 'Inputs',
+            input: 'Input',
             status: 'Status',
+            restoreInput: 'Restore Input Panel',
+            restoreStatus: 'Restore Status Panel',
 
             /* left panel: devices & rules */
             devices: 'Devices',

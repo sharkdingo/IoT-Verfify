@@ -1,18 +1,11 @@
 // src/api/board.ts
 import api from './http'   // 你已有 http.ts：axios.create(...)
 
-import type { DeviceNode } from '@/types/node'
-import type { DeviceEdge } from '@/types/edge'
-import type { Specification } from '@/types/spec'
-import type { PanelActive } from '@/types/panel'
-import type { CanvasPan } from '@/types/canvas'
-
-export interface BoardLayoutDto {
-    input: { x: number; y: number }
-    status: { x: number; y: number }
-    canvasPan: CanvasPan
-    canvasZoom: number
-}
+// 引入类型
+import type { DeviceNode } from '../types/node'
+import type { DeviceEdge } from '../types/edge'
+import type { Specification } from '../types/spec'
+import type { BoardLayoutDto, PanelActive } from '../types/panel'
 
 export default {
     // ==== 节点 ====
@@ -27,11 +20,11 @@ export default {
     getSpecs: () => api.get<Specification[]>('/board/specs'),
     saveSpecs: (specs: Specification[]) => api.post('/board/specs', specs),
 
-    // ==== 布局（panel + canvas） ====
+    // ==== 布局（包含 Panel 位置、停靠状态、Canvas 缩放位移） ====
     getLayout: () => api.get<BoardLayoutDto>('/board/layout'),
     saveLayout: (dto: BoardLayoutDto) => api.post('/board/layout', dto),
 
-    // ==== 折叠面板 ====
+    // ==== 折叠面板（展开/收起的内容项） ====
     getActive: () => api.get<PanelActive>('/board/active'),
     saveActive: (active: PanelActive) => api.post('/board/active', active)
 }

@@ -8,7 +8,6 @@ import type {
     Specification
 } from '../types/spec'
 import type { DeviceTemplate } from '../types/device'
-import { getTemplateByNodeId } from './canvas/template.ts'
 
 /* =========================================
  * 小常量：关系运算符选项（避免魔法字符串）
@@ -47,6 +46,19 @@ export function getSpecMode(templateId: SpecTemplateId | '' | null): 'single' | 
     if (!templateId) return null
     const num = Number(templateId)
     return num >= 4 && num !== 7 ? 'ifThen' : 'single'
+}
+
+/**
+ * 根据 nodeId 找到对应的模板定义（templateName 匹配模板 name）
+ */
+export function getTemplateByNodeId(
+    nodeId: string,
+    nodes: DeviceNode[],
+    templates: DeviceTemplate[]
+): DeviceTemplate | undefined {
+    const n= nodes.find(n => n.id === nodeId)
+    if (!n) return undefined
+    return templates.find(t => t.name === n.templateName)
 }
 
 /* =========================================

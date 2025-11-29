@@ -36,4 +36,30 @@ public class BoardLayoutPo {
 
     @Column(name = "canvas_zoom")
     private Double canvasZoom;
+
+    // --- Input Dock State (新增) ---
+    @Column(name = "input_is_docked")
+    private Boolean inputIsDocked;
+
+    @Column(name = "input_dock_side")
+    private String inputDockSide;
+
+    @Column(name = "input_last_pos_x")
+    private Double inputLastPosX;
+
+    @Column(name = "input_last_pos_y")
+    private Double inputLastPosY;
+
+    // --- Status Dock State (新增) ---
+    @Column(name = "status_is_docked")
+    private Boolean statusIsDocked;
+
+    @Column(name = "status_dock_side")
+    private String statusDockSide;
+
+    @Column(name = "status_last_pos_x")
+    private Double statusLastPosX;
+
+    @Column(name = "status_last_pos_y")
+    private Double statusLastPosY;
 }

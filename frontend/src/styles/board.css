@@ -174,6 +174,10 @@
     overflow: hidden;
     font-size: var(--iot-font-base);
     max-height: calc(100vh - 6rem); /* 上下各留 2rem 空隙 */
+
+    transition: var(--iot-transition-dock);
+    z-index: 100; /* Standard floating z-index */
+    will-change: transform, left, top, width, height;
 }
 
 /* 左侧输入面板 / 右侧状态面板统一宽度 */
@@ -311,4 +315,110 @@
 /* 表单项之间默认间距 */
 .iot-board .floating-card .el-form-item {
     margin-bottom: 0.875rem;
+}
+
+/* --- Docked State --- */
+
+.iot-board .floating-card.is-docked {
+    width: var(--iot-dock-icon-size) !important;
+    height: var(--iot-dock-icon-size) !important;
+    min-height: 0 !important;
+    padding: 0;
+    border-radius: 50%; /* Make it circular or rounded square */
+    background: var(--iot-color-node-bg); /* Use solid bg when docked */
+    cursor: pointer;
+    z-index: 2000; /* Bring above everything else */
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.iot-board .floating-card.is-docked:hover {
+    transform: scale(1.1); /* Pop effect */
+    border-color: var(--iot-color-edge);
+}
+
+/* Docking Orientation Adjustments (Optional specific borders) */
+.iot-board .floating-card.dock-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.iot-board .floating-card.dock-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.iot-board .floating-card.dock-top { border-top-left-radius: 0; border-top-right-radius: 0; }
+.iot-board .floating-card.dock-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+
+/* --- Header & Buttons --- */
+
+.iot-board .card-header {
+    /* [Modified] Ensure header layout handles the close button */
+    padding: var(--iot-space-sm) var(--iot-space-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between; /* Push 'X' to right */
+    gap: var(--iot-space-sm);
+    border-bottom: 1px solid var(--iot-color-card-border);
+    cursor: pointer;
+    background: radial-gradient(
+            circle at top left,
+            var(--iot-color-card-header-glow),
+            transparent 60%
+    );
+    min-height: 2.5rem;
+}
+
+/* Hide normal header content when docked */
+.iot-board .floating-card.is-docked .card-header,
+.iot-board .floating-card.is-docked .card-body {
+    display: none;
+}
+
+/* The Icon visible ONLY when docked */
+.iot-board .docked-icon-container {
+    display: none; /* Hidden by default */
+    width: 100%;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    color: var(--iot-color-edge);
+}
+
+.iot-board .floating-card.is-docked .docked-icon-container {
+    display: flex; /* Show when docked */
+}
+
+/* Close / Dock Button (The 'X') */
+.iot-board .dock-close-btn {
+    cursor: pointer;
+    opacity: 0.6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    width: 1.5rem;
+    height: 1.5rem;
+    transition: all 0.2s;
+}
+
+.iot-board .dock-close-btn:hover {
+    opacity: 1;
+    background-color: rgba(255, 75, 75, 0.2);
+    color: #ff4d4f;
+}
+
+/* ... (Keep existing InputPanel/StatusPanel overrides) ... */
+.iot-board .input-card,
+.iot-board .status-card {
+    /* Only apply width constraints when NOT docked */
+    width: clamp(var(--iot-card-width-min), var(--iot-card-width), var(--iot-card-width-max));
+}
+
+.iot-board .floating-card.is-docked.input-card,
+.iot-board .floating-card.is-docked.status-card {
+    width: auto; /* Reset width for icon mode */
+}
+
+/* 核心修复：当处于拖拽状态时，立即移除所有过渡！
+ * 这让卡片能 1:1 紧跟鼠标，没有任何延迟
+ */
+.iot-board .floating-card.is-dragging {
+    transition: none !important;
+    user-select: none; /* 防止拖拽时选中文字 */
+    cursor: grabbing;
 }

@@ -67,6 +67,13 @@
     --iot-toast-padding-y: 0.5rem;
     --iot-toast-padding-x: 0.875rem;
     --iot-toast-gap: 0.5rem;
+
+    /* Docking & Transition Variables */
+    --iot-dock-icon-size: 3rem;       /* 48px */
+    --iot-dock-snap-threshold: 100px; /* Drag snap distance */
+
+    /* Smooth movement for docking */
+    --iot-transition-dock: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 /* ========== 深色主题（默认） ========== */

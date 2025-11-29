@@ -1,18 +1,25 @@
 <script setup lang="ts">
+/* =================================================================================
+ * 1. Imports & Setup
+ * ================================================================================= */
 import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
+import { ElMessage, ElMessageBox } from 'element-plus'
+// Icons
+import { Edit, Platform, Close } from '@element-plus/icons-vue'
 
+// Types
 import type { DeviceDialogMeta, DeviceTemplate } from '../types/device'
 import type { CanvasPan } from '../types/canvas'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
+import type { DockSide, DockState, PanelKey, PanelPosition } from "@/types/panel.ts";
 
+// Utils
 import { getDeviceIconPath, getNodeIcon } from '../utils/device'
 import { getUniqueLabel } from '../utils/canvas/nodeCreate'
-
 import {
   getSpecMode,
   validateAndCleanConditions,
@@ -21,35 +28,39 @@ import {
   removeSpecsForNode,
   updateSpecsForNodeRename
 } from '../utils/spec'
+import { getLinkPoints, updateRulesForNodeRename } from '../utils/rule'
+import { loadDeviceTemplates, saveDeviceTemplates } from '../utils/boardStorage'
 
+// Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
 import { defaultDeviceTemplates } from '../assets/config/deviceTemplates'
 
-// 设备模板仍然用 sessionStorage
-import { loadDeviceTemplates, saveDeviceTemplates } from '../utils/boardStorage'
-
-// === 与后端交互的 API（请确保有 src/api/board.ts 并默认导出这些方法） ===
+// API
 import boardApi from '@/api/board'
 
+// Components
 import InputPanel from '../components/InputPanel.vue'
 import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
 import CanvasBoard from '../components/CanvasBoard.vue'
 
+// Styles
 import '../styles/board.css'
 
 const { t } = useI18n()
 
-/* ========= 常量区域 ========= */
+/* =================================================================================
+ * 2. Constants & Configuration
+ * ================================================================================= */
 
-const DEFAULT_PANEL_PADDING = 8
+const DEFAULT_PANEL_PADDING = 10
+const DOCK_SNAP_THRESHOLD = 1 // 拖拽到边缘多少像素内自动吸附
 
-const CARD_WIDTH_MIN = 12 * 16 // 12rem
-const CARD_WIDTH_MAX = 24 * 16 // 24rem
-const CARD_WIDTH_RATIO = 0.24    // 24vw
+const CARD_WIDTH_MIN = 12 * 16 // 192px
+const CARD_WIDTH_MAX = 24 * 16 // 384px
+const CARD_WIDTH_RATIO = 0.24  // 24vw
 
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
-
 const NODE_GRID_COLS = 4
 const NODE_SPACING_X = 160
 const NODE_SPACING_Y = 120
@@ -62,15 +73,114 @@ const ZOOM_STEP = 0.1
 const BASE_NODE_WIDTH = 160
 const BASE_FONT_SIZE = 16
 
-/* ========= 画布缩放 / 平移 ========= */
+/* =================================================================================
+ * 3. State Definitions
+ * ================================================================================= */
 
+// --- Canvas State ---
 const canvasZoom = ref(1)
 const isCanvasHovered = ref(false)
 const canvasPan = ref<CanvasPan>({ x: 0, y: 0 })
-
 let isPanning = false
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
+
+// --- Panel State (Position & Docking) ---
+const panelPositions = reactive<Record<PanelKey, PanelPosition>>({
+  input: { x: 24, y: 24 },
+  status: { x: 1040, y: 80 }
+})
+
+const panelDockState = reactive<Record<PanelKey, DockState>>({
+  input: { isDocked: false, side: null, lastPos: { x: 24, y: 24 } },
+  status: { isDocked: false, side: null, lastPos: { x: 1040, y: 80 } }
+})
+
+// [Fix] Dragging State for smooth interaction
+// Used to apply 'transition: none' via CSS class '.is-dragging'
+const draggingState = reactive<Record<PanelKey, boolean>>({
+  input: false,
+  status: false
+})
+
+let draggingPanel: PanelKey | null = null
+let panelDragStart = { x: 0, y: 0 }
+let panelStartPos = { x: 0, y: 0 }
+
+// --- Core Data State ---
+const deviceTemplates = ref<DeviceTemplate[]>([])
+const nodes = ref<DeviceNode[]>([])
+const edges = ref<DeviceEdge[]>([])
+const specifications = ref<Specification[]>([])
+const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
+
+const inputActive = ref<string[]>([])
+const statusActive = ref<string[]>([])
+
+const draggingTplName = ref<string | null>(null) // For device drag-drop
+
+// --- UI State ---
+const dialogVisible = ref(false)
+const dialogMeta = reactive<DeviceDialogMeta>({
+  nodeId: '',
+  deviceName: '',
+  description: '',
+  label: '',
+  manifest: null,
+  rules: [],
+  specs: []
+})
+
+/* =================================================================================
+ * 4. Helper Functions (Styles & Calculation)
+ * ================================================================================= */
+
+const getCardWidth = () => {
+  const w = window.innerWidth * CARD_WIDTH_RATIO
+  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, w))
+}
+
+const getTemplateInitIcon = (tpl: DeviceTemplate) => {
+  const folder = tpl.name
+  const initState = tpl.manifest?.InitState || 'Working'
+  return getDeviceIconPath(folder, initState)
+}
+
+const getNodeLabelStyle = (node: DeviceNode) => {
+  const ratio = node.width / BASE_NODE_WIDTH
+  const scale = Math.min(Math.max(ratio, 0.75), 1.5)
+  const fontSize = BASE_FONT_SIZE * scale
+  return {
+    fontSize: fontSize + 'px',
+    maxWidth: node.width - 16 + 'px'
+  }
+}
+
+// 动态计算卡片样式类
+const getCardClasses = (key: PanelKey) => {
+  const state = panelDockState[key]
+  return {
+    'floating-card': true,
+    [`${key}-card`]: true,
+    'is-docked': state.isDocked,
+    [`dock-${state.side}`]: state.isDocked,
+    'is-dragging': draggingState[key] // [Fix] 绑定拖拽状态
+  }
+}
+
+// 识别交互元素，防止在输入框打字时触发拖拽
+const isInteractiveTarget = (el: HTMLElement | null): boolean => {
+  if (!el) return false
+  const interactiveSelectors =
+      'input, textarea, select, button, a, [role="button"],' +
+      '.el-input, .el-select, .el-button, .el-checkbox, .el-radio,' +
+      '.el-switch, .el-slider, .el-table, .el-scrollbar, .dock-close-btn'
+  return !!el.closest(interactiveSelectors)
+}
+
+/* =================================================================================
+ * 5. Canvas Interaction (Zoom & Pan)
+ * ================================================================================= */
 
 const onCanvasEnter = () => (isCanvasHovered.value = true)
 const onCanvasLeave = () => (isCanvasHovered.value = false)
@@ -127,51 +237,11 @@ const onCanvasPointerUp = async () => {
   window.removeEventListener('pointerup', onCanvasPointerUp)
 }
 
-/* ========= 浮动卡片位置（可拖拽 + 持久化） ========= */
+/* =================================================================================
+ * 6. Panel Interaction (Move, Dock, Restore)
+ * ================================================================================= */
 
-type PanelKey = 'input' | 'status'
-
-const panelPositions = reactive<Record<PanelKey, { x: number; y: number }>>({
-  input: { x: 24, y: 24 },
-  status: { x: 1040, y: 80 }
-})
-
-let draggingPanel: PanelKey | null = null
-let panelDragStart = { x: 0, y: 0 }
-let panelStartPos = { x: 0, y: 0 }
-
-const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
-  draggingPanel = key
-  panelDragStart = { x: e.clientX, y: e.clientY }
-  panelStartPos = { ...panelPositions[key] }
-  window.addEventListener('pointermove', onPanelPointerMove)
-  window.addEventListener('pointerup', onPanelPointerUp)
-}
-
-const onPanelPointerMove = (e: PointerEvent) => {
-  if (!draggingPanel) return
-  const dx = e.clientX - panelDragStart.x
-  const dy = e.clientY - panelDragStart.y
-  const pos = panelPositions[draggingPanel]
-  pos.x = panelStartPos.x + dx
-  pos.y = panelStartPos.y + dy
-}
-
-const onPanelPointerUp = async () => {
-  draggingPanel = null
-  window.removeEventListener('pointermove', onPanelPointerMove)
-  window.removeEventListener('pointerup', onPanelPointerUp)
-  await saveLayoutToServer()
-}
-
-const isInteractiveTarget = (el: HTMLElement | null): boolean => {
-  if (!el) return false
-  const interactiveSelectors =
-      'input, textarea, select, button, a, [role="button"],' +
-      '.el-input, .el-select, .el-button, .el-checkbox, .el-radio,' +
-      '.el-switch, .el-slider, .el-table, .el-scrollbar'
-  return !!el.closest(interactiveSelectors)
-}
+// --- 6.1 Event Handlers ---
 
 const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
   const target = e.target as HTMLElement | null
@@ -179,44 +249,193 @@ const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
   onPanelPointerDown(e, key)
 }
 
-/* ========= 计算卡片宽度 ========= */
+const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
+  // 如果已停靠，点击即恢复
+  if (panelDockState[key].isDocked) {
+    restorePanel(key)
+    return
+  }
 
-const getCardWidth = () => {
-  const w = window.innerWidth * CARD_WIDTH_RATIO
-  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, w))
+  // 1. 设置拖拽状态 -> 激活 CSS 的 no-transition
+  draggingPanel = key
+  draggingState[key] = true
+
+  // 2. 捕获指针，防止快速拖动时鼠标移出元素导致失焦
+  const target = e.currentTarget as HTMLElement
+  if (target && target.setPointerCapture) {
+    target.setPointerCapture(e.pointerId)
+  }
+
+  panelDragStart = { x: e.clientX, y: e.clientY }
+  panelStartPos = { ...panelPositions[key] }
+
+  window.addEventListener('pointermove', onPanelPointerMove)
+  window.addEventListener('pointerup', onPanelPointerUp)
 }
 
-/* ========= 核心数据 ========= */
-
-const deviceTemplates = ref<DeviceTemplate[]>([])
-const nodes = ref<DeviceNode[]>([])
-const edges = ref<DeviceEdge[]>([])
-const specifications = ref<Specification[]>([])
-const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
-
-const inputActive = ref<string[]>([])
-const statusActive = ref<string[]>([])
-
-/* ========= 节点图标 / 标签样式 ========= */
-
-const getTemplateInitIcon = (tpl: DeviceTemplate) => {
-  const folder = tpl.name
-  const initState = tpl.manifest?.InitState || 'Working'
-  return getDeviceIconPath(folder, initState)
+const onPanelPointerMove = (e: PointerEvent) => {
+  if (!draggingPanel) return
+  // 纯粹的位置更新，因为有 is-dragging 类，这里会非常流畅
+  const dx = e.clientX - panelDragStart.x
+  const dy = e.clientY - panelDragStart.y
+  const pos = panelPositions[draggingPanel]
+  pos.x = panelStartPos.x + dx
+  pos.y = panelStartPos.y + dy
 }
 
-const getNodeLabelStyle = (node: DeviceNode) => {
-  const ratio = node.width / BASE_NODE_WIDTH
-  const scale = Math.min(Math.max(ratio, 0.75), 1.5)
-  const fontSize = BASE_FONT_SIZE * scale
-  return {
-    fontSize: fontSize + 'px',
-    maxWidth: node.width - 16 + 'px'
+const onPanelPointerUp = async (e: PointerEvent) => {
+  if (!draggingPanel) return
+
+  const key = draggingPanel
+
+  // 释放指针捕获
+  const target = e.target as HTMLElement
+  if (target && target.releasePointerCapture) {
+    try { target.releasePointerCapture(e.pointerId) } catch(err){}
+  }
+
+  // 3. 检查是否需要自动吸附
+  checkAutoDock(key)
+
+  // 4. 清除状态
+  // 使用 requestAnimationFrame 延迟一帧，
+  // 确保如果触发了吸附，CSS transition 能平滑接管位置变化
+  requestAnimationFrame(() => {
+    draggingState[key] = false
+    draggingPanel = null
+  })
+
+  window.removeEventListener('pointermove', onPanelPointerMove)
+  window.removeEventListener('pointerup', onPanelPointerUp)
+
+  await saveLayoutToServer()
+}
+
+// --- 6.2 Docking Logic ---
+
+const getNearestEdge = (x: number, y: number, width: number, height: number): { side: DockSide, dist: number } => {
+  const winW = window.innerWidth
+  const winH = window.innerHeight
+
+  const distLeft = x
+  const distRight = winW - (x + width)
+  const distTop = y
+  const distBottom = winH - (y + height)
+
+  const min = Math.min(distLeft, distRight, distTop, distBottom)
+
+  if (min === distLeft) return { side: 'left', dist: min }
+  if (min === distRight) return { side: 'right', dist: min }
+  if (min === distTop) return { side: 'top', dist: min }
+  return { side: 'bottom', dist: min }
+}
+
+const checkAutoDock = (key: PanelKey) => {
+  const el = document.querySelector(`.${key}-card`) as HTMLElement
+  if (!el) return
+
+  const rect = el.getBoundingClientRect()
+  const { side, dist } = getNearestEdge(rect.x, rect.y, rect.width, rect.height)
+
+  if (dist < DOCK_SNAP_THRESHOLD) {
+    dockPanel(key, side)
   }
 }
 
-/* ========= 节点布局：避免重叠 & 远离左面板 ========= */
+const handleManualDock = (key: PanelKey) => {
+  const el = document.querySelector(`.${key}-card`) as HTMLElement
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  // 手动点击 X 时，寻找绝对最近的边缘直接停靠
+  const { side } = getNearestEdge(rect.x, rect.y, rect.width, rect.height)
+  dockPanel(key, side)
+}
 
+const dockPanel = (key: PanelKey, side: DockSide) => {
+  if (!side) return
+
+  panelDockState[key].lastPos = { ...panelPositions[key] }
+  panelDockState[key].isDocked = true
+  panelDockState[key].side = side
+
+  const winW = window.innerWidth
+  const winH = window.innerHeight
+  const iconSize = 48 // 停靠后图标的大致尺寸
+
+  // 设置吸附位置（配合 CSS transition 实现飞入效果）
+  if (side === 'left') {
+    panelPositions[key].x = 0
+  } else if (side === 'right') {
+    panelPositions[key].x = winW - iconSize
+  } else if (side === 'top') {
+    panelPositions[key].y = 0
+  } else if (side === 'bottom') {
+    panelPositions[key].y = winH - iconSize
+  }
+
+  void saveLayoutToServer()
+}
+
+const restorePanel = (key: PanelKey) => {
+  const side = panelDockState[key].side
+  const padding = DEFAULT_PANEL_PADDING
+  const headerHeight = 60
+
+  // 获取当前卡片展开后的理论宽度
+  const currentCardWidth = getCardWidth()
+
+  const winW = window.innerWidth
+  const winH = window.innerHeight
+
+  let newX = panelPositions[key].x
+  let newY = panelPositions[key].y
+
+  // 根据停靠方向计算“完美展示位置”
+  if (side === 'left') {
+    // 停靠在左 -> 恢复到左侧 padding 处
+    newX = padding
+    newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
+  } else if (side === 'right') {
+    // 停靠在右 -> 恢复到右侧边缘内侧
+    newX = winW - currentCardWidth - padding
+    newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
+  } else if (side === 'top') {
+    // 停靠在上 -> 恢复到顶部
+    newY = padding
+    newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
+  } else if (side === 'bottom') {
+    // 停靠在下 -> 恢复到大概位置（因高度不定，这里做保守处理）
+    // 如果之前位置太低，提升上来
+    if (panelPositions[key].y > winH - 200) {
+      newY = winH - 500 // 假设一个合理高度
+    } else {
+      newY = Math.max(padding, panelPositions[key].y)
+    }
+    newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
+  } else {
+    // 异常回退
+    newX = panelDockState[key].lastPos.x
+    newY = panelDockState[key].lastPos.y
+  }
+
+  // 安全边界钳位，防止出界
+  newX = Math.min(Math.max(0, newX), winW - 100)
+  newY = Math.min(Math.max(0, newY), winH - headerHeight)
+
+  panelPositions[key].x = newX
+  panelPositions[key].y = newY
+
+  panelDockState[key].isDocked = false
+  panelDockState[key].side = null
+
+  void saveLayoutToServer()
+}
+
+/* =================================================================================
+ * 7. Node / Edge / Spec Management
+ * ================================================================================= */
+
+// --- Node Positioning ---
 const getNextNodePosition = (): { x: number; y: number } => {
   const count = nodes.value.length
   const col = count % NODE_GRID_COLS
@@ -230,60 +449,13 @@ const getNextNodePosition = (): { x: number; y: number } => {
 
   const screenY = NODE_START_Y + row * NODE_SPACING_Y
 
-  // 转换到画布内部坐标（极其关键）
   const x = (screenX - canvasPan.value.x) / canvasZoom.value
   const y = (screenY - canvasPan.value.y) / canvasZoom.value
 
   return { x, y }
 }
 
-/* ========= 与后端交互的一些小封装 ========= */
-
-const saveLayoutToServer = async () => {
-  const payload = {
-    input: { x: panelPositions.input.x, y: panelPositions.input.y },
-    status: { x: panelPositions.status.x, y: panelPositions.status.y },
-    canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
-    canvasZoom: canvasZoom.value
-  }
-  try {
-    await boardApi.saveLayout(payload)
-  } catch (e) {
-    console.error('saveLayout error', e)
-    ElMessage.error(t('app.saveLayoutFailed') || '保存画布布局失败')
-  }
-}
-
-
-const saveNodesToServer = async () => {
-  try {
-    await boardApi.saveNodes(nodes.value)
-  } catch (e) {
-    console.error(e)
-    ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
-  }
-}
-
-const saveEdgesToServer = async () => {
-  try {
-    await boardApi.saveEdges(edges.value)
-  } catch (e) {
-    console.error(e)
-    ElMessage.error(t('app.saveEdgesFailed') || '保存规则连线失败')
-  }
-}
-
-const saveSpecsToServer = async () => {
-  try {
-    await boardApi.saveSpecs(specifications.value)
-  } catch (e) {
-    console.error(e)
-    ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败')
-  }
-}
-
-/* ========= 设备创建 / 拖拽 ========= */
-
+// --- Creation ---
 const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
   const uniqueLabel = getUniqueLabel(tpl.name, nodes.value)
   const node: DeviceNode = {
@@ -304,8 +476,7 @@ const handleCreateDevice = async (tpl: DeviceTemplate) => {
   await createDeviceInstanceAt(tpl, pos)
 }
 
-const draggingTplName = ref<string | null>(null)
-
+// --- Drag & Drop Devices ---
 const onDeviceDragStart = (tpl: DeviceTemplate) => {
   draggingTplName.value = tpl.name
 }
@@ -327,7 +498,6 @@ const onCanvasDrop = async (e: DragEvent) => {
   const Sx = e.clientX - rect.left
   const Sy = e.clientY - rect.top
 
-  // 正确公式：I = (S - P) / Z
   const x = (Sx - canvasPan.value.x) / canvasZoom.value
   const y = (Sy - canvasPan.value.y) / canvasZoom.value
 
@@ -335,11 +505,13 @@ const onCanvasDrop = async (e: DragEvent) => {
   draggingTplName.value = null
 }
 
+// --- Canvas Board Events ---
+const handleNodeMovedOrResized = async () => {
+  await saveNodesToServer()
+  await saveEdgesToServer()
+}
 
-/* ========= IFTTT 规则（来自 InputPanel） ========= */
-
-import { getLinkPoints, updateRulesForNodeRename } from '../utils/rule'
-
+// --- Rules (InputPanel) ---
 const handleAddRule = async (payload: RuleForm) => {
   const { fromId, fromApi, toId, toApi } = payload
   if (!fromId || !fromApi || !toId || !toApi) {
@@ -367,8 +539,7 @@ const handleAddRule = async (payload: RuleForm) => {
   await saveEdgesToServer()
 }
 
-/* ========= 规约（来自 InputPanel） ========= */
-
+// --- Specs (InputPanel) ---
 const handleAddSpec = async (payload: {
   templateId: SpecTemplateId | ''
   mode: 'single' | 'ifThen'
@@ -382,15 +553,12 @@ const handleAddSpec = async (payload: {
   }
 
   const tplId = payload.templateId as SpecTemplateId
-
   const aCheck = validateAndCleanConditions(payload.aConditions)
   const ifCheck = validateAndCleanConditions(payload.ifConditions)
   const thenCheck = validateAndCleanConditions(payload.thenConditions)
 
   if (aCheck.hasIncomplete || ifCheck.hasIncomplete || thenCheck.hasIncomplete) {
-    ElMessage.warning(
-        t('app.specRowIncomplete') || '存在未填完整的条件，请删除该行或补全所有字段'
-    )
+    ElMessage.warning(t('app.specRowIncomplete') || '存在未填完整的条件')
     return
   }
 
@@ -406,7 +574,6 @@ const handleAddSpec = async (payload: {
       ElMessage.warning(t('app.specNeedA') || '请至少配置一个事件 A 条件')
       return
     }
-
     const item: Specification = {
       id: 'spec_' + Date.now(),
       templateId: tplId,
@@ -415,8 +582,7 @@ const handleAddSpec = async (payload: {
       ifConditions: [],
       thenConditions: []
     }
-    const exists = specifications.value.some(spec => isSameSpecification(spec, item))
-    if (exists) {
+    if (specifications.value.some(spec => isSameSpecification(spec, item))) {
       ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
       return
     }
@@ -426,15 +592,10 @@ const handleAddSpec = async (payload: {
   }
 
   if (mode === 'ifThen') {
-    if (!ifConds.length) {
-      ElMessage.warning(t('app.specNeedIf') || '请先完成 IF 部分（事件 A 的条件）')
+    if (!ifConds.length || !thenConds.length) {
+      ElMessage.warning(t('app.specNeedIf') || '请完善 IF/THEN 条件')
       return
     }
-    if (!thenConds.length) {
-      ElMessage.warning(t('app.specNeedThen') || '请先完成 THEN 部分（事件 B 的条件）')
-      return
-    }
-
     const item: Specification = {
       id: 'spec_' + Date.now(),
       templateId: tplId,
@@ -443,8 +604,7 @@ const handleAddSpec = async (payload: {
       ifConditions: ifConds,
       thenConditions: thenConds
     }
-    const exists = specifications.value.some(spec => isSameSpecification(spec, item))
-    if (exists) {
+    if (specifications.value.some(spec => isSameSpecification(spec, item))) {
       ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
       return
     }
@@ -452,8 +612,6 @@ const handleAddSpec = async (payload: {
     await saveSpecsToServer()
     return
   }
-
-  ElMessage.error('Unknown specification template id: ' + tplId)
 }
 
 const deleteSpecification = async (id: string) => {
@@ -461,18 +619,9 @@ const deleteSpecification = async (id: string) => {
   await saveSpecsToServer()
 }
 
-/* ========= 右键设备弹窗 ========= */
-
-const dialogVisible = ref(false)
-const dialogMeta = reactive<DeviceDialogMeta>({
-  nodeId: '',
-  deviceName: '',
-  description: '',
-  label: '',
-  manifest: null,
-  rules: [],
-  specs: []
-})
+/* =================================================================================
+ * 8. Context Menu & Deletion
+ * ================================================================================= */
 
 const onNodeContext = (node: DeviceNode) => {
   const tpl = deviceTemplates.value.find(t => t.name === node.templateName)
@@ -487,9 +636,7 @@ const onNodeContext = (node: DeviceNode) => {
 }
 
 const handleDialogSave = async (newLabel: string) => {
-  const exists = nodes.value.some(
-      n => n.label === newLabel && n.id !== dialogMeta.nodeId
-  )
+  const exists = nodes.value.some(n => n.label === newLabel && n.id !== dialogMeta.nodeId)
   if (exists) {
     ElMessage.error(t('app.nameExists') || '该名称已存在，请换一个')
     return
@@ -504,25 +651,15 @@ const handleDialogSave = async (newLabel: string) => {
   await saveNodesToServer()
 
   const rulesChanged = updateRulesForNodeRename(edges.value, node.id, newLabel)
-  if (rulesChanged) {
-    await saveEdgesToServer()
-  }
+  if (rulesChanged) await saveEdgesToServer()
 
-  const specChanged = updateSpecsForNodeRename(
-      specifications.value,
-      node.id,
-      newLabel
-  )
-  if (specChanged) {
-    await saveSpecsToServer()
-  }
+  const specChanged = updateSpecsForNodeRename(specifications.value, node.id, newLabel)
+  if (specChanged) await saveSpecsToServer()
 
   dialogMeta.label = newLabel
   dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
   dialogVisible.value = false
 }
-
-/* ========= 删除节点 ========= */
 
 const forceDeleteNode = async (nodeId: string) => {
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
@@ -536,9 +673,7 @@ const forceDeleteNode = async (nodeId: string) => {
   await saveSpecsToServer()
 
   if (removed.length > 0) {
-    ElMessage.info(
-        t('app.specsDeletedWithNode') || '已同时删除与该设备相关的规约'
-    )
+    ElMessage.info(t('app.specsDeletedWithNode') || '已同时删除与该设备相关的规约')
   }
 }
 
@@ -557,17 +692,10 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
   }
 
   ElMessageBox.confirm(
-      t('app.deleteNodeWithRelationsConfirm') ||
-      '该设备存在与其他设备的规则（连线）或已参与规约，删除设备将同时删除这些规则和相关规约，是否继续？',
+      t('app.deleteNodeWithRelationsConfirm') || '该设备有关联规则或规约，确认删除？',
       t('app.warning') || '警告',
-      {
-        type: 'warning',
-        confirmButtonText: t('app.delete') || '删除',
-        cancelButtonText: t('app.cancel') || '取消'
-      }
-  )
-      .then(() => doDelete())
-      .catch(() => {})
+      { type: 'warning', confirmButtonText: t('app.delete'), cancelButtonText: t('app.cancel') }
+  ).then(() => doDelete()).catch(() => {})
 }
 
 const handleDialogDelete = () => {
@@ -575,25 +703,54 @@ const handleDialogDelete = () => {
   deleteCurrentNodeWithConfirm(dialogMeta.nodeId)
 }
 
-/* ========= StatusPanel 删除回调 ========= */
-
-const deleteNodeFromStatus = (nodeId: string) => {
-  deleteCurrentNodeWithConfirm(nodeId)
-}
+const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
 const deleteEdgeFromStatus = async (edgeId: string) => {
   edges.value = edges.value.filter(e => e.id !== edgeId)
   await saveEdgesToServer()
 }
 
-/* ========= CanvasBoard 回调：节点移动 / 缩放完成 ========= */
+/* =================================================================================
+ * 9. API Interactions (Save)
+ * ================================================================================= */
 
-const handleNodeMovedOrResized = async () => {
-  await saveNodesToServer()
-  await saveEdgesToServer()
+const saveLayoutToServer = async () => {
+  const payload = {
+    input: { x: panelPositions.input.x, y: panelPositions.input.y },
+    status: { x: panelPositions.status.x, y: panelPositions.status.y },
+    dockState: {
+      input: { ...panelDockState.input },
+      status: { ...panelDockState.status }
+    },
+    canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
+    canvasZoom: canvasZoom.value
+  }
+  try {
+    await boardApi.saveLayout(payload)
+  } catch (e) {
+    console.error('saveLayout error', e)
+    ElMessage.error(t('app.saveLayoutFailed') || '保存画布布局失败')
+  }
 }
 
-/* ========= 初始化 ========= */
+const saveNodesToServer = async () => {
+  try { await boardApi.saveNodes(nodes.value) }
+  catch (e) { ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败') }
+}
+
+const saveEdgesToServer = async () => {
+  try { await boardApi.saveEdges(edges.value) }
+  catch (e) { ElMessage.error(t('app.saveEdgesFailed') || '保存规则连线失败') }
+}
+
+const saveSpecsToServer = async () => {
+  try { await boardApi.saveSpecs(specifications.value) }
+  catch (e) { ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败') }
+}
+
+/* =================================================================================
+ * 10. Lifecycle & Watchers
+ * ================================================================================= */
 
 const initDefaultDevices = () => {
   const cached = loadDeviceTemplates()
@@ -608,72 +765,54 @@ const initDefaultDevices = () => {
 onMounted(async () => {
   initDefaultDevices()
 
-  try {
-    const res = await boardApi.getNodes()
-    nodes.value = res.data
-  } catch {
-    nodes.value = []
-  }
+  // Load Data
+  try { nodes.value = (await boardApi.getNodes()).data } catch { nodes.value = [] }
+  try { edges.value = (await boardApi.getEdges()).data } catch { edges.value = [] }
+  try { specifications.value = (await boardApi.getSpecs()).data } catch { specifications.value = [] }
 
-  try {
-    const res = await boardApi.getEdges()
-    edges.value = res.data
-  } catch {
-    edges.value = []
-  }
-
-  try {
-    const res = await boardApi.getSpecs()
-    specifications.value = res.data
-  } catch {
-    specifications.value = []
-  }
-
+  // Load Layout
   try {
     const res = await boardApi.getLayout()
     const layout = res.data
-    if (layout?.input && layout?.status) {
-      panelPositions.input.x = layout.input.x
-      panelPositions.input.y = layout.input.y
-      panelPositions.status.x = layout.status.x
-      panelPositions.status.y = layout.status.y
-    } else {
-      // 没有数据时使用默认布局
-      panelPositions.input.x = DEFAULT_PANEL_PADDING
-      panelPositions.input.y = DEFAULT_PANEL_PADDING
 
-      const cardWidth = getCardWidth()
-      panelPositions.status.x =
-          window.innerWidth - cardWidth - DEFAULT_PANEL_PADDING
-      panelPositions.status.y = DEFAULT_PANEL_PADDING
+    // Panel Position
+    if (layout?.input && layout?.status) {
+      panelPositions.input = layout.input
+      panelPositions.status = layout.status
+    } else {
+      panelPositions.input = { x: DEFAULT_PANEL_PADDING, y: DEFAULT_PANEL_PADDING }
+      panelPositions.status = {
+        x: window.innerWidth - getCardWidth() - DEFAULT_PANEL_PADDING,
+        y: DEFAULT_PANEL_PADDING
+      }
     }
-    if (layout?.canvasPan) {
-      canvasPan.value = layout.canvasPan
+
+    // Dock State
+    if (layout?.dockState) {
+      if (layout.dockState.input) Object.assign(panelDockState.input, layout.dockState.input)
+      if (layout.dockState.status) Object.assign(panelDockState.status, layout.dockState.status)
     }
+
+    // Canvas
+    if (layout?.canvasPan) canvasPan.value = layout.canvasPan
     if (typeof layout?.canvasZoom === 'number') {
       canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
     }
   } catch {
-    // 布局加载失败：使用默认值
-    panelPositions.input.x = DEFAULT_PANEL_PADDING
-    panelPositions.input.y = DEFAULT_PANEL_PADDING
-    const cardWidth = getCardWidth()
-    panelPositions.status.x =
-        window.innerWidth - cardWidth - DEFAULT_PANEL_PADDING
-    panelPositions.status.y = DEFAULT_PANEL_PADDING
+    // Fallback
+    panelPositions.input = { x: DEFAULT_PANEL_PADDING, y: DEFAULT_PANEL_PADDING }
+    panelPositions.status = {
+      x: window.innerWidth - getCardWidth() - DEFAULT_PANEL_PADDING,
+      y: DEFAULT_PANEL_PADDING
+    }
   }
 
+  // Load Active Folders
   try {
     const res = await boardApi.getActive()
-    if (Array.isArray(res.data?.input)) {
-      inputActive.value = res.data.input
-    }
-    if (Array.isArray(res.data?.status)) {
-      statusActive.value = res.data.status
-    }
-  } catch {
-    // 折叠状态失败就用默认
-  }
+    if (Array.isArray(res.data?.input)) inputActive.value = res.data.input
+    if (Array.isArray(res.data?.status)) statusActive.value = res.data.status
+  } catch {}
 
   window.addEventListener('keydown', onGlobalKeydown)
 })
@@ -681,19 +820,13 @@ onMounted(async () => {
 watch(
     () => ({ input: inputActive.value, status: statusActive.value }),
     async val => {
-      try {
-        await boardApi.saveActive(val)
-      } catch (e) {
-        console.error(e)
-        ElMessage.error(t('app.saveActiveFailed') || '保存折叠面板状态失败')
-      }
+      try { await boardApi.saveActive(val) }
+      catch { ElMessage.error(t('app.saveActiveFailed') || '保存折叠面板状态失败') }
     },
     { deep: true }
 )
 
-watch(canvasZoom, () => {
-  void saveLayoutToServer()
-})
+watch(canvasZoom, () => void saveLayoutToServer())
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
@@ -704,7 +837,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="iot-board">
-    <!-- 画布：节点 + 连线 -->
     <CanvasBoard
         :nodes="nodes"
         :edges="edges"
@@ -722,15 +854,31 @@ onBeforeUnmount(() => {
         @node-moved-or-resized="handleNodeMovedOrResized"
     />
 
-    <!-- 左侧输入卡片 -->
     <div
-        class="floating-card input-card"
+        :class="getCardClasses('input')"
         :style="{ left: panelPositions.input.x + 'px', top: panelPositions.input.y + 'px' }"
         @pointerdown="onPanelPointerDownWrapper($event, 'input')"
     >
+      <el-tooltip
+          :disabled="!panelDockState.input.isDocked"
+          :content="t('app.restoreInput') || '点击恢复输入面板'"
+          placement="right"
+      >
+        <div class="docked-icon-container">
+          <el-icon :size="24"><Edit /></el-icon>
+        </div>
+      </el-tooltip>
+
       <div class="card-header">
-        <span class="card-title">{{ t('app.input') }}</span>
+        <span class="card-title">
+           <el-icon style="margin-right: 6px; vertical-align: middle"><Edit /></el-icon>
+           {{ t('app.input') }}
+        </span>
+        <div class="dock-close-btn" @click.stop="handleManualDock('input')" title="收起面板">
+          <el-icon><Close /></el-icon>
+        </div>
       </div>
+
       <div class="card-body">
         <InputPanel
             v-model:active="inputActive"
@@ -747,15 +895,31 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 右侧状态卡片 -->
     <div
-        class="floating-card status-card"
+        :class="getCardClasses('status')"
         :style="{ left: panelPositions.status.x + 'px', top: panelPositions.status.y + 'px' }"
         @pointerdown="onPanelPointerDownWrapper($event, 'status')"
     >
+      <el-tooltip
+          :disabled="!panelDockState.status.isDocked"
+          :content="t('app.restoreStatus') || '点击恢复状态面板'"
+          placement="left"
+      >
+        <div class="docked-icon-container">
+          <el-icon :size="24"><Platform /></el-icon>
+        </div>
+      </el-tooltip>
+
       <div class="card-header">
-        <span class="card-title">{{ t('app.status') }}</span>
+        <span class="card-title">
+           <el-icon style="margin-right: 6px; vertical-align: middle"><Platform /></el-icon>
+           {{ t('app.status') }}
+        </span>
+        <div class="dock-close-btn" @click.stop="handleManualDock('status')" title="收起面板">
+          <el-icon><Close /></el-icon>
+        </div>
       </div>
+
       <div class="card-body">
         <StatusPanel
             v-model:active="statusActive"
@@ -769,7 +933,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 右键弹出的设备详情对话框 -->
     <DeviceDialog
         :visible="dialogVisible"
         :device-name="dialogMeta.deviceName"
