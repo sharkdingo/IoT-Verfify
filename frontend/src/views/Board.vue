@@ -15,7 +15,8 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
-import type { DockSide, DockState, PanelKey, PanelPosition } from "@/types/panel.ts";
+// [Updated] 引入新的 Panel 类型定义
+import type { DockSide, DockState, PanelKey, PanelPosition, BoardLayoutDto } from '@/types/panel'
 
 // Utils
 import { getDeviceIconPath, getNodeIcon } from '../utils/device'
@@ -53,12 +54,13 @@ const { t } = useI18n()
  * 2. Constants & Configuration
  * ================================================================================= */
 
-const DEFAULT_PANEL_PADDING = 10
-const DOCK_SNAP_THRESHOLD = 1 // 拖拽到边缘多少像素内自动吸附
+const DEFAULT_PANEL_PADDING = 5
+const DOCK_SNAP_THRESHOLD = -1 // 拖拽到边缘多少像素内自动吸附
+const DOCK_ICON_SIZE = 48
 
-const CARD_WIDTH_MIN = 12 * 16 // 192px
-const CARD_WIDTH_MAX = 24 * 16 // 384px
-const CARD_WIDTH_RATIO = 0.24  // 24vw
+const CARD_WIDTH_MIN = 192 // 12rem
+const CARD_WIDTH_MAX = 384 // 24rem
+const CARD_WIDTH_RATIO = 0.24
 
 const NODE_MARGIN_RIGHT_OF_PANEL = 60
 const NODE_GRID_COLS = 4
@@ -81,6 +83,7 @@ const BASE_FONT_SIZE = 16
 const canvasZoom = ref(1)
 const isCanvasHovered = ref(false)
 const canvasPan = ref<CanvasPan>({ x: 0, y: 0 })
+
 let isPanning = false
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
@@ -96,8 +99,7 @@ const panelDockState = reactive<Record<PanelKey, DockState>>({
   status: { isDocked: false, side: null, lastPos: { x: 1040, y: 80 } }
 })
 
-// [Fix] Dragging State for smooth interaction
-// Used to apply 'transition: none' via CSS class '.is-dragging'
+// [Fix] Dragging State: 用于在拖拽时禁用 CSS transition，解决“粘滞”感
 const draggingState = reactive<Record<PanelKey, boolean>>({
   input: false,
   status: false
@@ -117,7 +119,7 @@ const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 const inputActive = ref<string[]>([])
 const statusActive = ref<string[]>([])
 
-const draggingTplName = ref<string | null>(null) // For device drag-drop
+const draggingTplName = ref<string | null>(null)
 
 // --- UI State ---
 const dialogVisible = ref(false)
@@ -156,7 +158,7 @@ const getNodeLabelStyle = (node: DeviceNode) => {
   }
 }
 
-// 动态计算卡片样式类
+// [Fix] CSS 类绑定：添加 is-dragging 用于禁用过渡
 const getCardClasses = (key: PanelKey) => {
   const state = panelDockState[key]
   return {
@@ -164,11 +166,10 @@ const getCardClasses = (key: PanelKey) => {
     [`${key}-card`]: true,
     'is-docked': state.isDocked,
     [`dock-${state.side}`]: state.isDocked,
-    'is-dragging': draggingState[key] // [Fix] 绑定拖拽状态
+    'is-dragging': draggingState[key]
   }
 }
 
-// 识别交互元素，防止在输入框打字时触发拖拽
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
   const interactiveSelectors =
@@ -178,36 +179,78 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   return !!el.closest(interactiveSelectors)
 }
 
+// [Fix] 安全检查：防止面板在初始化或窗口缩放时跑出屏幕外
+const clampPanelsToScreen = () => {
+  const winW = window.innerWidth
+  const winH = window.innerHeight
+  const margin = 40;
+
+  (['input', 'status'] as PanelKey[]).forEach(key => {
+    const pos = panelPositions[key]
+    const dock = panelDockState[key]
+
+    // [Crucial Fix] 如果是停靠状态，必须根据当前窗口尺寸重置位置
+    // 否则如果之前保存的坐标在当前屏幕外（例如底部停靠时 y 很大），面板就会消失
+    if (dock.isDocked && dock.side) {
+      switch (dock.side) {
+        case 'left':
+          pos.x = 0
+          pos.y = Math.min(Math.max(0, pos.y), winH - DOCK_ICON_SIZE)
+          break
+        case 'right':
+          pos.x = winW - DOCK_ICON_SIZE
+          pos.y = Math.min(Math.max(0, pos.y), winH - DOCK_ICON_SIZE)
+          break
+        case 'top':
+          pos.y = 0
+          pos.x = Math.min(Math.max(0, pos.x), winW - DOCK_ICON_SIZE)
+          break
+        case 'bottom':
+          pos.y = winH - DOCK_ICON_SIZE
+          pos.x = Math.min(Math.max(0, pos.x), winW - DOCK_ICON_SIZE)
+          break
+      }
+    } else {
+      // 未停靠状态，进行常规边界检查
+      pos.x = Math.min(Math.max(0, pos.x), winW - margin)
+      pos.y = Math.min(Math.max(0, pos.y), winH - margin)
+    }
+  })
+}
+
 /* =================================================================================
  * 5. Canvas Interaction (Zoom & Pan)
  * ================================================================================= */
 
-const onCanvasEnter = () => (isCanvasHovered.value = true)
-const onCanvasLeave = () => (isCanvasHovered.value = false)
-
-const onCanvasWheel = (e: WheelEvent) => {
-  if (!isCanvasHovered.value) return
-  if (!e.ctrlKey) return
-  e.preventDefault()
-
-  if (e.deltaY > 0) {
-    canvasZoom.value = Math.max(MIN_ZOOM, canvasZoom.value - ZOOM_STEP)
-  } else {
-    canvasZoom.value = Math.min(MAX_ZOOM, canvasZoom.value + ZOOM_STEP)
+// [Fix] 拦截浏览器默认缩放，只改变 canvasZoom
+const onBoardWheel = (e: WheelEvent) => {
+  if (e.ctrlKey) {
+    // 阻止浏览器默认缩放行为 (template 中已加 .prevent，这里是逻辑处理)
+    if (e.deltaY > 0) {
+      canvasZoom.value = Math.max(MIN_ZOOM, canvasZoom.value - ZOOM_STEP)
+    } else {
+      canvasZoom.value = Math.min(MAX_ZOOM, canvasZoom.value + ZOOM_STEP)
+    }
   }
 }
 
-const onGlobalKeydown = (e: KeyboardEvent) => {
-  if (!isCanvasHovered.value) return
-  if (!e.ctrlKey) return
-  if (['=', '+', '-', '0'].includes(e.key)) e.preventDefault()
+const onCanvasEnter = () => (isCanvasHovered.value = true)
+const onCanvasLeave = () => (isCanvasHovered.value = false)
 
-  if (e.key === '=' || e.key === '+') {
-    canvasZoom.value = Math.min(MAX_ZOOM, canvasZoom.value + ZOOM_STEP)
-  } else if (e.key === '-') {
-    canvasZoom.value = Math.max(MIN_ZOOM, canvasZoom.value - ZOOM_STEP)
-  } else if (e.key === '0') {
-    canvasZoom.value = 1
+// [Fix] 全局按键拦截：拦截 Ctrl + +/-/0 防止浏览器缩放快捷键
+const onGlobalKeydown = (e: KeyboardEvent) => {
+  if (e.ctrlKey) {
+    if (['=', '+', '-', '0'].includes(e.key)) {
+      e.preventDefault() // 关键！阻止浏览器菜单缩放
+
+      if (e.key === '=' || e.key === '+') {
+        canvasZoom.value = Math.min(MAX_ZOOM, canvasZoom.value + ZOOM_STEP)
+      } else if (e.key === '-') {
+        canvasZoom.value = Math.max(MIN_ZOOM, canvasZoom.value - ZOOM_STEP)
+      } else if (e.key === '0') {
+        canvasZoom.value = 1
+      }
+    }
   }
 }
 
@@ -216,6 +259,13 @@ const onCanvasPointerDown = (e: PointerEvent) => {
   isPanning = true
   panStart = { x: e.clientX, y: e.clientY }
   panOrigin = { x: canvasPan.value.x, y: canvasPan.value.y }
+
+  // 捕获指针，拖动体验更好
+  const target = e.currentTarget as HTMLElement
+  if (target && target.setPointerCapture) {
+    target.setPointerCapture(e.pointerId)
+  }
+
   window.addEventListener('pointermove', onCanvasPointerMove)
   window.addEventListener('pointerup', onCanvasPointerUp)
 }
@@ -230,8 +280,14 @@ const onCanvasPointerMove = (e: PointerEvent) => {
   }
 }
 
-const onCanvasPointerUp = async () => {
+const onCanvasPointerUp = async (e: PointerEvent) => {
   isPanning = false
+
+  const target = e.target as HTMLElement
+  if (target && target.releasePointerCapture) {
+    try { target.releasePointerCapture(e.pointerId) } catch(err){}
+  }
+
   await saveLayoutToServer()
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
@@ -256,7 +312,7 @@ const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
     return
   }
 
-  // 1. 设置拖拽状态 -> 激活 CSS 的 no-transition
+  // 1. 设置拖拽状态 -> 激活 CSS 的 no-transition (关键：解决拖拽延迟)
   draggingPanel = key
   draggingState[key] = true
 
@@ -297,9 +353,8 @@ const onPanelPointerUp = async (e: PointerEvent) => {
   // 3. 检查是否需要自动吸附
   checkAutoDock(key)
 
-  // 4. 清除状态
-  // 使用 requestAnimationFrame 延迟一帧，
-  // 确保如果触发了吸附，CSS transition 能平滑接管位置变化
+  // 4. 清除拖拽状态
+  // 使用 requestAnimationFrame 延迟一帧，确保吸附动画(transition)能平滑接管
   requestAnimationFrame(() => {
     draggingState[key] = false
     draggingPanel = null
@@ -312,7 +367,6 @@ const onPanelPointerUp = async (e: PointerEvent) => {
 }
 
 // --- 6.2 Docking Logic ---
-
 const getNearestEdge = (x: number, y: number, width: number, height: number): { side: DockSide, dist: number } => {
   const winW = window.innerWidth
   const winH = window.innerHeight
@@ -360,22 +414,22 @@ const dockPanel = (key: PanelKey, side: DockSide) => {
 
   const winW = window.innerWidth
   const winH = window.innerHeight
-  const iconSize = 48 // 停靠后图标的大致尺寸
 
   // 设置吸附位置（配合 CSS transition 实现飞入效果）
   if (side === 'left') {
     panelPositions[key].x = 0
   } else if (side === 'right') {
-    panelPositions[key].x = winW - iconSize
+    panelPositions[key].x = winW - DOCK_ICON_SIZE
   } else if (side === 'top') {
     panelPositions[key].y = 0
   } else if (side === 'bottom') {
-    panelPositions[key].y = winH - iconSize
+    panelPositions[key].y = winH - DOCK_ICON_SIZE
   }
 
   void saveLayoutToServer()
 }
 
+// [Fix] 智能恢复逻辑：紧贴边缘完全展示
 const restorePanel = (key: PanelKey) => {
   const side = panelDockState[key].side
   const padding = DEFAULT_PANEL_PADDING
@@ -404,8 +458,7 @@ const restorePanel = (key: PanelKey) => {
     newY = padding
     newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
   } else if (side === 'bottom') {
-    // 停靠在下 -> 恢复到大概位置（因高度不定，这里做保守处理）
-    // 如果之前位置太低，提升上来
+    // 停靠在下 -> 恢复到大概位置
     if (panelPositions[key].y > winH - 200) {
       newY = winH - 500 // 假设一个合理高度
     } else {
@@ -715,14 +768,14 @@ const deleteEdgeFromStatus = async (edgeId: string) => {
  * ================================================================================= */
 
 const saveLayoutToServer = async () => {
-  const payload = {
-    input: { x: panelPositions.input.x, y: panelPositions.input.y },
-    status: { x: panelPositions.status.x, y: panelPositions.status.y },
+  const payload: BoardLayoutDto = {
+    input: panelPositions.input,
+    status: panelPositions.status,
     dockState: {
       input: { ...panelDockState.input },
       status: { ...panelDockState.status }
     },
-    canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
+    canvasPan: canvasPan.value,
     canvasZoom: canvasZoom.value
   }
   try {
@@ -793,6 +846,9 @@ onMounted(async () => {
       if (layout.dockState.status) Object.assign(panelDockState.status, layout.dockState.status)
     }
 
+    // [Fix] Ensure panels are on screen
+    clampPanelsToScreen()
+
     // Canvas
     if (layout?.canvasPan) canvasPan.value = layout.canvasPan
     if (typeof layout?.canvasZoom === 'number') {
@@ -815,6 +871,7 @@ onMounted(async () => {
   } catch {}
 
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('resize', clampPanelsToScreen)
 })
 
 watch(
@@ -830,13 +887,15 @@ watch(canvasZoom, () => void saveLayoutToServer())
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('resize', clampPanelsToScreen)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
 })
 </script>
 
 <template>
-  <div class="iot-board">
+  <!-- [Fix] @wheel.ctrl.prevent 阻止浏览器原生缩放 -->
+  <div class="iot-board" @wheel.ctrl.prevent="onBoardWheel">
     <CanvasBoard
         :nodes="nodes"
         :edges="edges"
@@ -849,7 +908,6 @@ onBeforeUnmount(() => {
         @canvas-drop="onCanvasDrop"
         @canvas-enter="onCanvasEnter"
         @canvas-leave="onCanvasLeave"
-        @canvas-wheel="onCanvasWheel"
         @node-context="onNodeContext"
         @node-moved-or-resized="handleNodeMovedOrResized"
     />
