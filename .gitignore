@@ -11,6 +11,7 @@
 .idea/
 .vscode/
 *.iml
+queries/
 
 # Node.js 依赖
 node_modules/

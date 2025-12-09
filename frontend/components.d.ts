@@ -13,7 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AddTemplateDialog: typeof import('./src/components/AddTemplateDialog.vue')['default']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
-    ChatbotBall: typeof import('./src/components/ChatbotBall.vue')['default']
+    ChatView: typeof import('./src/components/ChatView.vue')['default']
     DeviceDialog: typeof import('./src/components/DeviceDialog.vue')['default']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']

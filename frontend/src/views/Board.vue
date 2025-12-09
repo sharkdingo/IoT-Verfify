@@ -485,7 +485,7 @@ const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: 
     templateName: tpl.manifest.Name,
     label: uniqueLabel,
     position: pos,
-    state: tpl.manifest.InitState || 'Off',
+    state: tpl.manifest.InitState || 'Working',
     width: 110,
     height: 90
   }

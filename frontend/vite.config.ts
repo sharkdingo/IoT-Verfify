@@ -6,13 +6,19 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import { fileURLToPath } from 'node:url'
+import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers'
 
 // https://vite.dev/config/
 export default defineConfig({
     plugins: [
         vue(),
         AutoImport({
-            resolvers: [ElementPlusResolver()],
+            resolvers: [
+                ElementPlusResolver(),
+                AntDesignVueResolver({
+                    importStyle: false, // 如果你已经全局引入了 CSS，这里设为 false；否则设为 'css' 或 'less'
+                }),
+            ],
         }),
         Components({
             resolvers: [ElementPlusResolver()],

@@ -23,8 +23,9 @@ server:
     include-message: always
     include-binding-errors: always
 
-ark:
-  api-key: 8f3151df-403e-4f3d-b559-b35a7618393b
-  model-id: ep-20251125202752-bhwbw   # doubao-seed-1-6-251015 对应的 Endpoint ID
-  base-url: https://ark.cn-beijing.volces.com/api/v3
+volcengine:
+  ark:
+    api-key: 8f3151df-403e-4f3d-b559-b35a7618393b
+    model-id: ep-20251125202752-bhwbw   # doubao-seed-1-6-251015 对应的 Endpoint ID
+    base-url: https://ark.cn-beijing.volces.com/api/v3
 
