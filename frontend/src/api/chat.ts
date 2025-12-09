@@ -2,53 +2,59 @@
 // 注意：请确认您的 http 封装文件路径是否正确，之前建议是 '@/utils/http'
 import api from '@/api/http'
 import { ChatMessage, ChatSession } from "@/types/chat"
-// --- 1. 定义后端的 Result 包装结构 ---
+// --- 定义后端的 Result 包装结构 ---
 export interface Result<T> {
-    code: number;    // 200 成功, 500 失败
+    code: number;    // 200 成功
     message: string; // 错误信息
     data: T;         // 真正的数据
 }
 
+// ==========================================
+// 核心修改点：
+// 因为 http.ts 没有拦截器，所以 api.get 返回的是 AxiosResponse。
+// 我们需要用 async/await 手动返回 response.data，
+// 这样组件里收到的就是干净的 { code, msg, data } 了。
+// ==========================================
+
 /**
  * 获取会话列表
- * 返回值类型变为: Promise<Result<ChatSession[]>>
  */
-export const getSessionList = (userId: string) => {
-    return api.get<any, Result<ChatSession[]>>('/chat/sessions', {
+export const getSessionList = async (userId: string) => {
+    const response = await api.get<Result<ChatSession[]>>('/chat/sessions', {
         params: { userId }
     })
+    return response.data; // <--- 这里手动解包
 }
 
 /**
  * 创建新会话
- * 返回值类型变为: Promise<Result<ChatSession>>
  */
-export const createSession = (userId: string) => {
-    return api.post<any, Result<ChatSession>>('/chat/sessions', null, {
+export const createSession = async (userId: string) => {
+    const response = await api.post<Result<ChatSession>>('/chat/sessions', null, {
         params: { userId }
     })
+    return response.data; // <--- 这里手动解包
 }
 
 /**
  * 获取会话历史记录
- * 返回值类型变为: Promise<Result<ChatMessage[]>>
  */
-export const getSessionHistory = (sessionId: string) => {
-    return api.get<any, Result<ChatMessage[]>>(`/chat/sessions/${sessionId}/messages`)
+export const getSessionHistory = async (sessionId: string) => {
+    const response = await api.get<Result<ChatMessage[]>>(`/chat/sessions/${sessionId}/messages`)
+    return response.data; // <--- 这里手动解包
 }
 
 /**
  * 删除会话
- * 返回值类型变为: Promise<Result<void>>
  */
-export const deleteSession = (sessionId: string) => {
-    return api.delete<any, Result<void>>(`/chat/sessions/${sessionId}`)
+export const deleteSession = async (sessionId: string) => {
+    const response = await api.delete<Result<void>>(`/chat/sessions/${sessionId}`)
+    return response.data; // <--- 这里手动解包
 }
 
 /**
  * 发送流式消息
- * 注意：流式接口后端返回的是 SseEmitter，不是 Result JSON，所以这里逻辑不需要针对 Result 修改
- * 但必须保留 data: 前缀的解析逻辑
+ * (这个函数使用原生 fetch，不受 axios 影响，保持原样即可，但我加上了 controller 支持以防万一)
  */
 export const sendStreamChat = async (
     sessionId: string,
@@ -57,20 +63,20 @@ export const sendStreamChat = async (
         onMessage: (text: string) => void
         onError?: (err: any) => void
         onFinish?: () => void
-    }
+    },
+    controller?: AbortController
 ) => {
     try {
-        // 使用 fetch 是因为 axios 不支持流式读取
         const response = await fetch('http://localhost:8080/api/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ sessionId, content })
+            body: JSON.stringify({ sessionId, content }),
+            signal: controller?.signal
         })
 
         if (!response.ok) {
-            // 如果后端报错（如 500），尝试读取错误信息
             const errText = await response.text();
             throw new Error(errText || response.statusText);
         }
@@ -92,22 +98,22 @@ export const sendStreamChat = async (
             buffer = lines.pop() || ''
 
             for (const line of lines) {
-                const trimmed = line.trim()
-                if (!trimmed) continue
-
-                // 解析 data: 前缀
-                if (trimmed.startsWith('data:')) {
-                    const data = trimmed.slice(5)
-                    if (data.trim() !== '[DONE]') {
-                        callbacks.onMessage(data)
-                    }
+                if (line.startsWith('data:')) {
+                    const data = line.slice(5)
+                    // 后端发送的是纯文本，不需要 trim() 掉可能存在的格式空格，也不需要 JSON.parse
+                    // 除非内容是 "[DONE]" 这种特殊标记
+                    callbacks.onMessage(data)
                 }
             }
         }
 
         if (callbacks.onFinish) callbacks.onFinish()
 
-    } catch (error) {
+    } catch (error: any) {
+        if (error.name === 'AbortError') {
+            if (callbacks.onFinish) callbacks.onFinish();
+            return;
+        }
         console.error('Stream Error:', error)
         if (callbacks.onError) callbacks.onError(error)
     }

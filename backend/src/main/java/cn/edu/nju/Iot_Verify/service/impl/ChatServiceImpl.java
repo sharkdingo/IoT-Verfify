@@ -90,6 +90,7 @@ public class ChatServiceImpl implements ChatService {
             String systemPromptContent = """
                     你是 IoT-Verify 平台的智能专家助手。这是一个基于 NuSMV 的智能家居仿真与形式化验证平台。
                     你的行为准则：
+                    0. **使用Markdown格式输出**：请严格使用Markdown格式输出内容。
                     1. **必须响应工具结果**：当工具（如 add_device, verify_model）执行完毕后，你必须根据返回的 JSON 或文本结果，用自然语言向用户汇报执行情况。严禁直接返回空内容或沉默。
                     2. **处理系统提示**：如果工具返回结果中包含“【系统提示】”（例如模板不匹配导致的自动替换），你必须在回复中明确告知用户这一变更。
                     3. **场景化解释**：对于设备操作，确认名称和状态；对于 NuSMV 验证结果，解释是“验证通过”还是“发现了安全反例”，并引导用户查看动画演示。
@@ -162,16 +163,22 @@ public class ChatServiceImpl implements ChatService {
                 });
 
                 // 兜底逻辑
-                if (finalAnswer.isEmpty() && !isDisconnect.get()) {
-                    log.warn("AI 收到工具结果后沉默了，触发人工兜底回复。");
-                    ChatMessage lastToolMsg = sdkMessages.get(sdkMessages.size() - 1);
-                    String fallbackText = "已为您完成操作: " + lastToolMsg.getContent();
+                if (finalAnswer.isEmpty()) {
+                    log.warn("AI 沉默或连接中断，触发后端兜底持久化。");
 
-                    // 这里也要防一手断开
-                    try {
-                        emitter.send(SseEmitter.event().data(fallbackText));
-                        finalAnswer.append(fallbackText);
-                    } catch (IOException ignored) {}
+                    ChatMessage lastToolMsg = sdkMessages.get(sdkMessages.size() - 1);
+                    String fallbackText = "已为您完成操作: " + lastToolMsg.getContent(); // 这里可以根据你的 System Prompt 风格调整
+
+                    // 1. 只有没断开的时候，才往前端推
+                    if (!isDisconnect.get()) {
+                        try {
+                            emitter.send(SseEmitter.event().data(fallbackText));
+                        } catch (IOException e) {
+                            // 发送失败也无所谓，关键是要存库
+                        }
+                    }
+                    // 2. 无论是否断开，都要 append 到 finalAnswer，这样下面就会存库
+                    finalAnswer.append(fallbackText);
                 }
 
             } else {

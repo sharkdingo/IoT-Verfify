@@ -10,6 +10,6 @@ export interface ChatSession {
 
 export interface ChatMessage {
     id?: number
-    role: 'user' | 'assistant'
+    role: 'user' | 'assistant' | 'tool'
     content: string
 }
