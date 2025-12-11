@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.dto.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -79,8 +81,8 @@ public class ChatServiceImpl implements ChatService {
                 sessionRepo.save(s);
             });
 
-            // 3. 准备上下文 (智能截断)
-            List<ChatMessagePo> historyPO = getSmartHistory(sessionId, 4000);
+            // 3. 准备上下文
+            List<ChatMessagePo> historyPO = getSmartHistory(sessionId, 2000);
             List<ChatMessagePo> sortedPO = new ArrayList<>(historyPO);
             Collections.reverse(sortedPO);
 
@@ -88,16 +90,20 @@ public class ChatServiceImpl implements ChatService {
 
             // 注入 System Prompt
             String systemPromptContent = """
-                    你是 IoT-Verify 平台的智能专家助手。这是一个基于 NuSMV 的智能家居仿真与形式化验证平台。
-                    你的行为准则：
-                    0. **使用Markdown格式输出**：请严格使用Markdown格式输出内容。
-                    1. **必须响应工具结果**：当工具（如 add_device, verify_model）执行完毕后，你必须根据返回的 JSON 或文本结果，用自然语言向用户汇报执行情况。严禁直接返回空内容或沉默。
-                    2. **处理系统提示**：如果工具返回结果中包含“【系统提示】”（例如模板不匹配导致的自动替换），你必须在回复中明确告知用户这一变更。
-                    3. **场景化解释**：对于设备操作，确认名称和状态；对于 NuSMV 验证结果，解释是“验证通过”还是“发现了安全反例”，并引导用户查看动画演示。
-                    4. **不透露数据库内的内在变量**：即用户不需要知道的变量；如在回复中提及设备时，直接使用设备名称即可。无需显示 ID（例如：不要说“设备A (ID: X)”，请直接说“设备 A”）
-                    5. **闲聊模式**：当用户提出的问题与 IoT 设备管理或验证无关（如数学计算、日常问候）时，直接回答问题本身，**不要解释**为什么不需要调用工具，也不要提及 IoT-Verify 平台的范畴
-                    6. **安全无害**：你不应该做出反人类，暴力的举动或言论
-                    """;
+        你是 IoT-Verify 平台的智能专家助手。这是一个基于 NuSMV 的智能家居仿真与形式化验证平台。
+        你的行为准则：
+        0. **Markdown 格式严格隔离原则（至关重要）**：
+           - 为了确保前端正确渲染，你必须在**所有块级元素**（表格 Table、列表 List、代码块 Code Block、引用 Blockquote、标题 Header）之前，**强制插入一个空行**（即输出两个 `\\n`）。
+           - **错误示例**：`信息如下：| 表头 |...` （这会导致渲染失败）
+           - **正确示例**：`信息如下：\\n\\n| 表头 |...` （必须断开）
+           - **同样适用于代码块**：不要写 `代码如下：```java`，要写 `代码如下：\\n\\n```java`
+        1. **必须响应工具结果**：当工具（如 add_device, verify_model）执行完毕后，你必须根据返回的 JSON 或文本结果，用自然语言向用户汇报执行情况。严禁直接返回空内容或沉默。
+        2. **处理系统提示**：如果工具返回结果中包含“【系统提示】”（例如模板不匹配导致的自动替换），你必须在回复中明确告知用户这一变更。
+        3. **场景化解释**：对于设备操作，确认名称和状态；对于 NuSMV 验证结果，解释是“验证通过”还是“发现了安全反例”，并引导用户查看动画演示。
+        4. **不透露数据库内的内在变量**：即用户不需要知道的变量；如在回复中提及设备时，直接使用设备名称即可。无需显示 ID（例如：不要说“设备A (ID: X)”，请直接说“设备 A”）
+        5. **闲聊模式**：当用户提出的问题与 IoT 设备管理或验证无关（如数学计算、日常问候）时，直接回答问题本身，**不要解释**为什么不需要调用工具，也不要提及 IoT-Verify 平台的范畴
+        6. **安全无害**：你不应该做出反人类，暴力的举动或言论
+        """;
 
             ChatMessage systemPrompt = ChatMessage.builder()
                     .role(ChatMessageRole.SYSTEM)
@@ -234,7 +240,6 @@ public class ChatServiceImpl implements ChatService {
         }
         messageRepo.saveAndFlush(po);
     }
-
     /**
      * 保存工具执行结果
      * 格式: toolCallId + ArkAiClient.TOOL_RESULT_SEPARATOR + resultJson
@@ -252,12 +257,25 @@ public class ChatServiceImpl implements ChatService {
 
     private void sendSseChunk(SseEmitter emitter, String data) {
         try {
-            if (data != null) emitter.send(SseEmitter.event().data(data));
-        } catch (IOException e) { /* ignore */ }
+            if (data != null) {
+                // 1. 创建 DTO
+                StreamResponseDto chunk = new StreamResponseDto(data);
+                // 2. 发送时指定 MediaType.APPLICATION_JSON
+                // Spring MVC 会自动调用 Jackson 将对象序列化为 JSON 字符串
+                // 例如: data:{"content":"标题\n表格"}
+                emitter.send(SseEmitter.event()
+                        .data(chunk, MediaType.APPLICATION_JSON));
+            }
+        } catch (IOException e) {
+            // 忽略连接断开异常
+        }
     }
 
     private void sendSseErrorMessage(SseEmitter emitter, String msg) {
         try {
+            // 错误消息也可以包装，或者为了前端简单，保持原样。
+            // 建议：为了前端统一解析，也可以包一下，或者前端 catch 解析失败的情况。
+            // 这里我们保持原样发送 [ERROR]，因为前端 api/chat.ts 里的 JSON.parse 会抛异常从而走 catch 逻辑，刚好能显示原始文本。
             emitter.send(SseEmitter.event().data("[ERROR] " + msg));
             emitter.complete();
         } catch (IOException ex) {
@@ -269,22 +287,15 @@ public class ChatServiceImpl implements ChatService {
      * @param limitCharCount 估算的字符限制（中文 1字符 ≈ 0.7~1 Token）
      */
     private List<ChatMessagePo> getSmartHistory(String sessionId, int limitCharCount) {
-        // 1. 取出足够多的历史（比如最近 50 条），按时间【倒序】（最新的在前面）
-        // 这里需要你在 Repo 里加一个 findTop50... 或者用 Pageable
         List<ChatMessagePo> recentMessages = messageRepo.findTop10BySessionIdOrderByCreatedAtDesc(sessionId);
-
         List<ChatMessagePo> safeHistory = new ArrayList<>();
         int currentLength = 0;
-
         for (ChatMessagePo msg : recentMessages) {
             int msgLen = (msg.getContent() == null) ? 0 : msg.getContent().length();
-
-            // 如果加上这条消息还没超标，就加进去
             if (currentLength + msgLen < limitCharCount) {
                 safeHistory.add(msg);
                 currentLength += msgLen;
             } else {
-                // 超标了就停止，丢弃更早的消息
                 break;
             }
         }

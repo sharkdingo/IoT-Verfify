@@ -1,4 +1,4 @@
-package cn.edu.nju.Iot_Verify.component.aitool.node; // 【变化】包名精确到 node
+package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;

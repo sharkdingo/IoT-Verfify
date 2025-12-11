@@ -78,7 +78,7 @@ public class NodeServiceImpl implements NodeService {
 
         String finalState = state;
         // 只有当 AI 没传状态 (null 或空) 时，才去查 Manifest
-        if (finalState == null || finalState.trim().isEmpty()) {
+        if (finalState == null || finalState.trim().isEmpty() || finalState.equals("null")) {
             finalState = getInitStateFromTemplate(finalTemplate);
         }
 
@@ -109,17 +109,15 @@ public class NodeServiceImpl implements NodeService {
 
         // 4. 构建 PO
         DeviceNodePo po = DeviceNodePo.builder()
-                .id(generatedId)            // 设置 ID 为 AC Cooler_ai_xxx
+                .id(generatedId)
                 .templateName(finalTemplate)
-                .label(generatedId)         // 【核心需求】Label 和 ID 完全一致
+                .label(generatedId)
                 .posX(posX)
                 .posY(posY)
                 .width(width)
                 .height(height)
                 .state(finalState)
                 .build();
-
-        // ================== 【修改重点结束】 ==================
 
         // 5. 落库
         nodeRepo.save(po);

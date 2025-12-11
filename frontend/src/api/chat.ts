@@ -69,52 +69,54 @@ export const sendStreamChat = async (
     try {
         const response = await fetch('http://localhost:8080/api/chat/completions', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, content }),
             signal: controller?.signal
         })
 
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(errText || response.statusText);
-        }
+        if (!response.ok) throw new Error(response.statusText);
+        if (!response.body) throw new Error('No response body');
 
-        if (!response.body) throw new Error('No response body')
-
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder('utf-8')
-        let buffer = ''
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
 
         while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            const chunk = decoder.decode(value, { stream: true })
-            buffer += chunk
-
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
 
             for (const line of lines) {
-                if (line.startsWith('data:')) {
-                    const data = line.slice(5)
-                    // 后端发送的是纯文本，不需要 trim() 掉可能存在的格式空格，也不需要 JSON.parse
-                    // 除非内容是 "[DONE]" 这种特殊标记
-                    callbacks.onMessage(data)
+                if (line.trim().startsWith('data:')) {
+                    const dataStr = line.replace(/^data:\s?/, '');
+                    if (dataStr.trim() === '[DONE]') continue;
+
+                    // --- 核心修改：尝试解析 JSON ---
+                    try {
+                        // 后端发来的是 {"content": "标题\n表格"}
+                        const json = JSON.parse(dataStr);
+                        if (json.content) {
+                            // 成功取回带换行的文本！
+                            callbacks.onMessage(json.content);
+                        }
+                    } catch (e) {
+                        // 兼容旧逻辑或纯文本错误信息
+                        callbacks.onMessage(dataStr);
+                    }
                 }
             }
         }
 
-        if (callbacks.onFinish) callbacks.onFinish()
+        if (callbacks.onFinish) callbacks.onFinish();
 
     } catch (error: any) {
         if (error.name === 'AbortError') {
             if (callbacks.onFinish) callbacks.onFinish();
             return;
         }
-        console.error('Stream Error:', error)
-        if (callbacks.onError) callbacks.onError(error)
+        console.error('Stream Error:', error);
+        if (callbacks.onError) callbacks.onError(error);
     }
 }

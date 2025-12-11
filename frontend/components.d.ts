@@ -14,6 +14,8 @@ declare module 'vue' {
     AddTemplateDialog: typeof import('./src/components/AddTemplateDialog.vue')['default']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
     ChatView: typeof import('./src/components/ChatView.vue')['default']
+    CodeBlack: typeof import('./src/components/CodeBlock.vue')['default']
+    CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
     DeviceDialog: typeof import('./src/components/DeviceDialog.vue')['default']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { nextTick, ref, watch, computed } from 'vue';
 import {
   ArrowsAltOutlined, AudioOutlined, BulbFilled, BulbOutlined,
   CloseOutlined, DeleteOutlined,
@@ -9,64 +9,25 @@ import {
   CopyOutlined
 } from '@ant-design/icons-vue';
 
-// 引入 Element Plus
 import { ElMessage, ElMessageBox } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 
-import MarkdownIt from 'markdown-it';
-import hljs from 'highlight.js';
-import 'highlight.js/styles/atom-one-dark.css';
-
-// SVG Icons
-const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-
-const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
-
-// 【核心修复】直接重写 fence 渲染规则
-// 这样可以避免 markdown-it 自动在外层包裹 <pre>，消除“白块”问题
-md.renderer.rules.fence = (tokens, idx, options, env, self) => {
-  const token = tokens[idx];
-  // 获取代码语言
-  const info = token.info ? md.utils.unescapeAll(token.info).trim() : '';
-  const langName = info.split(/\s+/)[0] || '';
-  const codeContent = token.content;
-
-  // 高亮逻辑
-  let highlightedCode = '';
-  if (langName && hljs.getLanguage(langName)) {
-    try {
-      highlightedCode = hljs.highlight(codeContent, { language: langName, ignoreIllegals: true }).value;
-    } catch (__) {
-      highlightedCode = md.utils.escapeHtml(codeContent);
-    }
-  } else {
-    highlightedCode = md.utils.escapeHtml(codeContent);
-  }
-
-  const languageLabel = langName ? langName.toUpperCase() : 'TEXT';
-
-  // 返回纯净的 HTML 结构，无多余 pre 包裹
-  return `
-    <div class="code-block-wrapper">
-      <div class="code-header">
-        <span class="code-lang">${languageLabel}</span>
-        <button class="copy-code-btn" data-clipboard-text="">
-          ${COPY_ICON_SVG} <span class="btn-text">复制</span>
-        </button>
-      </div>
-      <pre class="hljs"><code>${highlightedCode}</code></pre>
-      <textarea class="raw-code" style="display:none;">${md.utils.escapeHtml(codeContent)}</textarea>
-    </div>
-  `;
-};
+// ================= 新增引入 =================
+import { VueMarkdownRenderer } from "vue-mdr";
+import CodeBlock from '@/components/CodeBlock.vue';
+// 引入样式和插件
+import "katex/dist/katex.min.css";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import java from "@shikijs/langs/java"; // 示例额外语言支持
 
 // API
 import type { ChatMessage, ChatSession } from '@/types/chat';
 import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
 
 const USER_ID = 'test_user_001';
+const loadingRegex = /^正在执行指令[.\s\n]*/;
 
 // State
 const visible = ref(false);
@@ -83,9 +44,28 @@ const scrollRef = ref<HTMLElement | null>(null);
 const abortController = ref<AbortController | null>(null);
 
 watch(isExpanded, (newVal) => {
-  if (!newVal) isSidebarOpen.value = false;
-  else isSidebarOpen.value = true;
+  isSidebarOpen.value = newVal;
 });
+
+// 计算当前主题
+const currentTheme = computed(() => isDarkMode.value ? 'dark' : 'light');
+
+/**
+ * 标准化 LaTeX 分隔符
+ * 兼容 \[ \] \( \) 和 ```math 写法
+ */
+const convertLatexDelimiters = (text: string) => {
+  // 注意：正则末尾必须保留 'g' 标志，这样 replace 才会替换所有匹配项
+  const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
+
+  return text.replace(pattern, (match, codeBlock, squareBracket, roundBracket) => {
+    if (codeBlock !== undefined) return codeBlock;
+    if (squareBracket !== undefined) return `$$${squareBracket}$$`;
+    if (roundBracket !== undefined) return `$${roundBracket}$`;
+    return match;
+  });
+};
+// ================= 辅助函数 =================
 
 const shouldShowMessage = (msg: ChatMessage) => {
   if (msg.role === 'tool') return false;
@@ -93,27 +73,37 @@ const shouldShowMessage = (msg: ChatMessage) => {
   return true;
 };
 
-const handleMarkdownClick = async (event: MouseEvent) => {
-  const target = event.target as HTMLElement;
-  const btn = target.closest('.copy-code-btn') as HTMLElement;
-  if (btn) {
-    const wrapper = btn.closest('.code-block-wrapper');
-    if (!wrapper) return;
-    const rawTextarea = wrapper.querySelector('.raw-code') as HTMLTextAreaElement;
-    const codeText = rawTextarea ? rawTextarea.value : '';
-    if (codeText) {
-      try {
-        await navigator.clipboard.writeText(codeText);
-        btn.innerHTML = `${CHECK_ICON_SVG} <span class="btn-text">已复制</span>`;
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.innerHTML = `${COPY_ICON_SVG} <span class="btn-text">复制</span>`;
-          btn.classList.remove('copied');
-        }, 2000);
-        ElMessage.success({ message: '代码片段已复制', zIndex: 30000 });
-      } catch (err) { ElMessage.error('复制失败'); }
-    }
+// 原始的 Thinking 处理逻辑
+const getRawContentWithoutThinking = (content: string) => {
+  if (!content) return '';
+  const match = content.match(loadingRegex);
+  if (match) {
+    const prefixLength = match[0].length;
+    if (content.length <= prefixLength) return content;
+    return content.substring(prefixLength);
   }
+  return content;
+};
+
+/**
+ * 渲染处理函数
+ * 组合链：原始文本 -> 去除Thinking -> LaTeX标准化 -> 渲染
+ */
+const getProcessedContent = (content: string) => {
+  if (!content) return '';
+  // 1. 去除 "正在执行指令..."
+  let step1 = getRawContentWithoutThinking(content);
+  // 2. 标准化 LaTeX
+  let finalResult = convertLatexDelimiters(step1);
+
+  // === Debug 代码 Start ===
+  // 只在控制台打印包含"表格"的日志，避免刷屏
+  if (finalResult.includes('|')) {
+    console.log('🎨 渲染器接收到的最终文本:', JSON.stringify(finalResult));
+  }
+  // === Debug 代码 End ===
+
+  return finalResult;
 };
 
 const copyFullMessage = async (content: string) => {
@@ -142,7 +132,7 @@ const startListening = () => {
 
     recognition.onstart = () => { isRecording.value = true; ElMessage.info('请开始说话...'); };
     recognition.onend = () => { isRecording.value = false; };
-    recognition.onerror = (event: any) => { isRecording.value = false; ElMessage.error('语音识别出错'); };
+    recognition.onerror = () => { isRecording.value = false; ElMessage.error('语音识别出错'); };
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       if (transcript) inputValue.value += transcript;
@@ -247,6 +237,7 @@ const handleSend = async () => {
       currentSessionId.value = targetSessionId;
     }
 
+    // 先插入一条空的 AI 消息
     const aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
     scrollToBottom(true);
 
@@ -256,7 +247,15 @@ const handleSend = async () => {
         {
           onMessage: (chunk) => {
             const cleanChunk = chunk.replace('CallEnd|>', '');
-            messages.value[aiMsgIndex].content += cleanChunk;
+            if (!cleanChunk) return;
+            const msg = messages.value[aiMsgIndex];
+            // === Debug 代码 Start ===
+            console.log('📦 收到 Chunk:', JSON.stringify(cleanChunk));
+            console.log('📝 当前拼接后的完整文本:', JSON.stringify(msg.content + cleanChunk));
+            // === Debug 代码 End ===
+            // 直接追加原始数据，通过模板中的 getProcessedContent 实时修复
+            msg.content += cleanChunk;
+
             scrollToBottom(false);
           },
           onError: () => { if (abortController.value) messages.value[aiMsgIndex].content += '\n[发送失败]'; },
@@ -284,7 +283,6 @@ const scrollToBottom = (force = false) => {
 <template>
   <div class="global-chat-wrapper" :class="{ 'dark-mode': isDarkMode }">
     <div class="float-ball" @click="toggleChat" v-show="!visible">
-      <CustomerServiceOutlined style="font-size: 26px; color: #fff;"/>
       <div class="ripple"></div>
     </div>
 
@@ -357,12 +355,21 @@ const scrollToBottom = (force = false) => {
                 </div>
 
                 <div class="msg-content-wrapper">
-                  <div
-                      v-show="msg.content"
-                      class="msg-body markdown-body"
-                      v-html="md.render(msg.content || '')"
-                      @click="handleMarkdownClick"
-                  ></div>
+
+                  <div v-if="msg.role === 'user'" class="msg-body user-msg-body">
+                    {{ msg.content }}
+                  </div>
+
+                  <article v-else class="msg-body vue-markdown-wrapper">
+                    <VueMarkdownRenderer
+                        :source="getProcessedContent(msg.content) || ''"
+                        :theme="currentTheme"
+                        :code-block-renderer="CodeBlock"
+                        :extra-langs="[java]"
+                        :remark-plugins="[remarkMath]"
+                        :rehype-plugins="[rehypeKatex as any]"
+                    />
+                  </article>
 
                   <div v-if="msg.role === 'assistant' && msg.content && !isLoading" class="msg-actions">
                     <div class="action-btn-small" @click="copyFullMessage(msg.content)" title="复制全部">
@@ -410,11 +417,51 @@ const scrollToBottom = (force = false) => {
 </template>
 
 <style>
+/* 覆盖 Element UI z-index */
 .el-overlay, .el-message-box__wrapper, .el-message { z-index: 20002 !important; }
+
+/* ================= 核心：流式渲染动画 ================= */
+.vue-markdown-wrapper > *,
+.vue-markdown-wrapper .text-segmenter,
+.vue-markdown-wrapper .shiki-stream span {
+  animation: fade-in 0.5s ease-in-out;
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; transform: translateY(5px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* 适配表格样式 (因为不再使用 v-html, 需保证 renderer 生成的表格有样式) */
+.vue-markdown-wrapper table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.vue-markdown-wrapper th,
+.vue-markdown-wrapper td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+.vue-markdown-wrapper th {
+  background-color: rgba(0,0,0,0.05);
+  font-weight: 600;
+}
+.dark-mode .vue-markdown-wrapper th {
+  background-color: rgba(255,255,255,0.05);
+}
+
+/* 确保普通文本有正确的行高和间距 */
+.vue-markdown-wrapper p {
+  margin-bottom: 0.8em;
+  line-height: 1.6;
+}
 </style>
 
 <style scoped>
-/* ================= CSS 变量 ================= */
+/* 保持原有的样式变量和布局 */
 .global-chat-wrapper {
   --primary-color: #1677ff;
   --bg-app: #ffffff;
@@ -426,9 +473,6 @@ const scrollToBottom = (force = false) => {
   --shadow-card: 0 0 15px rgba(0,0,0,0.08);
   --bubble-user-bg: #f3f3f3;
   --highlight-color: #10a37f;
-  /* 代码块颜色：浅色模式下 Header 稍微深一点点，突出层次 */
-  --code-header-bg: #f5f5f5;
-  --code-header-text: #666;
 }
 
 .global-chat-wrapper.dark-mode {
@@ -440,74 +484,34 @@ const scrollToBottom = (force = false) => {
   --border: #565869;
   --shadow-card: 0 0 20px rgba(0,0,0,0.3);
   --bubble-user-bg: #444654;
-  --code-header-bg: #343541;
-  --code-header-text: #ccc;
 }
 
+/* User Message Body 特有样式 (AI 的由 Renderer 接管) */
+.user-msg-body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-main);
+  white-space: pre-wrap; /* 保留用户输入的换行 */
+  word-wrap: break-word;
+  background: var(--bubble-user-bg);
+  padding: 10px 14px;
+  border-radius: 12px;
+  border-top-right-radius: 2px;
+  align-self: flex-end;
+}
+
+/* 以下复用您之前的布局样式，未做修改 */
 .global-chat-wrapper { position: fixed; z-index: 9999; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-
-/* Float Ball */
-.float-ball {
-  position: fixed;
-  bottom: 30px;
-  right: 30px;
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-
-  /* --- 核心修改开始 --- */
-  /* 移除原来的纯黑背景 */
-  /* background: #000; */
-
-  /* 设置背景图片 */
-  /* center/cover 意思是：居中对齐 / 尽可能填满容器且不变形（可能会裁剪边缘） */
-  /* no-repeat 意思是：不要平铺重复 */
-  background: url('/AI.png') center/cover no-repeat;
-
-  /* 可选：如果你的 AI.png 是透明底的图标， */
-  /* 你可能希望保留一个半透明的深色背景底色，取消下面这行的注释即可： */
-  /* background-color: rgba(0, 0, 0, 0.7); */
-  /* --- 核心修改结束 --- */
-
-  /* 注意：如果你 HTML 里的 .float-ball 标签内部没有其他文字或图标元素，*/
-  /* 这三行 Flex 布局属性其实可以移除。如果内部有元素，它们会覆盖在背景图之上。 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  /* 现代化的阴影：稍微加深一点，增加层次感 */
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
-  /* 现代化的过渡：使用贝塞尔曲线让动画更Q弹、顺滑 */
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  /* 确保背景图不会溢出圆角 */
-  overflow: hidden;
-  z-index: 999; /* 确保它浮在最上层 */
-}
-
-.float-ball:hover {
-  /* 鼠标悬停时，轻微向上浮动并放大 */
-  transform: translateY(-5px) scale(1.1);
-  /* 悬停时阴影变得更深、更扩散，营造悬浮感 */
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
-.float-ball:active {
-  transform: scale(0.95);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-.float-ball:hover { transform: scale(1.1); }
+.float-ball { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; border-radius: 50%; background: url('/AI.png') center/cover no-repeat; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); cursor: pointer; transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); overflow: hidden; z-index: 999; }
+.float-ball:hover { transform: translateY(-5px) scale(1.1); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.float-ball:active { transform: scale(0.95); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
 .ripple { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 1px solid rgba(255,255,255,0.5); animation: ripple 2s infinite; opacity: 0; }
 @keyframes ripple { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0; } }
-
-/* Main Panel */
 .chat-panel { position: fixed; bottom: 90px; right: 30px; width: 420px; height: 600px; background: var(--bg-app); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.15); border: 1px solid var(--border); display: flex; overflow: hidden; transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1); }
 .chat-panel.expanded { width: 90vw; height: 92vh; bottom: 4vh; right: 5vw; max-width: 1400px; border-radius: 10px; }
 @media (max-width: 480px) { .chat-panel { width: 100vw; height: 100vh; bottom: 0; right: 0; border-radius: 0; } }
 .panel-zoom-enter-active, .panel-zoom-leave-active { transition: opacity 0.3s, transform 0.3s; }
 .panel-zoom-enter-from, .panel-zoom-leave-to { opacity: 0; transform: translateY(20px) scale(0.95); }
-
-/* Sidebar */
 .sidebar { width: clamp(160px, 25%, 300px); background: var(--bg-sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; transition: width 0.3s ease, padding 0.3s ease, opacity 0.2s ease; overflow: hidden; white-space: nowrap; }
 .sidebar.collapsed { width: 0; padding: 0; border-right: none; opacity: 0; }
 .sidebar-header { padding: 14px; }
@@ -524,8 +528,6 @@ const scrollToBottom = (force = false) => {
 .sidebar-footer { padding: 14px; border-top: 1px solid var(--border); }
 .footer-item { display: flex; align-items: center; gap: 10px; color: var(--text-main); cursor: pointer; padding: 8px; border-radius: 6px; }
 .footer-item:hover { background: rgba(0,0,0,0.05); }
-
-/* Main Content */
 .main-content { flex: 1; display: flex; flex-direction: column; position: relative; background: var(--bg-app); min-width: 0; }
 .glass-header { height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); position: absolute; top: 0; left: 0; right: 0; z-index: 10; }
 .dark-mode .glass-header { background: rgba(52,53,65,0.85); }
@@ -536,40 +538,21 @@ const scrollToBottom = (force = false) => {
 .header-controls { display: flex; gap: 12px; }
 .control-icon { color: var(--text-sub); cursor: pointer; font-size: 16px; }
 .control-icon:hover { color: var(--text-main); }
-
-/* Messages */
 .messages-viewport { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 60px 20px 0 20px; scroll-behavior: smooth; }
 .scroll-spacer { height: 160px; flex-shrink: 0; }
 .welcome-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-main); opacity: 0.8; padding-bottom: 100px; }
 .brand-logo { font-size: 48px; margin-bottom: 16px; color: var(--text-sub); }
-
-/* 消息行 (已修复间距问题) */
-.msg-row {
-  display: flex; gap: 12px;
-  /* 恢复为紧凑间距，不再过大 */
-  margin-bottom: 24px;
-  width: 100%; max-width: 800px; margin-left: auto; margin-right: auto;
-  flex-shrink: 0;
-}
+.msg-row { display: flex; gap: 12px; margin-bottom: 24px; width: 100%; max-width: 800px; margin-left: auto; margin-right: auto; flex-shrink: 0; }
 .ai-row { flex-direction: row; }
 .user-row { flex-direction: row-reverse; }
-
 .avatar-container { width: 32px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .ai-row .avatar-container { background: var(--highlight-color); color: #fff; }
 .user-row .avatar-container { background: #9ca3af; color: #fff; }
-
 .msg-content-wrapper { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.msg-body { font-size: 15px; line-height: 1.6; color: var(--text-main); word-wrap: break-word; }
-.user-row .msg-body { background: var(--bubble-user-bg); padding: 10px 14px; border-radius: 12px; border-top-right-radius: 2px; align-self: flex-end; }
-.ai-row .msg-body { background: transparent; padding: 0; width: 100%; }
-
-/* 底部工具栏 (紧凑) */
 .msg-actions { display: flex; gap: 8px; margin-top: 4px; opacity: 0; transition: opacity 0.2s; }
 .msg-row:hover .msg-actions { opacity: 1; }
 .action-btn-small { cursor: pointer; color: var(--text-sub); font-size: 14px; padding: 4px; border-radius: 4px; transition: all 0.2s; }
 .action-btn-small:hover { background: rgba(0,0,0,0.05); color: var(--text-main); }
-
-/* Input */
 .input-floating-area { position: absolute; bottom: 0; left: 0; right: 0; padding: 20px; background: linear-gradient(to top, var(--bg-app) 80%, transparent); }
 .input-card { max-width: 800px; margin: 0 auto; background: var(--bg-input); border: 1px solid var(--border); box-shadow: var(--shadow-card); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; }
 .input-card:focus-within { border-color: #999; }
@@ -584,48 +567,6 @@ const scrollToBottom = (force = false) => {
 .action-btn.stop { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
 .action-btn.stop:hover { background: var(--border); }
 .disclaimer { font-size: 12px; color: var(--text-sub); text-align: center; margin-top: 8px; }
-
-/* Markdown & Code Block Styling */
-/* 【核心修复】消除白块 */
-:deep(.code-block-wrapper) {
-  margin: 12px 0;
-  border-radius: 6px;
-  overflow: hidden;
-  font-family: Consolas, monospace;
-  border: 1px solid var(--border);
-}
-:deep(.code-header) {
-  background: var(--code-header-bg);
-  color: var(--code-header-text);
-  padding: 6px 12px; /* 增加一点左右留白 */
-  font-size: 12px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--border);
-}
-:deep(.copy-code-btn) {
-  background: transparent;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-}
-:deep(.copy-code-btn:hover) { opacity: 0.7; }
-/* 强制背景色，防止白块 */
-:deep(.code-block-wrapper pre) {
-  margin: 0;
-  padding: 16px; /* 增加内部空间 */
-  background: #0d0d0d !important;
-  color: #fff;
-  overflow-x: auto;
-}
-:deep(.markdown-body p) { margin-bottom: 8px; }
-:deep(.markdown-body ul) { padding-left: 20px; margin-bottom: 8px; }
-
 .typing-indicator span { display: inline-block; width: 6px; height: 6px; background: #999; border-radius: 50%; margin: 0 2px; animation: typing 1.4s infinite ease-in-out both; }
 .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
 .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
