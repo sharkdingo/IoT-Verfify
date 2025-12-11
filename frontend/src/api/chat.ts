@@ -1,7 +1,7 @@
 // src/api/chat.ts
 // 注意：请确认您的 http 封装文件路径是否正确，之前建议是 '@/utils/http'
 import api from '@/api/http'
-import { ChatMessage, ChatSession } from "@/types/chat"
+import { ChatMessage, ChatSession, StreamCommand } from "@/types/chat"
 // --- 定义后端的 Result 包装结构 ---
 export interface Result<T> {
     code: number;    // 200 成功
@@ -61,6 +61,7 @@ export const sendStreamChat = async (
     content: string,
     callbacks: {
         onMessage: (text: string) => void
+        onCommand?: (cmd: StreamCommand) => void;
         onError?: (err: any) => void
         onFinish?: () => void
     },
@@ -100,6 +101,9 @@ export const sendStreamChat = async (
                         if (json.content) {
                             // 成功取回带换行的文本！
                             callbacks.onMessage(json.content);
+                        }
+                        if (json.command && callbacks.onCommand) {
+                            callbacks.onCommand(json.command);
                         }
                     } catch (e) {
                         // 兼容旧逻辑或纯文本错误信息

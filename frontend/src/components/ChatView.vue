@@ -22,8 +22,10 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import java from "@shikijs/langs/java"; // 示例额外语言支持
 
+const emit = defineEmits(['command']);
+
 // API
-import type { ChatMessage, ChatSession } from '@/types/chat';
+import type {ChatMessage, ChatSession, StreamCommand} from '@/types/chat';
 import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
 
 const USER_ID = 'test_user_001';
@@ -96,12 +98,12 @@ const getProcessedContent = (content: string) => {
   // 2. 标准化 LaTeX
   let finalResult = convertLatexDelimiters(step1);
 
-  // === Debug 代码 Start ===
-  // 只在控制台打印包含"表格"的日志，避免刷屏
-  if (finalResult.includes('|')) {
-    console.log('🎨 渲染器接收到的最终文本:', JSON.stringify(finalResult));
-  }
-  // === Debug 代码 End ===
+  // // === Debug 代码 Start ===
+  // // 只在控制台打印包含"表格"的日志，避免刷屏
+  // if (finalResult.includes('|')) {
+  //   console.log('🎨 渲染器接收到的最终文本:', JSON.stringify(finalResult));
+  // }
+  // // === Debug 代码 End ===
 
   return finalResult;
 };
@@ -249,14 +251,20 @@ const handleSend = async () => {
             const cleanChunk = chunk.replace('CallEnd|>', '');
             if (!cleanChunk) return;
             const msg = messages.value[aiMsgIndex];
-            // === Debug 代码 Start ===
-            console.log('📦 收到 Chunk:', JSON.stringify(cleanChunk));
-            console.log('📝 当前拼接后的完整文本:', JSON.stringify(msg.content + cleanChunk));
-            // === Debug 代码 End ===
-            // 直接追加原始数据，通过模板中的 getProcessedContent 实时修复
+            // // === Debug 代码 Start ===
+            // console.log('📦 收到 Chunk:', JSON.stringify(cleanChunk));
+            // console.log('📝 当前拼接后的完整文本:', JSON.stringify(msg.content + cleanChunk));
+            // // === Debug 代码 End ===
+            // // 直接追加原始数据，通过模板中的 getProcessedContent 实时修复
             msg.content += cleanChunk;
 
             scrollToBottom(false);
+          },
+          onCommand: (cmd: StreamCommand) => {
+            console.log("收到后端指令:", cmd);
+
+            // 策略 1: 直接转发给父组件 (推荐，解耦最彻底)
+            emit('command', cmd);
           },
           onError: () => { if (abortController.value) messages.value[aiMsgIndex].content += '\n[发送失败]'; },
           onFinish: async () => {
@@ -425,6 +433,12 @@ const scrollToBottom = (force = false) => {
 .vue-markdown-wrapper .text-segmenter,
 .vue-markdown-wrapper .shiki-stream span {
   animation: fade-in 0.5s ease-in-out;
+}
+
+.vue-markdown-wrapper {
+  /* 必须有这一行，才能正确显示 "AC Cooler" 中间的空格 */
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 @keyframes fade-in {

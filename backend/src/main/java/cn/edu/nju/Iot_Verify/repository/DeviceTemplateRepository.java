@@ -19,5 +19,8 @@ public interface DeviceTemplateRepository extends JpaRepository<DeviceTemplatePo
     @Query("SELECT t.name FROM DeviceTemplatePo t")
     List<String> findAllNames();
 
+    @Query("SELECT t.manifestJson FROM DeviceTemplatePo t")
+    List<String> findAllManifestJsons();
+
     Optional<DeviceTemplatePo> findByName(String templateName);
 }

@@ -13,3 +13,8 @@ export interface ChatMessage {
     role: 'user' | 'assistant' | 'tool'
     content: string
 }
+
+export interface StreamCommand {
+    type: string;
+    payload?: Record<string, any>;
+}

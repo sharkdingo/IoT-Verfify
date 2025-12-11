@@ -30,8 +30,8 @@ public class DeviceNodeMapper {
                 .state(dto.getState())
                 .width(dto.getWidth())
                 .height(dto.getHeight())
-                .posX(dto.getPosition() != null ? dto.getPosition().getX() : 0.0)
-                .posY(dto.getPosition() != null ? dto.getPosition().getY() : 0.0)
+                .posX(dto.getPosition() != null ? dto.getPosition().getX() : 250.0)
+                .posY(dto.getPosition() != null ? dto.getPosition().getY() : 250.0)
                 .build();
     }
 }

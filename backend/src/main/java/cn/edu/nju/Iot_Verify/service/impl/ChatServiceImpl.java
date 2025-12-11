@@ -93,10 +93,13 @@ public class ChatServiceImpl implements ChatService {
         你是 IoT-Verify 平台的智能专家助手。这是一个基于 NuSMV 的智能家居仿真与形式化验证平台。
         你的行为准则：
         0. **Markdown 格式严格隔离原则（至关重要）**：
-           - 为了确保前端正确渲染，你必须在**所有块级元素**（表格 Table、列表 List、代码块 Code Block、引用 Blockquote、标题 Header）之前，**强制插入一个空行**（即输出两个 `\\n`）。
-           - **错误示例**：`信息如下：| 表头 |...` （这会导致渲染失败）
-           - **正确示例**：`信息如下：\\n\\n| 表头 |...` （必须断开）
-           - **同样适用于代码块**：不要写 `代码如下：```java`，要写 `代码如下：\\n\\n```java`
+          - 必须在**所有块级元素**（表格、列表、代码块、标题）之前，**插入一个空行**（即连续按两次回车）。
+          - **表格**：表格上方必须有一个空行，表格行之间必须紧凑，不要插入空行。
+          - **示例**：
+          文本内容...
+        
+          | 表头 | 内容 |
+          - 代码块等也是如此
         1. **必须响应工具结果**：当工具（如 add_device, verify_model）执行完毕后，你必须根据返回的 JSON 或文本结果，用自然语言向用户汇报执行情况。严禁直接返回空内容或沉默。
         2. **处理系统提示**：如果工具返回结果中包含“【系统提示】”（例如模板不匹配导致的自动替换），你必须在回复中明确告知用户这一变更。
         3. **场景化解释**：对于设备操作，确认名称和状态；对于 NuSMV 验证结果，解释是“验证通过”还是“发现了安全反例”，并引导用户查看动画演示。
@@ -130,8 +133,19 @@ public class ChatServiceImpl implements ChatService {
                 sdkMessages.add(aiMsg);
                 sendSseChunk(emitter, "正在执行指令...\n"); // 这里可以用辅助方法，因为还没涉及断开控制
 
+                boolean needAction = false;
+                StreamResponseDto.CommandDto command = null;
+
                 for (ChatToolCall toolCall : aiMsg.getToolCalls()) {
                     String functionName = toolCall.getFunction().getName();
+                    // 如果执行的是创建或删除设备的工具，标记需要刷新，之后还需要添加
+                    if (functionName.equals("add_device") || functionName.equals("delete_device")) {
+                        command = new StreamResponseDto.CommandDto(
+                                "REFRESH_DATA",
+                                Map.of("target", "device_list") // 告诉前端刷新哪个部分
+                        );
+                        needAction = true;
+                    }
                     String argsJson = toolCall.getFunction().getArguments();
                     String toolResult = aiToolManager.execute(functionName, argsJson);
 
@@ -144,49 +158,47 @@ public class ChatServiceImpl implements ChatService {
                             .build();
                     sdkMessages.add(toolMsg);
                 }
-
+                // 发送指令包
+                if (needAction) {
+                    try {
+                        // content 为空，仅发送指令
+                        // 前端收到后会触发 command 回调，但不会在对话框显示空白气泡（因为 content 是空串）
+                        StreamResponseDto packet = new StreamResponseDto("", command);
+                        emitter.send(SseEmitter.event().data(packet, MediaType.APPLICATION_JSON));
+                    } catch (IOException e) {
+                        log.warn("发送前端指令失败", e);
+                    }
+                }
                 // 定义原子布尔值，标记前端是否断开
                 AtomicBoolean isDisconnect = new AtomicBoolean(false);
-
-                log.info("正在进行二次请求，向 AI 汇报工具结果...");
-
-                // 【核心修正点】
+                //log.info("正在进行二次请求，向 AI 汇报工具结果...");
                 arkAiClient.streamChat(sdkMessages, (delta) -> {
                     // 1. 如果之前已经捕获到断开异常，直接阻断后续处理
                     if (isDisconnect.get()) return;
+                    if (delta != null && !delta.isEmpty()) {
+                        // 🚀 核心修改：使用辅助方法发送数据，并根据返回值判断连接状态
+                        boolean success = sendSseChunk(emitter, delta);
 
-                    try {
-                        // 2. 只发送一次，只追加一次
-                        if (delta != null && !delta.isEmpty()) {
-                            emitter.send(SseEmitter.event().data(delta));
+                        if (success) {
                             finalAnswer.append(delta);
+                        } else {
+                            log.info("SSE 连接中断，停止接收 AI 响应");
+                            isDisconnect.set(true);
                         }
-                    } catch (IOException e) {
-                        // 3. 捕获断开异常，设置标记位，停止后续逻辑
-                        log.info("SSE 连接中断，停止接收 AI 响应");
-                        isDisconnect.set(true);
                     }
                 });
-
                 // 兜底逻辑
                 if (finalAnswer.isEmpty()) {
                     log.warn("AI 沉默或连接中断，触发后端兜底持久化。");
-
                     ChatMessage lastToolMsg = sdkMessages.get(sdkMessages.size() - 1);
                     String fallbackText = "已为您完成操作: " + lastToolMsg.getContent(); // 这里可以根据你的 System Prompt 风格调整
-
                     // 1. 只有没断开的时候，才往前端推
                     if (!isDisconnect.get()) {
-                        try {
-                            emitter.send(SseEmitter.event().data(fallbackText));
-                        } catch (IOException e) {
-                            // 发送失败也无所谓，关键是要存库
-                        }
+                        sendSseChunk(emitter, fallbackText);
                     }
                     // 2. 无论是否断开，都要 append 到 finalAnswer，这样下面就会存库
                     finalAnswer.append(fallbackText);
                 }
-
             } else {
                 // === 分支 B: 普通对话 ===
                 String text = aiMsg.getContent() != null ? aiMsg.getContent().toString() : "";
@@ -196,14 +208,11 @@ public class ChatServiceImpl implements ChatService {
                     finalAnswer.append(text);
                 }
             }
-
             // 6. 保存 AI 最终回复
             if (!finalAnswer.isEmpty()) {
                 saveSimpleMsg(sessionId, "assistant", finalAnswer.toString());
             }
-
             emitter.complete();
-
         } catch (Exception e) {
             log.error("Chat Error", e);
             sendSseErrorMessage(emitter, "系统异常: " + e.getMessage());
@@ -253,35 +262,6 @@ public class ChatServiceImpl implements ChatService {
         messageRepo.saveAndFlush(po);
     }
 
-    // ============ SSE 辅助 ============
-
-    private void sendSseChunk(SseEmitter emitter, String data) {
-        try {
-            if (data != null) {
-                // 1. 创建 DTO
-                StreamResponseDto chunk = new StreamResponseDto(data);
-                // 2. 发送时指定 MediaType.APPLICATION_JSON
-                // Spring MVC 会自动调用 Jackson 将对象序列化为 JSON 字符串
-                // 例如: data:{"content":"标题\n表格"}
-                emitter.send(SseEmitter.event()
-                        .data(chunk, MediaType.APPLICATION_JSON));
-            }
-        } catch (IOException e) {
-            // 忽略连接断开异常
-        }
-    }
-
-    private void sendSseErrorMessage(SseEmitter emitter, String msg) {
-        try {
-            // 错误消息也可以包装，或者为了前端简单，保持原样。
-            // 建议：为了前端统一解析，也可以包一下，或者前端 catch 解析失败的情况。
-            // 这里我们保持原样发送 [ERROR]，因为前端 api/chat.ts 里的 JSON.parse 会抛异常从而走 catch 逻辑，刚好能显示原始文本。
-            emitter.send(SseEmitter.event().data("[ERROR] " + msg));
-            emitter.complete();
-        } catch (IOException ex) {
-            emitter.completeWithError(ex);
-        }
-    }
     /**
      * 智能获取历史记录，防止 Token 爆炸
      * @param limitCharCount 估算的字符限制（中文 1字符 ≈ 0.7~1 Token）
@@ -300,5 +280,37 @@ public class ChatServiceImpl implements ChatService {
             }
         }
         return safeHistory;
+    }
+
+    // ============ SSE 辅助 ============
+
+    /**
+     * 发送 SSE 块 (统一 JSON 包装)
+     * @return true 表示发送成功，false 表示发送失败（通常是客户端断开）
+     */
+    private boolean sendSseChunk(SseEmitter emitter, String data) {
+        try {
+            if (data != null) {
+                // 统一使用 StreamResponseDto 包装，确保换行符安全传输
+                StreamResponseDto chunk = new StreamResponseDto(data);
+                emitter.send(SseEmitter.event().data(chunk, MediaType.APPLICATION_JSON));
+                return true;
+            }
+        } catch (IOException e) {
+            // 返回 false 让调用方知道连接已断开，可以停止 AI 生成
+            return false;
+        }
+        return true;
+    }
+
+    private void sendSseErrorMessage(SseEmitter emitter, String msg) {
+        try {
+            // 🛠️ 优化：错误消息也包装成 JSON，保持协议一致性
+            StreamResponseDto errorChunk = new StreamResponseDto("[ERROR] " + msg);
+            emitter.send(SseEmitter.event().data(errorChunk, MediaType.APPLICATION_JSON));
+            emitter.complete();
+        } catch (IOException ex) {
+            emitter.completeWithError(ex);
+        }
     }
 }

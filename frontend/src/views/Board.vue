@@ -806,13 +806,39 @@ const handleSaveTemplate = async (newTpl: DeviceTemplate) => {
  * 10. Lifecycle & Watchers
  * ================================================================================= */
 
+// 1. 定义刷新设备的函数
+const refreshDevices = async () => {
+  console.log('🔄 Board组件收到指令，正在刷新设备列表...')
+  try { nodes.value = (await boardApi.getNodes()).data } catch(e) {
+    console.error('加载设备失败', e)
+    nodes.value = [] }
+}
+
+// 2.定义刷新规则的函数
+const refreshRules = async () => {
+  console.log('🔄 Board组件收到指令，正在刷新规则列表...')
+  try { edges.value = (await boardApi.getEdges()).data } catch(e) {
+    console.error('加载规则失败', e)
+    edges.value = []
+  }
+}
+
+// 3.定义刷新规约的函数
+const refreshSpecifications = async () => {
+  console.log('🔄 Board组件收到指令，正在刷新规约列表...')
+  try { specifications.value = (await boardApi.getSpecs()).data } catch(e) {
+    console.error('加载规约失败', e)
+    specifications.value = []
+  }
+}
+
 onMounted(async () => {
   await refreshDeviceTemplates()
 
   // Load Data
-  try { nodes.value = (await boardApi.getNodes()).data } catch { nodes.value = [] }
-  try { edges.value = (await boardApi.getEdges()).data } catch { edges.value = [] }
-  try { specifications.value = (await boardApi.getSpecs()).data } catch { specifications.value = [] }
+  await refreshDevices()
+  await refreshRules()
+  await refreshSpecifications()
 
   // Load Layout
   try {
@@ -881,6 +907,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', clampPanelsToScreen)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
+})
+
+defineExpose({
+  refreshDevices,
+  refreshRules,
+  refreshSpecifications,
 })
 </script>
 

@@ -1,6 +1,29 @@
 <script setup lang="ts">
 import Header from "./components/Header.vue";
 import ChatView from "./components/ChatView.vue";
+import {ref} from "vue";
+
+const routerViewRef = ref<any>(null);
+const handleSystemCommand = (cmd: any) => {
+  console.log("App收到指令:", cmd);
+
+  if (cmd.type === 'REFRESH_DATA') {
+    // 判断目标是不是 device_list，且当前路由组件是否有 refreshDevices 方法
+    if (cmd.payload?.target === 'device_list') {
+      // 🚀 使用可选链调用，因为当前页面可能不是 Board，或者还没加载完
+      if (routerViewRef.value && typeof routerViewRef.value.refreshDevices === 'function') {
+        routerViewRef.value.refreshDevices();
+      } else {
+        console.warn("当前页面无法响应 refreshDevices 指令");
+      }
+    }
+  }
+
+  // 处理其他指令...
+  if (cmd.type === 'NAVIGATE') {
+    // router.push(...)
+  }
+};
 </script>
 
 <template>
@@ -10,8 +33,13 @@ import ChatView from "./components/ChatView.vue";
     </header>
 
     <main class="app-main">
-      <router-view />
-      <ChatView />
+      <router-view v-slot="{ Component }">
+        <keep-alive>
+          <component :is="Component" ref="routerViewRef" />
+        </keep-alive>
+      </router-view>
+
+      <ChatView @command="handleSystemCommand" />
     </main>
   </div>
 </template>
