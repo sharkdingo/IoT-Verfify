@@ -434,13 +434,6 @@ const scrollToBottom = (force = false) => {
 .vue-markdown-wrapper .shiki-stream span {
   animation: fade-in 0.5s ease-in-out;
 }
-
-.vue-markdown-wrapper {
-  /* 必须有这一行，才能正确显示 "AC Cooler" 中间的空格 */
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
 @keyframes fade-in {
   0% { opacity: 0; transform: translateY(5px); }
   100% { opacity: 1; transform: translateY(0); }
