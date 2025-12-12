@@ -103,39 +103,34 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
   color: #333;
 }
 
-/* ============== 深色模式适配 (Dark Mode) ============== */
-/* Vue 组件中，如果使用了 :deep 或全局类名，
-   需要确保 .dark 类在父级能被选中。
-   在 Tailwind 或 Element Plus 中，通常是在 html.dark 下生效
-*/
-:global(.dark) .code-block-container {
-  border-color: #444;
-  background: #1e1e1e;
+/* ============== 🌙 深色模式适配 ============== */
+
+/* 1. 修正选择器：使用 .dark-mode 而不是 .dark */
+:global(.dark-mode) .code-block-container {
+  border-color: #333;
+  /* 使用更深的背景色，增加对比度 */
+  background: #0d1117;
 }
 
-:global(.dark) .code-header {
-  background: #2d2d2d;
-  border-bottom-color: #444;
-  color: #cdcdcd;
+:global(.dark-mode) .code-header {
+  background: #161b22; /* 稍微亮一点的头部 */
+  border-bottom-color: #333;
+  color: #8b949e;
 }
 
-:global(.dark) .lang-label {
-  color: #9ca3af;
+:global(.dark-mode) .lang-label {
+  color: #c9d1d9;
 }
 
-:global(.dark) .copy-btn {
-  color: #9ca3af;
+:global(.dark-mode) .copy-btn {
+  color: #8b949e;
 }
 
-:global(.dark) .copy-btn:hover {
-  color: #fff;
+:global(.dark-mode) .copy-btn:hover {
+  color: #c9d1d9;
 }
 
-:global(.dark) .code-content {
-  color: #e5e5e5;
-}
-
-/* 强制覆盖 shiki 生成的样式，确保背景色透明，以便使用我们容器的背景 */
+/* 强制让 Shiki 的 pre 背景透明，以便显示我们容器的背景 */
 :deep(pre.shiki) {
   background-color: transparent !important;
   margin: 0;

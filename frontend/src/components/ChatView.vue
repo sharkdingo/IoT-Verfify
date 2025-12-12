@@ -74,7 +74,7 @@ watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
 
-const currentTheme = computed(() => isDarkMode.value ? 'dark' : 'light');
+const currentTheme = computed(() => isDarkMode.value ? 'github-dark' : 'github-light');
 
 // ================= 文本处理辅助函数 =================
 
