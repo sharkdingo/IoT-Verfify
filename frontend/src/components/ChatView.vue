@@ -6,30 +6,54 @@ import {
   MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined,
   ShrinkOutlined, UserOutlined, StopOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined,
-  CopyOutlined
+  CopyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
+  CodeOutlined, ExperimentOutlined
 } from '@ant-design/icons-vue';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 
-// ================= 新增引入 =================
 import { VueMarkdownRenderer } from "vue-mdr";
 import CodeBlock from '@/components/CodeBlock.vue';
-// 引入样式和插件
 import "katex/dist/katex.min.css";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import java from "@shikijs/langs/java"; // 示例额外语言支持
+import java from "@shikijs/langs/java";
+
+import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
+import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
 
 const emit = defineEmits(['command']);
 
-// API
-import type {ChatMessage, ChatSession, StreamCommand} from '@/types/chat';
-import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
-
 const USER_ID = 'test_user_001';
 const loadingRegex = /^正在执行指令[.\s\n]*/;
+const presetTasks = [
+  {
+    icon: ThunderboltOutlined,
+    title: '快速创建设备',
+    desc: '一键添加空调、净化器等组件',
+    text: '请帮我创建一个名为“LivingRoom_AC”的空调设备，初始状态为关闭，放置在坐标(100, 100)处。'
+  },
+  {
+    icon: SafetyCertificateOutlined,
+    title: '系统形式化验证',
+    desc: '基于 NuSMV 检查系统安全性',
+    text: '请对当前的智能家居系统模型进行形式化验证，检查是否存在“空调开启时窗户未关闭”的安全隐患。'
+  },
+  {
+    icon: ExperimentOutlined,
+    title: '场景联动测试',
+    desc: '模拟设备交互与规则触发',
+    text: '如果我现在将“PM2.5监测仪”的读数调整为 150，系统中的空气净化器会自动开启吗？'
+  },
+  {
+    icon: CodeOutlined,
+    title: '通用代码助手',
+    desc: '编写脚本或解释技术概念',
+    text: '请写一段 Python 脚本，用于模拟智能家居中的温度传感器数据上报逻辑，要求使用 MQTT 协议。'
+  }
+];
 
 // State
 const visible = ref(false);
@@ -45,21 +69,17 @@ const isLoading = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
 const abortController = ref<AbortController | null>(null);
 
+// 联动：全屏时自动展开侧边栏
 watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
 
-// 计算当前主题
 const currentTheme = computed(() => isDarkMode.value ? 'dark' : 'light');
 
-/**
- * 标准化 LaTeX 分隔符
- * 兼容 \[ \] \( \) 和 ```math 写法
- */
-const convertLatexDelimiters = (text: string) => {
-  // 注意：正则末尾必须保留 'g' 标志，这样 replace 才会替换所有匹配项
-  const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
+// ================= 文本处理辅助函数 =================
 
+const convertLatexDelimiters = (text: string) => {
+  const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
   return text.replace(pattern, (match, codeBlock, squareBracket, roundBracket) => {
     if (codeBlock !== undefined) return codeBlock;
     if (squareBracket !== undefined) return `$$${squareBracket}$$`;
@@ -67,20 +87,20 @@ const convertLatexDelimiters = (text: string) => {
     return match;
   });
 };
-// ================= 辅助函数 =================
 
 const shouldShowMessage = (msg: ChatMessage) => {
   if (msg.role === 'tool') return false;
+  // 兼容旧数据的过滤
   if (msg.content && msg.content.startsWith(':::TOOL_CALLS:::')) return false;
   return true;
 };
 
-// 原始的 Thinking 处理逻辑
 const getRawContentWithoutThinking = (content: string) => {
   if (!content) return '';
   const match = content.match(loadingRegex);
   if (match) {
     const prefixLength = match[0].length;
+    // 如果只有提示语，为了避免空内容，暂时返回提示语（或可返回空字符串让界面显示 Loading）
     if (content.length <= prefixLength) return content;
     return content.substring(prefixLength);
   }
@@ -88,35 +108,27 @@ const getRawContentWithoutThinking = (content: string) => {
 };
 
 /**
- * 渲染处理函数
- * 组合链：原始文本 -> 去除Thinking -> LaTeX标准化 -> 渲染
+ * 最终渲染内容的预处理
  */
 const getProcessedContent = (content: string) => {
   if (!content) return '';
-  // 1. 去除 "正在执行指令..."
-  let step1 = getRawContentWithoutThinking(content);
+  // 1. 去除 Thinking 前缀
+  let text = getRawContentWithoutThinking(content);
   // 2. 标准化 LaTeX
-  let finalResult = convertLatexDelimiters(step1);
-
-  // // === Debug 代码 Start ===
-  // // 只在控制台打印包含"表格"的日志，避免刷屏
-  // if (finalResult.includes('|')) {
-  //   console.log('🎨 渲染器接收到的最终文本:', JSON.stringify(finalResult));
-  // }
-  // // === Debug 代码 End ===
-
-  return finalResult;
+  return convertLatexDelimiters(text);
 };
 
 const copyFullMessage = async (content: string) => {
   try {
     const cleanContent = content.replace('CallEnd|>', '');
     await navigator.clipboard.writeText(cleanContent);
-    ElMessage.success({ message: '消息内容已复制', zIndex: 30000 });
+    ElMessage.success({ message: '已复制', zIndex: 30000 });
   } catch (err) {
     ElMessage.error('复制失败');
   }
 };
+
+// ================= 交互逻辑 =================
 
 const startListening = () => {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -148,7 +160,10 @@ const startListening = () => {
 
 const toggleChat = () => {
   visible.value = !visible.value;
+  // 仅当首次打开且无会话时加载，避免重复请求
   if (visible.value && sessions.value.length === 0) initSessions();
+  // 每次打开时，如果不是全屏模式，默认收起侧边栏（根据你的原始逻辑）
+  // 或者保持上次状态更友好？这里保留你的原始逻辑
   if (visible.value && !isExpanded.value) isSidebarOpen.value = false;
 };
 
@@ -173,6 +188,7 @@ const handleCreateSession = async () => {
 const onNewChatClick = async () => {
   const newId = await handleCreateSession();
   if (newId) await handleSelectSession(newId);
+  // 新建对话后自动收起侧边栏（移动端友好）
   if (!isExpanded.value) isSidebarOpen.value = false;
 };
 
@@ -197,15 +213,25 @@ const handleDelete = async (sessionId: string) => {
 
 const handleSelectSession = async (sessionId: string) => {
   if (currentSessionId.value === sessionId) return;
-  if (abortController.value) { abortController.value.abort(); abortController.value = null; isLoading.value = false; }
+
+  // 切换会话时，中断上一次的请求
+  if (abortController.value) {
+    abortController.value.abort();
+    abortController.value = null;
+    isLoading.value = false;
+  }
+
   currentSessionId.value = sessionId;
   messages.value = [];
   isLoading.value = true;
+
+  // 移动端体验优化：选中后收起侧边栏
   if (!isExpanded.value) isSidebarOpen.value = false;
 
   try {
     const res = await getSessionHistory(sessionId);
     if (res.code === 200) {
+      // 统一清洗历史消息中的脏数据
       messages.value = res.data.map(m => ({
         ...m,
         content: m.content ? m.content.replace('CallEnd|>', '') : ''
@@ -216,7 +242,11 @@ const handleSelectSession = async (sessionId: string) => {
 };
 
 const handleStop = () => {
-  if (abortController.value) { abortController.value.abort(); abortController.value = null; isLoading.value = false; }
+  if (abortController.value) {
+    abortController.value.abort();
+    abortController.value = null;
+    isLoading.value = false;
+  }
 };
 
 const handleSend = async () => {
@@ -232,14 +262,15 @@ const handleSend = async () => {
 
   try {
     let targetSessionId = currentSessionId.value;
+    // 自动创建新会话
     if (!targetSessionId) {
       const newId = await handleCreateSession();
-      if (!newId) throw new Error('Failed');
+      if (!newId) throw new Error('Create session failed');
       targetSessionId = newId;
       currentSessionId.value = targetSessionId;
     }
 
-    // 先插入一条空的 AI 消息
+    // 先插入一条空的 AI 消息占位
     const aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
     scrollToBottom(true);
 
@@ -250,38 +281,48 @@ const handleSend = async () => {
           onMessage: (chunk) => {
             const cleanChunk = chunk.replace('CallEnd|>', '');
             if (!cleanChunk) return;
-            const msg = messages.value[aiMsgIndex];
-            // // === Debug 代码 Start ===
-            // console.log('📦 收到 Chunk:', JSON.stringify(cleanChunk));
-            // console.log('📝 当前拼接后的完整文本:', JSON.stringify(msg.content + cleanChunk));
-            // // === Debug 代码 End ===
-            // // 直接追加原始数据，通过模板中的 getProcessedContent 实时修复
-            msg.content += cleanChunk;
 
+            const msg = messages.value[aiMsgIndex];
+            // 直接追加，渲染器会自动处理 Markdown 格式
+            msg.content += cleanChunk;
             scrollToBottom(false);
           },
           onCommand: (cmd: StreamCommand) => {
-            console.log("收到后端指令:", cmd);
-
-            // 策略 1: 直接转发给父组件 (推荐，解耦最彻底)
-            emit('command', cmd);
+            console.log("收到指令:", cmd);
+            emit('command', cmd); // 转发指令
           },
-          onError: () => { if (abortController.value) messages.value[aiMsgIndex].content += '\n[发送失败]'; },
+          onError: () => {
+            if (abortController.value) {
+              messages.value[aiMsgIndex].content += '\n[发送失败]';
+            }
+          },
           onFinish: async () => {
             isLoading.value = false;
             abortController.value = null;
+            // 刷新会话列表（更新时间/标题）
             await initSessions();
           }
         },
         abortController.value
     );
-  } catch (error) { ElMessage.error('发送消息失败'); isLoading.value = false; }
+  } catch (error) {
+    ElMessage.error('发送消息失败');
+    isLoading.value = false;
+  }
+};
+
+const handleTaskClick = (text: string) => {
+  inputValue.value = text;
+  // 可选：聚焦输入框 (如果 textarea 组件有 ref)
+  // const textarea = document.querySelector('.modern-textarea') as HTMLTextAreaElement;
+  // if (textarea) textarea.focus();
 };
 
 const scrollToBottom = (force = false) => {
   nextTick(() => {
     if (!scrollRef.value) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.value;
+    // 只有当用户确实在底部，或者强制滚动时，才自动滚动。防止用户回看历史时被强制拉回底部。
     const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
     if (force || isNearBottom) scrollRef.value.scrollTop = scrollHeight;
   });
@@ -290,8 +331,15 @@ const scrollToBottom = (force = false) => {
 
 <template>
   <div class="global-chat-wrapper" :class="{ 'dark-mode': isDarkMode }">
-    <div class="float-ball" @click="toggleChat" v-show="!visible">
-      <div class="ripple"></div>
+    <div class="global-chat-wrapper" :class="{ 'dark-mode': isDarkMode }">
+      <div class="float-ball" @click="toggleChat" v-show="!visible">
+        <div class="ripple"></div>
+
+        <div class="float-tooltip">
+          Hi~ 我是您的 IoT 智能助手 👋
+        </div>
+      </div>
+
     </div>
 
     <transition name="panel-zoom">
@@ -351,8 +399,31 @@ const scrollToBottom = (force = false) => {
 
           <div class="messages-viewport" ref="scrollRef">
             <div v-if="messages.length === 0" class="welcome-screen">
-              <div class="brand-logo"><RobotOutlined /></div>
-              <h3>有什么可以帮您？</h3>
+              <div class="brand-logo">
+                <div class="logo-inner">
+                  <img src="/AI.png" alt="IoT Assistant" class="custom-logo-img" />
+                </div>
+              </div>
+              <h3 class="welcome-title">IoT-Verify 智能助手</h3>
+              <p class="welcome-subtitle">基于 NuSMV 的智能家居仿真与验证平台</p>
+
+              <div class="task-grid">
+                <div
+                    v-for="(task, index) in presetTasks"
+                    :key="index"
+                    class="task-card"
+                    @click="handleTaskClick(task.text)"
+                    :style="{ animationDelay: `${index * 0.1}s` }"
+                >
+                  <div class="task-icon">
+                    <component :is="task.icon" />
+                  </div>
+                  <div class="task-info">
+                    <div class="task-title">{{ task.title }}</div>
+                    <div class="task-desc">{{ task.desc }}</div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <template v-for="(msg, index) in messages" :key="index">
@@ -509,9 +580,96 @@ const scrollToBottom = (force = false) => {
 
 /* 以下复用您之前的布局样式，未做修改 */
 .global-chat-wrapper { position: fixed; z-index: 9999; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-.float-ball { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; border-radius: 50%; background: url('/AI.png') center/cover no-repeat; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); cursor: pointer; transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); overflow: hidden; z-index: 999; }
-.float-ball:hover { transform: translateY(-5px) scale(1.1); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
-.float-ball:active { transform: scale(0.95); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
+/* ================= 悬浮球主体样式 ================= */
+.float-ball {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  /* 背景图片 */
+  background: url('/AI.png') center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  /* 弹性的过渡动画 */
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  z-index: 999;
+
+  /* 🔴 关键修改：已移除 overflow: hidden; 以便让 tooltip 能显示在球体外部 */
+  /* overflow: hidden; */
+
+  /* 确保作为定位基准 */
+  position: fixed;
+}
+
+/* 悬浮状态：上浮并放大 */
+.float-ball:hover {
+  transform: translateY(-5px) scale(1.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 点击状态：缩小 */
+.float-ball:active {
+  transform: scale(0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ================= 🟢 新增：仿 ELTooltip 的悬浮提示框 ================= */
+.float-tooltip {
+  position: absolute;
+  /* 定位到球体的左侧。60px = 球体宽度(50) + 间距(10) */
+  right: 65px;
+  top: 50%;
+  /* 初始状态：垂直居中，稍微靠右（隐藏在球后面），并缩小 */
+  transform: translateY(-50%) translateX(15px) scale(0.8);
+
+  /* 仿 Element Plus 深色外观 */
+  background-color: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap; /* 不换行 */
+  line-height: 1.2;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+  /* 隐藏状态 */
+  opacity: 0;
+  visibility: hidden;
+  /* 防止隐藏时挡住鼠标交互 */
+  pointer-events: none;
+
+  /* 丝滑的进出场动画 */
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* 提示框右侧的小三角箭头 */
+.float-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 100%; /* 定位到提示框的最右侧 */
+  margin-top: -5px; /* 垂直居中偏移 */
+  border-width: 5px;
+  border-style: solid;
+  /* CSS三角形：只有左边框有颜色 */
+  border-color: transparent transparent transparent rgba(0, 0, 0, 0.85);
+}
+
+/* 🟢 触发机制：当鼠标悬停在 float-ball 上时，显示内部的 tooltip */
+.float-ball:hover .float-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  /* 终态：位置复原，大小复原 */
+  transform: translateY(-50%) translateX(0) scale(1);
+  /* 稍微延时出现，让球体先完成放大动画，体验更好 */
+  transition-delay: 0.1s;
+}
 .ripple { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 1px solid rgba(255,255,255,0.5); animation: ripple 2s infinite; opacity: 0; }
 @keyframes ripple { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0; } }
 .chat-panel { position: fixed; bottom: 90px; right: 30px; width: 420px; height: 600px; background: var(--bg-app); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.15); border: 1px solid var(--border); display: flex; overflow: hidden; transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1); }
@@ -547,8 +705,124 @@ const scrollToBottom = (force = false) => {
 .control-icon:hover { color: var(--text-main); }
 .messages-viewport { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 60px 20px 0 20px; scroll-behavior: smooth; }
 .scroll-spacer { height: 160px; flex-shrink: 0; }
-.welcome-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-main); opacity: 0.8; padding-bottom: 100px; }
-.brand-logo { font-size: 48px; margin-bottom: 16px; color: var(--text-sub); }
+.welcome-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-main); opacity: 0.8; padding: 40px 20px 100px 20px; width: 100%;max-width: 800px; margin: 0 auto;}
+.brand-logo { font-size: 48px; margin-bottom: 20px; color: var(--text-sub); }
+.logo-inner {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 8px 20px rgba(22, 119, 255, 0.2);
+  animation: float 6s ease-in-out infinite;
+}
+.custom-logo-img {
+  width: 180%;
+  height: 180%;
+  /* 使用 contain 确保图片完整显示在容器内，不会被拉伸或裁剪 */
+  object-fit: contain;
+  /* 可选：如果觉得图片贴边太紧，可以加一点内边距 */
+  /* padding: 2px; */
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.welcome-title {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  background: linear-gradient(to right, var(--text-main), var(--text-sub));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent; /* 渐变文字效果 */
+}
+.welcome-subtitle {
+  font-size: 14px;
+  color: var(--text-sub);
+  margin-bottom: 40px;
+  text-align: center;
+}
+.task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr); /* 两列布局 */
+  gap: 16px;
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .task-grid {
+    grid-template-columns: 1fr; /* 移动端单列 */
+  }
+}
+/* 任务卡片样式 */
+.task-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+  overflow: hidden;
+  animation: fade-in-up 0.6s backwards; /* 进场动画 */
+}
+
+/* 悬停特效 */
+.task-card:hover {
+  border-color: var(--primary-color);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  background: var(--bg-sidebar); /* 轻微变色 */
+}
+
+.dark-mode .task-card:hover {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.task-icon {
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  font-size: 20px;
+  color: var(--text-main);
+  transition: all 0.3s;
+}
+
+.dark-mode .task-icon {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.task-card:hover .task-icon {
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.task-info {
+  flex: 1;
+}
+
+.task-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 4px;
+}
+
+.task-desc {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.4;
+}
+
+@keyframes fade-in-up {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
 .msg-row { display: flex; gap: 12px; margin-bottom: 24px; width: 100%; max-width: 800px; margin-left: auto; margin-right: auto; flex-shrink: 0; }
 .ai-row { flex-direction: row; }
 .user-row { flex-direction: row-reverse; }

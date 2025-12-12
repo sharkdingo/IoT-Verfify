@@ -74,7 +74,7 @@ public class ChatServiceImpl implements ChatService {
             sessionRepo.findById(sessionId).ifPresent(s -> {
                 s.setUpdatedAt(LocalDateTime.now());
                 if (s.getTitle().equals("新对话") || s.getTitle().startsWith("对话 ")) {
-                    String newTitle = content.length() > 15 ? content.substring(0, 15) : content;
+                    String newTitle = content.length() > 12 ? content.substring(0, 12) + "...": content;
                     newTitle = newTitle.replace("\n", " ").trim();
                     s.setTitle(newTitle);
                 }
