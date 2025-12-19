@@ -16,7 +16,7 @@
 
     /* 圆角 */
     --iot-radius-card: 1.125rem;
-    --iot-radius-node: 1.25rem;
+    --iot-radius-node: 0.8rem;
     --iot-radius-input: 0.625rem;
     --iot-radius-resize: 0.2rem;
 

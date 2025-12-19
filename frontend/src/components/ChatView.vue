@@ -74,7 +74,7 @@ watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
 
-const currentTheme = computed(() => isDarkMode.value ? 'github-dark' : 'github-light');
+const currentTheme = computed(() => isDarkMode.value ? 'dark' : 'light');
 
 // ================= 文本处理辅助函数 =================
 
@@ -289,7 +289,7 @@ const handleSend = async () => {
           },
           onCommand: (cmd: StreamCommand) => {
             console.log("收到指令:", cmd);
-            emit('command', cmd); // 转发指令
+            emit('command', cmd); // 转发指令emit
           },
           onError: () => {
             if (abortController.value) {

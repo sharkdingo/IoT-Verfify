@@ -133,18 +133,18 @@ public class ChatServiceImpl implements ChatService {
                 sdkMessages.add(aiMsg);
                 sendSseChunk(emitter, "正在执行指令...\n"); // 这里可以用辅助方法，因为还没涉及断开控制
 
-                boolean needAction = false;
-                StreamResponseDto.CommandDto command = null;
+                Set<StreamResponseDto.CommandDto> commandSet = new HashSet<>();
 
                 for (ChatToolCall toolCall : aiMsg.getToolCalls()) {
                     String functionName = toolCall.getFunction().getName();
                     // 如果执行的是创建或删除设备的工具，标记需要刷新，之后还需要添加
                     if (functionName.equals("add_device") || functionName.equals("delete_device")) {
-                        command = new StreamResponseDto.CommandDto(
+                        commandSet.add(new StreamResponseDto.CommandDto(
                                 "REFRESH_DATA",
                                 Map.of("target", "device_list") // 告诉前端刷新哪个部分
-                        );
-                        needAction = true;
+                        ));
+                    } else {
+                        //TODO
                     }
                     String argsJson = toolCall.getFunction().getArguments();
                     String toolResult = aiToolManager.execute(functionName, argsJson);
@@ -159,14 +159,16 @@ public class ChatServiceImpl implements ChatService {
                     sdkMessages.add(toolMsg);
                 }
                 // 发送指令包
-                if (needAction) {
-                    try {
-                        // content 为空，仅发送指令
-                        // 前端收到后会触发 command 回调，但不会在对话框显示空白气泡（因为 content 是空串）
-                        StreamResponseDto packet = new StreamResponseDto("", command);
-                        emitter.send(SseEmitter.event().data(packet, MediaType.APPLICATION_JSON));
-                    } catch (IOException e) {
-                        log.warn("发送前端指令失败", e);
+                if (!commandSet.isEmpty()) {
+                    for (StreamResponseDto.CommandDto cmd : commandSet) {
+                        try {
+                            // content 为空，仅发送指令
+                            StreamResponseDto packet = new StreamResponseDto("", cmd);
+                            emitter.send(SseEmitter.event().data(packet, MediaType.APPLICATION_JSON));
+                            log.info("已发送前端指令: type={}, payload={}", cmd.getType(), cmd.getPayload());
+                        } catch (IOException e) {
+                            log.warn("发送指令失败", e);
+                        }
                     }
                 }
                 // 定义原子布尔值，标记前端是否断开
@@ -176,7 +178,7 @@ public class ChatServiceImpl implements ChatService {
                     // 1. 如果之前已经捕获到断开异常，直接阻断后续处理
                     if (isDisconnect.get()) return;
                     if (delta != null && !delta.isEmpty()) {
-                        // 🚀 核心修改：使用辅助方法发送数据，并根据返回值判断连接状态
+                        // 使用辅助方法发送数据，并根据返回值判断连接状态
                         boolean success = sendSseChunk(emitter, delta);
 
                         if (success) {

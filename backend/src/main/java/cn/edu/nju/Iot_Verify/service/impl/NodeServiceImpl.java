@@ -69,7 +69,6 @@ public class NodeServiceImpl implements NodeService {
 
             List<String> allTemplates = deviceTemplateService.getAllTemplateNames();
 
-            // 🚀 Log in English 🚀
             log.info("User requested template: [{}], Available templates in DB: {}", rawTemplate, allTemplates);
 
             String bestMatch = findBestMatch(rawTemplate, allTemplates);
@@ -84,7 +83,6 @@ public class NodeServiceImpl implements NodeService {
                 if (!normRaw.equals(normMatch)) {
                     resultMsg.append(String.format("【系统提示】库中未找到 '%s'，已为您自动匹配最接近的模板 '%s'。", rawTemplate, finalTemplate));
                 } else {
-                    // 🚀 Log in English 🚀
                     log.info("Template name auto-corrected: {} -> {}", rawTemplate, finalTemplate);
                 }
             } else {
@@ -97,7 +95,6 @@ public class NodeServiceImpl implements NodeService {
         if (finalState == null || finalState.trim().isEmpty() || finalState.equals("null")) {
             finalState = getInitStateFromTemplate(finalTemplate);
         }
-
         // 2. 处理默认值
         double posX = (x != null) ? x : 250.0;
         double posY = (y != null) ? y : 250.0;
