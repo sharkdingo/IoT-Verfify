@@ -20,6 +20,9 @@ export default {
     // ==== 规约 ====
     getSpecs: () => api.get<Specification[]>('/board/specs'),
     saveSpecs: (specs: Specification[]) => api.post('/board/specs', specs),
+    // ==== 规则（sources -> target） ====
+    getRules: () => api.get<RuleDto[]>('/board/rules'),
+    saveRules: (rules: RuleDto[]) => api.post('/board/rules', rules),
 
     // ==== 布局（包含 Panel 位置、停靠状态、Canvas 缩放位移） ====
     getLayout: () => api.get<BoardLayoutDto>('/board/layout'),

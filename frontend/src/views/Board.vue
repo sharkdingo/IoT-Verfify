@@ -532,30 +532,46 @@ const handleNodeMovedOrResized = async () => {
 }
 
 const handleAddRule = async (payload: RuleForm) => {
-  const { fromId, fromApi, toId, toApi } = payload
-  if (!fromId || !fromApi || !toId || !toApi) {
+  const { sources, toId, toApi } = payload
+  if (!sources || !sources.length || !toId || !toApi) {
     ElMessage.warning(t('app.fillAllRuleFields') || '请完整选择源/目标设备及 API')
     return
   }
 
-  const fromNode = nodes.value.find(n => n.id === fromId)
   const toNode = nodes.value.find(n => n.id === toId)
-  if (!fromNode || !toNode) return
+  if (!toNode) return
 
-  const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
+  const newEdges: DeviceEdge[] = []
+  for (const s of sources) {
+    const fid = s.fromId
+    const fromApi = s.fromApi
+    if (!fid || !fromApi) continue
+    const fromNode = nodes.value.find(n => n.id === fid)
+    if (!fromNode) continue
+    const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
+    newEdges.push({
+      id: 'edge_' + Date.now() + '_' + fid,
+      from: fromNode.id,
+      to: toNode.id,
+      fromLabel: fromNode.label,
+      toLabel: toNode.label,
+      fromApi,
+      toApi,
+      fromPos: fromPoint,
+      toPos: toPoint
+    })
+  }
 
-  edges.value.push({
-    id: 'edge_' + Date.now(),
-    from: fromNode.id,
-    to: toNode.id,
-    fromLabel: fromNode.label,
-    toLabel: toNode.label,
-    fromApi,
-    toApi,
-    fromPos: fromPoint,
-    toPos: toPoint
-  })
-  await saveEdgesToServer()
+  if (newEdges.length) {
+    // 保存为规则（后端将持久化并生成 edges），然后刷新 edges
+    try {
+      await boardApi.saveRules([payload])
+      await refreshRules()
+    } catch (e) {
+      console.error('saveRules error', e)
+      ElMessage.error(t('app.saveRulesFailed') || '保存规则失败')
+    }
+  }
 }
 
 const handleAddSpec = async (payload: {

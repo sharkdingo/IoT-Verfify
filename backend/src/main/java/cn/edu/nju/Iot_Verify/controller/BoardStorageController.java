@@ -45,6 +45,16 @@ public class BoardStorageController {
         boardService.saveSpecs(specs);
     }
 
+    @GetMapping("/rules")
+    public List<RuleDto> getRules() {
+        return boardService.getRules();
+    }
+
+    @PostMapping("/rules")
+    public void saveRules(@RequestBody List<RuleDto> rules) {
+        boardService.saveRules(rules);
+    }
+
     @GetMapping("/layout")
     public BoardLayoutDto getLayout() {
         return boardService.getLayout();

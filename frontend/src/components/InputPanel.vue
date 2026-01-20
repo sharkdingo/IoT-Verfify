@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {ref, reactive, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
-import {List, Picture, Plus} from '@element-plus/icons-vue'
+import {List, Picture, Plus, Close} from '@element-plus/icons-vue'
 import {ElMessage} from "element-plus"
 
 import type {DeviceTemplate} from '../types/device'
@@ -75,14 +75,41 @@ const handleOpenAddDialog = () => {
   emit('open-add-template-dialog')
 }
 
-/* ========= IFTTT 规则 (保持不变) ========= */
-const ruleForm = reactive<RuleForm>({fromId: '', fromApi: '', toId: '', toApi: ''})
-const fromApis = computed(() => {
-  const n = props.nodes.find(n => n.id === ruleForm.fromId)
+/* ========= IFTTT 规则（每个源单独一行，含 API） ========= */
+const ruleForm = reactive<RuleForm>({sources: [{ fromId: '', fromApi: '' }], toId: '', toApi: ''})
+
+const getFromApisFor = (source: { fromId: string; fromApi: string }) => {
+  if (!source || !source.fromId) return []
+  const n = props.nodes.find(n => n.id === source.fromId)
   if (!n) return []
   const tpl = props.deviceTemplates.find(t => t.manifest.Name === n.templateName)
   return tpl ? tpl.manifest.APIs : []
+}
+
+const apiPlaceholder = computed(() => {
+  const v = t('app.api')
+  // 如果没有翻译，t 会返回 key，例如 "app.api"，则回退到 'API'
+  return (typeof v === 'string' && v.includes('app.api')) ? 'API' : v
 })
+
+const getDeviceDisplayName = (node: DeviceNode) => {
+  // 优先使用label，如果没有则使用模板名称
+  if (node.label && node.label.trim()) {
+    return node.label
+  }
+  // 如果label为空，查找对应的设备模板名称
+  const template = props.deviceTemplates.find(t => t.manifest.Name === node.templateName)
+  return template ? template.manifest.Name : node.templateName
+}
+
+const addSourceRow = () => {
+  ruleForm.sources.push({ fromId: '', fromApi: '' })
+}
+
+const removeSourceRow = (index: number) => {
+  if (ruleForm.sources.length === 1) return
+  ruleForm.sources.splice(index, 1)
+}
 const toApis = computed(() => {
   const n = props.nodes.find(n => n.id === ruleForm.toId)
   if (!n) return []
@@ -91,9 +118,8 @@ const toApis = computed(() => {
 })
 const onAddRule = () => {
   emit('add-rule', {...ruleForm})
-  ruleForm.fromId = '';
-  ruleForm.fromApi = '';
-  ruleForm.toId = '';
+  ruleForm.sources = [{ fromId: '', fromApi: '' }]
+  ruleForm.toId = ''
   ruleForm.toApi = ''
 }
 
@@ -222,19 +248,28 @@ const onAddSpec = () => {
                                               :title="t('app.rules')">{{ t('app.rules') }}</span></div>
       </template>
       <div class="ipt-rule-block">
-        <div class="ipt-row"><span class="ipt-label">{{ t('app.sourceDevice') }}</span>
-          <el-select v-model="ruleForm.fromId" class="ipt-select" :placeholder="t('app.select')">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.label" :value="n.id"/>
-          </el-select>
-        </div>
-        <div class="ipt-row"><span class="ipt-label">{{ t('app.sourceApi') }}</span>
-          <el-select v-model="ruleForm.fromApi" class="ipt-select" :placeholder="t('app.select')">
-            <el-option v-for="api in fromApis" :key="api.Name" :label="api.Name" :value="api.Name"/>
-          </el-select>
+        <div class="ipt-row ipt-sources-block">
+          <span class="ipt-label">{{ t('app.sourceDevice') }}</span>
+          <div style="flex:1; display:flex; flex-direction:column; gap:8px;">
+            <div v-for="(s, idx) in ruleForm.sources" :key="idx" class="source-row">
+              <el-select v-model="s.fromId" class="ipt-select" :placeholder="t('app.select')" @change="() => { s.fromApi = '' }">
+                <el-option v-for="n in nodes" :key="n.id" :label="getDeviceDisplayName(n)" :value="n.id"/>
+              </el-select>
+              <el-select v-model="s.fromApi" class="ipt-select ipt-select-api" :placeholder="apiPlaceholder">
+                <el-option v-for="api in getFromApisFor(s)" :key="api.Name" :label="api.Name" :value="api.Name"/>
+              </el-select>
+              <el-button type="text" class="remove-source-btn" :disabled="ruleForm.sources.length === 1" @click.prevent="removeSourceRow(idx)" title="移除此源">
+                <el-icon><Close/></el-icon>
+              </el-button>
+              <el-button v-if="idx === ruleForm.sources.length - 1" type="text" class="add-source-inline" @click.prevent="addSourceRow" title="添加源">
+                <el-icon><Plus/></el-icon>
+              </el-button>
+            </div>
+          </div>
         </div>
         <div class="ipt-row"><span class="ipt-label">{{ t('app.targetDevice') }}</span>
           <el-select v-model="ruleForm.toId" class="ipt-select" :placeholder="t('app.select')">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.label" :value="n.id"/>
+            <el-option v-for="n in nodes" :key="n.id" :label="getDeviceDisplayName(n)" :value="n.id"/>
           </el-select>
         </div>
         <div class="ipt-row"><span class="ipt-label">{{ t('app.targetApi') }}</span>
@@ -269,7 +304,7 @@ const onAddSpec = () => {
         <div v-for="cond in specForm.aConditions" :key="cond.id" class="spec-condition-row">
           <el-select v-model="cond.deviceId" size="default" class="spec-cond-device"
                      @change="onConditionDeviceChange(cond)" :placeholder="t('app.select')">
-            <el-option v-for="n in nodes" :key="n.id" :label="n.label" :value="n.id"/>
+            <el-option v-for="n in nodes" :key="n.id" :label="getDeviceDisplayName(n)" :value="n.id"/>
           </el-select>
           <el-select v-if="cond.deviceId" v-model="cond.key" size="default" class="spec-cond-target"
                      @change="onConditionKeyChange(cond, $event)" :placeholder="t('app.select')">
@@ -297,7 +332,7 @@ const onAddSpec = () => {
           <div v-for="cond in specForm.ifConditions" :key="cond.id" class="spec-condition-row">
             <el-select v-model="cond.deviceId" size="default" class="spec-cond-device"
                        @change="onConditionDeviceChange(cond)" :placeholder="t('app.select')">
-              <el-option v-for="n in nodes" :key="n.id" :label="n.label" :value="n.id"/>
+              <el-option v-for="n in nodes" :key="n.id" :label="getDeviceDisplayName(n)" :value="n.id"/>
             </el-select>
             <el-select v-if="cond.deviceId" v-model="cond.key" size="default" class="spec-cond-target"
                        @change="onConditionKeyChange(cond, $event)" :placeholder="t('app.select')">
@@ -324,7 +359,7 @@ const onAddSpec = () => {
           <div v-for="cond in specForm.thenConditions" :key="cond.id" class="spec-condition-row">
             <el-select v-model="cond.deviceId" size="default" class="spec-cond-device"
                        @change="onConditionDeviceChange(cond)" :placeholder="t('app.select')">
-              <el-option v-for="n in nodes" :key="n.id" :label="n.label" :value="n.id"/>
+              <el-option v-for="n in nodes" :key="n.id" :label="getDeviceDisplayName(n)" :value="n.id"/>
             </el-select>
             <el-select v-if="cond.deviceId" v-model="cond.key" size="default" class="spec-cond-target"
                        @change="onConditionKeyChange(cond, $event)" :placeholder="t('app.select')">
@@ -453,6 +488,57 @@ const onAddSpec = () => {
 .ipt-select {
   width: 100%;
 }
+
+/* ========== Source row styling ========== */
+.ipt-sources-block .source-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ipt-sources-block .source-row .ipt-select {
+  flex: 1 1 0;
+  min-width: 0; /* allow flex children to shrink */
+}
+.ipt-sources-block .source-row .ipt-select:first-child {
+  flex: 0 0 9rem;
+  max-width: 6rem;
+}
+.ipt-sources-block .ipt-select-api {
+  flex: 0 0 12rem;
+  min-width: 12rem;
+}
+.ipt-sources-block .remove-source-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+  color: var(--iot-color-danger);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+}
+.ipt-sources-block .remove-source-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ipt-sources-block .el-button[type="primary"][size="mini"] {
+  align-self: flex-end;
+}
+
+.add-source-inline {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: 2px;
+  color: var(--iot-color-brand);
+}
+.ipt-row.ipt-sources-block {
+  align-items: flex-start; /* label aligns to top of selects */
+}
+
 
 .spec-form {
   margin-top: var(--iot-space-2xs);

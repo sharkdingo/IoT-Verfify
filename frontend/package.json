@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:unit": "vitest",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },
@@ -34,7 +35,10 @@
     "unplugin-auto-import": "^20.3.0",
     "unplugin-vue-components": "^30.0.0",
     "vite": "npm:rolldown-vite@7.1.14",
-    "vue-tsc": "^3.1.0"
+    "vue-tsc": "^3.1.0",
+    "vitest": "^1.0.0",
+    "@vue/test-utils": "^2.6.0",
+    "jsdom": "^21.1.0"
   },
   "overrides": {
     "vite": "npm:rolldown-vite@7.1.14"

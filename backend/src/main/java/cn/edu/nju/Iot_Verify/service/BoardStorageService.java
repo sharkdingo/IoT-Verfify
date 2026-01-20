@@ -13,6 +13,8 @@ public interface BoardStorageService {
 
     List<SpecificationDto> getSpecs();
     void saveSpecs(List<SpecificationDto> specs);
+    List<RuleDto> getRules();
+    void saveRules(List<RuleDto> rules);
 
     BoardLayoutDto getLayout();
     void saveLayout(BoardLayoutDto layout);

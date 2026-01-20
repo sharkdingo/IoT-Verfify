@@ -18,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,6 +29,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceNodeRepository nodeRepo;
     private final DeviceEdgeRepository edgeRepo;
     private final SpecificationRepository specRepo;
+    private final RuleRepository ruleRepo;
     private final BoardLayoutRepository layoutRepo;
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
@@ -85,6 +88,98 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .map(SpecificationMapper::toPo)
                 .toList();
         specRepo.saveAll(pos);
+    }
+
+    /* ===================== RULES ===================== */
+
+    @Override
+    public List<RuleDto> getRules() {
+        return ruleRepo.findAll().stream().map(po -> {
+            RuleDto dto = new RuleDto();
+            dto.setId(po.getId());
+            dto.setToId(po.getToId());
+            dto.setToApi(po.getToApi());
+            dto.setTemplateLabel(po.getTemplateLabel());
+            try {
+                List<SourceEntryDto> sources = MAPPER.readValue(po.getSourcesJson(), new com.fasterxml.jackson.core.type.TypeReference<List<SourceEntryDto>>() {});
+                dto.setSources(sources);
+            } catch (Exception e) {
+                dto.setSources(List.of());
+            }
+            return dto;
+        }).toList();
+    }
+
+    @Override
+    @Transactional
+    public void saveRules(List<RuleDto> rules) {
+        ruleRepo.deleteAll();
+        List<RulePo> pos = rules.stream().map(r -> {
+            try {
+                String json = MAPPER.writeValueAsString(r.getSources() == null ? List.of() : r.getSources());
+                return RulePo.builder()
+                        .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
+                        .sourcesJson(json)
+                        .toId(r.getToId())
+                        .toApi(r.getToApi())
+                        .templateLabel(r.getTemplateLabel())
+                        .build();
+            } catch (Exception e) {
+                return RulePo.builder()
+                        .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
+                        .sourcesJson("[]")
+                        .toId(r.getToId())
+                        .toApi(r.getToApi())
+                        .templateLabel(r.getTemplateLabel())
+                        .build();
+            }
+        }).toList();
+        ruleRepo.saveAll(pos);
+
+        // generate edges
+        try {
+            List<DeviceEdgeDto> edges = new ArrayList<>();
+            for (RuleDto r : rules) {
+                if (r.getSources() == null) continue;
+                for (SourceEntryDto s : r.getSources()) {
+                    if (s == null || s.getFromId() == null || s.getFromId().isBlank()) continue;
+                    DeviceEdgeDto edge = new DeviceEdgeDto();
+                    edge.setId(UUID.randomUUID().toString());
+                    edge.setFrom(s.getFromId());
+                    edge.setTo(r.getToId());
+
+                    // 先查询数据库节点
+                    DeviceNodePo fromNode = nodeRepo.findById(s.getFromId()).orElse(null);
+                    DeviceNodePo toNode = nodeRepo.findById(r.getToId()).orElse(null);
+
+                    // 填充标签（优先使用数据库节点的 label）
+                    if (fromNode != null && fromNode.getLabel() != null) {
+                        edge.setFromLabel(fromNode.getLabel());
+                    } else {
+                        edge.setFromLabel(s.getFromLabel() == null ? "" : s.getFromLabel());
+                    }
+                    if (toNode != null && toNode.getLabel() != null) {
+                        edge.setToLabel(toNode.getLabel());
+                    } else {
+                        edge.setToLabel("");
+                    }
+                    edge.setFromApi(s.getFromApi() == null ? "" : s.getFromApi());
+                    edge.setToApi(r.getToApi() == null ? "" : r.getToApi());
+                    DeviceEdgeDto.Point fp = new DeviceEdgeDto.Point();
+                    DeviceEdgeDto.Point tp = new DeviceEdgeDto.Point();
+                    if (fromNode != null) { fp.setX(fromNode.getPosX()); fp.setY(fromNode.getPosY()); } else { fp.setX(0.0); fp.setY(0.0); }
+                    if (toNode != null) { tp.setX(toNode.getPosX()); tp.setY(toNode.getPosY()); } else { tp.setX(0.0); tp.setY(0.0); }
+                    edge.setFromPos(fp);
+                    edge.setToPos(tp);
+                    edges.add(edge);
+                }
+            }
+            if (!edges.isEmpty()) {
+                this.saveEdges(edges);
+            } else {
+                edgeRepo.deleteAll();
+            }
+        } catch (Exception ignored) {}
     }
 
     /* ===================== LAYOUT ===================== */
