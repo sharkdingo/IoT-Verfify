@@ -16,6 +16,9 @@ public class DeviceNodePo {
     @Column(length = 100)
     private String id;
 
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
     @Column(name = "template_name", nullable = false, length = 100)
     private String templateName;
 

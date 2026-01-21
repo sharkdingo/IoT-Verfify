@@ -16,6 +16,9 @@ public class SpecificationPo {
     @Column(length = 100)
     private String id;
 
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
     @Column(name = "template_id", nullable = false, length = 10)
     private String templateId;
 

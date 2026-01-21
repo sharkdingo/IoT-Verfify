@@ -1,12 +1,14 @@
-// src/main/java/cn/edu/nju/Iot_Verify/dto/ChatRequestDto.java
 package cn.edu.nju.Iot_Verify.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
 public class ChatRequestDto {
-    // 当前会话 ID
+
+    @NotBlank(message = "Session ID is required")
     private String sessionId;
-    // 用户本次输入的问题
+
+    @NotBlank(message = "Content is required")
     private String content;
 }

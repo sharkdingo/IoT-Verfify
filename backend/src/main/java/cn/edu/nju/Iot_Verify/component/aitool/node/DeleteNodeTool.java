@@ -1,6 +1,7 @@
-package cn.edu.nju.Iot_Verify.component.aitool.node; // 【变化】包名精确到 node
+package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,7 +32,7 @@ public class DeleteNodeTool implements AiTool {
     @Override
     public ChatTool getDefinition() {
         Map<String, Object> props = new HashMap<>();
-        props.put("label", Map.of("type", "string", "description", "设备名称（标签）"));
+        props.put("label", Map.of("type", "string", "description", "Device name (label)"));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", props, Collections.singletonList("label")
@@ -41,7 +42,7 @@ public class DeleteNodeTool implements AiTool {
                 "function",
                 new ChatFunction.Builder()
                         .name(getName())
-                        .description("删除设备结点")
+                        .description("Delete a device node")
                         .parameters(schema)
                         .build()
         );
@@ -50,15 +51,20 @@ public class DeleteNodeTool implements AiTool {
     @Override
     public String execute(String argsJson) {
         try {
+            Long userId = UserContextHolder.getUserId();
+            if (userId == null) {
+                return "{\"error\": \"User not logged in\"}";
+            }
+
             JsonNode args = objectMapper.readTree(argsJson);
             String label = args.path("label").asText();
-            if (label == null || label.isEmpty()) return "{\"error\": \"缺少label\"}";
+            if (label == null || label.isEmpty()) return "{\"error\": \"Missing label\"}";
 
-            log.info("执行工具 delete_device, label: {}", label);
-            return nodeService.deleteNode(label);
+            log.info("Executing delete_device, label: {}", label);
+            return nodeService.deleteNode(userId, label);
         } catch (Exception e) {
-            log.error("delete_device 执行失败", e);
-            return "{\"error\": \"删除失败: " + e.getMessage() + "\"}";
+            log.error("delete_device failed", e);
+            return "{\"error\": \"Delete failed: " + e.getMessage() + "\"}";
         }
     }
 }

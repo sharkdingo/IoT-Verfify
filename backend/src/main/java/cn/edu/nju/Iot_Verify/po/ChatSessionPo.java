@@ -12,8 +12,8 @@ public class ChatSessionPo {
     @Id
     private String id; // UUID
 
-    @Column(nullable = false)
-    private String userId;
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
 
     private String title; // 会话标题
 

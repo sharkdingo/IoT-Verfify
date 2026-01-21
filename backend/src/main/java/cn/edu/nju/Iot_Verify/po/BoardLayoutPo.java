@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/po/BoardLayoutPo.java
 package cn.edu.nju.Iot_Verify.po;
 
 import jakarta.persistence.*;
@@ -13,8 +12,11 @@ import lombok.*;
 public class BoardLayoutPo {
 
     @Id
-    @Column(name = "id")
-    private Byte id;   // 固定用 1 作为唯一一条记录
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "user_id", nullable = false, unique = true)
+    private Long userId;
 
     @Column(name = "input_x")
     private Double inputX;
@@ -37,7 +39,6 @@ public class BoardLayoutPo {
     @Column(name = "canvas_zoom")
     private Double canvasZoom;
 
-    // --- Input Dock State (新增) ---
     @Column(name = "input_is_docked")
     private Boolean inputIsDocked;
 
@@ -50,7 +51,6 @@ public class BoardLayoutPo {
     @Column(name = "input_last_pos_y")
     private Double inputLastPosY;
 
-    // --- Status Dock State (新增) ---
     @Column(name = "status_is_docked")
     private Boolean statusIsDocked;
 

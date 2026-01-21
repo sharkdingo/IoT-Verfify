@@ -1,6 +1,7 @@
-package cn.edu.nju.Iot_Verify.component.aitool.node; // 【变化】包名精确到 node
+package cn.edu.nju.Iot_Verify.component.aitool.node;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool; // 需要 import 上级包的接口
+import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -25,7 +26,7 @@ public class SearchNodeTool implements AiTool {
 
     @Override
     public String getName() {
-        return "search_devices"; // AI 以后会输出这个名字
+        return "search_devices";
     }
 
     @Override
@@ -33,7 +34,7 @@ public class SearchNodeTool implements AiTool {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
-                "description", "设备模板关键词（如 'AC Cooler'）或设备名称。如果不填则返回所有设备。"
+                "description", "Device template keyword (e.g. 'AC Cooler') or device name. Leave empty to return all devices."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -44,7 +45,7 @@ public class SearchNodeTool implements AiTool {
                 "function",
                 new ChatFunction.Builder()
                         .name(getName())
-                        .description("搜索当前画布上的设备列表，支持按模板类型或名称搜索")
+                        .description("Search devices on the canvas, supports filtering by template type or name")
                         .parameters(schema)
                         .build()
         );
@@ -53,13 +54,18 @@ public class SearchNodeTool implements AiTool {
     @Override
     public String execute(String argsJson) {
         try {
+            Long userId = UserContextHolder.getUserId();
+            if (userId == null) {
+                return "{\"error\": \"User not logged in\"}";
+            }
+
             JsonNode args = objectMapper.readTree(argsJson);
             String keyword = args.path("keyword").asText("");
-            log.info("执行工具 search_devices, keyword: {}", keyword);
-            return nodeService.searchNodes(keyword);
+            log.info("Executing search_devices, keyword: {}", keyword);
+            return nodeService.searchNodes(userId, keyword);
         } catch (Exception e) {
-            log.error("search_devices 执行失败", e); // 修正日志名
-            return "{\"error\": \"查询失败: " + e.getMessage() + "\"}";
+            log.error("search_devices failed", e);
+            return "{\"error\": \"Search failed: " + e.getMessage() + "\"}";
         }
     }
 }

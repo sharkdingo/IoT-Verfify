@@ -1,26 +1,21 @@
-// src/main/java/cn/edu/nju/Iot_Verify/service/impl/BoardStorageServiceImpl.java
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.*;
 import cn.edu.nju.Iot_Verify.dto.manifest.DeviceManifest;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.DeviceNodeMapper;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.UUID;
-import java.util.stream.Collectors;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -34,178 +29,173 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    /* ===================== NODES ===================== */
-
     @Override
-    public List<DeviceNodeDto> getNodes() {
-        return nodeRepo.findAll().stream()
+    public List<DeviceNodeDto> getNodes(Long userId) {
+        return nodeRepo.findByUserId(userId).stream()
                 .map(DeviceNodeMapper::toDto)
                 .toList();
     }
 
     @Override
-    public void saveNodes(List<DeviceNodeDto> nodes) {
-        nodeRepo.deleteAll();
+    @Transactional
+    public List<DeviceNodeDto> saveNodes(Long userId, List<DeviceNodeDto> nodes) {
+        nodeRepo.deleteByUserId(userId);
         List<DeviceNodePo> pos = nodes.stream()
-                .map(DeviceNodeMapper::toPo)
+                .map(dto -> DeviceNodeMapper.toPo(dto, userId))
                 .toList();
-        nodeRepo.saveAll(pos);
+        List<DeviceNodePo> saved = nodeRepo.saveAll(pos);
+        return saved.stream().map(DeviceNodeMapper::toDto).toList();
     }
 
-    /* ===================== EDGES ===================== */
-
     @Override
-    public List<DeviceEdgeDto> getEdges() {
-        return edgeRepo.findAll().stream()
+    public List<DeviceEdgeDto> getEdges(Long userId) {
+        return edgeRepo.findByUserId(userId).stream()
                 .map(DeviceEdgeMapper::toDto)
                 .toList();
     }
 
     @Override
-    public void saveEdges(List<DeviceEdgeDto> edges) {
-        edgeRepo.deleteAll();
+    @Transactional
+    public List<DeviceEdgeDto> saveEdges(Long userId, List<DeviceEdgeDto> edges) {
+        edgeRepo.deleteByUserId(userId);
         List<DeviceEdgePo> pos = edges.stream()
-                .map(DeviceEdgeMapper::toPo)
+                .map(dto -> DeviceEdgeMapper.toPo(dto, userId))
                 .toList();
-        edgeRepo.saveAll(pos);
+        List<DeviceEdgePo> saved = edgeRepo.saveAll(pos);
+        return saved.stream().map(DeviceEdgeMapper::toDto).toList();
     }
 
-    /* ===================== SPECS ===================== */
-
     @Override
-    public List<SpecificationDto> getSpecs() {
-        return specRepo.findAll().stream()
+    public List<SpecificationDto> getSpecs(Long userId) {
+        return specRepo.findByUserId(userId).stream()
                 .map(SpecificationMapper::toDto)
                 .toList();
     }
 
     @Override
-    public void saveSpecs(List<SpecificationDto> specs) {
-        specRepo.deleteAll();
+    @Transactional
+    public List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs) {
+        specRepo.deleteByUserId(userId);
         List<SpecificationPo> pos = specs.stream()
-                .map(SpecificationMapper::toPo)
+                .map(dto -> SpecificationMapper.toPo(dto, userId))
                 .toList();
-        specRepo.saveAll(pos);
+        List<SpecificationPo> saved = specRepo.saveAll(pos);
+        return saved.stream().map(SpecificationMapper::toDto).toList();
     }
 
-    /* ===================== RULES ===================== */
-
     @Override
-    public List<RuleDto> getRules() {
-        return ruleRepo.findAll().stream().map(po -> {
+    public List<RuleDto> getRules(Long userId) {
+        return ruleRepo.findByUserId(userId).stream().map(po -> {
             RuleDto dto = new RuleDto();
             dto.setId(po.getId());
             dto.setToId(po.getToId());
             dto.setToApi(po.getToApi());
             dto.setTemplateLabel(po.getTemplateLabel());
-            try {
-                List<SourceEntryDto> sources = MAPPER.readValue(po.getSourcesJson(), new com.fasterxml.jackson.core.type.TypeReference<List<SourceEntryDto>>() {});
-                dto.setSources(sources);
-            } catch (Exception e) {
-                dto.setSources(List.of());
-            }
+            List<SourceEntryDto> sources = JsonUtils.fromJsonOrDefault(
+                    po.getSourcesJson(),
+                    new TypeReference<List<SourceEntryDto>>() {},
+                    List.of()
+            );
+            dto.setSources(sources);
             return dto;
         }).toList();
     }
 
     @Override
     @Transactional
-    public void saveRules(List<RuleDto> rules) {
-        ruleRepo.deleteAll();
-        List<RulePo> pos = rules.stream().map(r -> {
-            try {
-                String json = MAPPER.writeValueAsString(r.getSources() == null ? List.of() : r.getSources());
-                return RulePo.builder()
-                        .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
-                        .sourcesJson(json)
-                        .toId(r.getToId())
-                        .toApi(r.getToApi())
-                        .templateLabel(r.getTemplateLabel())
-                        .build();
-            } catch (Exception e) {
-                return RulePo.builder()
-                        .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
-                        .sourcesJson("[]")
-                        .toId(r.getToId())
-                        .toApi(r.getToApi())
-                        .templateLabel(r.getTemplateLabel())
-                        .build();
-            }
-        }).toList();
+    public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
+        ruleRepo.deleteByUserId(userId);
+        List<RulePo> pos = rules.stream().map(r -> RulePo.builder()
+                .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
+                .userId(userId)
+                .sourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()))
+                .toId(r.getToId())
+                .toApi(r.getToApi())
+                .templateLabel(r.getTemplateLabel())
+                .build()
+        ).toList();
         ruleRepo.saveAll(pos);
 
-        // generate edges
-        try {
-            List<DeviceEdgeDto> edges = new ArrayList<>();
-            for (RuleDto r : rules) {
-                if (r.getSources() == null) continue;
-                for (SourceEntryDto s : r.getSources()) {
-                    if (s == null || s.getFromId() == null || s.getFromId().isBlank()) continue;
-                    DeviceEdgeDto edge = new DeviceEdgeDto();
-                    edge.setId(UUID.randomUUID().toString());
-                    edge.setFrom(s.getFromId());
-                    edge.setTo(r.getToId());
+        syncEdgesFromRules(userId, rules);
 
-                    // 先查询数据库节点
-                    DeviceNodePo fromNode = nodeRepo.findById(s.getFromId()).orElse(null);
-                    DeviceNodePo toNode = nodeRepo.findById(r.getToId()).orElse(null);
-
-                    // 填充标签（优先使用数据库节点的 label）
-                    if (fromNode != null && fromNode.getLabel() != null) {
-                        edge.setFromLabel(fromNode.getLabel());
-                    } else {
-                        edge.setFromLabel(s.getFromLabel() == null ? "" : s.getFromLabel());
-                    }
-                    if (toNode != null && toNode.getLabel() != null) {
-                        edge.setToLabel(toNode.getLabel());
-                    } else {
-                        edge.setToLabel("");
-                    }
-                    edge.setFromApi(s.getFromApi() == null ? "" : s.getFromApi());
-                    edge.setToApi(r.getToApi() == null ? "" : r.getToApi());
-                    DeviceEdgeDto.Point fp = new DeviceEdgeDto.Point();
-                    DeviceEdgeDto.Point tp = new DeviceEdgeDto.Point();
-                    if (fromNode != null) { fp.setX(fromNode.getPosX()); fp.setY(fromNode.getPosY()); } else { fp.setX(0.0); fp.setY(0.0); }
-                    if (toNode != null) { tp.setX(toNode.getPosX()); tp.setY(toNode.getPosY()); } else { tp.setX(0.0); tp.setY(0.0); }
-                    edge.setFromPos(fp);
-                    edge.setToPos(tp);
-                    edges.add(edge);
-                }
-            }
-            if (!edges.isEmpty()) {
-                this.saveEdges(edges);
-            } else {
-                edgeRepo.deleteAll();
-            }
-        } catch (Exception ignored) {}
+        return getRules(userId);
     }
 
-    /* ===================== LAYOUT ===================== */
+    private void syncEdgesFromRules(Long userId, List<RuleDto> rules) {
+        List<DeviceEdgeDto> edges = new ArrayList<>();
+        for (RuleDto r : rules) {
+            if (r.getSources() == null) continue;
+            for (SourceEntryDto s : r.getSources()) {
+                if (s == null || s.getFromId() == null || s.getFromId().isBlank()) continue;
+
+                DeviceEdgeDto edge = new DeviceEdgeDto();
+                edge.setId(UUID.randomUUID().toString());
+                edge.setFrom(s.getFromId());
+                edge.setTo(r.getToId());
+
+                DeviceNodePo fromNode = nodeRepo.findById(s.getFromId()).orElse(null);
+                DeviceNodePo toNode = nodeRepo.findById(r.getToId()).orElse(null);
+
+                edge.setFromLabel(fromNode != null && fromNode.getLabel() != null
+                        ? fromNode.getLabel()
+                        : (s.getFromLabel() == null ? "" : s.getFromLabel()));
+                edge.setToLabel(toNode != null && toNode.getLabel() != null
+                        ? toNode.getLabel()
+                        : "");
+                edge.setFromApi(s.getFromApi() == null ? "" : s.getFromApi());
+                edge.setToApi(r.getToApi() == null ? "" : r.getToApi());
+
+                DeviceEdgeDto.Point fp = new DeviceEdgeDto.Point();
+                DeviceEdgeDto.Point tp = new DeviceEdgeDto.Point();
+                if (fromNode != null) {
+                    fp.setX(fromNode.getPosX());
+                    fp.setY(fromNode.getPosY());
+                } else {
+                    fp.setX(0.0);
+                    fp.setY(0.0);
+                }
+                if (toNode != null) {
+                    tp.setX(toNode.getPosX());
+                    tp.setY(toNode.getPosY());
+                } else {
+                    tp.setX(0.0);
+                    tp.setY(0.0);
+                }
+                edge.setFromPos(fp);
+                edge.setToPos(tp);
+                edges.add(edge);
+            }
+        }
+
+        if (!edges.isEmpty()) {
+            this.saveEdges(userId, edges);
+        } else {
+            edgeRepo.deleteByUserId(userId);
+        }
+    }
 
     @Override
-    public BoardLayoutDto getLayout() {
-        BoardLayoutPo po = layoutRepo.findById((byte) 1).orElseGet(() -> {
+    public BoardLayoutDto getLayout(Long userId) {
+        BoardLayoutPo po = layoutRepo.findByUserId(userId).orElseGet(() -> {
             BoardLayoutPo created = BoardLayoutPo.builder()
-                    .id((byte) 1)
-                    // 默认位置
+                    .userId(userId)
                     .inputX(24.0).inputY(24.0)
                     .statusX(1040.0).statusY(80.0)
                     .canvasPanX(0.0).canvasPanY(0.0).canvasZoom(1.0)
-                    // 默认 Dock 状态 (Input)
                     .inputIsDocked(false).inputDockSide(null)
                     .inputLastPosX(24.0).inputLastPosY(24.0)
-                    // 默认 Dock 状态 (Status)
                     .statusIsDocked(false).statusDockSide(null)
                     .statusLastPosX(1040.0).statusLastPosY(80.0)
                     .build();
             return layoutRepo.save(created);
         });
 
+        return mapLayoutPoToDto(po);
+    }
+
+    private BoardLayoutDto mapLayoutPoToDto(BoardLayoutPo po) {
         BoardLayoutDto dto = new BoardLayoutDto();
 
-        // 1. Panel Positions
         BoardLayoutDto.PanelPosition inputPos = new BoardLayoutDto.PanelPosition();
         inputPos.setX(po.getInputX());
         inputPos.setY(po.getInputY());
@@ -216,10 +206,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         statusPos.setY(po.getStatusY());
         dto.setStatus(statusPos);
 
-        // 2. Dock State (Mapping from PO fields to nested DTO)
         BoardLayoutDto.DockStateWrapper dockWrapper = new BoardLayoutDto.DockStateWrapper();
 
-        // --- Input Dock State ---
         BoardLayoutDto.DockState inputDock = new BoardLayoutDto.DockState();
         inputDock.setIsDocked(po.getInputIsDocked() != null ? po.getInputIsDocked() : false);
         inputDock.setSide(po.getInputDockSide());
@@ -231,7 +219,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         dockWrapper.setInput(inputDock);
 
-        // --- Status Dock State ---
         BoardLayoutDto.DockState statusDock = new BoardLayoutDto.DockState();
         statusDock.setIsDocked(po.getStatusIsDocked() != null ? po.getStatusIsDocked() : false);
         statusDock.setSide(po.getStatusDockSide());
@@ -245,7 +232,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         dto.setDockState(dockWrapper);
 
-        // 3. Canvas
         BoardLayoutDto.CanvasPan pan = new BoardLayoutDto.CanvasPan();
         pan.setX(po.getCanvasPanX());
         pan.setY(po.getCanvasPanY());
@@ -257,8 +243,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
-    public void saveLayout(BoardLayoutDto layout) {
-        // 辅助方法：安全获取 input dock state
+    public BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout) {
         boolean inDocked = false;
         String inSide = null;
         double inLastX = 24.0;
@@ -274,7 +259,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             }
         }
 
-        // 辅助方法：安全获取 status dock state
         boolean stDocked = false;
         String stSide = null;
         double stLastX = 1040.0;
@@ -289,8 +273,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 stLastY = ds.getLastPos().getY() != null ? ds.getLastPos().getY() : 80.0;
             }
         }
+
+        BoardLayoutPo existing = layoutRepo.findByUserId(userId).orElse(null);
+        Long id = existing != null ? existing.getId() : null;
+
         BoardLayoutPo po = BoardLayoutPo.builder()
-                .id((byte) 1)
+                .id(id)
+                .userId(userId)
                 .inputX(layout.getInput() != null ? layout.getInput().getX() : 24.0)
                 .inputY(layout.getInput() != null ? layout.getInput().getY() : 24.0)
                 .statusX(layout.getStatus() != null ? layout.getStatus().getX() : 1040.0)
@@ -308,104 +297,84 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .statusLastPosY(stLastY)
                 .build();
         layoutRepo.save(po);
+
+        return getLayout(userId);
     }
 
-    /* ===================== ACTIVE ===================== */
-
     @Override
-    public BoardActiveDto getActive() {
-        BoardActivePo po = activeRepo.findById((byte) 1).orElse(null);
+    public BoardActiveDto getActive(Long userId) {
+        BoardActivePo po = activeRepo.findByUserId(userId).orElse(null);
         BoardActiveDto dto = new BoardActiveDto();
 
         if (po == null) {
-            // 第一次使用给个默认展开
             dto.setInput(List.of("devices", "rules", "specs"));
             dto.setStatus(List.of("devices", "edges", "specs"));
             return dto;
         }
 
-        dto.setInput(readStringList(po.getInputTabsJson()));
-        dto.setStatus(readStringList(po.getStatusTabsJson()));
+        dto.setInput(JsonUtils.fromJsonToStringList(po.getInputTabsJson()));
+        dto.setStatus(JsonUtils.fromJsonToStringList(po.getStatusTabsJson()));
         return dto;
     }
 
     @Override
-    public void saveActive(BoardActiveDto active) {
+    public BoardActiveDto saveActive(Long userId, BoardActiveDto active) {
+        BoardActivePo existing = activeRepo.findByUserId(userId).orElse(null);
+        Long id = existing != null ? existing.getId() : null;
+
         BoardActivePo po = BoardActivePo.builder()
-                .id((byte) 1)
-                .inputTabsJson(writeStringList(active.getInput()))
-                .statusTabsJson(writeStringList(active.getStatus()))
+                .id(id)
+                .userId(userId)
+                .inputTabsJson(JsonUtils.toJsonOrEmpty(active.getInput()))
+                .statusTabsJson(JsonUtils.toJsonOrEmpty(active.getStatus()))
                 .build();
         activeRepo.save(po);
+
+        return getActive(userId);
     }
 
-    // ================= 设备模板实现 =================
-
     @Override
-    public List<DeviceTemplateDto> getDeviceTemplates() {
-        List<DeviceTemplatePo> poList = deviceTemplateRepo.findAll();
+    public List<DeviceTemplateDto> getDeviceTemplates(Long userId) {
+        List<DeviceTemplatePo> poList = deviceTemplateRepo.findByUserId(userId);
 
         return poList.stream().map(po -> {
             DeviceTemplateDto dto = new DeviceTemplateDto();
             dto.setId(po.getId().toString());
             dto.setName(po.getName());
 
-            // 反序列化：String JSON -> DeviceManifest Object
             if (po.getManifestJson() != null && !po.getManifestJson().isEmpty()) {
-                try {
-                    // [Modified] 使用 DeviceManifest.class
-                    DeviceManifest manifest = MAPPER.readValue(po.getManifestJson(), DeviceManifest.class);
-                    dto.setManifest(manifest);
-                } catch (JsonProcessingException e) {
-                    e.printStackTrace();
-                    // 容错：如果解析失败，返回 null 或空对象，防止接口崩溃
-                    dto.setManifest(new DeviceManifest());
-                }
+                DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
+                        po.getManifestJson(),
+                        new TypeReference<DeviceManifest>() {},
+                        new DeviceManifest()
+                );
+                dto.setManifest(manifest);
             }
             return dto;
-        }).collect(Collectors.toList());
+        }).toList();
     }
 
     @Override
     @Transactional
-    public void addDeviceTemplate(DeviceTemplateDto dto) {
-        // 校验名称唯一性
-        if (deviceTemplateRepo.existsByName(dto.getName())) {
-            throw new RuntimeException("Device template name '" + dto.getName() + "' already exists.");
+    public DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto dto) {
+        if (deviceTemplateRepo.existsByUserIdAndName(userId, dto.getName())) {
+            throw ConflictException.duplicateTemplate(dto.getName());
         }
 
-        try {
-            // 序列化：DeviceManifest Object -> String JSON
-            // [Modified] Jackson 会根据 DeviceManifest 的注解自动处理
-            String json = MAPPER.writeValueAsString(dto.getManifest());
+        String json = JsonUtils.toJson(dto.getManifest());
 
-            DeviceTemplatePo po = DeviceTemplatePo.builder()
-                    .name(dto.getName())
-                    .manifestJson(json)
-                    .build();
+        DeviceTemplatePo po = DeviceTemplatePo.builder()
+                .userId(userId)
+                .name(dto.getName())
+                .manifestJson(json)
+                .build();
 
-            deviceTemplateRepo.save(po);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize manifest JSON", e);
-        }
-    }
+        DeviceTemplatePo saved = deviceTemplateRepo.save(po);
 
-    /* ===================== JSON 小工具 ===================== */
-
-    private List<String> readStringList(String json) {
-        if (json == null || json.isBlank()) return Collections.emptyList();
-        try {
-            return MAPPER.readValue(json, new TypeReference<List<String>>() {});
-        } catch (Exception e) {
-            return Collections.emptyList();
-        }
-    }
-
-    private String writeStringList(List<String> list) {
-        try {
-            return MAPPER.writeValueAsString(list == null ? List.of() : list);
-        } catch (Exception e) {
-            return "[]";
-        }
+        DeviceTemplateDto result = new DeviceTemplateDto();
+        result.setId(saved.getId().toString());
+        result.setName(saved.getName());
+        result.setManifest(dto.getManifest());
+        return result;
     }
 }

@@ -16,6 +16,9 @@ public class DeviceEdgePo {
     @Column(length = 100)
     private String id;
 
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
     @Column(name = "`from`", nullable = false, length = 100)
     private String from;
 

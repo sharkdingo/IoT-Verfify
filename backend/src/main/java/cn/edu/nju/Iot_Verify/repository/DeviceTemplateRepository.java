@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/repository/DeviceTemplateRepository.java
 package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
@@ -11,16 +10,14 @@ import java.util.Optional;
 
 @Repository
 public interface DeviceTemplateRepository extends JpaRepository<DeviceTemplatePo, Long> {
+    List<DeviceTemplatePo> findByUserId(Long userId);
+    boolean existsByUserIdAndName(Long userId, String name);
 
-    // 检查名称是否存在，用于创建时的查重
-    boolean existsByName(String name);
+    @Query("SELECT t.name FROM DeviceTemplatePo t WHERE t.userId = :userId")
+    List<String> findAllNamesByUserId(Long userId);
 
-    // 获取所有模板名称（用于业务层的模糊匹配算法）
-    @Query("SELECT t.name FROM DeviceTemplatePo t")
-    List<String> findAllNames();
+    @Query("SELECT t.manifestJson FROM DeviceTemplatePo t WHERE t.userId = :userId")
+    List<String> findAllManifestJsonsByUserId(Long userId);
 
-    @Query("SELECT t.manifestJson FROM DeviceTemplatePo t")
-    List<String> findAllManifestJsons();
-
-    Optional<DeviceTemplatePo> findByName(String templateName);
+    Optional<DeviceTemplatePo> findByUserIdAndName(Long userId, String templateName);
 }

@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/util/DeviceNodeMapper.java
 package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.dto.DeviceNodeDto;
@@ -22,9 +21,10 @@ public class DeviceNodeMapper {
         return dto;
     }
 
-    public static DeviceNodePo toPo(DeviceNodeDto dto) {
+    public static DeviceNodePo toPo(DeviceNodeDto dto, Long userId) {
         return DeviceNodePo.builder()
                 .id(dto.getId())
+                .userId(userId)
                 .templateName(dto.getTemplateName())
                 .label(dto.getLabel())
                 .state(dto.getState())

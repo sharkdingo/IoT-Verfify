@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/repository/DeviceNodeRepository.java
 package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
@@ -8,9 +7,10 @@ import java.util.List;
 import java.util.Optional;
 
 public interface DeviceNodeRepository extends JpaRepository<DeviceNodePo, String> {
-    List<DeviceNodePo> findByLabelContaining(String label);
-
-    List<DeviceNodePo> findByTemplateNameContainingIgnoreCaseOrLabelContainingIgnoreCase(String templateKeyword, String labelKeyword);
-
-    Optional<DeviceNodePo> findByLabel(String label);
+    List<DeviceNodePo> findByUserId(Long userId);
+    List<DeviceNodePo> findByUserIdAndLabelContaining(Long userId, String label);
+    List<DeviceNodePo> findByUserIdAndTemplateNameContainingIgnoreCaseOrUserIdAndLabelContainingIgnoreCase(
+            Long userId1, String templateKeyword, Long userId2, String labelKeyword);
+    Optional<DeviceNodePo> findByUserIdAndLabel(Long userId, String label);
+    void deleteByUserId(Long userId);
 }

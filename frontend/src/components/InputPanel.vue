@@ -89,7 +89,7 @@ const getFromApisFor = (source: { fromId: string; fromApi: string }) => {
 const apiPlaceholder = computed(() => {
   const v = t('app.api')
   // 如果没有翻译，t 会返回 key，例如 "app.api"，则回退到 'API'
-  return (typeof v === 'string' && v.includes('app.api')) ? 'API' : v
+  return v.includes('app.api') ? 'API' : v
 })
 
 const getDeviceDisplayName = (node: DeviceNode) => {

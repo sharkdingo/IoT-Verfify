@@ -15,6 +15,9 @@ public class RulePo {
     @Column(length = 100)
     private String id;
 
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
     @Column(name = "sources_json", columnDefinition = "JSON", nullable = false)
     private String sourcesJson;
 

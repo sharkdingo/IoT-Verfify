@@ -1,7 +1,7 @@
-// src/main/java/cn/edu/nju/Iot_Verify/controller/BoardStorageController.java
 package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.*;
+import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -16,72 +16,72 @@ public class BoardStorageController {
     private final BoardStorageService boardService;
 
     @GetMapping("/nodes")
-    public List<DeviceNodeDto> getNodes() {
-        return boardService.getNodes();
+    public Result<List<DeviceNodeDto>> getNodes(@CurrentUser Long userId) {
+        return Result.success(boardService.getNodes(userId));
     }
 
     @PostMapping("/nodes")
-    public void saveNodes(@RequestBody List<DeviceNodeDto> nodes) {
-        boardService.saveNodes(nodes);
+    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @RequestBody List<DeviceNodeDto> nodes) {
+        return Result.success(boardService.saveNodes(userId, nodes));
     }
 
     @GetMapping("/edges")
-    public List<DeviceEdgeDto> getEdges() {
-        return boardService.getEdges();
+    public Result<List<DeviceEdgeDto>> getEdges(@CurrentUser Long userId) {
+        return Result.success(boardService.getEdges(userId));
     }
 
     @PostMapping("/edges")
-    public void saveEdges(@RequestBody List<DeviceEdgeDto> edges) {
-        boardService.saveEdges(edges);
+    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @RequestBody List<DeviceEdgeDto> edges) {
+        return Result.success(boardService.saveEdges(userId, edges));
     }
 
     @GetMapping("/specs")
-    public List<SpecificationDto> getSpecs() {
-        return boardService.getSpecs();
+    public Result<List<SpecificationDto>> getSpecs(@CurrentUser Long userId) {
+        return Result.success(boardService.getSpecs(userId));
     }
 
     @PostMapping("/specs")
-    public void saveSpecs(@RequestBody List<SpecificationDto> specs) {
-        boardService.saveSpecs(specs);
+    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @RequestBody List<SpecificationDto> specs) {
+        return Result.success(boardService.saveSpecs(userId, specs));
     }
 
     @GetMapping("/rules")
-    public List<RuleDto> getRules() {
-        return boardService.getRules();
+    public Result<List<RuleDto>> getRules(@CurrentUser Long userId) {
+        return Result.success(boardService.getRules(userId));
     }
 
     @PostMapping("/rules")
-    public void saveRules(@RequestBody List<RuleDto> rules) {
-        boardService.saveRules(rules);
+    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @RequestBody List<RuleDto> rules) {
+        return Result.success(boardService.saveRules(userId, rules));
     }
 
     @GetMapping("/layout")
-    public BoardLayoutDto getLayout() {
-        return boardService.getLayout();
+    public Result<BoardLayoutDto> getLayout(@CurrentUser Long userId) {
+        return Result.success(boardService.getLayout(userId));
     }
 
     @PostMapping("/layout")
-    public void saveLayout(@RequestBody BoardLayoutDto layout) {
-        boardService.saveLayout(layout);
+    public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @RequestBody BoardLayoutDto layout) {
+        return Result.success(boardService.saveLayout(userId, layout));
     }
 
     @GetMapping("/active")
-    public BoardActiveDto getActive() {
-        return boardService.getActive();
+    public Result<BoardActiveDto> getActive(@CurrentUser Long userId) {
+        return Result.success(boardService.getActive(userId));
     }
 
     @PostMapping("/active")
-    public void saveActive(@RequestBody BoardActiveDto active) {
-        boardService.saveActive(active);
+    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @RequestBody BoardActiveDto active) {
+        return Result.success(boardService.saveActive(userId, active));
     }
 
     @GetMapping("/templates")
-    public List<DeviceTemplateDto> getTemplates() {
-        return boardService.getDeviceTemplates();
+    public Result<List<DeviceTemplateDto>> getTemplates(@CurrentUser Long userId) {
+        return Result.success(boardService.getDeviceTemplates(userId));
     }
 
     @PostMapping("/templates")
-    public void addTemplate(@RequestBody DeviceTemplateDto dto) {
-        boardService.addDeviceTemplate(dto);
+    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @RequestBody DeviceTemplateDto dto) {
+        return Result.success(boardService.addDeviceTemplate(userId, dto));
     }
 }

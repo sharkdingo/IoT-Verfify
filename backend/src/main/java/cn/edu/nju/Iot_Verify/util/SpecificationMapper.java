@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/util/SpecificationMapper.java
 package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.dto.SpecConditionDto;
@@ -25,9 +24,10 @@ public class SpecificationMapper {
         return dto;
     }
 
-    public static SpecificationPo toPo(SpecificationDto dto) {
+    public static SpecificationPo toPo(SpecificationDto dto, Long userId) {
         return SpecificationPo.builder()
                 .id(dto.getId())
+                .userId(userId)
                 .templateId(dto.getTemplateId())
                 .templateLabel(dto.getTemplateLabel())
                 .aConditionsJson(writeList(dto.getAConditions()))
@@ -39,12 +39,8 @@ public class SpecificationMapper {
     private static List<SpecConditionDto> readList(String json) {
         if (json == null || json.isBlank()) return Collections.emptyList();
         try {
-            return OBJECT_MAPPER.readValue(
-                    json,
-                    new TypeReference<List<SpecConditionDto>>() {}
-            );
+            return OBJECT_MAPPER.readValue(json, new TypeReference<List<SpecConditionDto>>() {});
         } catch (Exception e) {
-            // 生产项目里建议好好处理，这里简单兜底
             return Collections.emptyList();
         }
     }

@@ -2,7 +2,7 @@
 /* =================================================================================
  * 1. Imports & Setup
  * ================================================================================= */
-import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
+import {ref, reactive, onMounted, onBeforeUnmount, watch, UnwrapRef} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
@@ -53,8 +53,8 @@ const { t } = useI18n()
  * ================================================================================= */
 
 const DEFAULT_PANEL_PADDING = 10 // 稍微增加一点间距比较美观
-const DOCK_SNAP_THRESHOLD = 1  // [Fix] 恢复阈值，否则无法自动吸附
-const DOCK_ICON_SIZE = 48
+const DOCK_SNAP_THRESHOLD = 1
+const DOCK_ICON_SIZE = 24  // 与停靠图标实际尺寸一致
 
 const CARD_WIDTH_MIN = 192 // 12rem
 const CARD_WIDTH_MAX = 384 // 24rem
@@ -419,8 +419,8 @@ const restorePanel = (key: PanelKey) => {
   const winW = window.innerWidth
   const winH = window.innerHeight
 
-  let newX = panelPositions[key].x
-  let newY = panelPositions[key].y
+  let newX: UnwrapRef<PanelPosition["x"]>
+  let newY: UnwrapRef<PanelPosition["y"]>
 
   if (side === 'left') {
     newX = padding
@@ -825,7 +825,7 @@ const handleSaveTemplate = async (newTpl: DeviceTemplate) => {
 // 1. 定义刷新设备的函数
 const refreshDevices = async () => {
   console.log('🔄 Board组件收到指令，正在刷新设备列表...')
-  try { nodes.value = (await boardApi.getNodes()).data } catch(e) {
+  try { nodes.value = await boardApi.getNodes() } catch(e) {
     console.error('加载设备失败', e)
     nodes.value = [] }
 }
@@ -833,7 +833,7 @@ const refreshDevices = async () => {
 // 2.定义刷新规则的函数
 const refreshRules = async () => {
   console.log('🔄 Board组件收到指令，正在刷新规则列表...')
-  try { edges.value = (await boardApi.getEdges()).data } catch(e) {
+  try { edges.value = await boardApi.getEdges() } catch(e) {
     console.error('加载规则失败', e)
     edges.value = []
   }
@@ -842,7 +842,7 @@ const refreshRules = async () => {
 // 3.定义刷新规约的函数
 const refreshSpecifications = async () => {
   console.log('🔄 Board组件收到指令，正在刷新规约列表...')
-  try { specifications.value = (await boardApi.getSpecs()).data } catch(e) {
+  try { specifications.value = await boardApi.getSpecs() } catch(e) {
     console.error('加载规约失败', e)
     specifications.value = []
   }
@@ -858,8 +858,7 @@ onMounted(async () => {
 
   // Load Layout
   try {
-    const res = await boardApi.getLayout()
-    const layout = res.data
+    const layout = await boardApi.getLayout()
 
     // Panel Position
     if (layout?.input && layout?.status) {
@@ -898,9 +897,9 @@ onMounted(async () => {
 
   // Load Active Folders
   try {
-    const res = await boardApi.getActive()
-    if (Array.isArray(res.data?.input)) inputActive.value = res.data.input
-    if (Array.isArray(res.data?.status)) statusActive.value = res.data.status
+    const active = await boardApi.getActive()
+    if (Array.isArray(active?.input)) inputActive.value = active.input
+    if (Array.isArray(active?.status)) statusActive.value = active.status
   } catch {}
 
   window.addEventListener('keydown', onGlobalKeydown)

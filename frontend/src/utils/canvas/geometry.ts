@@ -1,6 +1,6 @@
 // src/utils/canvas/geometry.ts
-import type { DeviceNode } from '../../types/node'
-import type { DeviceEdge } from '../../types/edge'
+import type { DeviceNode } from '@/types/node.ts'
+import type { DeviceEdge } from '@/types/edge.ts'
 import { getLinkPoints, getSelfLoopPath } from '../rule'
 
 /**

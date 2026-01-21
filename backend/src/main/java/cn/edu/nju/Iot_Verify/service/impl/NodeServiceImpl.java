@@ -23,7 +23,6 @@ import java.util.UUID;
 public class NodeServiceImpl implements NodeService {
 
     private final DeviceNodeRepository nodeRepo;
-    // 移除直接依赖 templateRepo，改用 Service
     private final DeviceTemplateService deviceTemplateService;
     private final ObjectMapper objectMapper;
 
@@ -31,23 +30,20 @@ public class NodeServiceImpl implements NodeService {
     private static final String HARD_FALLBACK_STATE = "Working";
 
     @Override
-    public String searchNodes(String keyword) {
+    public String searchNodes(Long userId, String keyword) {
         List<DeviceNodePo> results;
 
-        // 1. 如果关键词为空，返回所有
         if (keyword == null || keyword.trim().isEmpty() || keyword.equalsIgnoreCase("所有设备")) {
-            results = nodeRepo.findAll();
+            results = nodeRepo.findByUserId(userId);
         } else {
-            // 2. 调用混合搜索
-            results = nodeRepo.findByTemplateNameContainingIgnoreCaseOrLabelContainingIgnoreCase(keyword, keyword);
+            results = nodeRepo.findByUserIdAndTemplateNameContainingIgnoreCaseOrUserIdAndLabelContainingIgnoreCase(
+                    userId, keyword, userId, keyword);
         }
 
-        // 3. 序列化结果
         try {
             if (results.isEmpty()) {
                 return "未找到匹配 '" + keyword + "' 的设备。";
             }
-            // 简单序列化
             return objectMapper.writeValueAsString(results);
         } catch (JsonProcessingException e) {
             log.error("序列化搜索结果失败", e);
@@ -57,26 +53,20 @@ public class NodeServiceImpl implements NodeService {
 
     @Override
     @Transactional
-    public String addNode(String reqTemplate, String label, Double x, Double y, String state, Integer w, Integer h) {
+    public String addNode(Long userId, String reqTemplate, String label, Double x, Double y, String state, Integer w, Integer h) {
 
         String rawTemplate = reqTemplate != null ? reqTemplate.trim() : "";
         String finalTemplate = rawTemplate;
         StringBuilder resultMsg = new StringBuilder();
 
-        // 2. 核心：模板校验与模糊匹配
-        // 使用 Service 检查 (现在支持忽略大小写了)
-        if (!deviceTemplateService.checkTemplateExists(rawTemplate)) {
-
-            List<String> allTemplates = deviceTemplateService.getAllTemplateNames();
-
+        if (!deviceTemplateService.checkTemplateExists(userId, rawTemplate)) {
+            List<String> allTemplates = deviceTemplateService.getAllTemplateNames(userId);
             log.info("User requested template: [{}], Available templates in DB: {}", rawTemplate, allTemplates);
 
             String bestMatch = findBestMatch(rawTemplate, allTemplates);
 
             if (bestMatch != null) {
                 finalTemplate = bestMatch;
-
-                // Ignore case/space difference
                 String normRaw = rawTemplate.replace(" ", "").toLowerCase();
                 String normMatch = bestMatch.replace(" ", "").toLowerCase();
 
@@ -90,25 +80,22 @@ public class NodeServiceImpl implements NodeService {
                 resultMsg.append(String.format("【系统提示】无法识别模板 '%s'，已使用默认模板 '%s'。", rawTemplate, finalTemplate));
             }
         }
+        
         String finalState = state;
-        // 只有当 AI 没传状态 (null 或空) 时，才去查 Manifest
         if (finalState == null || finalState.trim().isEmpty() || finalState.equals("null")) {
-            finalState = getInitStateFromTemplate(finalTemplate);
+            finalState = getInitStateFromTemplate(userId, finalTemplate);
         }
-        // 2. 处理默认值
+        
         double posX = (x != null) ? x : 250.0;
         double posY = (y != null) ? y : 250.0;
         int width = (w != null) ? w : 110;
         int height = (h != null) ? h : 90;
 
-        // 3. 简化后的 ID 生成逻辑
         String generatedId;
 
-        // 3.1. 判断是否可以直接使用用户提供的 Label
         if (label != null && !label.equals("null") && !label.isEmpty() && !nodeRepo.existsById(label)) {
             generatedId = label;
         } else {
-            // 3.2. 进入自动生成逻辑
             if (label != null && nodeRepo.existsById(label) && !label.equals("null") && !label.isEmpty()) {
                 resultMsg.append(String.format("【系统提示】您指定的名称 '%s' 已经存在，系统已为您自动生成新名称。\n", label));
             }
@@ -128,9 +115,9 @@ public class NodeServiceImpl implements NodeService {
             } while (nodeRepo.existsById(generatedId));
         }
 
-        // 4. 构建 PO
         DeviceNodePo po = DeviceNodePo.builder()
                 .id(generatedId)
+                .userId(userId)
                 .templateName(finalTemplate)
                 .label(generatedId)
                 .posX(posX)
@@ -140,23 +127,19 @@ public class NodeServiceImpl implements NodeService {
                 .state(finalState)
                 .build();
 
-        // 5. 落库
         nodeRepo.save(po);
 
-        // 6. 返回结果
         resultMsg.insert(0, String.format("成功创建设备: %s。", generatedId));
         return resultMsg.toString();
     }
 
     @Override
     @Transactional
-    public String deleteNode(String label) {
-        // 1. 根据 Label 查找设备
-        Optional<DeviceNodePo> nodeOpt = nodeRepo.findByLabel(label);
+    public String deleteNode(Long userId, String label) {
+        Optional<DeviceNodePo> nodeOpt = nodeRepo.findByUserIdAndLabel(userId, label);
 
         if (nodeOpt.isPresent()) {
             DeviceNodePo node = nodeOpt.get();
-            // 2. 获取 ID 并删除
             nodeRepo.delete(node);
             log.info("成功删除设备: {}", label);
             return "成功删除设备: " + label;
@@ -165,11 +148,6 @@ public class NodeServiceImpl implements NodeService {
         }
     }
 
-    // ... findBestMatch 和 calculateLevenshteinDistance 保持不变 ...
-
-    /**
-     * 寻找最佳匹配项
-     */
     private String findBestMatch(String target, List<String> candidates) {
         if (candidates == null || candidates.isEmpty()) return null;
 
@@ -177,12 +155,10 @@ public class NodeServiceImpl implements NodeService {
         int minDistance = Integer.MAX_VALUE;
 
         for (String candidate : candidates) {
-            // 1. 简单的包含匹配优先 (比如 "Big Switch" -> "Switch")
             if (candidate.toLowerCase().contains(target.toLowerCase()) || target.toLowerCase().contains(candidate.toLowerCase())) {
                 return candidate;
             }
 
-            // 2. 编辑距离计算 (手写算法，无需依赖包)
             int dist = calculateLevenshteinDistance(target.toLowerCase(), candidate.toLowerCase());
 
             if (dist < minDistance) {
@@ -191,7 +167,6 @@ public class NodeServiceImpl implements NodeService {
             }
         }
 
-        // 阈值控制：如果差异过大（超过目标长度的一半 + 2），则认为匹配失败
         if (minDistance > target.length() / 2 + 2) {
             return null;
         }
@@ -215,14 +190,9 @@ public class NodeServiceImpl implements NodeService {
         return dp[len1][len2];
     }
 
-    /**
-     * 【辅助方法】解析 manifestJson 获取 InitState
-     * 修改：使用 DeviceTemplateService 替代直接查库
-     */
-    private String getInitStateFromTemplate(String templateName) {
+    private String getInitStateFromTemplate(Long userId, String templateName) {
         try {
-            // 改用 Service 获取
-            Optional<DeviceTemplatePo> templateOpt = deviceTemplateService.findTemplateByName(templateName);
+            Optional<DeviceTemplatePo> templateOpt = deviceTemplateService.findTemplateByName(userId, templateName);
 
             if (templateOpt.isEmpty()) {
                 log.warn("模板 {} 不存在，使用硬兜底状态", templateName);

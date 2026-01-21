@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/util/DeviceEdgeMapper.java
 package cn.edu.nju.Iot_Verify.util;
 
 import cn.edu.nju.Iot_Verify.dto.DeviceEdgeDto;
@@ -28,11 +27,12 @@ public class DeviceEdgeMapper {
         return dto;
     }
 
-    public static DeviceEdgePo toPo(DeviceEdgeDto dto) {
+    public static DeviceEdgePo toPo(DeviceEdgeDto dto, Long userId) {
         DeviceEdgeDto.Point fp = dto.getFromPos();
         DeviceEdgeDto.Point tp = dto.getToPos();
         return DeviceEdgePo.builder()
                 .id(dto.getId())
+                .userId(userId)
                 .from(dto.getFrom())
                 .to(dto.getTo())
                 .fromLabel(dto.getFromLabel())

@@ -126,6 +126,32 @@ const messages = {
             varName: "变量名称",
             isInside: "是否在内部",
             publicVisible: "公开可见"
+        },
+
+        auth: {
+            welcomeBack: '欢迎回来',
+            phoneRequired: '请输入手机号',
+            phoneInvalid: '手机号格式不正确',
+            phonePlaceholder: '请输入手机号',
+            passwordRequired: '请输入密码',
+            passwordPlaceholder: '请输入密码',
+            usernameRequired: '请输入用户名',
+            usernamePlaceholder: '请输入用户名（3-20字符）',
+            usernameLength: '用户名需为3-20个字符',
+            passwordLength: '密码需为6-20个字符',
+            confirmPasswordRequired: '请确认密码',
+            confirmPasswordPlaceholder: '请再次输入密码',
+            passwordMismatch: '两次输入的密码不一致',
+            login: '登 录',
+            register: '注 册',
+            loginSuccess: '登录成功',
+            loginFailed: '登录失败，请检查手机号和密码',
+            registerSuccess: '注册成功，请登录',
+            registerFailed: '注册失败',
+            noAccount: '还没有账号？',
+            registerNow: '立即注册',
+            haveAccount: '已有账号？',
+            loginNow: '立即登录'
         }
     },
 
@@ -249,6 +275,31 @@ const messages = {
             isInside: 'Is Inside',
             publicVisible: 'Public Visible',
 
+            auth: {
+                welcomeBack: 'Welcome Back',
+                phoneRequired: 'Please enter your phone number',
+                phoneInvalid: 'Invalid phone number format',
+                phonePlaceholder: 'Enter phone number',
+                passwordRequired: 'Please enter your password',
+                passwordPlaceholder: 'Enter password',
+                usernameRequired: 'Please enter your username',
+                usernamePlaceholder: 'Username (3-20 characters)',
+                usernameLength: 'Username must be 3-20 characters',
+                passwordLength: 'Password must be 6-20 characters',
+                confirmPasswordRequired: 'Please confirm your password',
+                confirmPasswordPlaceholder: 'Confirm password',
+                passwordMismatch: 'Passwords do not match',
+                login: 'Login',
+                register: 'Register',
+                loginSuccess: 'Login successful',
+                loginFailed: 'Login failed. Please check your phone number and password.',
+                registerSuccess: 'Registration successful. Please login.',
+                registerFailed: 'Registration failed',
+                noAccount: "Don't have an account?",
+                registerNow: 'Register Now',
+                haveAccount: 'Already have an account?',
+                loginNow: 'Login Now'
+            }
         }
     }
 }

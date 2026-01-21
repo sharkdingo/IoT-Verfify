@@ -54,8 +54,9 @@ buildNumber.properties
 .mvn/timing.properties
 .mvn/wrapper/maven-wrapper.jar
 
-# 环境文件
+# 环境文件（前端必需，提交到仓库）
 .env
+!.env.example  # 环境变量示例模板
 
 # Vite 相关
 *.local

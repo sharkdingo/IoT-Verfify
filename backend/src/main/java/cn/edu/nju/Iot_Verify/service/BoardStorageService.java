@@ -1,27 +1,28 @@
-// src/main/java/cn/edu/nju/Iot_Verify/service/BoardStorageService.java
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.*;
+
 import java.util.List;
 
 public interface BoardStorageService {
-    List<DeviceNodeDto> getNodes();
-    void saveNodes(List<DeviceNodeDto> nodes);
+    List<DeviceNodeDto> getNodes(Long userId);
+    List<DeviceNodeDto> saveNodes(Long userId, List<DeviceNodeDto> nodes);
 
-    List<DeviceEdgeDto> getEdges();
-    void saveEdges(List<DeviceEdgeDto> edges);
+    List<DeviceEdgeDto> getEdges(Long userId);
+    List<DeviceEdgeDto> saveEdges(Long userId, List<DeviceEdgeDto> edges);
 
-    List<SpecificationDto> getSpecs();
-    void saveSpecs(List<SpecificationDto> specs);
-    List<RuleDto> getRules();
-    void saveRules(List<RuleDto> rules);
+    List<SpecificationDto> getSpecs(Long userId);
+    List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs);
 
-    BoardLayoutDto getLayout();
-    void saveLayout(BoardLayoutDto layout);
+    List<RuleDto> getRules(Long userId);
+    List<RuleDto> saveRules(Long userId, List<RuleDto> rules);
 
-    BoardActiveDto getActive();
-    void saveActive(BoardActiveDto active);
+    BoardLayoutDto getLayout(Long userId);
+    BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout);
 
-    List<DeviceTemplateDto> getDeviceTemplates();
-    void addDeviceTemplate(DeviceTemplateDto templateDto);
+    BoardActiveDto getActive(Long userId);
+    BoardActiveDto saveActive(Long userId, BoardActiveDto active);
+
+    List<DeviceTemplateDto> getDeviceTemplates(Long userId);
+    DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);
 }

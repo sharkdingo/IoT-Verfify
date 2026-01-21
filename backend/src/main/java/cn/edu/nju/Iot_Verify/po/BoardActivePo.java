@@ -1,4 +1,3 @@
-// src/main/java/cn/edu/nju/Iot_Verify/po/BoardActivePo.java
 package cn.edu.nju.Iot_Verify.po;
 
 import jakarta.persistence.*;
@@ -13,7 +12,11 @@ import lombok.*;
 public class BoardActivePo {
 
     @Id
-    private Byte id; // 永远1
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "user_id", nullable = false, unique = true)
+    private Long userId;
 
     @Column(name = "input_tabs", columnDefinition = "JSON", nullable = false)
     private String inputTabsJson;

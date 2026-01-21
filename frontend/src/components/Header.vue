@@ -1,77 +1,158 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { computed, ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessageBox } from 'element-plus';
+import { useI18n } from 'vue-i18n';
+import { useAuth } from '@/stores/auth';
+import { authApi } from '@/api/auth';
 
-const { locale } = useI18n()
+const { locale } = useI18n();
+const router = useRouter();
+const { state, logout, getUser } = useAuth();
 
 // 语言切换
 const isZh = computed({
   get: () => locale.value === 'zh-CN',
   set: (val: boolean) => {
-    locale.value = val ? 'zh-CN' : 'en'
-    localStorage.setItem('locale', locale.value)
+    locale.value = val ? 'zh-CN' : 'en';
+    localStorage.setItem('locale', locale.value);
   }
-})
+});
 
 const toggleLang = () => {
-  isZh.value = !isZh.value
-}
+  isZh.value = !isZh.value;
+};
 
 // 主题切换：dark / light
 const theme = ref<'dark' | 'light'>(
-    (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
-)
+  (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
+);
 
 const isDark = computed({
   get: () => theme.value === 'dark',
   set: (val: boolean) => {
-    theme.value = val ? 'dark' : 'light'
-    document.documentElement.setAttribute('data-theme', theme.value)
-    localStorage.setItem('theme', theme.value)
+    theme.value = val ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme.value);
+    localStorage.setItem('theme', theme.value);
   }
-})
+});
 
 const toggleTheme = () => {
-  isDark.value = !isDark.value
-}
+  isDark.value = !isDark.value;
+};
 
 onMounted(() => {
-  // 初始化时应用主题
-  document.documentElement.setAttribute('data-theme', theme.value)
-})
+  document.documentElement.setAttribute('data-theme', theme.value);
+});
+
+// 用户相关
+const currentUser = computed(() => getUser());
+const isLoggedIn = computed(() => state.isLoggedIn);
+
+const handleLogout = async () => {
+  try {
+    await ElMessageBox.confirm(
+      isZh.value ? '确定要退出登录吗？' : 'Are you sure you want to log out?',
+      isZh.value ? '提示' : 'Confirm',
+      { type: 'warning' }
+    );
+    
+    // 调用登出API（可选，失败也清除本地状态）
+    try {
+      await authApi.logout();
+    } catch {
+      // API失败不影响本地登出
+    }
+    
+    logout();
+    ElMessageBox.close();
+    router.push('/login');
+  } catch {
+    // 用户取消
+  }
+};
+
+const goToLogin = () => {
+  router.push('/login');
+};
+
+const goToRegister = () => {
+  router.push('/register');
+};
 </script>
 
 <template>
   <el-header class="custom-header" height="60px">
     <el-row :gutter="10" align="middle" style="width: 100%; height: 100%;">
-      <el-col :span="5" class="header-left">
-        <div class="brand-container">
+      <el-col :span="4" class="header-left">
+        <div class="brand-container" @click="router.push('/board')">
           <img
-              src="/IoT-Verify.png"
-              alt="IoT-Verify Logo"
-              class="brand-logo"
+            src="/IoT-Verify.png"
+            alt="IoT-Verify Logo"
+            class="brand-logo"
           />
           <h1 class="brand-text">IoT-Verify</h1>
         </div>
       </el-col>
 
-      <el-col :span="4" :offset="15" class="header-right">
-        <el-button
+      <el-col :span="20" class="header-right">
+        <!-- 登录状态显示 -->
+        <template v-if="isLoggedIn">
+          <div class="user-info">
+            <el-avatar :size="32" class="user-avatar">
+              {{ currentUser?.username?.charAt(0)?.toUpperCase() }}
+            </el-avatar>
+            <span class="username">{{ currentUser?.username }}</span>
+          </div>
+          
+          <el-button
             size="small"
             round
-            class="lang-btn"
-            style="margin-right: 8px"
-            @click="toggleTheme"
+            class="header-btn"
+            @click="handleLogout"
+          >
+            {{ isZh ? '退出登录' : 'Logout' }}
+          </el-button>
+        </template>
+        
+        <!-- 未登录状态显示 -->
+        <template v-else>
+          <el-button
+            size="small"
+            round
+            class="header-btn"
+            @click="goToLogin"
+          >
+            {{ isZh ? '登录' : 'Login' }}
+          </el-button>
+          
+          <el-button
+            size="small"
+            round
+            type="primary"
+            class="header-btn"
+            @click="goToRegister"
+          >
+            {{ isZh ? '注册' : 'Register' }}
+          </el-button>
+        </template>
+
+        <el-button
+          size="small"
+          round
+          class="theme-btn"
+          style="margin-left: 12px"
+          @click="toggleTheme"
         >
           <span v-if="isDark">🌙</span>
           <span v-else>☀️</span>
         </el-button>
 
         <el-button
-            size="small"
-            round
-            class="lang-btn"
-            @click="toggleLang"
+          size="small"
+          round
+          class="lang-btn"
+          @click="toggleLang"
         >
           <span v-if="isZh">中</span>
           <span v-else>EN</span>
@@ -81,30 +162,33 @@ onMounted(() => {
   </el-header>
 </template>
 
+<script lang="ts">
+export default {
+  name: 'Header'
+};
+</script>
 
 <style scoped>
 .custom-header {
   background: var(--iot-header-bg);
   border-bottom: 1px solid var(--iot-header-border);
   box-shadow: var(--iot-header-shadow);
-  padding: 0 24px; /* 稍微增加两侧内边距 */
-  /* 确保 header 内部元素垂直居中 */
+  padding: 0 24px;
   display: flex;
   align-items: center;
 }
 
-/* --- 左侧品牌区样式 --- */
 .header-left {
   height: 100%;
   display: flex;
   align-items: center;
 }
 
-/* 品牌容器：核心布局 */
 .brand-container {
   display: flex;
-  align-items: center; /* 垂直居中对齐图标和文字 */
-  gap: 12px; /* 图标和文字之间的间距 */
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
   transition: opacity 0.2s ease;
 }
 
@@ -112,38 +196,62 @@ onMounted(() => {
   opacity: 0.9;
 }
 
-/* Logo 图片样式 */
 .brand-logo {
-  height: 48px; /* 设置一个合适的高度，通常比 header 高度小一些 */
-  width: auto;  /* 保持宽高比 */
+  height: 40px;
+  width: auto;
   object-fit: contain;
+  border-radius: 8px;
 }
 
-/* 文字样式 */
 .brand-text {
   color: var(--iot-color-title);
-  font-size: 1.4rem; /* 稍微加大一点字体 */
-  font-weight: 700;  /* 加粗 */
+  font-size: 1.2rem;
+  font-weight: 700;
   letter-spacing: 0.04em;
-  line-height: 1;    /* 紧凑的行高，便于与图标对齐 */
-  /* 移除原有的 margin，依靠 flex 容器居中 */
+  line-height: 1;
   margin: 0;
-  min-width: max-content;
-  /* 可选：给文字加一点渐变效果，显得更现代（如果你的主题支持） */
-  /* background: linear-gradient(90deg, var(--iot-color-title) 0%, var(--iot-primary-color, #6366f1) 100%); */
-  /* -webkit-background-clip: text; */
-  /* -webkit-text-fill-color: transparent; */
 }
 
-/* --- 右侧操作区样式 --- */
 .header-right {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   height: 100%;
+  gap: 8px;
 }
 
-/* 按钮样式保持不变 */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 8px;
+  padding-right: 16px;
+  border-right: 1px solid var(--iot-header-border);
+}
+
+.user-avatar {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  font-weight: 600;
+}
+
+.username {
+  color: var(--iot-color-title);
+  font-size: 14px;
+  font-weight: 500;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-btn {
+  font-weight: 600;
+  letter-spacing: 1px;
+  transition: all 0.2s ease;
+}
+
+.theme-btn,
 .lang-btn {
   font-weight: 600;
   letter-spacing: 1px;
@@ -153,20 +261,18 @@ onMounted(() => {
   background: var(--iot-lang-btn-bg);
   color: var(--iot-lang-btn-text);
   box-shadow: var(--iot-lang-btn-shadow);
-  transition:
-      background 0.18s ease-out,
-      box-shadow 0.18s ease-out,
-      transform 0.12s ease-out;
+  transition: all 0.18s ease-out;
 }
 
+.theme-btn:hover,
 .lang-btn:hover {
   background: var(--iot-lang-btn-hover-bg);
   box-shadow: 0 0.4rem 1.1rem rgba(15, 23, 42, 0.3);
   transform: translateY(-1px);
 }
 
+.theme-btn:active,
 .lang-btn:active {
   transform: translateY(0);
-  box-shadow: 0 0.1rem 0.6rem rgba(15, 23, 42, 0.3);
 }
 </style>
