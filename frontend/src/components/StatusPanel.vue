@@ -3,19 +3,19 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeviceNode } from '../types/node'
 import type { Specification } from '../types/spec'
-import { buildSpecText } from "../utils/spec.ts";
-import { DeviceEdge } from "../types/edge";
+import { buildSpecText } from "../utils/spec.ts"
+import type { RuleForm } from '../types/rule'
 
 const props = defineProps<{
   nodes: DeviceNode[]
-  edges: DeviceEdge[]
+  rules: RuleForm[]
   specifications: Specification[]
   active: string[]
 }>()
 
 const emit = defineEmits<{
   (e: 'delete-node', id: string): void
-  (e: 'delete-edge', id: string): void
+  (e: 'delete-rule', id: string): void
   (e: 'delete-spec', id: string): void
   (e: 'update:active', value: string[]): void
 }>()
@@ -26,6 +26,14 @@ const collapseActive = computed({
   get: () => props.active,
   set: (val: string[]) => emit('update:active', val)
 })
+
+/**
+ * 获取节点的显示名称
+ */
+const getNodeLabel = (nodeId: string): string => {
+  const node = props.nodes.find(n => n.id === nodeId)
+  return node?.label || nodeId
+}
 </script>
 
 <template>
@@ -78,36 +86,33 @@ const collapseActive = computed({
         <span class="card-subtitle">{{ t('app.currentRules') }}</span>
       </template>
       <el-table
-          :data="props.edges"
+          :data="props.rules"
           size="small"
           height="160"
           border
           :fit="false"
       >
         <el-table-column
-            prop="fromLabel"
             :label="t('app.sourceDevice')"
-            min-width="120"
+            min-width="200"
             show-overflow-tooltip
-        />
+        >
+          <template #default="scope">
+            <span v-for="(s, idx) in scope.row.sources" :key="idx">
+              {{ getNodeLabel(s.fromId) }}.{{ s.fromApi }}
+              <span v-if="idx < scope.row.sources.length - 1">, </span>
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column
-            prop="fromApi"
-            :label="t('app.sourceApi')"
-            min-width="110"
-            show-overflow-tooltip
-        />
-        <el-table-column
-            prop="toLabel"
             :label="t('app.targetDevice')"
-            min-width="120"
+            min-width="160"
             show-overflow-tooltip
-        />
-        <el-table-column
-            prop="toApi"
-            :label="t('app.targetApi')"
-            min-width="110"
-            show-overflow-tooltip
-        />
+        >
+          <template #default="scope">
+            {{ getNodeLabel(scope.row.toId) }}.{{ scope.row.toApi }}
+          </template>
+        </el-table-column>
         <el-table-column
             :label="t('app.actions')"
             min-width="80"
@@ -117,7 +122,7 @@ const collapseActive = computed({
                 link
                 type="danger"
                 size="small"
-                @click="emit('delete-edge', scope.row.id)"
+                @click="emit('delete-rule', scope.row.id)"
             >
               {{ t('app.delete') }}
             </el-button>

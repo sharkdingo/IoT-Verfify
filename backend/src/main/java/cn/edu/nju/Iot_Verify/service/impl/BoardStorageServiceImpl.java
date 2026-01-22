@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -104,74 +105,47 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
-        ruleRepo.deleteByUserId(userId);
-        List<RulePo> pos = rules.stream().map(r -> RulePo.builder()
-                .id(r.getId() == null ? UUID.randomUUID().toString() : r.getId())
-                .userId(userId)
-                .sourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()))
-                .toId(r.getToId())
-                .toApi(r.getToApi())
-                .templateLabel(r.getTemplateLabel())
-                .build()
-        ).toList();
-        ruleRepo.saveAll(pos);
+        // 增量更新：获取现有规则
+        Map<String, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
+                .collect(Collectors.toMap(RulePo::getId, r -> r));
 
-        syncEdgesFromRules(userId, rules);
+        // 新规则 ID 集合
+        Set<String> newRuleIds = new HashSet<>();
 
-        return getRules(userId);
-    }
-
-    private void syncEdgesFromRules(Long userId, List<RuleDto> rules) {
-        List<DeviceEdgeDto> edges = new ArrayList<>();
+        // 处理每个规则
         for (RuleDto r : rules) {
-            if (r.getSources() == null) continue;
-            for (SourceEntryDto s : r.getSources()) {
-                if (s == null || s.getFromId() == null || s.getFromId().isBlank()) continue;
+            String ruleId = r.getId() == null ? UUID.randomUUID().toString() : r.getId();
+            newRuleIds.add(ruleId);
 
-                DeviceEdgeDto edge = new DeviceEdgeDto();
-                edge.setId(UUID.randomUUID().toString());
-                edge.setFrom(s.getFromId());
-                edge.setTo(r.getToId());
+            RulePo po = existingRules.get(ruleId);
+            if (po == null) {
+                // 新增
+                po = RulePo.builder()
+                        .id(ruleId)
+                        .userId(userId)
+                        .sourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()))
+                        .toId(r.getToId())
+                        .toApi(r.getToApi())
+                        .templateLabel(r.getTemplateLabel())
+                        .build();
+            } else {
+                // 更新
+                po.setSourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()));
+                po.setToId(r.getToId());
+                po.setToApi(r.getToApi());
+                po.setTemplateLabel(r.getTemplateLabel());
+            }
+            ruleRepo.save(po);
+        }
 
-                DeviceNodePo fromNode = nodeRepo.findById(s.getFromId()).orElse(null);
-                DeviceNodePo toNode = nodeRepo.findById(r.getToId()).orElse(null);
-
-                edge.setFromLabel(fromNode != null && fromNode.getLabel() != null
-                        ? fromNode.getLabel()
-                        : (s.getFromLabel() == null ? "" : s.getFromLabel()));
-                edge.setToLabel(toNode != null && toNode.getLabel() != null
-                        ? toNode.getLabel()
-                        : "");
-                edge.setFromApi(s.getFromApi() == null ? "" : s.getFromApi());
-                edge.setToApi(r.getToApi() == null ? "" : r.getToApi());
-
-                DeviceEdgeDto.Point fp = new DeviceEdgeDto.Point();
-                DeviceEdgeDto.Point tp = new DeviceEdgeDto.Point();
-                if (fromNode != null) {
-                    fp.setX(fromNode.getPosX());
-                    fp.setY(fromNode.getPosY());
-                } else {
-                    fp.setX(0.0);
-                    fp.setY(0.0);
-                }
-                if (toNode != null) {
-                    tp.setX(toNode.getPosX());
-                    tp.setY(toNode.getPosY());
-                } else {
-                    tp.setX(0.0);
-                    tp.setY(0.0);
-                }
-                edge.setFromPos(fp);
-                edge.setToPos(tp);
-                edges.add(edge);
+        // 删除不再存在的规则
+        for (String existingId : existingRules.keySet()) {
+            if (!newRuleIds.contains(existingId)) {
+                ruleRepo.deleteById(existingId);
             }
         }
 
-        if (!edges.isEmpty()) {
-            this.saveEdges(userId, edges);
-        } else {
-            edgeRepo.deleteByUserId(userId);
-        }
+        return getRules(userId);
     }
 
     @Override

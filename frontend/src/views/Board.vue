@@ -111,6 +111,7 @@ let panelStartPos = { x: 0, y: 0 }
 const deviceTemplates = ref<DeviceTemplate[]>([])
 const nodes = ref<DeviceNode[]>([])
 const edges = ref<DeviceEdge[]>([])
+const rules = ref<RuleForm[]>([])  // 独立存储规则列表
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
@@ -541,6 +542,14 @@ const handleAddRule = async (payload: RuleForm) => {
   const toNode = nodes.value.find(n => n.id === toId)
   if (!toNode) return
 
+  // 为新规则生成 ID
+  const ruleId = 'rule_' + Date.now()
+  const newRule: RuleForm = {
+    ...payload,
+    id: ruleId
+  }
+
+  // 计算新规则对应的 Edge
   const newEdges: DeviceEdge[] = []
   for (const s of sources) {
     const fid = s.fromId
@@ -563,12 +572,23 @@ const handleAddRule = async (payload: RuleForm) => {
   }
 
   if (newEdges.length) {
-    // 保存为规则（后端将持久化并生成 edges），然后刷新 edges
     try {
-      await boardApi.saveRules([payload])
-      await refreshRules()
+      // 更新前端状态
+      rules.value = [...rules.value, newRule]
+      edges.value = [...edges.value, ...newEdges]
+
+      // 并行保存规则和边
+      await Promise.all([
+        boardApi.saveRules(rules.value),
+        boardApi.saveEdges(edges.value)
+      ])
+
+      ElMessage.success(t('app.addRuleSuccess') || '添加规则成功')
     } catch (e) {
-      console.error('saveRules error', e)
+      console.error('saveRules/saveEdges error', e)
+      // 保存失败，回滚状态
+      rules.value = rules.value.filter(r => r.id !== ruleId)
+      edges.value = edges.value.filter(e => !newEdges.some(ne => ne.id === e.id))
       ElMessage.error(t('app.saveRulesFailed') || '保存规则失败')
     }
   }
@@ -739,9 +759,39 @@ const handleDialogDelete = () => {
 
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
-const deleteEdgeFromStatus = async (edgeId: string) => {
-  edges.value = edges.value.filter(e => e.id !== edgeId)
-  await saveEdgesToServer()
+/**
+ * 删除规则及其相关的边
+ */
+const deleteRule = async (ruleId: string) => {
+  const ruleToDelete = rules.value.find(r => r.id === ruleId)
+  if (!ruleToDelete) return
+
+  // 删除规则
+  rules.value = rules.value.filter(r => r.id !== ruleId)
+
+  // 删除相关的边（所有 toId 和 toApi 匹配的边）
+  edges.value = edges.value.filter(e => {
+    // 如果边的 toId 和 toApi 与被删除的规则匹配，则删除
+    if (e.to === ruleToDelete.toId && e.toApi === ruleToDelete.toApi) {
+      // 检查 source 是否在这个规则中
+      return !ruleToDelete.sources.some(s => s.fromId === e.from && s.fromApi === e.fromApi)
+    }
+    return true
+  })
+
+  // 并行保存
+  try {
+    await Promise.all([
+      boardApi.saveRules(rules.value),
+      boardApi.saveEdges(edges.value)
+    ])
+    ElMessage.success(t('app.deleteRuleSuccess') || '删除规则成功')
+  } catch (e) {
+    console.error('删除规则失败', e)
+    // 保存失败，回滚（重新获取）
+    await refreshRules()
+    ElMessage.error(t('app.deleteRuleFailed') || '删除规则失败')
+  }
 }
 
 /* =================================================================================
@@ -786,7 +836,7 @@ const addTemplateVisible = ref(false)
 const refreshDeviceTemplates = async () => {
   try {
     const res = await boardApi.getDeviceTemplates()
-    deviceTemplates.value = res.data || []
+    deviceTemplates.value = res || []
   } catch (e) {
     console.error(e)
     ElMessage.error(t('app.loadTemplatesFailed') || '加载设备模板失败')
@@ -833,8 +883,17 @@ const refreshDevices = async () => {
 // 2.定义刷新规则的函数
 const refreshRules = async () => {
   console.log('🔄 Board组件收到指令，正在刷新规则列表...')
-  try { edges.value = await boardApi.getEdges() } catch(e) {
+  try {
+    // 并行获取规则列表和边列表
+    const [rulesData, edgesData] = await Promise.all([
+      boardApi.getRules(),
+      boardApi.getEdges()
+    ])
+    rules.value = rulesData
+    edges.value = edgesData
+  } catch (e) {
     console.error('加载规则失败', e)
+    rules.value = []
     edges.value = []
   }
 }
@@ -1021,10 +1080,10 @@ defineExpose({
         <StatusPanel
             v-model:active="statusActive"
             :nodes="nodes"
-            :edges="edges"
+            :rules="rules"
             :specifications="specifications"
             @delete-node="deleteNodeFromStatus"
-            @delete-edge="deleteEdgeFromStatus"
+            @delete-rule="deleteRule"
             @delete-spec="deleteSpecification"
         />
       </div>

@@ -40,11 +40,11 @@ export default {
     },
 
     // ==== 规则（sources -> target） ====
-    getRules: async (): Promise<DeviceEdge[]> => {
-        return unpack<DeviceEdge[]>(await api.get('/board/rules'));
+    getRules: async (): Promise<RuleForm[]> => {
+        return unpack<RuleForm[]>(await api.get('/board/rules'));
     },
-    saveRules: async (rules: RuleForm[]): Promise<DeviceEdge[]> => {
-        return unpack<DeviceEdge[]>(await api.post('/board/rules', rules));
+    saveRules: async (rules: RuleForm[]): Promise<RuleForm[]> => {
+        return unpack<RuleForm[]>(await api.post('/board/rules', rules));
     },
 
     // ==== 布局（包含 Panel 位置、停靠状态、Canvas 缩放位移） ====
