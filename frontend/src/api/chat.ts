@@ -9,7 +9,7 @@ const unpack = <T>(response: any): T => {
 };
 
 /**
- * 获取会话列表
+ * 获取会话列表（使用 JWT token 中的 userId）
  */
 export const getSessionList = async (): Promise<ChatSession[]> => {
   const response = await api.get<any>('/chat/sessions');
@@ -17,7 +17,7 @@ export const getSessionList = async (): Promise<ChatSession[]> => {
 }
 
 /**
- * 创建新会话
+ * 创建新会话（使用 JWT token 中的 userId）
  */
 export const createSession = async (): Promise<ChatSession> => {
   const response = await api.post<any>('/chat/sessions', null);
@@ -66,19 +66,25 @@ export const sendStreamChat = async (
             headers['Authorization'] = `Bearer ${token}`;
         }
         
-        const response = await fetch(`${API_BASE}/chat/completions`, {
+        const response = await fetch(`${API_BASE}/api/chat/completions`, {
             method: 'POST',
             headers,
             body: JSON.stringify({ sessionId, content }),
             signal: controller?.signal
         });
 
-        if (!response.ok) throw new Error(response.statusText);
-        if (!response.body) throw new Error('No response body');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        if (!response.body) {
+            throw new Error('No response body');
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
+        let hasReceivedContent = false;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -95,16 +101,26 @@ export const sendStreamChat = async (
                     try {
                         const json = JSON.parse(dataStr);
                         if (json.content) {
+                            hasReceivedContent = true;
                             callbacks.onMessage(json.content);
                         }
                         if (json.command && callbacks.onCommand) {
                             callbacks.onCommand(json.command);
                         }
                     } catch (e) {
-                        callbacks.onMessage(dataStr);
+                        // 如果不是有效的 JSON，直接作为文本处理
+                        if (dataStr.trim() && !dataStr.startsWith('[ERROR]')) {
+                            hasReceivedContent = true;
+                            callbacks.onMessage(dataStr);
+                        }
                     }
                 }
             }
+        }
+
+        // 只有在没有收到任何内容时才视为失败
+        if (!hasReceivedContent) {
+            throw new Error('No content received from server');
         }
 
         if (callbacks.onFinish) callbacks.onFinish();
@@ -114,7 +130,8 @@ export const sendStreamChat = async (
             if (callbacks.onFinish) callbacks.onFinish();
             return;
         }
-        console.error('Stream Error:', error);
+        console.error('[Chat] 流式请求错误:', error.message);
         if (callbacks.onError) callbacks.onError(error);
+        throw error;
     }
 }

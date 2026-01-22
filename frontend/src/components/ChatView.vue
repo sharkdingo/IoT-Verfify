@@ -23,10 +23,14 @@ import java from "@shikijs/langs/java";
 
 import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
 import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
+import { useAuth } from '@/stores/auth';
 
 const emit = defineEmits(['command']);
 
-const USER_ID = 'test_user_001';
+// 从 auth store 获取当前用户 ID（JWT token 中的 userId）
+const { getUserId } = useAuth();
+const currentUserId = computed(() => getUserId() || 'anonymous');
+
 const loadingRegex = /^正在执行指令[.\s\n]*/;
 const presetTasks = [
   {
@@ -169,20 +173,23 @@ const toggleChat = () => {
 
 const initSessions = async () => {
   try {
-    const res = await getSessionList(USER_ID);
-    if (res.code === 200) sessions.value = res.data;
+    const res = await getSessionList();
+    if (Array.isArray(res)) sessions.value = res;
   } catch (e) { console.error(e); }
 };
 
 const handleCreateSession = async () => {
   try {
-    const res = await createSession(USER_ID);
-    if (res.code === 200) {
-      sessions.value.unshift(res.data);
-      return res.data.id;
+    const session = await createSession();
+    if (session && session.id) {
+      sessions.value.unshift(session);
+      return session.id;
     }
     return null;
-  } catch (e) { return null; }
+  } catch (e) {
+    console.error('创建会话失败:', e);
+    return null;
+  }
 };
 
 const onNewChatClick = async () => {
@@ -199,15 +206,13 @@ const handleDelete = async (sessionId: string) => {
         '删除确认',
         { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', lockScroll: false, appendTo: 'body' }
     );
-    const res = await deleteSession(sessionId);
-    if (res.code === 200) {
-      sessions.value = sessions.value.filter(s => s.id !== sessionId);
-      if (currentSessionId.value === sessionId) {
-        currentSessionId.value = '';
-        messages.value = [];
-      }
-      ElMessage.success('会话已删除');
+    await deleteSession(sessionId);
+    sessions.value = sessions.value.filter(s => s.id !== sessionId);
+    if (currentSessionId.value === sessionId) {
+      currentSessionId.value = '';
+      messages.value = [];
     }
+    ElMessage.success('会话已删除');
   } catch (error) { if (error !== 'cancel') ElMessage.error('删除失败'); }
 };
 
@@ -229,15 +234,13 @@ const handleSelectSession = async (sessionId: string) => {
   if (!isExpanded.value) isSidebarOpen.value = false;
 
   try {
-    const res = await getSessionHistory(sessionId);
-    if (res.code === 200) {
-      // 统一清洗历史消息中的脏数据
-      messages.value = res.data.map(m => ({
-        ...m,
-        content: m.content ? m.content.replace('CallEnd|>', '') : ''
-      }));
-      scrollToBottom(true);
-    }
+    const messagesData = await getSessionHistory(sessionId);
+    // 统一清洗历史消息中的脏数据
+    messages.value = messagesData.map(m => ({
+      ...m,
+      content: m.content ? m.content.replace('CallEnd|>', '') : ''
+    }));
+    scrollToBottom(true);
   } catch (e) { ElMessage.error('网络错误'); } finally { isLoading.value = false; }
 };
 
@@ -274,6 +277,8 @@ const handleSend = async () => {
     const aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
     scrollToBottom(true);
 
+    let hasReceivedContent = false;
+
     await sendStreamChat(
         targetSessionId,
         content,
@@ -282,6 +287,7 @@ const handleSend = async () => {
             const cleanChunk = chunk.replace('CallEnd|>', '');
             if (!cleanChunk) return;
 
+            hasReceivedContent = true;
             const msg = messages.value[aiMsgIndex];
             // 直接追加，渲染器会自动处理 Markdown 格式
             msg.content += cleanChunk;
@@ -291,8 +297,10 @@ const handleSend = async () => {
             console.log("收到指令:", cmd);
             emit('command', cmd); // 转发指令emit
           },
-          onError: () => {
-            if (abortController.value) {
+          onError: (err: any) => {
+            console.error('[Chat] 流式错误:', err);
+            // 只有在没有收到任何内容时才显示失败
+            if (abortController.value && !hasReceivedContent) {
               messages.value[aiMsgIndex].content += '\n[发送失败]';
             }
           },
@@ -306,7 +314,11 @@ const handleSend = async () => {
         abortController.value
     );
   } catch (error) {
-    ElMessage.error('发送消息失败');
+    console.error('[Chat] 发送消息失败:', error);
+    // 只有在没有收到内容时才显示错误提示
+    if (!hasReceivedContent) {
+      ElMessage.error('发送消息失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
     isLoading.value = false;
   }
 };
