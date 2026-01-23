@@ -268,8 +268,8 @@ Authorization: Bearer <token>
 | toLabel | string | No | Target node label |
 | fromApi | string | No | Source API name |
 | toApi | string | No | Target API name |
-| fromPos | object | No | Source position |
-| toPos | object | No | Target position |
+| fromPos | object | No | Source position (edge endpoint coordinates) |
+| toPos | object | No | Target position (edge endpoint coordinates) |
 
 **Success Response:** Returns saved edges array.
 
@@ -363,6 +363,14 @@ Authorization: Bearer <token>
 **Endpoint:** `POST /api/board/rules`
 
 **Request Body:** Array of rule objects.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | string | No | Rule ID (auto-generated if not provided) |
+| sources | array | Yes | Source entries (fromId, fromApi) |
+| toId | string | Yes | Target node ID |
+| toApi | string | Yes | Target API name |
+| templateLabel | string | No | Target template label |
 
 **Success Response:** Returns saved rules array.
 
@@ -550,19 +558,41 @@ Authorization: Bearer <token>
   "message": "success",
   "data": [
     {
-      "id": "session-uuid",
+      "id": "550e8400-e29b-41d4-a716-446655440000",
       "userId": 1,
       "title": "Chat Session 1",
-      "createdAt": "2024-01-01T10:00:00"
+      "createdAt": "2024-01-01T10:00:00",
+      "updatedAt": "2024-01-01T10:30:00"
     }
   ]
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| id | string | Session UUID |
+| userId | Long | Owner user ID |
+| title | string | Session title (auto-generated from first message) |
+| createdAt | DateTime | Creation timestamp |
+| updatedAt | DateTime | Last update timestamp |
+
 ### 3.2 Create Session
 **Endpoint:** `POST /api/chat/sessions`
 
-**Success Response (200):** Returns the created session.
+**Success Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "userId": 1,
+    "title": "New Chat",
+    "createdAt": "2024-01-01T10:00:00",
+    "updatedAt": "2024-01-01T10:00:00"
+  }
+}
+```
 
 ### 3.3 Get Messages
 **Endpoint:** `GET /api/chat/sessions/{sessionId}/messages`
@@ -574,15 +604,30 @@ Authorization: Bearer <token>
   "message": "success",
   "data": [
     {
-      "id": "msg-uuid",
-      "sessionId": "session-uuid",
+      "id": 1,
+      "sessionId": "550e8400-e29b-41d4-a716-446655440000",
       "role": "user",
       "content": "Hello",
       "createdAt": "2024-01-01T10:00:00"
+    },
+    {
+      "id": 2,
+      "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+      "role": "assistant",
+      "content": "Hi there! How can I assist you?",
+      "createdAt": "2024-01-01T10:00:01"
     }
   ]
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | Long | Message ID (auto-increment) |
+| sessionId | string | Parent session UUID |
+| role | string | "user" \| "assistant" \| "tool" |
+| content | string | Message content |
+| createdAt | DateTime | Creation timestamp |
 
 ### 3.4 Send Message (SSE Stream)
 **Endpoint:** `POST /api/chat/completions`
@@ -590,7 +635,7 @@ Authorization: Bearer <token>
 **Request Body:**
 ```json
 {
-  "sessionId": "session-uuid",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "content": "Your message here"
 }
 ```
@@ -603,11 +648,30 @@ Authorization: Bearer <token>
 **Response:** Server-Sent Events (SSE) stream.
 
 **SSE Event Format:**
-```
-data: {"type": "content", "content": "AI response chunk"}
 
-data: {"type": "done"}
 ```
+data: {"content":"AI response chunk 1"}
+
+data: {"content":"AI response chunk 2"}
+
+data: {"command":{"type":"REFRESH_DATA","payload":{"target":"device_list"}}}
+
+data: [DONE]
+```
+
+**StreamResponseDto Structure:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| content | string | AI response text chunk (may be empty when command is present) |
+| command | CommandDto | Optional command for frontend actions |
+
+**CommandDto Structure:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| type | string | Command type (e.g., "REFRESH_DATA") |
+| payload | Map | Command parameters |
 
 ### 3.5 Delete Session
 **Endpoint:** `DELETE /api/chat/sessions/{sessionId}`
@@ -718,7 +782,23 @@ curl -X POST http://localhost:8080/api/board/nodes \
   -d '[{"id":"node-1","templateName":"AC","label":"AC1","position":{"x":100,"y":100},"state":"idle","width":150,"height":100}]'
 ```
 
-### Step 4: Logout
+### Step 4: Chat with AI (SSE Stream)
+```bash
+# First create a session
+SESSION=$(curl -X POST http://localhost:8080/api/chat/sessions \
+  -H "Authorization: Bearer $TOKEN" \
+  -s | jq -r '.data.id')
+
+# Send message and receive SSE stream
+curl -X POST http://localhost:8080/api/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d "{\"sessionId\":\"$SESSION\",\"content\":\"Hello\"}" \
+  --stream
+```
+
+### Step 5: Logout
 ```bash
 # Logout to invalidate the token
 curl -X POST http://localhost:8080/api/auth/logout \
@@ -788,17 +868,17 @@ interface SpecConditionDto {
 ### RuleDto
 ```typescript
 interface RuleDto {
-  id: string;
+  id?: string;              // Optional, auto-generated
   sources: SourceEntryDto[];
-  toId: string;
-  toApi: string;
+  toId: string;             // Required
+  toApi: string;            // Required
   templateLabel: string;
 }
 
 interface SourceEntryDto {
   fromId: string;
   fromApi: string;
-  fromLabel: string;
+  fromLabel?: string;       // Optional, for display
 }
 ```
 
@@ -847,5 +927,40 @@ interface RegisterResponseDto {
 interface ChatRequestDto {
   sessionId: string;  // Required
   content: string;    // Required
+}
+```
+
+### ChatSessionPo (Database Entity)
+```typescript
+interface ChatSessionPo {
+  id: string;              // UUID
+  userId: Long;            // Required
+  title: string;
+  createdAt: DateTime;
+  updatedAt: DateTime;
+}
+```
+
+### ChatMessagePo (Database Entity)
+```typescript
+interface ChatMessagePo {
+  id: Long;                // Auto-increment
+  sessionId: string;       // Required, FK to ChatSessionPo
+  role: string;            // "user" | "assistant" | "tool"
+  content: string;
+  createdAt: DateTime;
+}
+```
+
+### StreamResponseDto (SSE Response)
+```typescript
+interface StreamResponseDto {
+  content: string;         // AI response text chunk
+  command?: CommandDto;    // Optional command for frontend
+}
+
+interface CommandDto {
+  type: string;            // e.g., "REFRESH_DATA"
+  payload: Record<string, any>;  // Command parameters
 }
 ```

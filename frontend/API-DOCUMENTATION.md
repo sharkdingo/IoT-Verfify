@@ -1,25 +1,93 @@
-# IoT-Verify Backend API Documentation
+# IoT-Verify Frontend API Documentation
 
-## Base URL
+## Overview
+
+This document describes the frontend API layer, including HTTP client configuration, API service functions, and type definitions.
+
+---
+
+## API Directory Structure
+
 ```
-http://localhost:8080
-```
-
-## Authentication
-
-All API endpoints (except `/api/auth/**`) require JWT authentication.
-
-### Headers
-```
-Authorization: Bearer <token>
+frontend/src/
+├── api/
+│   ├── http.ts          # Axios instance with interceptors
+│   ├── auth.ts          # Authentication API
+│   ├── board.ts         # Board storage API (nodes, edges, specs, rules, etc.)
+│   └── chat.ts          # Chat API (SSE streaming)
+├── types/
+│   ├── auth.ts          # Auth-related types
+│   ├── chat.ts          # Chat types
+│   ├── device.ts        # Device template types
+│   ├── edge.ts          # Edge types
+│   ├── node.ts          # Node types
+│   ├── panel.ts         # Panel/layout types
+│   ├── rule.ts          # Rule types
+│   └── spec.ts          # Specification types
+└── stores/
+    └── auth.ts          # Auth state management (Vue reactive)
 ```
 
 ---
 
-## Response Format
+## HTTP Client Configuration
 
-All responses follow the unified `Result<T>` format:
+### File: `src/api/http.ts`
 
+The Axios instance is configured with:
+- **Base URL**: `http://localhost:8080/api`
+- **Request Interceptor**: Automatically adds `Authorization: Bearer <token>` header
+- **Response Interceptor**: Handles 401 errors (clears auth state, redirects to login)
+
+```typescript
+import axios from 'axios';
+import { useAuth } from '../stores/auth';
+import { router } from '../router';
+
+const api = axios.create({
+  baseURL: 'http://localhost:8080/api',
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+});
+
+// Request interceptor
+api.interceptors.request.use((config) => {
+  const { getToken } = useAuth();
+  const token = getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response interceptor
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      const { logout } = useAuth();
+      logout();
+      const currentPath = router.currentRoute.value.path;
+      if (!['/login', '/register'].includes(currentPath)) {
+        router.push({ path: '/login', query: { redirect: currentPath } });
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+```
+
+---
+
+## Result Unpacking
+
+### File: `src/api/board.ts`
+
+All REST APIs return data wrapped in `Result<T>` format:
 ```json
 {
   "code": 200,
@@ -28,824 +96,359 @@ All responses follow the unified `Result<T>` format:
 }
 ```
 
-### Status Codes
+The `unpack` function extracts the `data` field:
 
-| Code | Meaning | Description |
-|------|---------|-------------|
-| 200 | Success | Request completed successfully |
-| 400 | Bad Request | Invalid request data or parameters |
-| 401 | Unauthorized | Missing or invalid authentication token |
-| 403 | Forbidden | Authenticated but lacks permission |
-| 404 | Not Found | Resource does not exist |
-| 409 | Conflict | Resource already exists or state conflict |
-| 422 | Validation Error | Request data failed validation |
-| 500 | Internal Server Error | Unexpected server error |
-| 503 | Service Unavailable | External service temporarily unavailable |
-
----
-
-## 1. Authentication API
-
-### 1.1 Register
-
-**Endpoint:** `POST /api/auth/register`
-
-> **Note:** Registration does not return a token. Please login after successful registration.
-
-**Request Body:**
-```json
-{
-  "phone": "13800138000",
-  "username": "testuser",
-  "password": "123456"
-}
-```
-
-| Field | Type | Required | Validation |
-|-------|------|----------|------------|
-| phone | string | Yes | Format: 1[3-9]xxxxxxxxx |
-| username | string | Yes | 3-20 characters |
-| password | string | Yes | 6-20 characters |
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "userId": 1,
-    "phone": "13800138000",
-    "username": "testuser"
-  }
-}
-```
-
-**Error Responses:**
-
-| Code | Message | Cause |
-|------|---------|-------|
-| 409 | Phone number already registered: 13800138000 | Phone exists |
-| 409 | Username already exists: testuser | Username exists |
-| 422 | phone: Phone number format is invalid | Invalid phone format |
-| 422 | username: Username must be 3-20 characters | Invalid username |
-| 422 | password: Password must be 6-20 characters | Invalid password |
-
----
-
-### 1.2 Login
-
-**Endpoint:** `POST /api/auth/login`
-
-**Request Body:**
-```json
-{
-  "phone": "13800138000",
-  "password": "123456"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| phone | string | Yes | Registered phone number |
-| password | string | Yes | User password |
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "userId": 1,
-    "phone": "13800138000",
-    "username": "testuser",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }
-}
-```
-
-**Error Responses:**
-
-| Code | Message | Cause |
-|------|---------|-------|
-| 401 | Phone number or password is incorrect | Invalid credentials |
-| 422 | phone: Phone number is required | Missing phone |
-| 422 | password: Password is required | Missing password |
-
----
-
-### 1.3 Logout
-
-**Endpoint:** `POST /api/auth/logout`
-
-> **Note:** Requires authentication. The token will be added to a blacklist and can no longer be used for subsequent requests.
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": null
-}
-```
-
-**Error Responses:**
-
-| Code | Message | Cause |
-|------|---------|-------|
-| 401 | Missing Authorization header | No token provided |
-| 401 | Invalid or expired token | Token is invalid or expired |
-
----
-
-## 2. Board Storage API
-
-> All endpoints require authentication.
-
-### 2.1 Device Nodes
-
-#### Get Nodes
-**Endpoint:** `GET /api/board/nodes`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "node-1",
-      "templateName": "AirConditioner",
-      "label": "AC-Living-Room",
-      "position": {
-        "x": 100.0,
-        "y": 200.0
-      },
-      "state": "idle",
-      "width": 150,
-      "height": 100
-    }
-  ]
-}
-```
-
-#### Save Nodes
-**Endpoint:** `POST /api/board/nodes`
-
-**Request Body:**
-```json
-[
-  {
-    "id": "node-1",
-    "templateName": "AirConditioner",
-    "label": "AC-Living-Room",
-    "position": {
-      "x": 100.0,
-      "y": 200.0
-    },
-    "state": "idle",
-    "width": 150,
-    "height": 100
-  }
-]
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | string | Yes | Unique node identifier |
-| templateName | string | Yes | Device template name |
-| label | string | No | Display label |
-| position | object | Yes | Node position (x, y) |
-| state | string | No | Current state |
-| width | integer | No | Node width in pixels |
-| height | integer | No | Node height in pixels |
-
-**Success Response:** Returns saved nodes array.
-
----
-
-### 2.2 Device Edges
-
-#### Get Edges
-**Endpoint:** `GET /api/board/edges`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "edge-1",
-      "from": "node-1",
-      "to": "node-2",
-      "fromLabel": "AC-Living-Room",
-      "toLabel": "Thermostat",
-      "fromApi": "setTemperature",
-      "toApi": "onTemperatureChange",
-      "fromPos": { "x": 100.0, "y": 200.0 },
-      "toPos": { "x": 300.0, "y": 200.0 }
-    }
-  ]
-}
-```
-
-#### Save Edges
-**Endpoint:** `POST /api/board/edges`
-
-**Request Body:** Array of edge objects.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | string | Yes | Unique edge identifier |
-| from | string | Yes | Source node ID |
-| to | string | Yes | Target node ID |
-| fromLabel | string | No | Source node label |
-| toLabel | string | No | Target node label |
-| fromApi | string | No | Source API name |
-| toApi | string | No | Target API name |
-| fromPos | object | No | Source position |
-| toPos | object | No | Target position |
-
-**Success Response:** Returns saved edges array.
-
----
-
-### 2.3 Specifications
-
-#### Get Specifications
-**Endpoint:** `GET /api/board/specs`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "spec-1",
-      "templateId": "template-1",
-      "templateLabel": "AirConditioner",
-      "aConditions": [
-        {
-          "id": "cond-1",
-          "side": "a",
-          "deviceId": "node-1",
-          "deviceLabel": "AC-Living-Room",
-          "targetType": "state",
-          "key": "power",
-          "relation": "==",
-          "value": "on"
-        }
-      ],
-      "ifConditions": [],
-      "thenConditions": []
-    }
-  ]
-}
-```
-
-#### Save Specifications
-**Endpoint:** `POST /api/board/specs`
-
-**Request Body:** Array of specification objects.
-
-**SpecConditionDto Structure:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| id | string | Condition ID |
-| side | string | "a" \| "if" \| "then" |
-| deviceId | string | Device node ID |
-| deviceLabel | string | Device label |
-| targetType | string | "state" \| "variable" \| "api" |
-| key | string | Property key |
-| relation | string | Comparison operator |
-| value | string | Expected value |
-
-**Success Response:** Returns saved specifications array.
-
----
-
-### 2.4 Rules
-
-#### Get Rules
-**Endpoint:** `GET /api/board/rules`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "rule-1",
-      "sources": [
-        {
-          "fromId": "node-1",
-          "fromApi": "getTemperature",
-          "fromLabel": "AC-Living-Room"
-        }
-      ],
-      "toId": "node-2",
-      "toApi": "setTemperature",
-      "templateLabel": "Thermostat"
-    }
-  ]
-}
-```
-
-#### Save Rules
-**Endpoint:** `POST /api/board/rules`
-
-**Request Body:** Array of rule objects.
-
-**Success Response:** Returns saved rules array.
-
----
-
-### 2.5 Layout
-
-#### Get Layout
-**Endpoint:** `GET /api/board/layout`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "input": { "x": 24.0, "y": 24.0 },
-    "status": { "x": 1040.0, "y": 80.0 },
-    "canvasPan": { "x": 0.0, "y": 0.0 },
-    "canvasZoom": 1.0,
-    "dockState": {
-      "input": {
-        "isDocked": false,
-        "side": null,
-        "lastPos": { "x": 24.0, "y": 24.0 }
-      },
-      "status": {
-        "isDocked": false,
-        "side": null,
-        "lastPos": { "x": 1040.0, "y": 80.0 }
-      }
-    }
-  }
-}
-```
-
-#### Save Layout
-**Endpoint:** `POST /api/board/layout`
-
-**Request Body:** Layout object (same structure as response data).
-
-**Success Response:** Returns saved layout.
-
----
-
-### 2.6 Active Tabs
-
-#### Get Active Tabs
-**Endpoint:** `GET /api/board/active`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "input": ["devices", "rules", "specs"],
-    "status": ["devices", "edges", "specs"]
-  }
-}
-```
-
-#### Save Active Tabs
-**Endpoint:** `POST /api/board/active`
-
-**Request Body:**
-```json
-{
-  "input": ["devices", "rules", "specs"],
-  "status": ["devices", "edges", "specs"]
-}
-```
-
-**Success Response:** Returns saved active tabs.
-
----
-
-### 2.7 Device Templates
-
-#### Get Templates
-**Endpoint:** `GET /api/board/templates`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "1",
-      "name": "AirConditioner",
-      "manifest": {
-        "Name": "AirConditioner",
-        "Description": "Smart air conditioner device",
-        "Modes": ["cooling", "heating", "auto"],
-        "InternalVariables": [
-          {
-            "Name": "temperature",
-            "Description": "Current temperature",
-            "IsInside": true,
-            "PublicVisible": true,
-            "Trust": "high",
-            "Privacy": "low",
-            "LowerBound": 16.0,
-            "UpperBound": 30.0
-          }
-        ],
-        "ImpactedVariables": ["roomTemperature"],
-        "InitState": "idle",
-        "WorkingStates": [
-          {
-            "Name": "idle",
-            "Description": "Device is idle",
-            "Trust": "high",
-            "Privacy": "low",
-            "Invariant": "power == off",
-            "Dynamics": []
-          }
-        ],
-        "Transitions": [],
-        "APIs": [
-          {
-            "Name": "turnOn",
-            "Description": "Turn on the device",
-            "Signal": true,
-            "StartState": "idle",
-            "EndState": "running",
-            "Trigger": "user",
-            "Assignments": []
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-#### Add Template
-**Endpoint:** `POST /api/board/templates`
-
-**Request Body:**
-```json
-{
-  "name": "NewDevice",
-  "manifest": {
-    "Name": "NewDevice",
-    "Description": "New device template",
-    "Modes": [],
-    "InternalVariables": [],
-    "ImpactedVariables": [],
-    "InitState": "idle",
-    "WorkingStates": [],
-    "Transitions": [],
-    "APIs": []
-  }
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| name | string | Yes | Template name (must be unique) |
-| manifest | object | No | Device manifest definition |
-
-**Success Response (200):** Returns the created template with generated ID.
-
-**Error Responses:**
-
-| Code | Message | Cause |
-|------|---------|-------|
-| 409 | Device template already exists: NewDevice | Duplicate name |
-
----
-
-## 3. Chat API
-
-> All endpoints require authentication.
-
-### 3.1 Get Sessions
-**Endpoint:** `GET /api/chat/sessions`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "session-uuid",
-      "userId": 1,
-      "title": "Chat Session 1",
-      "createdAt": "2024-01-01T10:00:00"
-    }
-  ]
-}
-```
-
-### 3.2 Create Session
-**Endpoint:** `POST /api/chat/sessions`
-
-**Success Response (200):** Returns the created session.
-
-### 3.3 Get Messages
-**Endpoint:** `GET /api/chat/sessions/{sessionId}/messages`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "msg-uuid",
-      "sessionId": "session-uuid",
-      "role": "user",
-      "content": "Hello",
-      "createdAt": "2024-01-01T10:00:00"
-    }
-  ]
-}
-```
-
-### 3.4 Send Message (SSE Stream)
-**Endpoint:** `POST /api/chat/completions`
-
-**Request Body:**
-```json
-{
-  "sessionId": "session-uuid",
-  "content": "Your message here"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| sessionId | string | Yes | Chat session ID |
-| content | string | Yes | Message content |
-
-**Response:** Server-Sent Events (SSE) stream.
-
-**SSE Event Format:**
-```
-data: {"type": "content", "content": "AI response chunk"}
-
-data: {"type": "done"}
-```
-
-### 3.5 Delete Session
-**Endpoint:** `DELETE /api/chat/sessions/{sessionId}`
-
-**Success Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": null
-}
-```
-
----
-
-## 4. Error Handling
-
-### Error Response Format
-```json
-{
-  "code": 400,
-  "message": "Descriptive error message"
-}
-```
-
-### Exception Types
-
-| Exception | Code | Usage |
-|-----------|------|-------|
-| BadRequestException | 400 | Invalid request data |
-| UnauthorizedException | 401 | Authentication failure |
-| ForbiddenException | 403 | Insufficient permissions |
-| ResourceNotFoundException | 404 | Resource not found |
-| ConflictException | 409 | Resource conflict |
-| ValidationException | 422 | Validation failure |
-| InternalServerException | 500 | Server error |
-| ServiceUnavailableException | 503 | External service down |
-
-### Common Error Messages
-
-| Scenario | Code | Message |
-|----------|------|---------|
-| Missing token | 401 | Missing Authorization header |
-| Invalid token | 401 | Invalid or expired token |
-| Expired token | 401 | Token has expired |
-| Token blacklisted | 401 | Invalid or expired token |
-| Invalid credentials | 401 | Phone number or password is incorrect |
-| Duplicate phone | 409 | Phone number already registered: {phone} |
-| Duplicate username | 409 | Username already exists: {username} |
-| Duplicate template | 409 | Device template already exists: {name} |
-| Session not found | 404 | Chat session not found: {id} |
-| User not found | 404 | User not found with id: {id} |
-| Validation failed | 422 | {field}: {message} |
-
----
-
-## 5. Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| DB_URL | Database connection URL | jdbc:mysql://localhost:3306/iot_verify... |
-| DB_USERNAME | Database username | root |
-| DB_PASSWORD | Database password | your_password_here |
-| SERVER_PORT | Server port | 8080 |
-| JWT_SECRET | JWT signing secret (min 256 bits) | iot-verify-secret-key... |
-| JWT_EXPIRATION | Token expiration in ms | 86400000 (24 hours) |
-| VOLCENGINE_API_KEY | Volcengine AI API key | your_api_key_here |
-| VOLCENGINE_MODEL_ID | AI model endpoint ID | ep-20251125202752-bhwbw |
-| VOLCENGINE_BASE_URL | Volcengine API base URL | https://ark.cn-beijing.volces.com/api/v3 |
-| REDIS_HOST | Redis server host | localhost |
-| REDIS_PORT | Redis server port | 6379 |
-| REDIS_PASSWORD | Redis password | (empty) |
-| REDIS_DATABASE | Redis database number | 0 |
-
----
-
-## 6. Quick Start Example
-
-### Step 1: Register
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138000","username":"testuser","password":"123456"}'
-```
-
-### Step 2: Login
-```bash
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138000","password":"123456"}'
-```
-
-### Step 3: Use Token for Protected APIs
-```bash
-# Save token from login response
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-# Get nodes
-curl -X GET http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer $TOKEN"
-
-# Save nodes
-curl -X POST http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '[{"id":"node-1","templateName":"AC","label":"AC1","position":{"x":100,"y":100},"state":"idle","width":150,"height":100}]'
-```
-
-### Step 4: Logout
-```bash
-# Logout to invalidate the token
-curl -X POST http://localhost:8080/api/auth/logout \
-  -H "Authorization: Bearer $TOKEN"
-
-# Subsequent requests with this token will be rejected
-```
-
----
-
-## 7. Data Models Reference
-
-### DeviceNodeDto
 ```typescript
-interface DeviceNodeDto {
-  id: string;           // Required
-  templateName: string; // Required
+const unpack = <T>(response: any): T => {
+  return response.data.data;
+};
+```
+
+**Note:** After unpacking, the return value is the raw data (not wrapped).
+
+---
+
+## Authentication API
+
+### File: `src/api/auth.ts`
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `login(data)` | POST | `/auth/login` | User login |
+| `register(data)` | POST | `/auth/register` | User registration |
+| `logout()` | POST | `/auth/logout` | User logout (blacklists token) |
+| `getUserInfo()` | GET | `/auth/me` | Get current user info |
+
+### Usage Example
+```typescript
+import { login, logout } from '@/api/auth';
+
+const handleLogin = async () => {
+  const response = await login({ phone: '13800138000', password: '123456' });
+  // Response is already unpacked
+  console.log(response.userId, response.token);
+};
+```
+
+---
+
+## Board Storage API
+
+### File: `src/api/board.ts`
+
+#### Nodes (Devices)
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getNodes()` | GET | `/board/nodes` | Get all device nodes |
+| `saveNodes(nodes)` | POST | `/board/nodes` | Save nodes (full replace) |
+
+#### Edges
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getEdges()` | GET | `/board/edges` | Get all edges |
+| `saveEdges(edges)` | POST | `/board/edges` | Save edges (full replace) |
+
+#### Specifications
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getSpecs()` | GET | `/board/specs` | Get all specifications |
+| `saveSpecs(specs)` | POST | `/board/specs` | Save specifications |
+
+#### Rules
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getRules()` | GET | `/board/rules` | Get all rules |
+| `saveRules(rules)` | POST | `/board/rules` | Save rules (incremental update) |
+
+#### Layout
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getLayout()` | GET | `/board/layout` | Get panel layout |
+| `saveLayout(layout)` | POST | `/board/layout` | Save layout |
+
+#### Active Tabs
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getActive()` | GET | `/board/active` | Get active tabs |
+| `saveActive(active)` | POST | `/board/active` | Save active tabs |
+
+#### Device Templates
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getTemplates()` | GET | `/board/templates` | Get all templates |
+| `addTemplate(template)` | POST | `/board/templates` | Add new template |
+
+### Usage Example
+```typescript
+import boardApi from '@/api/board';
+
+// Get all nodes
+const nodes = await boardApi.getNodes();
+console.log(nodes);
+
+// Save a new node
+await boardApi.saveNodes([{
+  id: 'node-1',
+  templateName: 'AirConditioner',
+  label: 'AC-1',
+  position: { x: 100, y: 200 },
+  width: 150,
+  height: 100
+}]);
+```
+
+---
+
+## Chat API (SSE Streaming)
+
+### File: `src/api/chat.ts`
+
+The chat API uses native `fetch` for Server-Sent Events (SSE) streaming, as SSE is not well-supported by Axios.
+
+#### Functions
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `getSessionList()` | GET | `/chat/sessions` | Get user's chat sessions |
+| `createSession()` | POST | `/chat/sessions` | Create new session |
+| `getSessionHistory(id)` | GET | `/chat/sessions/{id}/messages` | Get message history |
+| `deleteSession(id)` | DELETE | `/chat/sessions/{id}` | Delete a session |
+| `sendStreamChat(sessionId, content, callbacks, controller)` | POST | `/chat/completions` | Send message (SSE) |
+
+#### sendStreamChat Signature
+
+```typescript
+export const sendStreamChat = async (
+    sessionId: string,
+    content: string,
+    callbacks: {
+        onMessage: (text: string) => void           // Called for each content chunk
+        onCommand?: (cmd: StreamCommand) => void;   // Called when command received
+        onError?: (err: any) => void                 // Called on error
+        onFinish?: () => void                        // Called when stream ends
+    },
+    controller?: AbortController
+) => {
+  // ...
+}
+```
+
+#### Usage Example
+
+```typescript
+import { sendStreamChat } from '@/api/chat';
+
+const handleSendMessage = async () => {
+  const abortController = new AbortController();
+  
+  await sendStreamChat(
+    sessionId,
+    content,
+    {
+      onMessage: (chunk) => {
+        // Append AI response chunk to message
+        messageContent += chunk;
+      },
+      onCommand: (cmd) => {
+        console.log('Command received:', cmd);
+        // Handle commands like REFRESH_DATA
+        if (cmd.type === 'REFRESH_DATA') {
+          refreshDeviceList();
+        }
+      },
+      onError: (err) => {
+        console.error('Stream error:', err);
+        messageContent += '\n[发送失败]';
+      },
+      onFinish: () => {
+        isLoading.value = false;
+        abortController.abort();
+      }
+    },
+    abortController
+  );
+};
+```
+
+#### Stream Command Type
+
+```typescript
+interface StreamCommand {
+  type: string;              // e.g., "REFRESH_DATA"
+  payload?: Record<string, any>;  // Command parameters
+}
+```
+
+---
+
+## Frontend Type Definitions
+
+### Type Mappings (Frontend ↔ Backend DTO)
+
+| Frontend Type | Backend DTO | File |
+|---------------|-------------|------|
+| `DeviceNode` | `DeviceNodeDto` | `types/node.ts` |
+| `DeviceEdge` | `DeviceEdgeDto` | `types/edge.ts` |
+| `Specification` | `SpecificationDto` | `types/spec.ts` |
+| `RuleForm` | `RuleDto` | `types/rule.ts` |
+| `DeviceTemplate` | `DeviceTemplateDto` | `types/device.ts` |
+| `ChatSession` | `ChatSessionPo` | `types/chat.ts` |
+| `ChatMessage` | `ChatMessagePo` | `types/chat.ts` |
+
+### Example: DeviceNode Type
+
+```typescript
+// frontend/src/types/node.ts
+export interface DeviceNode {
+  id: string;
+  templateName: string;
   label: string;
-  position: {           // Required
-    x: number;          // Required
-    y: number;          // Required
-  };
+  position: { x: number; y: number };
   state: string;
   width: number;
   height: number;
 }
 ```
 
-### DeviceEdgeDto
+### Example: ChatSession Type
+
 ```typescript
-interface DeviceEdgeDto {
-  id: string;       // Required
-  from: string;     // Required
-  to: string;       // Required
-  fromLabel: string;
-  toLabel: string;
-  fromApi: string;
-  toApi: string;
-  fromPos: { x: number; y: number };
-  toPos: { x: number; y: number };
+// frontend/src/types/chat.ts
+export interface ChatSession {
+  id: string;        // UUID
+  userId: string;    // User ID (from JWT)
+  title: string;
+  updatedAt: string; // ISO datetime string
+}
+
+export interface ChatMessage {
+  id?: number;
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
 }
 ```
 
-### SpecificationDto
+---
+
+## Authentication State Management
+
+### File: `src/stores/auth.ts`
+
+Uses Vue 3 `reactive()` for state management:
+
 ```typescript
-interface SpecificationDto {
-  id: string;
-  templateId: string;
-  templateLabel: string;
-  aConditions: SpecConditionDto[];
-  ifConditions: SpecConditionDto[];
-  thenConditions: SpecConditionDto[];
+interface AuthState {
+  token: string | null;
+  user: UserInfo | null;
+  isLoggedIn: boolean;
 }
 
-interface SpecConditionDto {
-  id: string;
-  side: 'a' | 'if' | 'then';
-  deviceId: string;
-  deviceLabel: string;
-  targetType: 'state' | 'variable' | 'api';
-  key: string;
-  relation: string;
-  value: string;
-}
-```
-
-### RuleDto
-```typescript
-interface RuleDto {
-  id: string;
-  sources: SourceEntryDto[];
-  toId: string;
-  toApi: string;
-  templateLabel: string;
-}
-
-interface SourceEntryDto {
-  fromId: string;
-  fromApi: string;
-  fromLabel: string;
-}
-```
-
-### DeviceTemplateDto
-```typescript
-interface DeviceTemplateDto {
-  id: string;
-  name: string;       // Required
-  manifest: DeviceManifest;
-}
-
-interface DeviceManifest {
-  Name: string;
-  Description: string;
-  Modes: string[];
-  InternalVariables: InternalVariable[];
-  ImpactedVariables: string[];
-  InitState: string;
-  WorkingStates: WorkingState[];
-  Transitions: any[];
-  APIs: API[];
-}
-```
-
-### AuthResponseDto
-```typescript
-interface AuthResponseDto {
-  userId: number;
-  phone: string;
-  username: string;
-  token: string;      // Only returned on login
-}
-```
-
-### RegisterResponseDto
-```typescript
-interface RegisterResponseDto {
+interface UserInfo {
   userId: number;
   phone: string;
   username: string;
 }
+
+// Usage
+const { getToken, getUser, isAuthenticated, logout } = useAuth();
+
+const token = getToken();  // Returns JWT token string
+const user = getUser();    // Returns UserInfo object
+const loggedIn = isAuthenticated();
 ```
 
-### ChatRequestDto
-```typescript
-interface ChatRequestDto {
-  sessionId: string;  // Required
-  content: string;    // Required
-}
+---
+
+## Environment Variables
+
+### File: `frontend/.env`
+
+```bash
+# API 基础地址（后端服务地址）
+VITE_API_BASE_URL=http://localhost:8080
 ```
+
+---
+
+## Error Handling
+
+### Frontend Error Handling Strategy
+
+1. **HTTP Errors (4xx, 5xx)**
+   - Axios response interceptor handles 401 (redirects to login)
+   - Other errors are thrown and caught by components
+
+2. **SSE Stream Errors**
+   - Handled in `sendStreamChat` callbacks
+   - `onError`: Called on stream error
+   - `onFinish`: Called when stream ends (even after error)
+   - Only show error if no content was received
+
+### Common Error Messages
+
+| Scenario | Frontend Display |
+|----------|-----------------|
+| Network error | "发送消息失败: network error" |
+| 401 Unauthorized | Redirected to /login |
+| Validation error | Displayed from backend message |
+
+---
+
+## Quick Start for Frontend Developers
+
+### 1. Make an API Call
+```typescript
+import boardApi from '@/api/board';
+
+// GET request
+const nodes = await boardApi.getNodes();
+
+// POST request
+await boardApi.saveNodes(nodes);
+```
+
+### 2. Handle SSE Stream
+```typescript
+import { sendStreamChat } from '@/api/chat';
+
+await sendStreamChat(sessionId, message, {
+  onMessage: (chunk) => {
+    // Update UI with response chunk
+    response.value += chunk;
+  },
+  onCommand: (cmd) => {
+    // Handle commands
+    if (cmd.type === 'REFRESH_DATA') {
+      refreshData();
+    }
+  },
+  onError: (err) => {
+    console.error('Error:', err);
+  },
+  onFinish: () => {
+    isLoading.value = false;
+  }
+});
+```
+
+### 3. Access Auth State
+```typescript
+import { useAuth } from '@/stores/auth';
+
+const { getToken, getUser, logout } = useAuth();
+const token = getToken();  // Use in custom fetch calls
+```
+
+---
+
+## Related Documentation
+
+- **Backend API**: [backend/API-DOCUMENTATION.md](../backend/API-DOCUMENTATION.md)
+- **Project README**: [README.md](../README.md)

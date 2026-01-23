@@ -21,11 +21,25 @@
 
 IoT-Verify 是一个物联网设备验证平台，支持用户注册登录、设备模板管理、规格管理、实时聊天等功能。
 
+**核心功能：**
+1. **设备管理**：创建设备模板、设备实例，拖拽式布局
+2. **规则引擎**：配置设备间数据流向规则（sources → target）
+3. **规格管理**：定义 IF-THEN 规则进行形式化验证
+4. **AI 助手**：基于火山引擎的智能对话，支持设备操作、NuSMV 验证问答
+
+**AI 助手特点：**
+- 自然语言交互：创建设备、查询状态、修改配置
+- 流式响应：SSE 实时显示 AI 生成内容
+- 工具调用：自动执行设备操作、刷新数据
+- 上下文感知：了解当前系统状态，提供智能建议
+
 **特点：**
 - 前后端分离架构
 - JWT Token 认证
-- 火山引擎 AI 模型集成
+- 火山引擎 AI 模型集成（智能家居问答、设备操作、形式化验证）
 - Redis Token 黑名单
+- SSE 流式聊天
+- 设备规则与边的可视化编辑
 
 ---
 
@@ -38,15 +52,16 @@ IoT-Verify 是一个物联网设备验证平台，支持用户注册登录、设
 - **缓存**：Redis
 - **安全**：Spring Security + JWT
 - **ORM**：Spring Data JPA
-- **AI**：火山引擎 Ark Runtime SDK
+- **AI**：火山引擎 Ark Runtime SDK（流式 SSE 输出）
 
 ### 前端
 - **框架**：Vue 3 + TypeScript
 - **构建工具**：Vite 6
 - **UI 组件库**：Ant Design Vue 4 + Element Plus
 - **路由**：Vue Router 4
-- **HTTP 客户端**：Axios
+- **HTTP 客户端**：Axios（REST API）+ 原生 fetch（SSE 流式）
 - **国际化**：Vue I18n
+- **实时通信**：Server-Sent Events (SSE)
 
 ---
 
@@ -599,7 +614,62 @@ taskkill /F /IM node.exe >nul 2>&1
 
 | 方法 | 路径 | 说明 | 需要认证 |
 |------|------|------|----------|
-| POST | `/api/chat` | 发送消息（流式） | 是 |
+| GET | `/api/chat/sessions` | 获取会话列表 | 是 |
+| POST | `/api/chat/sessions` | 创建新会话 | 是 |
+| GET | `/api/chat/sessions/{id}/messages` | 获取会话消息历史 | 是 |
+| POST | `/api/chat/completions` | 发送消息（SSE 流式） | 是 |
+| DELETE | `/api/chat/sessions/{id}` | 删除会话 | 是 |
+
+#### SSE 流式响应格式
+
+`POST /api/chat/completions` 使用 Server-Sent Events (SSE) 进行流式响应：
+
+```json
+// 数据块
+data: {"content":"AI 响应文本片段"}
+
+data: {"command":{"type":"REFRESH_DATA","payload":{"target":"device_list"}}}
+
+// 结束标记
+data: [DONE]
+```
+
+**Command 类型：**
+
+| type | payload | 说明 |
+|------|---------|------|
+| REFRESH_DATA | {"target": "device_list"} | 通知前端刷新数据 |
+
+#### 聊天请求示例
+
+```bash
+# 1. 先创建会话
+SESSION_ID=$(curl -X POST http://localhost:8080/api/chat/sessions \
+  -H "Authorization: Bearer $TOKEN" \
+  -s | jq -r '.data.id')
+
+# 2. 发送消息并接收 SSE 流
+curl -X POST http://localhost:8080/api/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d "{\"sessionId\":\"$SESSION_ID\",\"content\":\"你好\"}" \
+  --stream
+```
+
+### 规则与边接口
+
+| 方法 | 路径 | 说明 | 需要认证 |
+|------|------|------|----------|
+| GET | `/api/board/rules` | 获取规则列表 | 是 |
+| POST | `/api/board/rules` | 保存规则（增量更新） | 是 |
+| GET | `/api/board/edges` | 获取边列表 | 是 |
+| POST | `/api/board/edges` | 保存边列表 | 是 |
+
+**说明：**
+- Rule 表示数据流向：`sources[] → toId.toApi`
+- Edge 是 Rule 的可视化表示，包含连线端点坐标
+- 前端维护 Rule 和 Edge 的同步关系，后端只负责存储
 
 ### 响应格式
 
@@ -824,9 +894,47 @@ logging:
     org.springframework.security: DEBUG
 ```
 
+### Q11: AI 聊天无响应
+
+**错误信息：**
+```
+发送消息失败: network error
+```
+
+**解决方案：**
+1. 确认后端服务正常运行
+2. 检查火山引擎 API Key 是否正确配置
+3. 确认 Redis 服务正常运行（用于 Token 黑名单）
+4. 查看后端日志确认 AI 调用是否成功
+5. 检查 SSE 连接是否被 CORS 拦截
+
+### Q12: SSE 流式响应中断
+
+**可能原因：**
+1. 网络不稳定导致连接断开
+2. 后端 SSE 超时（默认 5 分钟）
+3. AI 响应时间过长
+
+**解决方案：**
+1. 前端已实现断点续传机制，部分内容仍可显示
+2. 优化 AI 提示，缩短响应时间
+3. 检查网络连接稳定性
+
+### Q13: AI 助手无法操作设备
+
+**可能原因：**
+1. 设备模板不存在
+2. 设备实例未创建
+3. API 名称不匹配
+
+**解决方案：**
+1. 确认设备模板已创建
+2. 确认设备实例已放置在画布上
+3. 使用准确的 API 名称（可从设备模板中查看）
+
 ---
 
-## 联系与支持
+## AI 助手使用指南
 
 - **项目负责人：** [你的名字]
 - **问题反馈：** [Issue 链接]
@@ -839,8 +947,13 @@ logging:
 - **v0.0.1** (2025-01-21)
   - 初始版本
   - 用户认证（注册/登录/登出）
-  - 设备模板管理
-  - 规格管理
-  - 实时聊天功能
-  - JWT Token 认证
-  - Redis Token 黑名单
+  - JWT Token 认证与 Redis Token 黑名单
+  - 设备模板管理（增删改查）
+  - 设备实例管理（拖拽创建、拖拽移动）
+  - 规则引擎（sources → target 数据流向）
+  - 边可视化（自动计算端点坐标）
+  - 规格管理（IF-THEN 规则）
+  - 形式化验证准备
+  - AI 助手（火山引擎集成，SSE 流式聊天）
+  - 设备操作工具（自然语言创建设备）
+  - 面板布局持久化
