@@ -2,7 +2,7 @@
 
 export type SpecSide = 'a' | 'if' | 'then'
 export type SpecTargetType = 'state' | 'variable' | 'api'
-export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7'
+export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7' | 'safety' | 'liveness' | 'fairness'
 
 export interface SpecCondition {
     id: string
@@ -34,4 +34,8 @@ export interface Specification {
     aConditions: SpecCondition[]
     ifConditions: SpecCondition[]
     thenConditions: SpecCondition[]
+    formula?: string // LTL formula for simple specifications
+    deviceId?: string // Associated device ID for device-specific specs (legacy)
+    deviceLabel?: string // Associated device label (legacy)
+    devices?: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}> // Multi-device support
 }

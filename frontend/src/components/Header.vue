@@ -10,39 +10,9 @@ const { locale } = useI18n();
 const router = useRouter();
 const { state, logout, getUser } = useAuth();
 
-// 语言切换
-const isZh = computed({
-  get: () => locale.value === 'zh-CN',
-  set: (val: boolean) => {
-    locale.value = val ? 'zh-CN' : 'en';
-    localStorage.setItem('locale', locale.value);
-  }
-});
-
-const toggleLang = () => {
-  isZh.value = !isZh.value;
-};
-
-// 主题切换：dark / light
-const theme = ref<'dark' | 'light'>(
-  (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
-);
-
-const isDark = computed({
-  get: () => theme.value === 'dark',
-  set: (val: boolean) => {
-    theme.value = val ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', theme.value);
-    localStorage.setItem('theme', theme.value);
-  }
-});
-
-const toggleTheme = () => {
-  isDark.value = !isDark.value;
-};
-
+// 移除主题切换功能，固定使用亮色主题
 onMounted(() => {
-  document.documentElement.setAttribute('data-theme', theme.value);
+  document.documentElement.setAttribute('data-theme', 'light');
 });
 
 // 用户相关
@@ -52,18 +22,18 @@ const isLoggedIn = computed(() => state.isLoggedIn);
 const handleLogout = async () => {
   try {
     await ElMessageBox.confirm(
-      isZh.value ? '确定要退出登录吗？' : 'Are you sure you want to log out?',
-      isZh.value ? '提示' : 'Confirm',
+      '确定要退出登录吗？',
+      '提示',
       { type: 'warning' }
     );
-    
+
     // 调用登出API（可选，失败也清除本地状态）
     try {
       await authApi.logout();
     } catch {
       // API失败不影响本地登出
     }
-    
+
     logout();
     ElMessageBox.close();
     router.push('/login');
@@ -111,7 +81,7 @@ const goToRegister = () => {
             class="header-btn"
             @click="handleLogout"
           >
-            {{ isZh ? '退出登录' : 'Logout' }}
+            logout
           </el-button>
         </template>
         
@@ -123,9 +93,9 @@ const goToRegister = () => {
             class="header-btn"
             @click="goToLogin"
           >
-            {{ isZh ? '登录' : 'Login' }}
+            login
           </el-button>
-          
+
           <el-button
             size="small"
             round
@@ -133,30 +103,11 @@ const goToRegister = () => {
             class="header-btn"
             @click="goToRegister"
           >
-            {{ isZh ? '注册' : 'Register' }}
+            注册
           </el-button>
         </template>
 
-        <el-button
-          size="small"
-          round
-          class="theme-btn"
-          style="margin-left: 12px"
-          @click="toggleTheme"
-        >
-          <span v-if="isDark">🌙</span>
-          <span v-else>☀️</span>
-        </el-button>
 
-        <el-button
-          size="small"
-          round
-          class="lang-btn"
-          @click="toggleLang"
-        >
-          <span v-if="isZh">中</span>
-          <span v-else>EN</span>
-        </el-button>
       </el-col>
     </el-row>
   </el-header>
@@ -251,7 +202,6 @@ export default {
   transition: all 0.2s ease;
 }
 
-.theme-btn,
 .lang-btn {
   font-weight: 600;
   letter-spacing: 1px;
@@ -264,14 +214,12 @@ export default {
   transition: all 0.18s ease-out;
 }
 
-.theme-btn:hover,
 .lang-btn:hover {
   background: var(--iot-lang-btn-hover-bg);
   box-shadow: 0 0.4rem 1.1rem rgba(15, 23, 42, 0.3);
   transform: translateY(-1px);
 }
 
-.theme-btn:active,
 .lang-btn:active {
   transform: translateY(0);
 }

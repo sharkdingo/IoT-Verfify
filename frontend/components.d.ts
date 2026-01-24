@@ -16,6 +16,8 @@ declare module 'vue' {
     ChatView: typeof import('./src/components/ChatView.vue')['default']
     CodeBlack: typeof import('./src/components/CodeBlock.vue')['default']
     CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
+    ControlCenter: typeof import('./src/components/ControlCenter.vue')['default']
+    ControlPanel: typeof import('./src/components/ControlPanel.vue')['default']
     DeviceDialog: typeof import('./src/components/DeviceDialog.vue')['default']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElAvatar: typeof import('element-plus/es')['ElAvatar']
@@ -56,8 +58,11 @@ declare module 'vue' {
     Header: typeof import('./src/components/Header.vue')['default']
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     InputPanel: typeof import('./src/components/InputPanel.vue')['default']
+    InspectorPanel: typeof import('./src/components/InspectorPanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']
     StatusPanel: typeof import('./src/components/StatusPanel.vue')['default']
+    SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
   }
 }

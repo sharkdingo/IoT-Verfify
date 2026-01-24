@@ -47,7 +47,7 @@
     --iot-thumb-width: 3.5rem;
     --iot-thumb-height: 2.6rem;
 
-    /* 连线颜色（深浅主题一致） */
+    /* 连线颜色基础值（实际连线颜色由设备颜色动态决定） */
     --iot-color-edge: #2563eb;
 
     /* Dialog 公共尺寸（设备详情弹窗等） */

@@ -63,7 +63,7 @@ const presetTasks = [
 const visible = ref(false);
 const isExpanded = ref(false);
 const isSidebarOpen = ref(true);
-const isDarkMode = ref(false);
+// 移除深色模式功能，固定使用亮色主题
 const isRecording = ref(false);
 const sessions = ref<ChatSession[]>([]);
 const currentSessionId = ref<string>('');
@@ -78,7 +78,7 @@ watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
 
-const currentTheme = computed(() => isDarkMode.value ? 'dark' : 'light');
+const currentTheme = computed(() => 'light');
 
 // ================= 文本处理辅助函数 =================
 
@@ -342,7 +342,7 @@ const scrollToBottom = (force = false) => {
 </script>
 
 <template>
-  <div class="global-chat-wrapper" :class="{ 'dark-mode': isDarkMode }">
+  <div class="global-chat-wrapper">
 
     <div class="float-ball" @click="toggleChat" v-show="!visible">
       <div class="ripple"></div>
@@ -377,10 +377,7 @@ const scrollToBottom = (force = false) => {
           </div>
 
           <div class="sidebar-footer">
-            <div class="footer-item" @click="isDarkMode = !isDarkMode">
-              <component :is="isDarkMode ? BulbFilled : BulbOutlined"/>
-              <span class="footer-text">{{ isDarkMode ? '深色模式' : '浅色模式' }}</span>
-            </div>
+            <!-- 移除深色模式切换功能 -->
           </div>
         </div>
 
@@ -535,9 +532,6 @@ const scrollToBottom = (force = false) => {
   background-color: rgba(0,0,0,0.05);
   font-weight: 600;
 }
-.dark-mode .vue-markdown-wrapper th {
-  background-color: rgba(255,255,255,0.05);
-}
 .vue-markdown-wrapper p {
   margin-bottom: 0.8em;
   line-height: 1.6;
@@ -567,17 +561,7 @@ const scrollToBottom = (force = false) => {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-.global-chat-wrapper.dark-mode {
-  /* 深色模式 */
-  --bg-app: #343541;
-  --bg-sidebar: #202123;
-  --bg-input: #40414f;
-  --text-main: #ececf1;
-  --text-sub: #c5c5d2;
-  --border: #565869;
-  --shadow-card: 0 0 20px rgba(0,0,0,0.3);
-  --bubble-user-bg: #444654;
-}
+/* 移除深色模式样式，固定使用亮色主题 */
 
 /* ================= 2. 悬浮球 & Tooltip ================= */
 .float-ball {
@@ -714,7 +698,6 @@ const scrollToBottom = (force = false) => {
   backdrop-filter: blur(8px);
   position: absolute; top: 0; left: 0; right: 0; z-index: 10;
 }
-.dark-mode .glass-header { background: rgba(52,53,65,0.85); }
 .header-left-group { display: flex; align-items: center; gap: 12px; }
 .header-title { font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 6px; }
 .header-controls { display: flex; gap: 12px; }
@@ -792,13 +775,11 @@ const scrollToBottom = (force = false) => {
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
   background: var(--bg-sidebar);
 }
-.dark-mode .task-card:hover { box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4); background: rgba(255, 255, 255, 0.05); }
 
 .task-icon {
   padding: 10px; background: rgba(0, 0, 0, 0.04);
   border-radius: 10px; font-size: 20px; color: var(--text-main); transition: all 0.3s;
 }
-.dark-mode .task-icon { background: rgba(255, 255, 255, 0.1); }
 .task-card:hover .task-icon { background: var(--primary-color); color: #fff; }
 
 .task-info { flex: 1; }

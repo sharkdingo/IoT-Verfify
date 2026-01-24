@@ -8,6 +8,21 @@ const checkAuthSync = (): boolean => {
   return !!token;
 };
 
+// 在应用启动时清除可能的无效token，确保从登录页面开始
+const clearInvalidTokens = () => {
+  // 如果当前页面不是公开页面但没有token，清除所有认证相关数据
+  const currentPath = window.location.hash.replace('#', '') || '/';
+  const isPublicPath = ['/login', '/register', '/404'].includes(currentPath) ||
+                       currentPath.startsWith('/login') ||
+                       currentPath.startsWith('/register');
+
+  if (!isPublicPath && !checkAuthSync()) {
+    // 清除可能的无效认证数据
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem('iot_verify_user');
+  }
+};
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/login',
@@ -48,12 +63,15 @@ const router = createRouter({
   routes
 });
 
+// 应用启动时清除无效token
+clearInvalidTokens();
+
 // 路由守卫 - 使用同步检查避免时序问题
 router.beforeEach((to, _from, next) => {
   // 使用同步检查（直接从localStorage读取，避免响应式状态时序问题）
   const isLoggedIn = checkAuthSync();
   const isPublic = to.meta.public as boolean | undefined;
-  
+
   // 如果是公开页面，直接放行
   if (isPublic) {
     // 如果已登录且访问登录/注册页，跳转到board
@@ -64,7 +82,17 @@ router.beforeEach((to, _from, next) => {
     }
     return;
   }
-  
+
+  // 特殊处理根路径重定向
+  if (to.path === '/' || to.path === '') {
+    if (isLoggedIn) {
+      next('/board');
+    } else {
+      next('/login');
+    }
+    return;
+  }
+
   // 保护页面需要登录
   if (!isLoggedIn) {
     next({ path: '/login', query: { redirect: to.fullPath } });

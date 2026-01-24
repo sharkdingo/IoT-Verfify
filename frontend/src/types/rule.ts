@@ -5,6 +5,7 @@ export interface SourceEntry {
 
 export interface RuleForm {
     id?: string  // 可选，添加新规则时由前端生成
+    name?: string // 规则名称
     // 多个源条目，每个源有自己的 API
     sources: SourceEntry[]
     toId: string

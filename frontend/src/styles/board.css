@@ -56,10 +56,10 @@
 
 /* 连线（包含自环 path 和普通 line） */
 .iot-board .edge-layer .edge-line {
-    fill: none; /* 自环 path 不要填充，否则会出现“黑洞” */
-    stroke: var(--iot-color-edge);
+    fill: none; /* 自环 path 不要填充，否则会出现"黑洞" */
     stroke-width: 2;
     stroke-linecap: round;
+    stroke-dasharray: 4, 8; /* 虚线样式：8px实线，4px空白 */
 }
 
 /* 可选：如果你的箭头 marker 需要单独类名 */
@@ -71,11 +71,8 @@
 
 .iot-board .device-node {
     position: absolute;
-    background: radial-gradient(
-            circle at top,
-            var(--iot-color-node-highlight),
-            var(--iot-color-node-bg)
-    );
+    /* Allow Tailwind background classes to work */
+    background: transparent;
     border-radius: var(--iot-radius-node);
     display: flex;
     flex-direction: column;
@@ -83,9 +80,8 @@
     justify-content: center;
     gap: var(--iot-node-gap);
     cursor: grab;
-    box-shadow:
-            var(--iot-node-shadow),
-            0 0 0 1px var(--iot-color-node-border);
+    box-shadow: var(--iot-node-shadow);
+    border: 1px solid;
     color: var(--iot-color-text);
     user-select: none;
 }
@@ -180,15 +176,6 @@
     will-change: transform, left, top, width, height;
 }
 
-/* 左侧输入面板 / 右侧状态面板统一宽度 */
-.iot-board .input-card,
-.iot-board .status-card {
-    width: clamp(
-            var(--iot-card-width-min),
-            var(--iot-card-width),
-            var(--iot-card-width-max)
-    );
-}
 
 /* 卡片头部：标题栏，可拖动 */
 .iot-board .card-header {
@@ -251,24 +238,6 @@
     min-width: 0;
 }
 
-/* ========== InputPanel 内部透明化（露出卡片 / 画布） ========== */
-
-.iot-board .input-card .card-body {
-    background-color: transparent;
-}
-
-/* 让 Element Plus 的容器不再画白底 / 阴影，整体透出卡片背景 */
-.iot-board .input-card .panel-collapse,
-.iot-board .input-card .el-collapse,
-.iot-board .input-card .el-collapse-item__wrap,
-.iot-board .input-card .el-collapse-item__content,
-.iot-board .input-card .el-scrollbar__wrap,
-.iot-board .input-card .el-scrollbar__view,
-.iot-board .input-card .el-form,
-.iot-board .input-card .el-form-item {
-    background-color: transparent !important;
-    box-shadow: none;
-}
 
 /* 分割线颜色弱一点，避免喧宾夺主 */
 .iot-board .input-card .el-divider {
@@ -402,17 +371,6 @@
     color: #ff4d4f;
 }
 
-/* ... (Keep existing InputPanel/StatusPanel overrides) ... */
-.iot-board .input-card,
-.iot-board .status-card {
-    /* Only apply width constraints when NOT docked */
-    width: clamp(var(--iot-card-width-min), var(--iot-card-width), var(--iot-card-width-max));
-}
-
-.iot-board .floating-card.is-docked.input-card,
-.iot-board .floating-card.is-docked.status-card {
-    width: auto; /* Reset width for icon mode */
-}
 
 /* 核心修复：当处于拖拽状态时，立即移除所有过渡！
  * 这让卡片能 1:1 紧跟鼠标，没有任何延迟
@@ -422,3 +380,99 @@
     user-select: none; /* 防止拖拽时选中文字 */
     cursor: grabbing;
 }
+
+/* ========== New Layout Styles ========== */
+
+/* Canvas container with sidebars */
+.iot-board .canvas-container {
+    position: absolute;
+    left: 288px; /* 72 * 4 = 288px for left ControlCenter */
+    right: 0; /* No right sidebar, extend to full width */
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
+/* Grid background pattern */
+.grid-bg {
+    background-size: 40px 40px;
+    background-image: linear-gradient(to right, rgba(148, 163, 184, 0.15) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(148, 163, 184, 0.15) 1px, transparent 1px);
+}
+
+/* Particle line animation */
+.particle-line {
+    stroke-dasharray: 4, 8;
+    animation: dash-animation 30s linear infinite;
+}
+
+@keyframes dash-animation {
+    from { stroke-dashoffset: 1000; }
+    to { stroke-dashoffset: 0; }
+}
+
+/* Node container hover effects */
+.node-container {
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.node-container:hover {
+    transform: scale(1.02);
+    z-index: 50;
+}
+
+/* Glass node effect */
+.glass-node {
+    backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+}
+
+/* Glow icon effect */
+.glow-icon {
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.1));
+}
+
+/* Data badge */
+.data-badge {
+    position: absolute;
+    right: -12px;
+    top: 0;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 0.025em;
+    background: white;
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.05);
+    z-index: 10;
+    color: #475569;
+}
+
+/* Pulse status animation */
+.pulse-status {
+    animation: pulse-border 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0px rgba(34, 197, 94, 0.7); }
+    50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+}
+
+/* Slow spin animation for sensors */
+.animate-spin-slow {
+    animation: spin 3s linear infinite;
+}
+
+/* Color utilities */
+.text-primary { color: #2563EB; }
+.text-secondary { color: #C026D3; }
+.bg-online { background-color: #059669; }
+.bg-offline { background-color: #dc2626; }
+.bg-green-200 { background-color: #bbf7d0; }
+.border-blue-100 { border-color: #dbeafe; }
+.border-green-200 { border-color: #bbf7d0; }
+.border-purple-100 { border-color: #faf5ff; }
+.border-purple-200 { border-color: #e9d5ff; }

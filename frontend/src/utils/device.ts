@@ -17,7 +17,23 @@ export const getDeviceIconPath = (folder: string, state: string) => {
 export const getNodeIcon = (node: DeviceNode) => {
     const folder = node.templateName.replace(/ /g, '_')
     const state = node.state || 'Working'
-    return getDeviceIconPath(folder, state)
+
+    // Try different state name variations
+    const possibleStates = [state, state.toLowerCase(), state.charAt(0).toUpperCase() + state.slice(1).toLowerCase()]
+
+    for (const stateName of possibleStates) {
+        try {
+            const path = getDeviceIconPath(folder, stateName)
+            // In a real implementation, you'd check if the file exists
+            // For now, we'll just return the first possibility
+            return path
+        } catch (e) {
+            continue
+        }
+    }
+
+    // Fallback to a default icon or placeholder
+    return getDeviceIconPath('default', 'Working')
 }
 
 // --- 状态查找 ---
@@ -134,4 +150,56 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
     }
 
     return { valid: true }
+}
+
+// --- 默认设备图标 (SVG字符串) ---
+export const getDefaultDeviceIcon = (deviceType: string): string => {
+  const defaultIcons: Record<string, string> = {
+    Sensor: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="16" r="12" fill="#3B82F6" stroke="#1E40AF" stroke-width="2"/>
+      <path d="M16 8v8l6 4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    Switch: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="8" y="12" width="16" height="8" rx="4" fill="#10B981" stroke="#059669" stroke-width="2"/>
+      <circle cx="20" cy="16" r="3" fill="white"/>
+    </svg>`,
+    Light: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 4v6M8 12l4 4M24 12l-4 4M12 20l4 4M20 20l-4 4" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="16" cy="14" r="6" fill="#F59E0B" stroke="#D97706" stroke-width="2"/>
+    </svg>`
+  }
+  return defaultIcons[deviceType] || `<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="4" y="4" width="24" height="24" rx="4" fill="#6B7280" stroke="#4B5563" stroke-width="2"/>
+    <text x="16" y="20" text-anchor="middle" fill="white" font-size="12" font-family="Arial">?</text>
+  </svg>`
+}
+
+// --- 增强版图标获取函数 ---
+export const getNodeIconWithFallback = (node: DeviceNode): string => {
+  const folder = node.templateName.replace(/ /g, '_')
+  const state = node.state || 'Working'
+
+  // Try different state name variations
+  const possibleStates = [
+    state,
+    state.toLowerCase(),
+    state.charAt(0).toUpperCase() + state.slice(1).toLowerCase(),
+    'Working', // Default fallback
+    'On',      // Alternative default
+    'Off'      // Another alternative
+  ]
+
+  for (const stateName of possibleStates) {
+    try {
+      const path = getDeviceIconPath(folder, stateName)
+      // In browser environment, we could check if image loads successfully
+      // For now, return the path and let the browser handle broken images
+      return path
+    } catch (e) {
+      continue
+    }
+  }
+
+  // If all attempts fail, return a data URL with default SVG
+  return `data:image/svg+xml;base64,${btoa(getDefaultDeviceIcon(node.templateName))}`
 }

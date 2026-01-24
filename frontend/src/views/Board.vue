@@ -2,7 +2,7 @@
 /* =================================================================================
  * 1. Imports & Setup
  * ================================================================================= */
-import {ref, reactive, onMounted, onBeforeUnmount, watch, UnwrapRef} from 'vue'
+import {ref, reactive, computed, onMounted, onBeforeUnmount, watch} from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
@@ -15,7 +15,7 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
-import type { DockSide, DockState, PanelKey, PanelPosition, BoardLayoutDto } from '@/types/panel'
+// Panel types removed
 
 // Utils
 import {getDeviceIconPath, getNodeIcon} from '../utils/device'
@@ -28,7 +28,7 @@ import {
   removeSpecsForNode,
   updateSpecsForNodeRename
 } from '../utils/spec'
-import { getLinkPoints, updateRulesForNodeRename } from '../utils/rule'
+import { getLinkPoints } from '../utils/rule'
 
 // Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -37,11 +37,11 @@ import { defaultSpecTemplates } from '../assets/config/specTemplates'
 import boardApi from '@/api/board'
 
 // Components
-import InputPanel from '../components/InputPanel.vue'
-import StatusPanel from '../components/StatusPanel.vue'
 import DeviceDialog from '../components/DeviceDialog.vue'
 import CanvasBoard from '../components/CanvasBoard.vue'
-import AddTemplateDialog from '../components/AddTemplateDialog.vue'
+import ControlCenter from '../components/ControlCenter.vue'
+import SystemInspector from '../components/SystemInspector.vue'
+import RuleBuilderDialog from '../components/RuleBuilderDialog.vue'
 
 // Styles
 import '../styles/board.css'
@@ -52,15 +52,8 @@ const { t } = useI18n()
  * 2. Constants & Configuration
  * ================================================================================= */
 
-const DEFAULT_PANEL_PADDING = 10 // 稍微增加一点间距比较美观
-const DOCK_SNAP_THRESHOLD = 1
-const DOCK_ICON_SIZE = 24  // 与停靠图标实际尺寸一致
+// Panel constants removed
 
-const CARD_WIDTH_MIN = 192 // 12rem
-const CARD_WIDTH_MAX = 384 // 24rem
-const CARD_WIDTH_RATIO = 0.24
-
-const NODE_MARGIN_RIGHT_OF_PANEL = 60
 const NODE_GRID_COLS = 4
 const NODE_SPACING_X = 160
 const NODE_SPACING_Y = 120
@@ -86,26 +79,9 @@ let isPanning = false
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
 
-// --- Panel State (Position & Docking) ---
-const panelPositions = reactive<Record<PanelKey, PanelPosition>>({
-  input: { x: 24, y: 24 },
-  status: { x: 1040, y: 80 }
-})
+// Panel system removed
 
-const panelDockState = reactive<Record<PanelKey, DockState>>({
-  input: { isDocked: false, side: null, lastPos: { x: 24, y: 24 } },
-  status: { isDocked: false, side: null, lastPos: { x: 1040, y: 80 } }
-})
-
-// [Fix] Dragging State: 用于在拖拽时禁用 CSS transition，解决“粘滞”感
-const draggingState = reactive<Record<PanelKey, boolean>>({
-  input: false,
-  status: false
-})
-
-let draggingPanel: PanelKey | null = null
-let panelDragStart = { x: 0, y: 0 }
-let panelStartPos = { x: 0, y: 0 }
+// Panel system removed
 
 // --- Core Data State ---
 const deviceTemplates = ref<DeviceTemplate[]>([])
@@ -115,8 +91,6 @@ const rules = ref<RuleForm[]>([])  // 独立存储规则列表
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
-const inputActive = ref<string[]>([])
-const statusActive = ref<string[]>([])
 
 const draggingTplName = ref<string | null>(null)
 
@@ -136,16 +110,8 @@ const dialogMeta = reactive<DeviceDialogMeta>({
  * 4. Helper Functions (Styles & Calculation)
  * ================================================================================= */
 
-const getCardWidth = () => {
-  const w = window.innerWidth * CARD_WIDTH_RATIO
-  return Math.min(CARD_WIDTH_MAX, Math.max(CARD_WIDTH_MIN, w))
-}
+// getCardWidth removed
 
-const getTemplateInitIcon = (tpl: DeviceTemplate) => {
-  const folder = tpl.name
-  const initState = tpl.manifest?.InitState || 'Working'
-  return getDeviceIconPath(folder, initState)
-}
 
 const getNodeLabelStyle = (node: DeviceNode) => {
   const ratio = node.width / BASE_NODE_WIDTH
@@ -157,64 +123,7 @@ const getNodeLabelStyle = (node: DeviceNode) => {
   }
 }
 
-const getCardClasses = (key: PanelKey) => {
-  const state = panelDockState[key]
-  return {
-    'floating-card': true,
-    [`${key}-card`]: true,
-    'is-docked': state.isDocked,
-    [`dock-${state.side}`]: state.isDocked,
-    'is-dragging': draggingState[key]
-  }
-}
-
-const isInteractiveTarget = (el: HTMLElement | null): boolean => {
-  if (!el) return false
-  const interactiveSelectors =
-      'input, textarea, select, button, a, [role="button"],' +
-      '.el-input, .el-select, .el-button, .el-checkbox, .el-radio,' +
-      '.el-switch, .el-slider, .el-table, .el-scrollbar, .dock-close-btn,' +
-      '.el-dialog'
-  return !!el.closest(interactiveSelectors)
-}
-
-// [Fix] 安全检查：防止面板在初始化或窗口缩放时跑出屏幕外
-const clampPanelsToScreen = () => {
-  const winW = window.innerWidth
-  const winH = window.innerHeight
-  const margin = 40;
-
-  (['input', 'status'] as PanelKey[]).forEach(key => {
-    const pos = panelPositions[key]
-    const dock = panelDockState[key]
-
-    // [Crucial Fix] 如果是停靠状态，必须根据当前窗口尺寸重置位置
-    if (dock.isDocked && dock.side) {
-      switch (dock.side) {
-        case 'left':
-          pos.x = 0
-          pos.y = Math.min(Math.max(0, pos.y), winH - DOCK_ICON_SIZE)
-          break
-        case 'right':
-          pos.x = winW - DOCK_ICON_SIZE
-          pos.y = Math.min(Math.max(0, pos.y), winH - DOCK_ICON_SIZE)
-          break
-        case 'top':
-          pos.y = 0
-          pos.x = Math.min(Math.max(0, pos.x), winW - DOCK_ICON_SIZE)
-          break
-        case 'bottom':
-          pos.y = winH - DOCK_ICON_SIZE
-          pos.x = Math.min(Math.max(0, pos.x), winW - DOCK_ICON_SIZE)
-          break
-      }
-    } else {
-      // 未停靠状态，进行常规边界检查
-      pos.x = Math.min(Math.max(0, pos.x), winW - margin)
-      pos.y = Math.min(Math.max(0, pos.y), winH - margin)
-    }
-  })
-}
+// Panel system removed
 
 /* =================================================================================
  * 5. Canvas Interaction (Zoom & Pan)
@@ -282,202 +191,17 @@ const onCanvasPointerUp = async (e: PointerEvent) => {
     try { target.releasePointerCapture(e.pointerId) } catch(err){}
   }
 
-  await saveLayoutToServer()
+  // Layout saving removed
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
 }
 
-/* =================================================================================
- * 6. Panel Interaction (Move, Dock, Restore)
- * ================================================================================= */
-
-const onPanelPointerDownWrapper = (e: PointerEvent, key: PanelKey) => {
-  const target = e.target as HTMLElement | null
-  // 这里的异常之前会由于语法错误而抛出，现在修复了
-  if (isInteractiveTarget(target)) return
-  onPanelPointerDown(e, key)
-}
-
-const onPanelPointerDown = (e: PointerEvent, key: PanelKey) => {
-  if (panelDockState[key].isDocked) {
-    restorePanel(key)
-    return
-  }
-
-  draggingPanel = key
-  draggingState[key] = true
-
-  const target = e.currentTarget as HTMLElement
-  if (target && target.setPointerCapture) {
-    target.setPointerCapture(e.pointerId)
-  }
-
-  panelDragStart = { x: e.clientX, y: e.clientY }
-  panelStartPos = { ...panelPositions[key] }
-
-  window.addEventListener('pointermove', onPanelPointerMove)
-  window.addEventListener('pointerup', onPanelPointerUp)
-}
-
-const onPanelPointerMove = (e: PointerEvent) => {
-  if (!draggingPanel) return
-  const dx = e.clientX - panelDragStart.x
-  const dy = e.clientY - panelDragStart.y
-  const pos = panelPositions[draggingPanel]
-  pos.x = panelStartPos.x + dx
-  pos.y = panelStartPos.y + dy
-}
-
-const onPanelPointerUp = async (e: PointerEvent) => {
-  if (!draggingPanel) return
-
-  const key = draggingPanel
-
-  const target = e.target as HTMLElement
-  if (target && target.releasePointerCapture) {
-    try { target.releasePointerCapture(e.pointerId) } catch(err){}
-  }
-
-  checkAutoDock(key)
-
-  requestAnimationFrame(() => {
-    draggingState[key] = false
-    draggingPanel = null
-  })
-
-  window.removeEventListener('pointermove', onPanelPointerMove)
-  window.removeEventListener('pointerup', onPanelPointerUp)
-
-  await saveLayoutToServer()
-}
-
-// --- 6.2 Docking Logic ---
-const getNearestEdge = (x: number, y: number, width: number, height: number): { side: DockSide, dist: number } => {
-  const winW = window.innerWidth
-  const winH = window.innerHeight
-
-  const distLeft = x
-  const distRight = winW - (x + width)
-  const distTop = y
-  const distBottom = winH - (y + height)
-
-  const min = Math.min(distLeft, distRight, distTop, distBottom)
-
-  if (min === distLeft) return { side: 'left', dist: min }
-  if (min === distRight) return { side: 'right', dist: min }
-  if (min === distTop) return { side: 'top', dist: min }
-  return { side: 'bottom', dist: min }
-}
-
-const checkAutoDock = (key: PanelKey) => {
-  const el = document.querySelector(`.${key}-card`) as HTMLElement
-  if (!el) return
-
-  const rect = el.getBoundingClientRect()
-  const { side, dist } = getNearestEdge(rect.x, rect.y, rect.width, rect.height)
-
-  if (dist < DOCK_SNAP_THRESHOLD) {
-    dockPanel(key, side)
-  }
-}
-
-const handleManualDock = (key: PanelKey) => {
-  const el = document.querySelector(`.${key}-card`) as HTMLElement
-  if (!el) return
-  const rect = el.getBoundingClientRect()
-  const { side } = getNearestEdge(rect.x, rect.y, rect.width, rect.height)
-  dockPanel(key, side)
-}
-
-const dockPanel = (key: PanelKey, side: DockSide) => {
-  if (!side) return
-
-  panelDockState[key].lastPos = { ...panelPositions[key] }
-  panelDockState[key].isDocked = true
-  panelDockState[key].side = side
-
-  const winW = window.innerWidth
-  const winH = window.innerHeight
-
-  if (side === 'left') {
-    panelPositions[key].x = 0
-  } else if (side === 'right') {
-    panelPositions[key].x = winW - DOCK_ICON_SIZE
-  } else if (side === 'top') {
-    panelPositions[key].y = 0
-  } else if (side === 'bottom') {
-    panelPositions[key].y = winH - DOCK_ICON_SIZE
-  }
-
-  void saveLayoutToServer()
-}
-
-const restorePanel = (key: PanelKey) => {
-  const side = panelDockState[key].side
-  const padding = DEFAULT_PANEL_PADDING
-  const headerHeight = 60
-  const currentCardWidth = getCardWidth()
-  const winW = window.innerWidth
-  const winH = window.innerHeight
-
-  let newX: UnwrapRef<PanelPosition["x"]>
-  let newY: UnwrapRef<PanelPosition["y"]>
-
-  if (side === 'left') {
-    newX = padding
-    newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
-  } else if (side === 'right') {
-    newX = winW - currentCardWidth - padding
-    newY = Math.min(Math.max(padding, panelPositions[key].y), winH - headerHeight)
-  } else if (side === 'top') {
-    newY = padding
-    newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
-  } else if (side === 'bottom') {
-    if (panelPositions[key].y > winH - 200) {
-      newY = winH - 500
-    } else {
-      newY = Math.max(padding, panelPositions[key].y)
-    }
-    newX = Math.min(Math.max(padding, panelPositions[key].x), winW - currentCardWidth - padding)
-  } else {
-    newX = panelDockState[key].lastPos.x
-    newY = panelDockState[key].lastPos.y
-  }
-
-  newX = Math.min(Math.max(0, newX), winW - 100)
-  newY = Math.min(Math.max(0, newY), winH - headerHeight)
-
-  panelPositions[key].x = newX
-  panelPositions[key].y = newY
-
-  panelDockState[key].isDocked = false
-  panelDockState[key].side = null
-
-  void saveLayoutToServer()
-}
+// Panel interaction removed
 
 /* =================================================================================
  * 7. Node / Edge / Spec Management
  * ================================================================================= */
 
-const getNextNodePosition = (): { x: number; y: number } => {
-  const count = nodes.value.length
-  const col = count % NODE_GRID_COLS
-  const row = Math.floor(count / NODE_GRID_COLS)
-
-  const screenX =
-      panelPositions.input.x +
-      getCardWidth() +
-      NODE_MARGIN_RIGHT_OF_PANEL +
-      col * NODE_SPACING_X
-
-  const screenY = NODE_START_Y + row * NODE_SPACING_Y
-
-  const x = (screenX - canvasPan.value.x) / canvasZoom.value
-  const y = (screenY - canvasPan.value.y) / canvasZoom.value
-
-  return { x, y }
-}
 
 const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
   const uniqueLabel = getUniqueLabel(tpl.manifest.Name, nodes.value)
@@ -494,18 +218,7 @@ const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: 
   await saveNodesToServer()
 }
 
-const handleCreateDevice = async (tpl: DeviceTemplate) => {
-  const pos = getNextNodePosition()
-  await createDeviceInstanceAt(tpl, pos)
-}
 
-const onDeviceDragStart = (tpl: DeviceTemplate) => {
-  draggingTplName.value = tpl.manifest.Name
-}
-
-const onDeviceDragEnd = () => {
-  draggingTplName.value = null
-}
 
 const onCanvasDragOver = (e: DragEvent) => {
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
@@ -594,90 +307,15 @@ const handleAddRule = async (payload: RuleForm) => {
   }
 }
 
-const handleAddSpec = async (payload: {
-  templateId: SpecTemplateId | ''
-  mode: 'single' | 'ifThen'
-  aConditions: SpecCondition[]
-  ifConditions: SpecCondition[]
-  thenConditions: SpecCondition[]
-}) => {
-  if (!payload.templateId) {
-    ElMessage.warning(t('app.selectTemplate') || '请选择规约模板')
-    return
-  }
-
-  const tplId = payload.templateId as SpecTemplateId
-  const aCheck = validateAndCleanConditions(payload.aConditions)
-  const ifCheck = validateAndCleanConditions(payload.ifConditions)
-  const thenCheck = validateAndCleanConditions(payload.thenConditions)
-
-  if (aCheck.hasIncomplete || ifCheck.hasIncomplete || thenCheck.hasIncomplete) {
-    ElMessage.warning(t('app.specRowIncomplete') || '存在未填完整的条件')
-    return
-  }
-
-  const aConds = aCheck.cleaned
-  const ifConds = ifCheck.cleaned
-  const thenConds = thenCheck.cleaned
-
-  const mode = getSpecMode(tplId)
-  const tplLabel = specTemplates.value.find(t => t.id === tplId)?.label || tplId
-
-  if (mode === 'single') {
-    if (!aConds.length) {
-      ElMessage.warning(t('app.specNeedA') || '请至少配置一个事件 A 条件')
-      return
-    }
-    const item: Specification = {
-      id: 'spec_' + Date.now(),
-      templateId: tplId,
-      templateLabel: tplLabel,
-      aConditions: aConds,
-      ifConditions: [],
-      thenConditions: []
-    }
-    if (specifications.value.some(spec => isSameSpecification(spec, item))) {
-      ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
-      return
-    }
-    specifications.value.push(item)
-    await saveSpecsToServer()
-    return
-  }
-
-  if (mode === 'ifThen') {
-    if (!ifConds.length || !thenConds.length) {
-      ElMessage.warning(t('app.specNeedIf') || '请完善 IF/THEN 条件')
-      return
-    }
-    const item: Specification = {
-      id: 'spec_' + Date.now(),
-      templateId: tplId,
-      templateLabel: tplLabel,
-      aConditions: [],
-      ifConditions: ifConds,
-      thenConditions: thenConds
-    }
-    if (specifications.value.some(spec => isSameSpecification(spec, item))) {
-      ElMessage.warning(t('app.specDuplicate') || '已经存在一条内容完全相同的规约')
-      return
-    }
-    specifications.value.push(item)
-    await saveSpecsToServer()
-    return
-  }
-}
-
-const deleteSpecification = async (id: string) => {
-  specifications.value = specifications.value.filter(s => s.id !== id)
-  await saveSpecsToServer()
-}
 
 /* =================================================================================
  * 8. Context Menu & Deletion
  * ================================================================================= */
 
-const onNodeContext = (node: DeviceNode) => {
+const onDeviceListClick = (deviceId: string) => {
+  const node = nodes.value.find(n => n.id === deviceId)
+  if (!node) return
+
   const tpl = deviceTemplates.value.find(t => t.manifest.Name === node.templateName)
   dialogMeta.nodeId = node.id
   dialogMeta.label = node.label
@@ -689,31 +327,68 @@ const onNodeContext = (node: DeviceNode) => {
   dialogVisible.value = true
 }
 
-const handleDialogSave = async (newLabel: string) => {
-  const exists = nodes.value.some(n => n.label === newLabel && n.id !== dialogMeta.nodeId)
+// 右键菜单状态
+const contextMenu = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  node: null as DeviceNode | null
+})
+
+const onNodeContext = (node: DeviceNode, event: MouseEvent) => {
+  event.preventDefault()
+  contextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    node: node
+  }
+}
+
+const closeContextMenu = () => {
+  contextMenu.value.visible = false
+}
+
+// 右键菜单操作
+const renameDevice = () => {
+  if (!contextMenu.value.node) return
+  // 打开重命名对话框或直接编辑
+  const node = contextMenu.value.node
+  const newLabel = prompt('请输入新的设备名称:', node.label)
+  if (newLabel && newLabel !== node.label) {
+    handleRenameDevice(node.id, newLabel)
+  }
+  closeContextMenu()
+}
+
+const deleteDevice = () => {
+  if (!contextMenu.value.node) return
+  deleteCurrentNodeWithConfirm(contextMenu.value.node.id)
+  closeContextMenu()
+}
+
+const handleRenameDevice = async (nodeId: string, newLabel: string) => {
+  const exists = nodes.value.some(n => n.label === newLabel && n.id !== nodeId)
   if (exists) {
     ElMessage.error(t('app.nameExists') || '该名称已存在，请换一个')
     return
   }
-  const node = nodes.value.find(n => n.id === dialogMeta.nodeId)
-  if (!node) {
-    dialogVisible.value = false
-    return
+
+  const node = nodes.value.find(n => n.id === nodeId)
+  if (node) {
+    node.label = newLabel
+    await saveNodesToServer()
+    ElMessage.success(t('app.renameSuccess') || '重命名成功')
   }
-
-  node.label = newLabel
-  await saveNodesToServer()
-
-  const rulesChanged = updateRulesForNodeRename(edges.value, node.id, newLabel)
-  if (rulesChanged) await saveEdgesToServer()
-
-  const specChanged = updateSpecsForNodeRename(specifications.value, node.id, newLabel)
-  if (specChanged) await saveSpecsToServer()
-
-  dialogMeta.label = newLabel
-  dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
-  dialogVisible.value = false
 }
+
+const viewDeviceDetails = () => {
+  if (!contextMenu.value.node) return
+  // 显示设备详情 - 复用左侧列表点击的逻辑
+  onDeviceListClick(contextMenu.value.node.id)
+  closeContextMenu()
+}
+
 
 const forceDeleteNode = async (nodeId: string) => {
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
@@ -794,28 +469,29 @@ const deleteRule = async (ruleId: string) => {
   }
 }
 
+const deleteSpecification = async (specId: string) => {
+  const specToDelete = specifications.value.find(s => s.id === specId)
+  if (!specToDelete) return
+
+  // 删除规约
+  specifications.value = specifications.value.filter(s => s.id !== specId)
+
+  try {
+    await saveSpecsToServer()
+    ElMessage.success('删除规约成功')
+  } catch (e) {
+    console.error('删除规约失败', e)
+    // 保存失败，回滚（重新获取）
+    await refreshSpecifications()
+    ElMessage.error('删除规约失败')
+  }
+}
+
 /* =================================================================================
  * 9. API Interactions (Save)
  * ================================================================================= */
 
-const saveLayoutToServer = async () => {
-  const payload: BoardLayoutDto = {
-    input: panelPositions.input,
-    status: panelPositions.status,
-    dockState: {
-      input: { ...panelDockState.input },
-      status: { ...panelDockState.status }
-    },
-    canvasPan: canvasPan.value,
-    canvasZoom: canvasZoom.value
-  }
-  try {
-    await boardApi.saveLayout(payload)
-  } catch (e) {
-    console.error('saveLayout error', e)
-    ElMessage.error(t('app.saveLayoutFailed') || '保存画布布局失败')
-  }
-}
+// Panel layout saving removed
 
 const saveNodesToServer = async () => {
   try { await boardApi.saveNodes(nodes.value) }
@@ -832,41 +508,115 @@ const saveSpecsToServer = async () => {
   catch (e) { ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败') }
 }
 
-const addTemplateVisible = ref(false)
+const ruleBuilderVisible = ref(false)
+
+// Default device templates for demonstration
+const defaultDeviceTemplates = ref<DeviceTemplate[]>([
+  {
+    id: 'sensor-1',
+    name: 'Sensor',
+    manifest: {
+      Name: 'Sensor',
+      Description: 'Basic sensor device',
+      Modes: ['Working', 'Off'],
+      InternalVariables: [],
+      ImpactedVariables: ['temperature', 'humidity', 'motion'],
+      InitState: 'Working',
+      WorkingStates: [
+        {
+          Name: 'Working',
+          Dynamics: [],
+          Description: 'Sensor is actively monitoring environmental conditions',
+          Trust: 'trusted',
+          Privacy: 'private',
+          Invariant: 'temperature >= -50 && temperature <= 100'
+        }
+      ],
+      APIs: []
+    }
+  },
+  {
+    id: 'switch-1',
+    name: 'Switch',
+    manifest: {
+      Name: 'Switch',
+      Description: 'Basic switch device',
+      Modes: ['On', 'Off'],
+      InternalVariables: [],
+      ImpactedVariables: ['power'],
+      InitState: 'Off',
+      WorkingStates: [
+        {
+          Name: 'On',
+          Dynamics: [],
+          Description: 'Switch is turned on and power is flowing',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Invariant: 'power == true'
+        },
+        {
+          Name: 'Off',
+          Dynamics: [],
+          Description: 'Switch is turned off and no power is flowing',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Invariant: 'power == false'
+        }
+      ],
+      APIs: []
+    }
+  },
+  {
+    id: 'light-1',
+    name: 'Light',
+    manifest: {
+      Name: 'Light',
+      Description: 'Basic light device',
+      Modes: ['On', 'Off'],
+      InternalVariables: [],
+      ImpactedVariables: ['brightness', 'color'],
+      InitState: 'Off',
+      WorkingStates: [
+        {
+          Name: 'On',
+          Dynamics: [],
+          Description: 'Light is turned on and emitting light',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Invariant: 'brightness > 0'
+        },
+        {
+          Name: 'Off',
+          Dynamics: [],
+          Description: 'Light is turned off and not emitting light',
+          Trust: 'trusted',
+          Privacy: 'public',
+          Invariant: 'brightness == 0'
+        }
+      ],
+      APIs: []
+    }
+  }
+])
 const refreshDeviceTemplates = async () => {
   try {
     const res = await boardApi.getDeviceTemplates()
     deviceTemplates.value = res || []
+    // If no templates from backend, use defaults
+    if (deviceTemplates.value.length === 0) {
+      deviceTemplates.value = defaultDeviceTemplates.value
+      console.log('Using default device templates:', deviceTemplates.value)
+    }
   } catch (e) {
     console.error(e)
-    ElMessage.error(t('app.loadTemplatesFailed') || '加载设备模板失败')
+    // Fallback to default templates on error
+    deviceTemplates.value = defaultDeviceTemplates.value
+    console.log('Using default device templates due to API error:', deviceTemplates.value)
+    // ElMessage.error(t('app.loadTemplatesFailed') || '加载设备模板失败')
   }
 }
 
-// 接收来自 InputPanel 的 "打开弹窗" 信号
-const openAddTemplateDialog = () => {
-  addTemplateVisible.value = true
-}
 
-// 处理 AddTemplateDialog 的保存事件
-const handleSaveTemplate = async (newTpl: DeviceTemplate) => {
-  // 查重逻辑（可选，后端也会查）
-  if (deviceTemplates.value.some(d => d.manifest.Name === newTpl.manifest.Name)) {
-    ElMessage.warning(t('app.nameExists') || '该设备名称已存在')
-    return
-  }
-
-  try {
-    await boardApi.addDeviceTemplate(newTpl)
-    ElMessage.success(t('app.addTemplateSuccess') || '添加设备模板成功')
-
-    addTemplateVisible.value = false // 成功后关闭弹窗
-    await refreshDeviceTemplates()
-  } catch (e) {
-    console.error(e)
-    ElMessage.error(t('app.addTemplateFailed') || '添加设备模板失败')
-  }
-}
 
 /* =================================================================================
  * 10. Lifecycle & Watchers
@@ -882,7 +632,6 @@ const refreshDevices = async () => {
 
 // 2.定义刷新规则的函数
 const refreshRules = async () => {
-  console.log('🔄 Board组件收到指令，正在刷新规则列表...')
   try {
     // 并行获取规则列表和边列表
     const [rulesData, edgesData] = await Promise.all([
@@ -915,30 +664,9 @@ onMounted(async () => {
   await refreshRules()
   await refreshSpecifications()
 
-  // Load Layout
+  // Load Layout (only canvas)
   try {
     const layout = await boardApi.getLayout()
-
-    // Panel Position
-    if (layout?.input && layout?.status) {
-      panelPositions.input = layout.input
-      panelPositions.status = layout.status
-    } else {
-      panelPositions.input = { x: DEFAULT_PANEL_PADDING, y: DEFAULT_PANEL_PADDING }
-      panelPositions.status = {
-        x: window.innerWidth - getCardWidth() - DEFAULT_PANEL_PADDING,
-        y: DEFAULT_PANEL_PADDING
-      }
-    }
-
-    // Dock State
-    if (layout?.dockState) {
-      if (layout.dockState.input) Object.assign(panelDockState.input, layout.dockState.input)
-      if (layout.dockState.status) Object.assign(panelDockState.status, layout.dockState.status)
-    }
-
-    // [Fix] Ensure panels are on screen
-    clampPanelsToScreen()
 
     // Canvas
     if (layout?.canvasPan) canvasPan.value = layout.canvasPan
@@ -946,39 +674,205 @@ onMounted(async () => {
       canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
     }
   } catch {
-    // Fallback
-    panelPositions.input = { x: DEFAULT_PANEL_PADDING, y: DEFAULT_PANEL_PADDING }
-    panelPositions.status = {
-      x: window.innerWidth - getCardWidth() - DEFAULT_PANEL_PADDING,
-      y: DEFAULT_PANEL_PADDING
-    }
+    // Layout loading failed
   }
 
-  // Load Active Folders
-  try {
-    const active = await boardApi.getActive()
-    if (Array.isArray(active?.input)) inputActive.value = active.input
-    if (Array.isArray(active?.status)) statusActive.value = active.status
-  } catch {}
+  // Panel system removed
 
   window.addEventListener('keydown', onGlobalKeydown)
-  window.addEventListener('resize', clampPanelsToScreen)
 })
 
-watch(
-    () => ({ input: inputActive.value, status: statusActive.value }),
-    async val => {
-      try { await boardApi.saveActive(val) }
-      catch { ElMessage.error(t('app.saveActiveFailed') || '保存折叠面板状态失败') }
-    },
-    { deep: true }
-)
+// Panel watch removed
 
-watch(canvasZoom, () => void saveLayoutToServer())
+// Canvas zoom saving removed
+
+// Color utilities (matching CanvasBoard colors)
+const getCanvasMapColorIndex = (nodeId: string): number => {
+  // Same hash function as CanvasBoard.vue for consistency - using djb2 algorithm
+  let hash = 5381
+  for (let i = 0; i < nodeId.length; i++) {
+    const char = nodeId.charCodeAt(i)
+    hash = ((hash << 5) + hash) + char // hash * 33 + char
+  }
+
+  // Convert to positive number and get modulo 4
+  const colorIndex = Math.abs(hash) % 4
+
+  return colorIndex
+}
+
+const getCanvasMapColor = (nodeId: string): string => {
+  // Return actual color values instead of Tailwind classes
+  const colorIndex = getCanvasMapColorIndex(nodeId)
+  const colorValues = ['#6366f1', '#059669', '#C026D3', '#dc2626'] // primary, online, secondary(purple), offline
+  return colorValues[colorIndex] || colorValues[0]
+}
+
+// Convert Tailwind bg- class to actual color value for SVG
+const getCanvasMapColorValue = (nodeId: string): string => {
+  const colorIndex = getCanvasMapColorIndex(nodeId)
+  // Map to actual color values that match the Tailwind colors
+  const colorValues = ['#2563EB', '#059669', '#C026D3', '#dc2626']
+  return colorValues[colorIndex] || colorValues[0]
+}
+
+const getCanvasMapSize = (nodeId: string): string => {
+  // All nodes use the same size for consistency
+  return 'size-2'
+}
+
+// Canvas map calculations
+const canvasMapData = computed(() => {
+  if (nodes.value.length === 0) return { dots: [], lines: [] }
+
+  // Calculate canvas bounds
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+
+  nodes.value.forEach(node => {
+    const x = node.position.x
+    const y = node.position.y
+    const width = node.width || 110
+    const height = node.height || 90
+
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + width)
+    maxY = Math.max(maxY, y + height)
+  })
+
+  // Add some padding
+  const padding = 100
+  minX -= padding
+  minY -= padding
+  maxX += padding
+  maxY += padding
+
+  const canvasWidth = maxX - minX
+  const canvasHeight = maxY - minY
+
+  // Map dimensions (the mini map container)
+  const mapWidth = 256 // width of the mini map container (w-full in h-32 div)
+  const mapHeight = 128 // height of the mini map container (h-32)
+
+  // Convert node positions to mini map coordinates
+  const dots = nodes.value.map((node) => {
+    const nodeX = canvasWidth > 0 ? ((node.position.x - minX) / canvasWidth) * mapWidth : mapWidth / 2
+    const nodeY = canvasHeight > 0 ? ((node.position.y - minY) / canvasHeight) * mapHeight : mapHeight / 2
+
+    return {
+      id: node.id,
+      x: Math.max(0, Math.min(mapWidth - 8, nodeX)), // Keep within bounds
+      y: Math.max(0, Math.min(mapHeight - 8, nodeY)),
+      size: getCanvasMapSize(node.id),
+      color: getCanvasMapColor(node.id)
+    }
+  })
+
+  // Create node lookup map for easy access
+  const nodeMap = new Map(dots.map(dot => [dot.id, dot]))
+
+  // Generate lines for edges
+  const lines = edges.value.map((edge) => {
+    const fromDot = nodeMap.get(edge.from)
+    const toDot = nodeMap.get(edge.to)
+
+    if (!fromDot || !toDot) return null
+
+    // Check if bidirectional
+    const isBidirectional = edges.value.some(e =>
+      (e.from === edge.to && e.to === edge.from)
+    )
+
+    let offsetY = 0
+
+    if (isBidirectional) {
+      // For bidirectional edges, offset vertically
+      const [node1, node2] = [edge.from, edge.to].sort()
+      const isFirstDirection = (edge.from === node1 && edge.to === node2)
+      offsetY = isFirstDirection ? -8 : 8 // Offset above/below
+    }
+
+    return {
+      id: edge.id,
+      fromId: edge.from,
+      x1: fromDot.x + 4, // Center of dot (assuming 8px diameter)
+      y1: fromDot.y + 4 + offsetY,
+      x2: toDot.x + 4,
+      y2: toDot.y + 4 + offsetY,
+      color: getCanvasMapColor(edge.from), // Use source device color
+      isBidirectional
+    }
+  }).filter(Boolean)
+
+  return { dots, lines }
+})
+
+const canvasMapDots = computed(() => canvasMapData.value.dots)
+const canvasMapLines = computed(() => canvasMapData.value.lines.filter(line => line !== null && line !== undefined))
+
+const handleCreateDevice = async (data: { template: DeviceTemplate, customName: string }) => {
+  const { template, customName } = data
+
+  // Create device with custom name
+  const uniqueLabel = getUniqueLabel(customName, nodes.value)
+  const node: DeviceNode = {
+    id: uniqueLabel,
+    templateName: template.manifest.Name,
+    label: uniqueLabel,
+    position: getNextNodePosition(),
+    state: template.manifest.InitState || 'Working',
+    width: 110,
+    height: 90
+  }
+  nodes.value.push(node)
+  await saveNodesToServer()
+}
+
+const openRuleBuilder = () => {
+  ruleBuilderVisible.value = true
+}
+
+const handleAddSpec = async (data: { templateId: string, devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, formula: string }) => {
+  const { templateId, devices, formula } = data
+
+  // Create specification with LTL formula
+  const specId = 'spec_' + Date.now()
+  const templateLabel = templateId === 'safety' ? 'Safety Property' :
+                       templateId === 'liveness' ? 'Liveness Property' :
+                       'Fairness Property'
+
+  const newSpec: Specification = {
+    id: specId,
+    templateId: '1' as any, // Use first template as fallback since we don't have LTL templates
+    templateLabel,
+    aConditions: [],
+    ifConditions: [],
+    thenConditions: [],
+    formula: formula,
+    devices: devices
+  }
+
+  specifications.value.push(newSpec)
+  await saveSpecsToServer()
+}
+
+const getNextNodePosition = (): { x: number; y: number } => {
+  const count = nodes.value.length
+  const col = count % NODE_GRID_COLS
+  const row = Math.floor(count / NODE_GRID_COLS)
+
+  // 使用固定起始位置
+  const screenX = 200 + col * NODE_SPACING_X
+  const screenY = NODE_START_Y + row * NODE_SPACING_Y
+
+  const x = (screenX - canvasPan.value.x) / canvasZoom.value
+  const y = (screenY - canvasPan.value.y) / canvasZoom.value
+
+  return { x, y }
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
-  window.removeEventListener('resize', clampPanelsToScreen)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
 })
@@ -993,100 +887,58 @@ defineExpose({
 <template>
   <!-- [Fix] @wheel.ctrl.prevent 阻止浏览器原生缩放 -->
   <div class="iot-board" @wheel.ctrl.prevent="onBoardWheel">
-    <CanvasBoard
-        :nodes="nodes"
-        :edges="edges"
-        :pan="canvasPan"
-        :zoom="canvasZoom"
-        :get-node-icon="getNodeIcon"
-        :get-node-label-style="getNodeLabelStyle"
-        @canvas-pointerdown="onCanvasPointerDown"
-        @canvas-dragover="onCanvasDragOver"
-        @canvas-drop="onCanvasDrop"
-        @canvas-enter="onCanvasEnter"
-        @canvas-leave="onCanvasLeave"
-        @node-context="onNodeContext"
-        @node-moved-or-resized="handleNodeMovedOrResized"
+    <!-- Left Sidebar - Control Center -->
+    <ControlCenter
+      :device-templates="deviceTemplates"
+      :nodes="nodes"
+      :edges="edges"
+      :canvas-pan="canvasPan"
+      :canvas-zoom="canvasZoom"
+      @create-device="handleCreateDevice"
+      @open-rule-builder="openRuleBuilder"
+      @add-spec="handleAddSpec"
     />
 
-    <div
-        :class="getCardClasses('input')"
-        :style="{ left: panelPositions.input.x + 'px', top: panelPositions.input.y + 'px' }"
-        @pointerdown="onPanelPointerDownWrapper($event, 'input')"
-    >
-      <el-tooltip
-          :disabled="!panelDockState.input.isDocked"
-          :content="t('app.restoreInput') || '点击恢复输入面板'"
-          placement="right"
-      >
-        <div class="docked-icon-container">
-          <el-icon :size="24"><Edit /></el-icon>
-        </div>
-      </el-tooltip>
+    <!-- Right Sidebar - System Inspector -->
+    <SystemInspector
+      :devices="nodes"
+      :rules="rules"
+      :specifications="specifications"
+      @delete-device="deleteNodeFromStatus"
+      @delete-rule="deleteRule"
+      @delete-spec="deleteSpecification"
+      @device-click="onDeviceListClick"
+    />
 
-      <div class="card-header">
-        <span class="card-title">
-           <el-icon style="margin-right: 6px; vertical-align: middle"><Edit /></el-icon>
-           {{ t('app.input') }}
-        </span>
-        <div class="dock-close-btn" @click.stop="handleManualDock('input')" title="收起面板">
-          <el-icon><Close /></el-icon>
-        </div>
-      </div>
+    <!-- Canvas Area -->
+    <div class="canvas-container">
+      <!-- Background elements -->
+      <div class="absolute inset-0 grid-bg opacity-100 pointer-events-none z-0"></div>
+      <div class="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-blue-50/20 pointer-events-none z-0"></div>
 
-      <div class="card-body">
-        <InputPanel
-            v-model:active="inputActive"
-            :device-templates="deviceTemplates"
-            :nodes="nodes"
-            :spec-templates="specTemplates"
-            @create-device="handleCreateDevice"
-            @add-rule="handleAddRule"
-            @add-spec="handleAddSpec"
-            @device-drag-start="onDeviceDragStart"
-            @device-drag-end="onDeviceDragEnd"
-            @open-add-template-dialog="openAddTemplateDialog"
-            :get-template-init-icon="getTemplateInitIcon"
-        />
-      </div>
+
+      <!-- Canvas Board -->
+      <CanvasBoard
+          :nodes="nodes"
+          :edges="edges"
+          :pan="canvasPan"
+          :zoom="canvasZoom"
+          :get-node-icon="getNodeIcon"
+          :get-node-label-style="getNodeLabelStyle"
+          @canvas-pointerdown="onCanvasPointerDown"
+          @canvas-dragover="onCanvasDragOver"
+          @canvas-drop="onCanvasDrop"
+          @canvas-enter="onCanvasEnter"
+          @canvas-leave="onCanvasLeave"
+          @node-context="onNodeContext"
+          @node-moved-or-resized="handleNodeMovedOrResized"
+      />
+
     </div>
 
-    <div
-        :class="getCardClasses('status')"
-        :style="{ left: panelPositions.status.x + 'px', top: panelPositions.status.y + 'px' }"
-        @pointerdown="onPanelPointerDownWrapper($event, 'status')"
-    >
-      <el-tooltip
-          :disabled="!panelDockState.status.isDocked"
-          :content="t('app.restoreStatus') || '点击恢复状态面板'"
-          placement="left"
-      >
-        <div class="docked-icon-container">
-          <el-icon :size="24"><Platform /></el-icon>
-        </div>
-      </el-tooltip>
+    <!-- Floating panels -->
+    <div>
 
-      <div class="card-header">
-        <span class="card-title">
-           <el-icon style="margin-right: 6px; vertical-align: middle"><Platform /></el-icon>
-           {{ t('app.status') }}
-        </span>
-        <div class="dock-close-btn" @click.stop="handleManualDock('status')" title="收起面板">
-          <el-icon><Close /></el-icon>
-        </div>
-      </div>
-
-      <div class="card-body">
-        <StatusPanel
-            v-model:active="statusActive"
-            :nodes="nodes"
-            :rules="rules"
-            :specifications="specifications"
-            @delete-node="deleteNodeFromStatus"
-            @delete-rule="deleteRule"
-            @delete-spec="deleteSpecification"
-        />
-      </div>
     </div>
 
     <DeviceDialog
@@ -1094,17 +946,105 @@ defineExpose({
         :device-name="dialogMeta.deviceName"
         :description="dialogMeta.description"
         :label="dialogMeta.label"
+        :node-id="dialogMeta.nodeId"
         :manifest="dialogMeta.manifest"
         :rules="dialogMeta.rules"
         :specs="dialogMeta.specs"
         @update:visible="dialogVisible = $event"
-        @save="handleDialogSave"
         @delete="handleDialogDelete"
     />
 
-    <AddTemplateDialog
-        v-model:visible="addTemplateVisible"
-        @save="handleSaveTemplate"
+    <!-- Context Menu for Node Right Click -->
+    <div
+      v-if="contextMenu.visible"
+      class="fixed z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-2 min-w-48"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @click.stop
+    >
+      <div class="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">
+        {{ contextMenu.node?.label }}
+      </div>
+      <button
+        @click="renameDevice"
+        class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+      >
+        <span class="material-icons-round text-base">edit</span>
+        重命名
+      </button>
+      <button
+        @click="viewDeviceDetails"
+        class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+      >
+        <span class="material-icons-round text-base">visibility</span>
+        查看详细
+      </button>
+      <div class="border-t border-slate-100 my-1"></div>
+      <button
+        @click="deleteDevice"
+        class="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+      >
+        <span class="material-icons-round text-base">delete</span>
+        删除设备
+      </button>
+    </div>
+
+    <!-- Click outside to close context menu -->
+    <div
+      v-if="contextMenu.visible"
+      class="fixed inset-0 z-40"
+      @click="closeContextMenu"
+    ></div>
+
+
+    <RuleBuilderDialog
+        v-model="ruleBuilderVisible"
+        :nodes="nodes"
+        @save-rule="handleAddRule"
     />
+
+    <!-- Canvas Map - Fixed at bottom left -->
+    <div class="fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] uppercase font-bold text-slate-400">Canvas Map</span>
+        <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>
+      </div>
+
+      <div class="w-full h-32 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shadow-inner">
+        <!-- SVG for lines (background layer) -->
+        <svg class="absolute inset-0 w-full h-full pointer-events-none">
+          <!-- Test line to verify SVG works -->
+
+          <line
+            v-for="line in canvasMapLines"
+            :key="line.id"
+            :x1="line.x1"
+            :y1="line.y1"
+            :x2="line.x2"
+            :y2="line.y2"
+            :stroke="getCanvasMapColorValue(line.fromId)"
+            stroke-width="2"
+            stroke-opacity="0.8"
+            stroke-linecap="round"
+          />
+        </svg>
+
+        <!-- Dynamic mini map dots representing devices -->
+        <div
+          v-for="dot in canvasMapDots"
+          :key="dot.id"
+          class="absolute rounded-full shadow-sm"
+          :class="dot.size"
+          :style="{ left: dot.x + 'px', top: dot.y + 'px', backgroundColor: dot.color }"
+        ></div>
+
+        <!-- Border frame -->
+        <div class="absolute inset-0 border-2 border-primary/20 rounded pointer-events-none"></div>
+
+        <!-- Empty state message -->
+        <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-400 text-xs">
+          No devices on canvas
+        </div>
+      </div>
+    </div>
   </div>
 </template>

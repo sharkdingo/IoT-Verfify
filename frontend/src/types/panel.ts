@@ -5,7 +5,7 @@ import type { CanvasPan } from './canvas'
 
 /* ================== 基础类型定义 ================== */
 
-export type PanelKey = 'input' | 'status'
+// PanelKey type removed as all panels are removed
 
 export type DockSide = 'left' | 'right' | 'top' | 'bottom' | null
 
@@ -25,25 +25,10 @@ export interface DockState {
 /* ================== DTO (数据传输对象) ================== */
 
 // 整个看板布局的数据结构（对应后端存储的 JSON）
-export interface BoardLayoutDto {
-    // 面板坐标
-    input: PanelPosition
-    status: PanelPosition
-
-    // 面板停靠状态 (新增!)
-    dockState: {
-        input: DockState
-        status: DockState
-    }
-
-    // 画布状态
-    canvasPan: CanvasPan
-    canvasZoom: number
-}
+// BoardLayoutDto removed as panel system is removed
 
 /* ================== 折叠面板状态 ================== */
 
 export interface PanelActive {
-    input: string[]
     status: string[]
 }

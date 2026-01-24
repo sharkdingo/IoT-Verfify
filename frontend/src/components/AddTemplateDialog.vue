@@ -188,7 +188,7 @@ const handleConfirm = () => {
   const check = validateManifest(finalManifest)
   if (!check.valid) return ElMessage.error(check.msg)
 
-  emit('save', {id: '', name: finalManifest.Name.replace(/ /g, '_'), manifest: finalManifest})
+  emit('save', {name: finalManifest.Name.replace(/ /g, '_'), manifest: finalManifest})
 }
 </script>
 
