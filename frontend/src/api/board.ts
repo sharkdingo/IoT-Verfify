@@ -69,5 +69,8 @@ export default {
     },
     addDeviceTemplate: async (tpl: DeviceTemplate): Promise<DeviceTemplate> => {
         return unpack<DeviceTemplate>(await api.post('/board/templates', tpl));
+    },
+    createDeviceTemplate: async (tpl: DeviceTemplate): Promise<DeviceTemplate> => {
+        return unpack<DeviceTemplate>(await api.post('/board/templates', tpl));
     }
 }

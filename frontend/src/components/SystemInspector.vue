@@ -175,9 +175,6 @@ const togglePanel = () => {
       <div>
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">Device List</h3>
-          <span class="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-medium border border-slate-200">
-            {{ activeDevicesCount }} Active
-          </span>
         </div>
 
         <div class="space-y-2">
@@ -193,7 +190,12 @@ const togglePanel = () => {
                 {{ device.name }}
               </span>
             </div>
-            <span class="text-[10px] text-slate-400 font-mono">ID:{{ device.id }}</span>
+            <button
+              @click.stop="handleDeleteDevice(device.id)"
+              class="text-red-500 hover:text-red-700 transition-colors opacity-0 group-hover:opacity-100"
+            >
+              <span class="material-symbols-outlined text-sm">delete</span>
+            </button>
           </div>
         </div>
       </div>

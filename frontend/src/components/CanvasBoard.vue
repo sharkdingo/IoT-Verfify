@@ -40,7 +40,10 @@ const getParticleColorByEdge = (edge: DeviceEdge): string => {
   if (!sourceNode) return 'url(#grad-blue)' // fallback
 
   const colorIndex = getNodeColorIndex(sourceNode.id)
-  const gradients = ['url(#grad-blue)', 'url(#grad-green)', 'url(#grad-purple)', 'url(#grad-orange)']
+  const gradients = [
+    'url(#grad-blue)', 'url(#grad-green)', 'url(#grad-purple)', 'url(#grad-orange)',
+    'url(#grad-red)', 'url(#grad-teal)', 'url(#grad-pink)', 'url(#grad-yellow)'
+  ]
   return gradients[colorIndex] || gradients[0]
 }
 
@@ -63,17 +66,16 @@ const getParticleDuration = (index: number): string => {
 // Node color utilities (matching Canvas Map colors)
 // Use node ID to generate stable color assignment
 const getNodeColorIndex = (nodeId: string): number => {
-  // Improved hash function using djb2 algorithm for better distribution
+  // 为每个节点生成随机但一致的颜色索引
+  // 使用节点ID作为种子，确保同一个节点始终有相同颜色
   let hash = 5381
   for (let i = 0; i < nodeId.length; i++) {
     const char = nodeId.charCodeAt(i)
     hash = ((hash << 5) + hash) + char // hash * 33 + char
   }
 
-  // Convert to positive number and get modulo 4
-  const colorIndex = Math.abs(hash) % 4
-
-  return colorIndex
+  // 使用更大的模数来获得更多颜色变化
+  return Math.abs(hash) % 8 // 现在有8种可能的颜色
 }
 
 // Test function to verify color distribution (removed console logs)
@@ -88,12 +90,18 @@ const testColorDistribution = () => {
 }
 
 const getNodeColorClass = (nodeId: string): string => {
-  const colors = ['border-primary', 'border-online', 'border-secondary', 'border-offline']
+  const colors = [
+    'border-primary', 'border-online', 'border-secondary', 'border-offline',
+    'border-red-500', 'border-teal-500', 'border-pink-500', 'border-yellow-500'
+  ]
   return colors[getNodeColorIndex(nodeId)]
 }
 
 const getNodeBgColorClass = (nodeId: string): string => {
-  const bgColors = ['bg-blue-50', 'bg-green-50', 'bg-purple-50', 'bg-orange-50']
+  const bgColors = [
+    'bg-blue-50', 'bg-green-50', 'bg-purple-50', 'bg-orange-50',
+    'bg-red-50', 'bg-teal-50', 'bg-pink-50', 'bg-yellow-50'
+  ]
   return bgColors[getNodeColorIndex(nodeId)]
 }
 
@@ -104,7 +112,11 @@ const getNodeBgColor = (nodeId: string): string => {
     0: 'rgba(239, 246, 255, 0.9)', // blue-50 with opacity
     1: 'rgba(236, 253, 245, 0.9)', // green-50 with opacity
     2: 'rgba(245, 243, 255, 0.9)', // purple-50 with opacity
-    3: 'rgba(255, 247, 237, 0.9)'  // orange-50 with opacity
+    3: 'rgba(255, 247, 237, 0.9)', // orange-50 with opacity
+    4: 'rgba(254, 242, 242, 0.9)', // red-50 with opacity
+    5: 'rgba(240, 253, 250, 0.9)', // teal-50 with opacity
+    6: 'rgba(253, 244, 255, 0.9)', // pink-50 with opacity
+    7: 'rgba(254, 249, 195, 0.9)'  // yellow-50 with opacity
   }
   return bgColors[colorIndex] || bgColors[0]
 }
@@ -116,7 +128,11 @@ const getNodeBorderColor = (nodeId: string): string => {
     0: '#2563EB', // primary blue
     1: '#059669', // online green
     2: '#C026D3', // secondary purple
-    3: '#dc2626'  // offline red
+    3: '#dc2626', // offline red
+    4: '#ef4444', // red
+    5: '#14b8a6', // teal
+    6: '#ec4899', // pink
+    7: '#eab308'  // yellow
   }
   return borderColors[colorIndex] || borderColors[0]
 }
@@ -137,7 +153,10 @@ const getParticleFillColor = (edge: DeviceEdge): string => {
   if (!sourceNode) return '#3B82F6' // fallback blue
 
   const colorIndex = getNodeColorIndex(sourceNode.id)
-  const colors = ['#2563EB', '#059669', '#C026D3', '#dc2626'] // solid colors
+  const colors = [
+    '#2563EB', '#059669', '#C026D3', '#dc2626',
+    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
+  ] // solid colors
   return colors[colorIndex] || colors[0]
 }
 
@@ -365,6 +384,30 @@ onBeforeUnmount(() => {
             <stop offset="0%" style="stop-color:#dc2626;stop-opacity:0.2"></stop>
             <stop offset="50%" style="stop-color:#dc2626;stop-opacity:1"></stop>
             <stop offset="100%" style="stop-color:#dc2626;stop-opacity:0.2"></stop>
+          </linearGradient>
+
+          <linearGradient id="grad-red" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" style="stop-color:#ef4444;stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:#ef4444;stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:#ef4444;stop-opacity:0.2"></stop>
+          </linearGradient>
+
+          <linearGradient id="grad-teal" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:#14b8a6;stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:#14b8a6;stop-opacity:0.2"></stop>
+          </linearGradient>
+
+          <linearGradient id="grad-pink" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" style="stop-color:#ec4899;stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:#ec4899;stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:#ec4899;stop-opacity:0.2"></stop>
+          </linearGradient>
+
+          <linearGradient id="grad-yellow" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" style="stop-color:#eab308;stop-opacity:0.2"></stop>
+            <stop offset="50%" style="stop-color:#eab308;stop-opacity:1"></stop>
+            <stop offset="100%" style="stop-color:#eab308;stop-opacity:0.2"></stop>
           </linearGradient>
 
           <!-- Arrow markers for different colors -->

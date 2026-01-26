@@ -351,4 +351,47 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         result.setManifest(dto.getManifest());
         return result;
     }
+
+    @Override
+    @Transactional
+    public void deleteDeviceTemplate(Long userId, String templateId) {
+        try {
+            // Log the input parameters for debugging
+            System.out.println("Attempting to delete template: userId=" + userId + ", templateId=" + templateId);
+
+            // Validate templateId format
+            if (templateId == null || templateId.trim().isEmpty()) {
+                throw new RuntimeException("Template ID cannot be null or empty");
+            }
+
+            Long id;
+            try {
+                id = Long.parseLong(templateId.trim());
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("Invalid template ID format: " + templateId + ". Expected numeric value.");
+            }
+
+            System.out.println("Parsed template ID: " + id);
+
+            // Find the template
+            DeviceTemplatePo po = deviceTemplateRepo.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Template not found with ID: " + id));
+
+            System.out.println("Found template: " + po.getName() + ", owner: " + po.getUserId());
+
+            // Check if the template belongs to the current user
+            if (!po.getUserId().equals(userId)) {
+                throw new RuntimeException("Template not found or access denied. Template belongs to different user.");
+            }
+
+            // Perform the deletion
+            deviceTemplateRepo.delete(po);
+            System.out.println("Successfully deleted template: " + po.getName());
+
+        } catch (Exception e) {
+            System.err.println("Error deleting template: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to delete template: " + e.getMessage());
+        }
+    }
 }

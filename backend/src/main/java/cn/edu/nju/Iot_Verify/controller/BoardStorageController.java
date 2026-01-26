@@ -84,4 +84,18 @@ public class BoardStorageController {
     public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @RequestBody DeviceTemplateDto dto) {
         return Result.success(boardService.addDeviceTemplate(userId, dto));
     }
+
+    @DeleteMapping("/templates/{id}")
+    public Result<Void> deleteTemplate(@CurrentUser Long userId, @PathVariable String id) {
+        try {
+            System.out.println("Delete template request: userId=" + userId + ", templateId=" + id);
+            boardService.deleteDeviceTemplate(userId, id);
+            System.out.println("Template deleted successfully");
+            return Result.success(null);
+        } catch (Exception e) {
+            System.err.println("Error in deleteTemplate controller: " + e.getMessage());
+            e.printStackTrace();
+            return Result.error(500, "Failed to delete template: " + e.getMessage());
+        }
+    }
 }

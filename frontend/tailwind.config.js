@@ -8,6 +8,7 @@ export default {
     extend: {
       colors: {
         primary: "#6366f1",
+        secondary: "#C026D3",
       },
       fontFamily: {
         display: ["Plus Jakarta Sans", "Inter", "sans-serif"],

@@ -106,6 +106,23 @@ const dialogMeta = reactive<DeviceDialogMeta>({
   specs: []
 })
 
+// Custom dialog states
+const renameDialogVisible = ref(false)
+const renameDialogData = reactive({
+  node: null as DeviceNode | null,
+  newName: ''
+})
+
+const deleteConfirmDialogVisible = ref(false)
+const deleteConfirmDialogData = reactive({
+  node: null as DeviceNode | null,
+  hasRelations: false,
+  relationCount: {
+    rules: 0,
+    specs: 0
+  }
+})
+
 /* =================================================================================
  * 4. Helper Functions (Styles & Calculation)
  * ================================================================================= */
@@ -352,12 +369,11 @@ const closeContextMenu = () => {
 // 右键菜单操作
 const renameDevice = () => {
   if (!contextMenu.value.node) return
-  // 打开重命名对话框或直接编辑
+  // 打开自定义重命名对话框
   const node = contextMenu.value.node
-  const newLabel = prompt('请输入新的设备名称:', node.label)
-  if (newLabel && newLabel !== node.label) {
-    handleRenameDevice(node.id, newLabel)
-  }
+  renameDialogData.node = node
+  renameDialogData.newName = node.label
+  renameDialogVisible.value = true
   closeContextMenu()
 }
 
@@ -391,22 +407,47 @@ const viewDeviceDetails = () => {
 
 
 const forceDeleteNode = async (nodeId: string) => {
+  // 先更新本地状态，确保UI立即响应
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
   edges.value = edges.value.filter(e => e.from !== nodeId && e.to !== nodeId)
+
+  // 删除与该设备相关的规则
+  const rulesToDelete = rules.value.filter(rule =>
+    rule.toId === nodeId || rule.sources.some(source => source.fromId === nodeId)
+  )
+  const ruleIdsToDelete = rulesToDelete.map(rule => rule.id)
+  rules.value = rules.value.filter(rule => !ruleIdsToDelete.includes(rule.id))
 
   const { nextSpecs, removed } = removeSpecsForNode(specifications.value, nodeId)
   specifications.value = nextSpecs
 
-  await saveNodesToServer()
-  await saveEdgesToServer()
-  await saveSpecsToServer()
+  // 尝试保存到服务器，但不让保存失败影响UI更新
+  try {
+    await Promise.all([
+      saveNodesToServer(),
+      saveEdgesToServer(),
+      boardApi.saveRules(rules.value),
+      saveSpecsToServer()
+    ])
 
-  if (removed.length > 0) {
-    ElMessage.info(t('app.specsDeletedWithNode') || '已同时删除与该设备相关的规约')
+    if (ruleIdsToDelete.length > 0) {
+      ElMessage.info(`已同时删除 ${ruleIdsToDelete.length} 个与该设备相关的规则`)
+    }
+
+    if (removed.length > 0) {
+      ElMessage.info('已同时删除与该设备相关的规约')
+    }
+  } catch (error) {
+    console.error('保存删除操作失败:', error)
+    // 即使保存失败，UI状态已经更新，用户可以看到设备已被删除
+    ElMessage.warning('设备已从界面删除，但保存到服务器时出现问题')
   }
 }
 
 const deleteCurrentNodeWithConfirm = (nodeId: string) => {
+  const node = nodes.value.find(n => n.id === nodeId)
+  if (!node) return
+
   const hasEdges = edges.value.some(e => e.from === nodeId || e.to === nodeId)
   const hasSpecs = specifications.value.some(spec => isSpecRelatedToNode(spec, nodeId))
 
@@ -420,16 +461,57 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
     return
   }
 
-  ElMessageBox.confirm(
-      t('app.deleteNodeWithRelationsConfirm') || '该设备有关联规则或规约，确认删除？',
-      t('app.warning') || '警告',
-      { type: 'warning', confirmButtonText: t('app.delete'), cancelButtonText: t('app.cancel') }
-  ).then(() => doDelete()).catch(() => {})
+  // 显示自定义确认对话框
+  deleteConfirmDialogData.node = node
+  deleteConfirmDialogData.hasRelations = true
+  deleteConfirmDialogData.relationCount = {
+    rules: edges.value.filter(e => e.from === nodeId || e.to === nodeId).length,
+    specs: specifications.value.filter(spec => isSpecRelatedToNode(spec, nodeId)).length
+  }
+  deleteConfirmDialogVisible.value = true
 }
 
 const handleDialogDelete = () => {
   if (!dialogMeta.nodeId) return
   deleteCurrentNodeWithConfirm(dialogMeta.nodeId)
+}
+
+// Custom dialog handlers
+const confirmRename = async () => {
+  if (!renameDialogData.node || !renameDialogData.newName.trim()) return
+
+  await handleRenameDevice(renameDialogData.node.id, renameDialogData.newName.trim())
+  renameDialogVisible.value = false
+  renameDialogData.node = null
+  renameDialogData.newName = ''
+}
+
+const cancelRename = () => {
+  renameDialogVisible.value = false
+  renameDialogData.node = null
+  renameDialogData.newName = ''
+}
+
+const confirmDelete = async () => {
+  if (!deleteConfirmDialogData.node) return
+
+  try {
+    await forceDeleteNode(deleteConfirmDialogData.node!.id)
+    // 如果设备详情对话框是打开的，也要关闭它
+    if (dialogVisible.value) {
+      dialogVisible.value = false
+    }
+    deleteConfirmDialogVisible.value = false
+    deleteConfirmDialogData.node = null
+  } catch (error) {
+    console.error('删除设备失败:', error)
+    ElMessage.error('删除设备失败，请重试')
+  }
+}
+
+const cancelDelete = () => {
+  deleteConfirmDialogVisible.value = false
+  deleteConfirmDialogData.node = null
 }
 
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
@@ -460,12 +542,12 @@ const deleteRule = async (ruleId: string) => {
       boardApi.saveRules(rules.value),
       boardApi.saveEdges(edges.value)
     ])
-    ElMessage.success(t('app.deleteRuleSuccess') || '删除规则成功')
+    ElMessage.success( '删除规则成功')
   } catch (e) {
     console.error('删除规则失败', e)
     // 保存失败，回滚（重新获取）
     await refreshRules()
-    ElMessage.error(t('app.deleteRuleFailed') || '删除规则失败')
+    ElMessage.error('删除规则失败')
   }
 }
 
@@ -532,7 +614,12 @@ const defaultDeviceTemplates = ref<DeviceTemplate[]>([
           Invariant: 'temperature >= -50 && temperature <= 100'
         }
       ],
-      APIs: []
+      APIs: [
+        { Name: 'temperature', StartState: 'Working', EndState: 'Working' },
+        { Name: 'humidity', StartState: 'Working', EndState: 'Working' },
+        { Name: 'motion', StartState: 'Working', EndState: 'Working' },
+        { Name: 'light_level', StartState: 'Working', EndState: 'Working' }
+      ]
     }
   },
   {
@@ -563,7 +650,14 @@ const defaultDeviceTemplates = ref<DeviceTemplate[]>([
           Invariant: 'power == false'
         }
       ],
-      APIs: []
+      APIs: [
+        { Name: 'turn_on', StartState: 'Off', EndState: 'On' },
+        { Name: 'turn_off', StartState: 'On', EndState: 'Off' },
+        { Name: 'toggle', StartState: 'On', EndState: 'Off' },
+        { Name: 'toggle', StartState: 'Off', EndState: 'On' },
+        { Name: 'status', StartState: 'On', EndState: 'On' },
+        { Name: 'status', StartState: 'Off', EndState: 'Off' }
+      ]
     }
   },
   {
@@ -594,19 +688,64 @@ const defaultDeviceTemplates = ref<DeviceTemplate[]>([
           Invariant: 'brightness == 0'
         }
       ],
-      APIs: []
+      APIs: [
+        { Name: 'brightness', StartState: 'On', EndState: 'On' },
+        { Name: 'brightness', StartState: 'Off', EndState: 'Off' },
+        { Name: 'color', StartState: 'On', EndState: 'On' },
+        { Name: 'color', StartState: 'Off', EndState: 'Off' },
+        { Name: 'turn_on', StartState: 'Off', EndState: 'On' },
+        { Name: 'turn_off', StartState: 'On', EndState: 'Off' }
+      ]
     }
   }
 ])
 const refreshDeviceTemplates = async () => {
   try {
     const res = await boardApi.getDeviceTemplates()
-    deviceTemplates.value = res || []
-    // If no templates from backend, use defaults
-    if (deviceTemplates.value.length === 0) {
-      deviceTemplates.value = defaultDeviceTemplates.value
-      console.log('Using default device templates:', deviceTemplates.value)
+    const backendTemplates = res || []
+
+    // Check if default templates exist in backend, if not, save them
+    const defaultTemplateNames = defaultDeviceTemplates.value.map(t => t.name)
+    const existingDefaultTemplates = backendTemplates.filter((tpl: any) =>
+      defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
+    )
+
+    // Save missing default templates to backend
+    if (existingDefaultTemplates.length < defaultDeviceTemplates.value.length) {
+      console.log('Saving missing default templates to backend...')
+      const missingDefaults = defaultDeviceTemplates.value.filter(defaultTpl =>
+        !existingDefaultTemplates.some(existingTpl =>
+          (existingTpl.name || existingTpl.manifest?.Name) === defaultTpl.name
+        )
+      )
+
+      for (const template of missingDefaults) {
+        try {
+          console.log('Saving default template:', template.name)
+          // Keep id field for default templates
+
+          await boardApi.createDeviceTemplate(template)
+          console.log('Successfully saved default template:', template.name)
+        } catch (saveError) {
+          console.error('Failed to save default template:', template.name, saveError)
+        }
+      }
+
+      // Re-fetch templates after saving defaults
+      const updatedRes = await boardApi.getDeviceTemplates()
+      const updatedBackendTemplates = updatedRes || []
+      deviceTemplates.value = [...defaultDeviceTemplates.value, ...updatedBackendTemplates.filter((tpl: any) =>
+        !defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
+      )]
+    } else {
+      // All default templates exist, merge normally
+      const customTemplates = backendTemplates.filter((tpl: any) =>
+        !defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
+      )
+      deviceTemplates.value = [...defaultDeviceTemplates.value, ...customTemplates]
     }
+
+    console.log('Loaded device templates:', deviceTemplates.value)
   } catch (e) {
     console.error(e)
     // Fallback to default templates on error
@@ -688,23 +827,25 @@ onMounted(async () => {
 
 // Color utilities (matching CanvasBoard colors)
 const getCanvasMapColorIndex = (nodeId: string): number => {
-  // Same hash function as CanvasBoard.vue for consistency - using djb2 algorithm
+  // 为每个节点生成随机但一致的颜色索引
+  // 使用节点ID作为种子，确保同一个节点始终有相同颜色
   let hash = 5381
   for (let i = 0; i < nodeId.length; i++) {
     const char = nodeId.charCodeAt(i)
     hash = ((hash << 5) + hash) + char // hash * 33 + char
   }
 
-  // Convert to positive number and get modulo 4
-  const colorIndex = Math.abs(hash) % 4
-
-  return colorIndex
+  // 使用8种颜色，与CanvasBoard.vue保持一致
+  return Math.abs(hash) % 8
 }
 
 const getCanvasMapColor = (nodeId: string): string => {
   // Return actual color values instead of Tailwind classes
   const colorIndex = getCanvasMapColorIndex(nodeId)
-  const colorValues = ['#6366f1', '#059669', '#C026D3', '#dc2626'] // primary, online, secondary(purple), offline
+  const colorValues = [
+    '#6366f1', '#059669', '#C026D3', '#dc2626',
+    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
+  ] // primary, online, secondary(purple), offline, red, teal, pink, yellow
   return colorValues[colorIndex] || colorValues[0]
 }
 
@@ -712,7 +853,10 @@ const getCanvasMapColor = (nodeId: string): string => {
 const getCanvasMapColorValue = (nodeId: string): string => {
   const colorIndex = getCanvasMapColorIndex(nodeId)
   // Map to actual color values that match the Tailwind colors
-  const colorValues = ['#2563EB', '#059669', '#C026D3', '#dc2626']
+  const colorValues = [
+    '#2563EB', '#059669', '#C026D3', '#dc2626',
+    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
+  ]
   return colorValues[colorIndex] || colorValues[0]
 }
 
@@ -856,19 +1000,81 @@ const handleAddSpec = async (data: { templateId: string, devices: Array<{deviceI
   await saveSpecsToServer()
 }
 
+const handleDeleteTemplate = async (templateId: string) => {
+  // Template deletion is handled in ControlCenter component
+  // Just refresh the templates list after deletion
+  await refreshDeviceTemplates()
+}
+
 const getNextNodePosition = (): { x: number; y: number } => {
+  // 将节点放置在画布网格中央附近，确保无重叠
   const count = nodes.value.length
-  const col = count % NODE_GRID_COLS
-  const row = Math.floor(count / NODE_GRID_COLS)
 
-  // 使用固定起始位置
-  const screenX = 200 + col * NODE_SPACING_X
-  const screenY = NODE_START_Y + row * NODE_SPACING_Y
+  // 基础节点尺寸（用于碰撞检测）
+  const nodeWidth = 110
+  const nodeHeight = 90
+  const minSpacing = 20 // 最小间距
 
-  const x = (screenX - canvasPan.value.x) / canvasZoom.value
-  const y = (screenY - canvasPan.value.y) / canvasZoom.value
+  // 计算网格位置（以中心为原点）
+  const cols = NODE_GRID_COLS
+  const col = count % cols
+  const row = Math.floor(count / cols)
 
-  return { x, y }
+  // 中心偏移：让第一个节点在中心，后面围绕中心排列
+  const offsetCol = col - Math.floor(cols / 2)
+  const offsetRow = row
+
+  // 计算屏幕坐标
+  const screenCenterX = window.innerWidth / 2
+  const screenCenterY = window.innerHeight / 2
+
+  // 应用偏移
+  let screenX = screenCenterX + offsetCol * NODE_SPACING_X
+  let screenY = screenCenterY + offsetRow * NODE_SPACING_Y
+
+  // 碰撞检测和位置调整
+  let attempts = 0
+  const maxAttempts = 50
+
+  while (attempts < maxAttempts) {
+    // 转换到世界坐标
+    const worldX = (screenX - canvasPan.value.x) / canvasZoom.value
+    const worldY = (screenY - canvasPan.value.y) / canvasZoom.value
+
+    // 检查与其他节点的重叠
+    const hasOverlap = nodes.value.some(node => {
+      const dx = Math.abs(node.position.x - worldX)
+      const dy = Math.abs(node.position.y - worldY)
+      const minDistanceX = (node.width + nodeWidth) / 2 + minSpacing
+      const minDistanceY = (node.height + nodeHeight) / 2 + minSpacing
+
+      return dx < minDistanceX && dy < minDistanceY
+    })
+
+    if (!hasOverlap) {
+      // 找到合适位置
+      return { x: worldX, y: worldY }
+    }
+
+    // 位置被占用，向外扩展查找
+    attempts++
+    const angle = (attempts * 137.5) * (Math.PI / 180) // 黄金角
+    const radius = Math.sqrt(attempts) * Math.max(NODE_SPACING_X, NODE_SPACING_Y) / 2
+
+    screenX = screenCenterX + Math.cos(angle) * radius
+    screenY = screenCenterY + Math.sin(angle) * radius
+  }
+
+  // 如果找不到合适位置，使用随机偏移
+  const randomAngle = Math.random() * 2 * Math.PI
+  const randomRadius = 100 + Math.random() * 200
+  screenX = screenCenterX + Math.cos(randomAngle) * randomRadius
+  screenY = screenCenterY + Math.sin(randomAngle) * randomRadius
+
+  const finalX = (screenX - canvasPan.value.x) / canvasZoom.value
+  const finalY = (screenY - canvasPan.value.y) / canvasZoom.value
+
+  return { x: finalX, y: finalY }
 }
 
 onBeforeUnmount(() => {
@@ -897,6 +1103,8 @@ defineExpose({
       @create-device="handleCreateDevice"
       @open-rule-builder="openRuleBuilder"
       @add-spec="handleAddSpec"
+      @refresh-templates="refreshDeviceTemplates"
+      @delete-template="handleDeleteTemplate"
     />
 
     <!-- Right Sidebar - System Inspector -->
@@ -999,11 +1207,12 @@ defineExpose({
     <RuleBuilderDialog
         v-model="ruleBuilderVisible"
         :nodes="nodes"
+        :device-templates="deviceTemplates"
         @save-rule="handleAddRule"
     />
 
     <!-- Canvas Map - Fixed at bottom left -->
-    <div class="fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
+    <div class="fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
       <div class="flex items-center justify-between mb-2">
         <span class="text-[10px] uppercase font-bold text-slate-400">Canvas Map</span>
         <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>
@@ -1043,6 +1252,91 @@ defineExpose({
         <!-- Empty state message -->
         <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-400 text-xs">
           No devices on canvas
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Rename Dialog -->
+    <div v-if="renameDialogVisible" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="cancelRename">
+      <div class="bg-white rounded-xl p-6 w-96 max-w-[90vw] shadow-2xl" @click.stop>
+        <div class="mb-6">
+          <h3 class="text-lg font-semibold text-slate-800 mb-4">重命名设备</h3>
+          <div class="space-y-2">
+            <input
+              v-model="renameDialogData.newName"
+              @keyup.enter="confirmRename"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              placeholder="输入设备名称"
+            />
+          </div>
+        </div>
+        <div class="flex justify-end space-x-3">
+          <button
+            @click="cancelRename"
+            class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="confirmRename"
+            :disabled="!renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.node?.label"
+            class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Delete Confirmation Dialog -->
+    <div v-if="deleteConfirmDialogVisible" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="cancelDelete">
+      <div class="bg-white rounded-xl p-6 w-96 max-w-[90vw] shadow-2xl" @click.stop>
+        <div class="mb-6">
+          <div class="flex items-center mb-4">
+            <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+              <span class="material-symbols-outlined text-red-600">warning</span>
+            </div>
+            <div class="ml-3">
+              <h3 class="text-lg font-semibold text-slate-800">确认删除设备</h3>
+              <p class="text-sm text-slate-600">此操作无法撤销</p>
+            </div>
+          </div>
+
+        
+
+          <div v-if="deleteConfirmDialogData.hasRelations" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+            <div class="flex items-start">
+              <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5">info</span>
+              <div>
+                <p class="text-sm font-medium text-yellow-800 mb-1">此设备有关联的规则和规约</p>
+                <div class="text-xs text-yellow-700 space-y-1">
+                  <div v-if="deleteConfirmDialogData.relationCount.rules > 0">
+                    • {{ deleteConfirmDialogData.relationCount.rules }} 个关联规则将被删除
+                  </div>
+                  <div v-if="deleteConfirmDialogData.relationCount.specs > 0">
+                    • {{ deleteConfirmDialogData.relationCount.specs }} 个关联规约将被删除
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+  
+        </div>
+
+        <div class="flex justify-end space-x-3">
+          <button
+            @click="cancelDelete"
+            class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="confirmDelete"
+            class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors"
+          >
+            删除设备
+          </button>
         </div>
       </div>
     </div>

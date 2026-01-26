@@ -8,11 +8,13 @@ import type { RuleForm } from '../types/rule'
 interface Props {
   modelValue: boolean
   nodes: DeviceNode[]
+  deviceTemplates: any[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   modelValue: false,
-  nodes: () => []
+  nodes: () => [],
+  deviceTemplates: () => []
 })
 
 // Emits
@@ -35,11 +37,34 @@ const currentSource = reactive({
   fromApi: ''
 })
 
-// Available APIs (mock data - in real app, this would come from device templates)
-const availableApis = {
-  sensor: ['temperature', 'humidity', 'motion', 'light_level'],
-  switch: ['turn_on', 'turn_off', 'toggle', 'status'],
-  light: ['brightness', 'color', 'turn_on', 'turn_off']
+// Get APIs from device template
+const getDeviceApis = (templateName: string) => {
+  if (!templateName) return []
+
+  // Find the template by name
+  const template = props.deviceTemplates.find((t: any) =>
+    t.manifest?.Name === templateName || t.name === templateName
+  )
+
+  if (template && template.manifest?.APIs) {
+    return template.manifest.APIs.map((api: any) => api.Name || api.name || '')
+  }
+
+  // Fallback to hardcoded APIs for built-in templates
+  const deviceType = templateName.toLowerCase()
+  const fallbackApis: Record<string, string[]> = {
+    sensor: ['temperature', 'humidity', 'motion', 'light_level'],
+    switch: ['turn_on', 'turn_off', 'toggle', 'status'],
+    light: ['brightness', 'color', 'turn_on', 'turn_off']
+  }
+
+  for (const [key, apis] of Object.entries(fallbackApis)) {
+    if (deviceType.includes(key)) {
+      return apis
+    }
+  }
+
+  return []
 }
 
 const availableTargetApis = computed(() => {
@@ -47,12 +72,7 @@ const availableTargetApis = computed(() => {
   const targetNode = props.nodes.find(n => n.id === ruleData.toId)
   if (!targetNode) return []
 
-  // Get device type from template name (simplified)
-  const deviceType = targetNode.templateName.toLowerCase()
-  if (deviceType.includes('sensor')) return availableApis.sensor
-  if (deviceType.includes('switch')) return availableApis.switch
-  if (deviceType.includes('light')) return availableApis.light
-  return []
+  return getDeviceApis(targetNode.templateName)
 })
 
 const availableSourceApis = computed(() => {
@@ -60,12 +80,7 @@ const availableSourceApis = computed(() => {
   const sourceNode = props.nodes.find(n => n.id === currentSource.fromId)
   if (!sourceNode) return []
 
-  // Get device type from template name (simplified)
-  const deviceType = sourceNode.templateName.toLowerCase()
-  if (deviceType.includes('sensor')) return availableApis.sensor
-  if (deviceType.includes('switch')) return availableApis.switch
-  if (deviceType.includes('light')) return availableApis.light
-  return []
+  return getDeviceApis(sourceNode.templateName)
 })
 
 // Rule preview
@@ -348,10 +363,10 @@ const formatApiLabel = (api: string) => {
           <div class="flex items-center gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
             <!-- Source devices -->
             <div class="flex items-center gap-2">
-              <template v-for="(source, index) in rulePreview.sources" :key="source.id">
-                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
-                  <span class="material-icons-round text-blue-500 text-base">{{ getDeviceIcon(source) }}</span>
-                  <span>{{ source.label }}</span>
+              <template v-for="(source, index) in rulePreview.sources" :key="source?.id || index">
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 min-w-[60px] justify-center">
+                  <span class="material-icons-round text-blue-500 text-base">{{ source ? getDeviceIcon(source) : '' }}</span>
+                  <span>{{ source?.label || 'Unknown device' }}</span>
                 </div>
                 <!-- Add "AND" connector if not the last source -->
                 <span v-if="index < rulePreview.sources.length - 1" class="text-xs font-bold text-slate-400 dark:text-slate-500 px-2 py-1 bg-slate-200 dark:bg-slate-600 rounded">
@@ -364,7 +379,7 @@ const formatApiLabel = (api: string) => {
             <span class="material-icons-round text-slate-300 dark:text-slate-500">trending_flat</span>
 
             <!-- Target device -->
-            <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 min-w-[60px] justify-center">
               <span class="material-icons-round text-emerald-500 text-base">{{ getDeviceIcon(rulePreview.target!) }}</span>
               <span>{{ rulePreview.target?.label }}</span>
             </div>

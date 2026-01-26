@@ -27,6 +27,13 @@ export default defineConfig({
     server: {
         port: 3000,   // 前端端口保持不变
         open: true,
+        proxy: {
+            '/api': {
+                target: 'http://localhost:8080',
+                changeOrigin: true,
+                rewrite: (path) => path.replace(/^\/api/, '/api')
+            }
+        }
     },
     resolve: {
         alias: {

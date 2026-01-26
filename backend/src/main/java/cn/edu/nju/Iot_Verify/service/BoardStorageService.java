@@ -25,4 +25,5 @@ public interface BoardStorageService {
 
     List<DeviceTemplateDto> getDeviceTemplates(Long userId);
     DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);
+    void deleteDeviceTemplate(Long userId, String templateId);
 }

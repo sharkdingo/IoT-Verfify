@@ -32,10 +32,10 @@
 /* 画布内部：真正被平移 / 缩放的层，负责网格 + 节点 */
 .iot-board .canvas-inner {
     position: relative;
-    width: var(--iot-canvas-size);
-    height: var(--iot-canvas-size);
-    min-width: 100%;
-    min-height: 100%;
+    width: calc(100vw * 4); /* 扩大到4倍屏幕宽度，确保完全覆盖 */
+    height: calc(100vh * 4); /* 扩大到4倍屏幕高度，确保完全覆盖 */
+    min-width: 400vw;
+    min-height: 400vh;
 
     /* 网格背景：跟随 translate / scale 一起变化 */
     background-image:
@@ -384,14 +384,7 @@
 /* ========== New Layout Styles ========== */
 
 /* Canvas container with sidebars */
-.iot-board .canvas-container {
-    position: absolute;
-    left: 288px; /* 72 * 4 = 288px for left ControlCenter */
-    right: 0; /* No right sidebar, extend to full width */
-    top: 0;
-    bottom: 0;
-    overflow: hidden;
-}
+
 
 /* Grid background pattern */
 .grid-bg {
