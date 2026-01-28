@@ -1,6 +1,21 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage as ElMessageRaw } from 'element-plus'
+import { 
+  specTemplateDetails, 
+  relationOperators, 
+  targetTypes 
+} from '@/assets/config/specTemplates.ts'
+import type { 
+  SpecTemplateId, 
+  SpecTemplateType, 
+  SpecCondition, 
+  SpecSide,
+} from '@/types/spec'
+import { getCachedManifestForNode } from '@/utils/templateCache'
+
+// Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
+const ElMessage = ElMessageRaw as any
 
 // Props
 interface Props {
@@ -43,7 +58,16 @@ const customTemplateForm = reactive({
   description: '',
   initState: '',
   modes: [] as Array<string>,
-  apis: [] as Array<{name: string, description: string}>,
+  apis: [] as Array<{
+    id: string,
+    name: string,
+    description: string,
+    signal: boolean,
+    startState: string,
+    endState: string,
+    trigger: string,
+    assignments: Array<{variableName: string, changeRate: string}>
+  }>,
   variables: [] as Array<{
     name: string,
     description: string,
@@ -127,9 +151,11 @@ const shortenErrorMessage = (message: string): string => {
 // Dialog states
 const showVariableDialog = ref(false)
 const showWorkingStateDialog = ref(false)
+const showApiDialog = ref(false)
 const showDeleteConfirmDialog = ref(false)
 const editingVariableIndex = ref(-1)
 const editingWorkingStateIndex = ref(-1)
+const editingApiIndex = ref(-1)
 const templateToDelete = ref<any>(null)
 
 // Dialog data
@@ -153,48 +179,528 @@ const editingWorkingStateData = reactive({
   invariant: 'true'
 })
 
-// JSON format example for template creation
-const jsonExample = `{
-  "Name": "SmartThermostat",
-  "Description": "A smart thermostat device",
-  "InitState": "idle",
-  "Modes": ["heating", "cooling"],
-  "InternalVariables": [
-    {
-      "Name": "temperature",
-      "Description": "Current temperature",
-      "IsInside": true,
-      "PublicVisible": true,
-      "Trust": "high",
-      "Privacy": "low",
-      "LowerBound": -10,
-      "UpperBound": 50
-    }
-  ],
-  "ImpactedVariables": ["temperature"],
-  "APIs": [
-    {
-      "Name": "setTemperature",
-      "Description": "Set target temperature"
-    }
-  ],
-  "WorkingStates": [
-    {
-      "Name": "heating",
-      "Description": "Device is heating",
-      "Trust": "high",
-      "Privacy": "low",
-      "Invariant": "temperature < targetTemp"
-    }
-  ]
-}`
+const editingApiData = reactive({
+  name: '',
+  description: '',
+  signal: false,
+  startState: '',
+  endState: '',
+  trigger: 'user',
+  assignments: [] as Array<{variableName: string, changeRate: string}>
+})
+
+// (removed unused `jsonExample`; UI provides direct JSON upload)
 
 // Specification form data
-  const specForm = reactive({
-    templateId: '',
-    selectedDevices: [] as Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>,
-    formula: ''
+const specForm = reactive({
+  templateId: '' as SpecTemplateId | '',
+  templateType: '' as SpecTemplateType | '',
+  selectedDevices: [] as Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>,
+  formula: '',
+  aConditions: [] as unknown as SpecCondition[],
+  ifConditions: [] as unknown as SpecCondition[],
+  thenConditions: [] as unknown as SpecCondition[]
+})
+
+// Specification dialog state
+const showSpecDialog = ref(false)
+const editingConditionIndex = ref(-1)
+const editingConditionSide = ref<SpecSide>('a')
+
+// Editing condition data
+const editingConditionData = reactive<Partial<SpecCondition>>({
+  id: '',
+  side: 'a',
+  deviceId: '',
+  deviceLabel: '',
+  targetType: 'state',
+  key: '',
+  relation: '=',
+  value: ''
+})
+
+// Get current template details
+const currentTemplateDetail = computed(() => {
+  if (!specForm.templateId) return null
+  return specTemplateDetails.find(t => t.id === specForm.templateId)
+})
+
+// Get required sides for current template
+const requiredSides = computed(() => {
+  return currentTemplateDetail.value?.requiredSides || []
+})
+
+// Check if a side is required for current template
+const isSideRequired = (side: SpecSide) => {
+  return requiredSides.value.includes(side)
+}
+
+// Get conditions for a specific side
+const getConditionsForSide = (side: SpecSide): SpecCondition[] => {
+  switch (side) {
+    case 'a': return specForm.aConditions
+    case 'if': return specForm.ifConditions
+    case 'then': return specForm.thenConditions
+    default: return []
+  }
+}
+
+// Generate unique ID for condition
+const generateConditionId = () => {
+  return `cond-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+}
+
+// Open condition dialog for adding/editing
+const openConditionDialog = (side: SpecSide, index: number = -1) => {
+  editingConditionSide.value = side
+  editingConditionIndex.value = index
+  
+  if (index >= 0) {
+    // Edit existing condition
+    const conditions = getConditionsForSide(side)
+    const condition = conditions[index]
+    Object.assign(editingConditionData, condition)
+  } else {
+    // Add new condition - reset to defaults
+    Object.assign(editingConditionData, {
+      id: generateConditionId(),
+      side,
+      deviceId: '',
+      deviceLabel: '',
+      targetType: 'state',
+      key: '',
+      relation: '=',
+      value: ''
+    })
+  }
+  showSpecDialog.value = true
+}
+
+// Save condition from dialog
+const saveCondition = () => {
+  if (!editingConditionData.deviceId) {
+    ElMessage.warning({
+      message: 'Please select a device',
+      center: true
+    })
+    return
+  }
+  if (!editingConditionData.targetType) {
+    ElMessage.warning({
+      message: 'Please select a type',
+      center: true
+    })
+    return
+  }
+  if (!editingConditionData.key) {
+    ElMessage.warning({
+      message: 'Please select a property',
+      center: true
+    })
+    return
+  }
+  
+  const device = props.nodes.find(n => n.id === editingConditionData.deviceId)
+  const condition: SpecCondition = {
+    id: editingConditionData.id || generateConditionId(),
+    side: editingConditionSide.value,
+    deviceId: editingConditionData.deviceId,
+    deviceLabel: device?.label || editingConditionData.deviceId,
+    targetType: editingConditionData.targetType || 'state',
+    key: editingConditionData.key,
+    relation: editingConditionData.relation || '=',
+    value: editingConditionData.value || ''
+  }
+  
+  switch (editingConditionSide.value) {
+    case 'a':
+      if (editingConditionIndex.value >= 0) {
+        specForm.aConditions[editingConditionIndex.value] = condition
+      } else {
+        specForm.aConditions.push(condition)
+      }
+      break
+    case 'if':
+      if (editingConditionIndex.value >= 0) {
+        specForm.ifConditions[editingConditionIndex.value] = condition
+      } else {
+        specForm.ifConditions.push(condition)
+      }
+      break
+    case 'then':
+      if (editingConditionIndex.value >= 0) {
+        specForm.thenConditions[editingConditionIndex.value] = condition
+      } else {
+        specForm.thenConditions.push(condition)
+      }
+      break
+  }
+  
+  showSpecDialog.value = false
+  updateFormula()
+}
+
+// Remove condition
+const removeCondition = (side: SpecSide, index: number) => {
+  switch (side) {
+    case 'a':
+      specForm.aConditions.splice(index, 1)
+      break
+    case 'if':
+      specForm.ifConditions.splice(index, 1)
+      break
+    case 'then':
+      specForm.thenConditions.splice(index, 1)
+      break
+  }
+  updateFormula()
+}
+
+// Get device display name
+const getDeviceLabel = (deviceId: string) => {
+  const device = props.nodes.find(n => n.id === deviceId)
+  return device?.label || deviceId
+}
+
+// Get device template
+const getDeviceTemplate = (deviceId: string) => {
+  const device = props.nodes.find(n => n.id === deviceId)
+  if (!device) return null
+
+  // Try different ways to match the template
+  let template = props.deviceTemplates.find(t => t.manifest?.Name === device.templateName)
+
+  // If not found, try with lowercase comparison
+  if (!template) {
+    template = props.deviceTemplates.find(t =>
+      t.manifest?.Name?.toLowerCase() === device.templateName?.toLowerCase()
+    )
+  }
+
+  // If still not found, try to match by checking if template name is part of device templateName
+  if (!template && device.templateName) {
+    template = props.deviceTemplates.find(t =>
+      device.templateName.toLowerCase().includes(t.manifest?.Name?.toLowerCase()) ||
+      t.manifest?.Name?.toLowerCase().includes(device.templateName?.toLowerCase())
+    )
+  }
+
+  // If template is missing (e.g. deleted), fallback to cached manifest snapshot for THIS node.
+  if (!template) {
+    const cachedManifest = getCachedManifestForNode(device.id)
+    if (cachedManifest) {
+      return { manifest: cachedManifest }
+    }
+  }
+
+  return template || null
+}
+
+// Get available keys based on target type for a device
+const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: string, value: string}> => {
+  const template = getDeviceTemplate(deviceId)
+  if (!template || !template.manifest) return []
+
+  const keys: Array<{label: string, value: string}> = []
+
+  if (targetType === 'variable' && template.manifest.InternalVariables) {
+    template.manifest.InternalVariables.forEach((v: any) => {
+      keys.push({ label: v.Name, value: v.Name })
+    })
+  }
+
+  if (targetType === 'state' && template.manifest.WorkingStates) {
+    template.manifest.WorkingStates.forEach((s: any) => {
+      keys.push({ label: s.Name, value: s.Name })
+    })
+  }
+
+  if (targetType === 'api' && template.manifest.APIs) {
+    template.manifest.APIs.forEach((api: any) => {
+      keys.push({ label: api.Name, value: api.Name })
+    })
+  }
+
+  return keys
+}
+
+// Computed available keys for current editing condition
+const availableKeys = computed(() => {
+  if (!editingConditionData.deviceId) return []
+  return getAvailableKeys(editingConditionData.deviceId, editingConditionData.targetType || 'state')
+})
+
+// Check if relation and value fields should be shown (hidden for API type)
+const showRelationAndValue = computed(() => {
+  return editingConditionData.targetType !== 'api'
+})
+
+// (removed unused helpers getKeyLabel/getTargetTypeLabel)
+
+// Get relation label (accepts string for flexibility)
+const getRelationLabel = (relation: string) => {
+  return relationOperators.find(r => r.value === relation)?.label || relation
+}
+
+// Update LTL formula based on conditions
+const updateFormula = () => {
+  if (!currentTemplateDetail.value) {
+    specForm.formula = ''
+    return
+  }
+
+  const template = currentTemplateDetail.value
+
+  // Helper to convert conditions to string
+  const conditionsToString = (conditions: SpecCondition[]) => {
+    return conditions.map(c => {
+      const deviceName = c.deviceLabel.toLowerCase().replace(/\s+/g, '_')
+      const key = c.key
+      const relation = c.relation === '!=' ? '≠' : c.relation
+      const value = c.value ? ` ${relation} "${c.value}"` : ''
+      return `${deviceName}_${key}${value}`
+    }).join(' ∧ ')
+  }
+
+  // Build formula based on template type
+  let formula = ''
+  switch (template.type) {
+    case 'always':
+      // □A - Always A
+      const aStr = conditionsToString(specForm.aConditions)
+      formula = aStr ? `□(${aStr})` : '□A'
+      break
+    case 'eventually':
+      // ◇A - Eventually A
+      const evA = conditionsToString(specForm.aConditions)
+      formula = evA ? `◇(${evA})` : '◇A'
+      break
+    case 'never':
+      // □¬A - Never A
+      const neverA = conditionsToString(specForm.aConditions)
+      formula = neverA ? `□¬(${neverA})` : '□¬A'
+      break
+    case 'immediate':
+      // □(A → B) - Immediate response
+      const ifStr = conditionsToString(specForm.ifConditions)
+      const thenStr = conditionsToString(specForm.thenConditions)
+      if (ifStr && thenStr) {
+        formula = `□((${ifStr}) → (${thenStr}))`
+      } else if (ifStr) {
+        formula = `□((${ifStr}) → B)`
+      } else {
+        formula = '□(A → B)'
+      }
+      break
+    case 'response':
+      // □(A → ◇B) - Eventual response
+      const respIf = conditionsToString(specForm.ifConditions)
+      const respThen = conditionsToString(specForm.thenConditions)
+      if (respIf && respThen) {
+        formula = `□((${respIf}) → ◇(${respThen}))`
+      } else if (respIf) {
+        formula = `□((${respIf}) → ◇B)`
+      } else {
+        formula = '□(A → ◇B)'
+      }
+      break
+    case 'persistence':
+      // □(A → □B) - Persistence
+      const persIf = conditionsToString(specForm.ifConditions)
+      const persThen = conditionsToString(specForm.thenConditions)
+      if (persIf && persThen) {
+        formula = `□((${persIf}) → □(${persThen}))`
+      } else if (persIf) {
+        formula = `□((${persIf}) → □B)`
+      } else {
+        formula = '□(A → □B)'
+      }
+      break
+    case 'safety':
+      // □(untrusted → ¬A) - Safety
+      const safeIf = conditionsToString(specForm.ifConditions)
+      const safeThen = conditionsToString(specForm.thenConditions)
+      if (safeIf && safeThen) {
+        formula = `□((${safeIf}) → ¬(${safeThen}))`
+      } else if (safeIf) {
+        formula = `□((${safeIf}) → ¬A)`
+      } else {
+        formula = '□(untrusted → ¬A)'
+      }
+      break
+  }
+
+  specForm.formula = formula
+}
+
+// Generate natural language rule description
+const naturalLanguageRule = computed(() => {
+  if (!currentTemplateDetail.value || specForm.templateType === '') {
+    return 'Configure conditions above to generate rule description...'
+  }
+
+  const template = currentTemplateDetail.value
+  const type = template.type
+
+  // Helper to format conditions in natural language
+  const formatConditions = (conditions: SpecCondition[]): string => {
+    if (conditions.length === 0) return ''
+
+    return conditions.map(c => {
+      const deviceName = c.deviceLabel
+      const keyName = c.key
+      const relationText = getRelationLabel(c.relation)
+      const valueText = c.value ? ` ${relationText} "${c.value}"` : ''
+
+      let prefix = ''
+      if (c.targetType === 'variable') {
+        prefix = `variable ${keyName} of`
+      } else if (c.targetType === 'state') {
+        prefix = `state ${keyName} of`
+      } else if (c.targetType === 'api') {
+        prefix = `API ${keyName} of`
+      } else {
+        prefix = keyName
+      }
+
+      return `${prefix} ${deviceName}${valueText}`
+    }).join(' AND ')
+  }
+
+  const aConditions = formatConditions(specForm.aConditions)
+  const ifConditions = formatConditions(specForm.ifConditions)
+  const thenConditions = formatConditions(specForm.thenConditions)
+
+  // Generate natural language based on template type
+  switch (type) {
+    case 'always':
+      if (aConditions) {
+        return `Always, ${aConditions} must hold true`
+      }
+      return 'Always condition must be satisfied'
+
+    case 'eventually':
+      if (aConditions) {
+        return `Eventually, ${aConditions} must become true`
+      }
+      return 'Eventually condition must be satisfied'
+
+    case 'never':
+      if (aConditions) {
+        return `${aConditions} must never happen`
+      }
+      return 'Never condition must be satisfied'
+
+    case 'immediate':
+      if (ifConditions && thenConditions) {
+        return `When ${ifConditions} happens, then ${thenConditions} must happen at the same time`
+      } else if (ifConditions) {
+        return `When ${ifConditions} happens, some action must occur simultaneously`
+      }
+      return 'Configure conditions to define the immediate response rule'
+
+    case 'response':
+      if (ifConditions && thenConditions) {
+        return `When ${ifConditions} happens, then ${thenConditions} must eventually happen (response pattern)`
+      } else if (ifConditions) {
+        return `When ${ifConditions} happens, some response must eventually occur`
+      }
+      return 'Configure conditions to define the response rule'
+
+    case 'persistence':
+      if (ifConditions && thenConditions) {
+        return `When ${ifConditions} happens, then ${thenConditions} must happen and remain true forever`
+      } else if (ifConditions) {
+        return `When ${ifConditions} happens, some persistent condition must be maintained`
+      }
+      return 'Configure conditions to define the persistence rule'
+
+    case 'safety':
+      if (ifConditions && thenConditions) {
+        return `When ${ifConditions} is detected (untrusted), ${thenConditions} must not happen`
+      } else if (ifConditions) {
+        return `When ${ifConditions} is detected, unsafe conditions must be prevented`
+      }
+      return 'Configure conditions to define the safety rule'
+
+    default:
+      return 'Configure conditions to generate rule description'
+  }
+})
+
+// Handle template selection
+const handleTemplateChange = () => {
+  const template = currentTemplateDetail.value
+  if (template) {
+    specForm.templateType = template.type
+    // Clear conditions when template changes
+    specForm.aConditions = []
+    specForm.ifConditions = []
+    specForm.thenConditions = []
+    updateFormula()
+  }
+}
+
+// Validate specification before creation
+const validateSpecification = () => {
+  if (!specForm.templateId) {
+    ElMessage.warning({
+      message: 'Please select a template',
+      center: true
+    })
+    return false
+  }
+  
+  const template = currentTemplateDetail.value
+  if (!template) return false
+  
+  // Check required conditions
+  for (const side of template.requiredSides) {
+    const conditions = getConditionsForSide(side)
+    if (conditions.length === 0) {
+      ElMessage.warning({
+        message: `Please add at least one condition for "${side.toUpperCase()}"`,
+        center: true
+      })
+      return false
+    }
+  }
+  
+  return true
+}
+
+// Create specification
+const createSpecification = () => {
+  if (!validateSpecification()) {
+    return
+  }
+  
+  emit('add-spec', {
+    templateId: specForm.templateId,
+    templateType: specForm.templateType,
+    devices: specForm.selectedDevices,
+    formula: specForm.formula,
+    aConditions: specForm.aConditions,
+    ifConditions: specForm.ifConditions,
+    thenConditions: specForm.thenConditions
   })
+  
+  // Reset form
+  resetSpecForm()
+}
+
+// Reset specification form
+const resetSpecForm = () => {
+  specForm.templateId = ''
+  specForm.templateType = ''
+  specForm.selectedDevices = []
+  specForm.formula = ''
+  specForm.aConditions = []
+  specForm.ifConditions = []
+  specForm.thenConditions = []
+}
+
+// (removed unused helper getConditionsCount)
 
 
 
@@ -263,6 +769,10 @@ const handleCreateDevice = async () => {
 // Panel state
 const isCollapsed = ref(false)
 
+// Top-level navigation to reduce UI density
+type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
+const activeSection = ref<ControlCenterSection>('devices')
+
 // Toggle panel collapse
 const togglePanel = () => {
   isCollapsed.value = !isCollapsed.value
@@ -271,7 +781,15 @@ const togglePanel = () => {
 const emit = defineEmits<{
   'create-device': [data: { template: any, customName: string }]
   'open-rule-builder': []
-  'add-spec': [data: { templateId: string, devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, formula: string }]
+  'add-spec': [data: { 
+    templateId: string, 
+    templateType: string,
+    devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, 
+    formula: string,
+    aConditions: SpecCondition[],
+    ifConditions: SpecCondition[],
+    thenConditions: SpecCondition[]
+  }]
   'refresh-templates': []
   'delete-template': [templateId: string]
 }>()
@@ -308,8 +826,47 @@ const switchToCustomTemplate = () => {
 }
 
 
+
 const addApiToTemplate = () => {
-  customTemplateForm.apis.push({ name: '', description: '' })
+  editingApiIndex.value = -1
+  Object.assign(editingApiData, {
+    name: '',
+    description: '',
+    signal: false,
+    startState: customTemplateForm.initState || '',
+    endState: customTemplateForm.initState || '',
+    trigger: 'user',
+    assignments: []
+  })
+  showApiDialog.value = true
+}
+
+const saveApi = (apiData: any) => {
+  if (editingApiIndex.value >= 0) {
+    customTemplateForm.apis[editingApiIndex.value] = { ...apiData, id: customTemplateForm.apis[editingApiIndex.value].id }
+  } else {
+    customTemplateForm.apis.push({ ...apiData, id: `api-${Date.now()}` })
+  }
+  showApiDialog.value = false
+}
+
+const editApi = (index: number) => {
+  editingApiIndex.value = index
+  const api = customTemplateForm.apis[index]
+  Object.assign(editingApiData, api)
+  showApiDialog.value = true
+}
+
+const confirmSaveApi = () => {
+  if (!editingApiData.name.trim()) {
+    ElMessage({
+      message: 'Enter API name',
+      type: 'warning',
+      center: true
+    })
+    return
+  }
+  saveApi({ ...editingApiData })
 }
 
 const removeApiFromTemplate = (index: number) => {
@@ -535,11 +1092,14 @@ const createCustomTemplate = async () => {
         .map(api => ({
           Name: api.name,
           Description: api.description,
-          Signal: false,
-          StartState: customTemplateForm.initState,
-          EndState: customTemplateForm.initState,
-          Trigger: "user",
-          Assignments: []
+          Signal: api.signal,
+          StartState: api.startState,
+          EndState: api.endState,
+          Trigger: api.trigger,
+          Assignments: api.assignments.filter(a => a.variableName.trim() !== '').map(a => ({
+            VariableName: a.variableName,
+            ChangeRate: a.changeRate
+          }))
         }))
     }
 
@@ -810,103 +1370,8 @@ const exportTemplate = (template: any) => {
   }
 }
 
+// (removed unused spec device helper functions; spec creation uses condition dialog + template-based keys)
 
-  const selectLTLOperator = (operator: string) => {
-    specForm.formula += operator + ' '
-  }
-
-  const addDeviceToSpec = (deviceId: string) => {
-    const device = props.nodes.find(d => d.id === deviceId)
-    if (!device) return
-
-    // 检查是否已添加
-    if (specForm.selectedDevices.some(d => d.deviceId === deviceId)) {
-      ElMessage({
-        message: 'Device already added',
-        type: 'warning',
-        center: true
-      })
-      return
-    }
-
-    specForm.selectedDevices.push({
-      deviceId,
-      deviceLabel: device.label,
-      selectedApis: []
-    })
-  }
-
-  const removeDeviceFromSpec = (deviceId: string) => {
-    specForm.selectedDevices = specForm.selectedDevices.filter(d => d.deviceId !== deviceId)
-  }
-
-  const toggleDeviceApi = (deviceId: string, apiName: string) => {
-    const device = specForm.selectedDevices.find(d => d.deviceId === deviceId)
-    if (!device) return
-
-    const index = device.selectedApis.indexOf(apiName)
-    if (index > -1) {
-      device.selectedApis.splice(index, 1)
-    } else {
-      device.selectedApis.push(apiName)
-    }
-  }
-
-  const insertVariableIntoFormula = (deviceId: string, apiName: string) => {
-    const device = props.nodes.find(d => d.id === deviceId)
-    if (!device) return
-
-    // 创建变量引用，如: sensor_temp, light_status 等
-    const variableName = `${device.label.toLowerCase().replace(/\s+/g, '_')}_${apiName}`
-    specForm.formula += variableName + ' '
-  }
-
-  // 获取设备可用API列表
-  const getDeviceApis = (deviceId: string) => {
-    const device = props.nodes.find(d => d.id === deviceId)
-    if (!device) return []
-
-    // 这里可以根据设备模板返回不同的API
-    // 暂时返回一些常见的API
-    return ['status', 'value', 'active', 'temperature', 'humidity', 'motion']
-  }
-
-const createSpecification = () => {
-  if (!specForm.templateId) {
-    ElMessage.warning({
-      message: 'Select a template',
-      center: true
-    })
-    return
-  }
-
-  if (specForm.selectedDevices.length === 0) {
-    ElMessage.warning({
-      message: 'Add at least one device',
-      center: true
-    })
-    return
-  }
-
-  if (!specForm.formula.trim()) {
-    ElMessage.warning({
-      message: 'Enter LTL formula',
-      center: true
-    })
-    return
-  }
-
-  emit('add-spec', {
-    templateId: specForm.templateId,
-    devices: specForm.selectedDevices,
-    formula: specForm.formula
-  })
-
-  // Reset form
-  specForm.templateId = ''
-  specForm.selectedDevices = []
-  specForm.formula = ''
-}
 </script>
 
 <template>
@@ -934,12 +1399,62 @@ const createSpecification = () => {
       </div>
     </div>
 
+    <!-- Section tabs (only when expanded) -->
+    <div v-if="!isCollapsed" class="px-3 py-2 border-b border-slate-100 bg-white/60">
+      <div class="grid grid-cols-4 gap-1">
+        <button
+          @click="activeSection = 'devices'"
+          :class="[
+            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            activeSection === 'devices'
+              ? 'bg-slate-200 text-slate-900 border-slate-300'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+          ]"
+        >
+          Devices
+        </button>
+        <button
+          @click="activeSection = 'templates'"
+          :class="[
+            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            activeSection === 'templates'
+              ? 'bg-slate-200 text-slate-900 border-slate-300'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+          ]"
+        >
+          Templates
+        </button>
+        <button
+          @click="activeSection = 'rules'"
+          :class="[
+            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            activeSection === 'rules'
+              ? 'bg-slate-200 text-slate-900 border-slate-300'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+          ]"
+        >
+          Rules
+        </button>
+        <button
+          @click="activeSection = 'specs'"
+          :class="[
+            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            activeSection === 'specs'
+              ? 'bg-slate-200 text-slate-900 border-slate-300'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+          ]"
+        >
+          Specs
+        </button>
+      </div>
+    </div>
+
     <div
-      class="flex-1 overflow-y-auto custom-scrollbar bg-white transition-all duration-300"
+      class="flex-1 overflow-y-auto custom-scrollbar bg-white transition-all duration-300 max-h-[calc(100vh-120px)]"
       :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-0'"
     >
-      <!-- Add Device Section -->
-      <details class="group border-b border-slate-100" open>
+      <!-- Devices -->
+      <details v-if="activeSection === 'devices'" class="group border-b border-slate-100" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
           <div class="flex items-center gap-3">
             <span class="material-symbols-outlined text-lg text-secondary">add_circle</span>
@@ -1063,28 +1578,6 @@ const createSpecification = () => {
 
             <!-- Compact Sections -->
             <div class="grid grid-cols-1 gap-3">
-              <!-- APIs -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">APIs</span>
-                  <button @click="addApiToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
-                    + Add
-                  </button>
-                </div>
-                <div class="space-y-1.5 max-h-20 overflow-y-auto">
-                  <div v-for="(api, index) in customTemplateForm.apis" :key="index" class="flex items-center gap-2">
-                    <input
-                      v-model="api.name"
-                      class="flex-1 bg-white border border-slate-200 rounded px-2 py-1 text-xs focus:border-secondary"
-                      placeholder="API name"
-                    />
-                    <button @click="removeApiFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               <!-- Modes -->
               <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
                 <div class="flex items-center justify-between mb-2">
@@ -1172,6 +1665,25 @@ const createSpecification = () => {
                 </div>
               </div>
 
+              <!-- APIs -->
+              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">APIs</span>
+                  <button @click="addApiToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
+                    + Add
+                  </button>
+                </div>
+                <div class="space-y-1 max-h-32 overflow-y-auto">
+                  <div v-for="(api, index) in customTemplateForm.apis" :key="api.id" class="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-200">
+                    <span class="text-xs text-slate-700 font-medium">{{ api.name || `API ${index + 1}` }}</span>
+                    <div class="flex gap-1">
+                      <button @click="editApi(index)" class="text-blue-500 hover:text-blue-700 text-xs">✏️</button>
+                      <button @click="removeApiFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">✕</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
 
             </div>
 
@@ -1186,8 +1698,8 @@ const createSpecification = () => {
         </div>
       </details>
 
-      <!-- Template Manager Section -->
-      <details class="group border-b border-slate-100">
+      <!-- Templates -->
+      <details v-if="activeSection === 'templates'" class="group border-b border-slate-100" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
           <div class="flex items-center gap-3">
             <span class="material-symbols-outlined text-lg text-orange-500">inventory_2</span>
@@ -1253,8 +1765,8 @@ const createSpecification = () => {
         </div>
       </details>
 
-      <!-- Rule Lab Section -->
-      <details class="group border-b border-slate-100">
+      <!-- Rules -->
+      <details v-if="activeSection === 'rules'" class="group border-b border-slate-100" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
           <div class="flex items-center gap-3">
             <span class="material-symbols-outlined text-lg text-primary">function</span>
@@ -1277,148 +1789,203 @@ const createSpecification = () => {
         </div>
       </details>
 
-      <!-- Protocol Hub Section -->
-      <details class="group border-b border-slate-100">
+      <!-- Specs -->
+      <details v-if="activeSection === 'specs'" class="group border-b border-slate-100" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
           <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-lg text-purple-500">schema</span>
+            <span class="material-symbols-outlined text-lg text-red-500">verified</span>
             <span class="text-sm font-semibold text-slate-700">Specifications</span>
           </div>
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
         </summary>
 
         <div class="px-4 pb-5 bg-slate-50/50 pt-2 space-y-2">
-          <p class="text-[10px] text-slate-400 mb-2 font-medium">Linear Temporal Logic (LTL) - Global Specifications</p>
-
-          <div class="flex gap-2 mb-3">
-            <!-- Global Operator -->
-            <div
-              class="flex-1 p-2 bg-white border border-slate-200 rounded text-center hover:border-purple-300 hover:shadow-sm cursor-pointer transition-all"
-              @click="selectLTLOperator('G')"
-            >
-              <span class="block text-lg font-bold text-purple-600">G</span>
-              <span class="text-[9px] uppercase text-slate-400 font-medium">Global</span>
-            </div>
-
-            <!-- Future Operator -->
-            <div
-              class="flex-1 p-2 bg-white border border-slate-200 rounded text-center hover:border-purple-300 hover:shadow-sm cursor-pointer transition-all"
-              @click="selectLTLOperator('F')"
-            >
-              <span class="block text-lg font-bold text-purple-600">F</span>
-              <span class="text-[9px] uppercase text-slate-400 font-medium">Future</span>
-            </div>
-
-            <!-- Next Operator -->
-            <div
-              class="flex-1 p-2 bg-white border border-slate-200 rounded text-center hover:border-purple-300 hover:shadow-sm cursor-pointer transition-all"
-              @click="selectLTLOperator('X')"
-            >
-              <span class="block text-lg font-bold text-purple-600">X</span>
-              <span class="text-[9px] uppercase text-slate-400 font-medium">Next</span>
-            </div>
-          </div>
-
-            <!-- Specification Creation -->
-            <div class="space-y-3">
-              <!-- Device Selection -->
-              <div>
-                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Add Devices</label>
-                <select
-                  @change="addDeviceToSpec(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
-                  class="w-full bg-white border border-slate-200 rounded-md px-2 py-2 text-xs text-slate-700 focus:border-purple-300 focus:ring-purple-200"
+          <!-- Specification Creation -->
+          <div class="space-y-4">
+            <!-- Step 1: Select Template -->
+            <div>
+              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">1. Select Template</label>
+              <select
+                v-model="specForm.templateId"
+                @change="handleTemplateChange"
+                class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all"
+              >
+                <option value="" disabled hidden>Select a specification template</option>
+                <option
+                  v-for="template in specTemplateDetails"
+                  :key="template.id"
+                  :value="template.id"
                 >
-                  <option value="" disabled hidden>Select Device to Add</option>
-                  <option
-                    v-for="device in props.nodes"
-                    :key="device.id"
-                    :value="device.id"
-                  >
-                    {{ device.label }} ({{ device.id }})
-                  </option>
-                </select>
-              </div>
+                  {{ template.label }}
+                </option>
+              </select>
+              <p v-if="currentTemplateDetail" class="text-xs text-slate-500 mt-1.5 px-1">
+                {{ currentTemplateDetail.description }}
+              </p>
+            </div>
 
-              <!-- Selected Devices with Variables -->
-              <div v-if="specForm.selectedDevices.length > 0">
-                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Selected Devices & Variables</label>
-                <div class="space-y-2 max-h-32 overflow-y-auto">
-                  <div
-                    v-for="device in specForm.selectedDevices"
-                    :key="device.deviceId"
-                    class="bg-purple-50/50 border border-purple-200 rounded p-2"
+            <!-- Step 2: Add Conditions based on template requirements -->
+            <div v-if="specForm.templateId" class="space-y-2">
+              <label class="block text-[10px] uppercase font-bold text-slate-500">2. Configure Conditions</label>
+
+              <!-- A Conditions (Always/Forall) -->
+              <div v-if="isSideRequired('a')" class="border border-red-200 rounded-lg p-2 bg-red-50/50">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs font-bold text-red-600 uppercase tracking-wide">A Conditions</span>
+                  <button
+                    @click="openConditionDialog('a')"
+                    class="text-xs px-2 py-0.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
                   >
-                    <div class="flex items-center justify-between mb-1">
-                      <span class="text-xs font-medium text-purple-700">{{ device.deviceLabel }}</span>
-                      <button
-                        @click="removeDeviceFromSpec(device.deviceId)"
-                        class="text-purple-400 hover:text-red-500 text-xs"
-                      >
-                        ✕
+                    + Add
+                  </button>
+                </div>
+                <div class="space-y-1 max-h-28 overflow-y-auto">
+                  <div
+                    v-for="(condition, index) in specForm.aConditions"
+                    :key="condition.id"
+                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-red-100"
+                  >
+                    <div class="flex items-center gap-1.5 overflow-hidden">
+                      <span class="text-xs text-slate-700 font-medium truncate">
+                        {{ getDeviceLabel(condition.deviceId) }}
+                      </span>
+                      <span class="text-slate-300">·</span>
+                      <span class="text-xs text-red-600 truncate">
+                        {{ condition.key }}
+                      </span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
+                        {{ condition.value || '*' }}
+                      </span>
+                    </div>
+                    <div class="flex gap-0.5 ml-1">
+                      <button @click="openConditionDialog('a', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
+                        <span class="material-symbols-outlined text-xs">edit</span>
+                      </button>
+                      <button @click="removeCondition('a', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
+                        <span class="material-symbols-outlined text-xs">close</span>
                       </button>
                     </div>
-                    <div class="flex flex-wrap gap-1">
-                      <button
-                        v-for="api in getDeviceApis(device.deviceId)"
-                        :key="api"
-                        @click="toggleDeviceApi(device.deviceId, api)"
-                        :class="[
-                          'px-1.5 py-0.5 text-[9px] rounded border transition-colors',
-                          device.selectedApis.includes(api)
-                            ? 'bg-slate-200 text-slate-900 border-slate-300'
-                            : 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50'
-                        ]"
-                      >
-                        {{ api }}
-                      </button>
-                    </div>
+                  </div>
+                  <div v-if="specForm.aConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
+                    No conditions
                   </div>
                 </div>
               </div>
 
-              <!-- Variable Insertion Buttons -->
-              <div v-if="specForm.selectedDevices.length > 0">
-                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Insert Variables</label>
-                <div class="flex flex-wrap gap-1">
-                  <template v-for="device in specForm.selectedDevices" :key="device.deviceId">
-                    <button
-                      v-for="api in device.selectedApis"
-                      :key="`${device.deviceId}-${api}`"
-                      @click="insertVariableIntoFormula(device.deviceId, api)"
-                      class="px-2 py-1 text-[9px] bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                    >
-                      {{ device.deviceLabel.toLowerCase().replace(/\s+/g, '_') }}_{{ api }}
-                    </button>
-                  </template>
+              <!-- IF Conditions (Antecedent) -->
+              <div v-if="isSideRequired('if')" class="border border-orange-200 rounded-lg p-2 bg-orange-50/50">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs font-bold text-orange-600 uppercase tracking-wide">IF Conditions</span>
+                  <button
+                    @click="openConditionDialog('if')"
+                    class="text-xs px-2 py-0.5 bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <div class="space-y-1 max-h-28 overflow-y-auto">
+                  <div
+                    v-for="(condition, index) in specForm.ifConditions"
+                    :key="condition.id"
+                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-orange-100"
+                  >
+                    <div class="flex items-center gap-1.5 overflow-hidden">
+                      <span class="text-xs text-slate-700 font-medium truncate">
+                        {{ getDeviceLabel(condition.deviceId) }}
+                      </span>
+                      <span class="text-slate-300">·</span>
+                      <span class="text-xs text-orange-600 truncate">
+                        {{ condition.key }}
+                      </span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
+                        {{ condition.value || '*' }}
+                      </span>
+                    </div>
+                    <div class="flex gap-0.5 ml-1">
+                      <button @click="openConditionDialog('if', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
+                        <span class="material-symbols-outlined text-xs">edit</span>
+                      </button>
+                      <button @click="removeCondition('if', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
+                        <span class="material-symbols-outlined text-xs">close</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="specForm.ifConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
+                    No conditions
+                  </div>
                 </div>
               </div>
 
-            <div>
-              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Template</label>
-              <select
-                v-model="specForm.templateId"
-                class="w-full bg-white border border-slate-200 rounded-md px-2 py-2 text-xs text-slate-700 focus:border-purple-300 focus:ring-purple-200"
-              >
-                <option value="" disabled hidden>Select Template</option>
-                <option value="safety">Safety Property</option>
-                <option value="liveness">Liveness Property</option>
-                <option value="fairness">Fairness Property</option>
-              </select>
+              <!-- THEN Conditions (Consequent) -->
+              <div v-if="isSideRequired('then')" class="border border-rose-200 rounded-lg p-2 bg-rose-50/50">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs font-bold text-rose-600 uppercase tracking-wide">THEN Conditions</span>
+                  <button
+                    @click="openConditionDialog('then')"
+                    class="text-xs px-2 py-0.5 bg-rose-500 text-white rounded hover:bg-rose-600 transition-colors"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <div class="space-y-1 max-h-28 overflow-y-auto">
+                  <div
+                    v-for="(condition, index) in specForm.thenConditions"
+                    :key="condition.id"
+                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-rose-100"
+                  >
+                    <div class="flex items-center gap-1.5 overflow-hidden">
+                      <text class="text-xs text-slate-700 font-medium truncate">
+                        {{ getDeviceLabel(condition.deviceId) }}
+                      </text>
+                      <span class="text-slate-300">·</span>
+                      <span class="text-xs text-rose-600 truncate">
+                        {{ condition.key }}
+                      </span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
+                        {{ condition.value || '*' }}
+                      </span>
+                    </div>
+                    <div class="flex gap-0.5 ml-1">
+                      <button @click="openConditionDialog('then', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
+                        <span class="material-symbols-outlined text-xs">edit</span>
+                      </button>
+                      <button @click="removeCondition('then', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
+                        <span class="material-symbols-outlined text-xs">close</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="specForm.thenConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
+                    No conditions
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div>
-              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Formula</label>
-              <input
-                v-model="specForm.formula"
-                class="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-xs text-slate-700 focus:border-purple-300 focus:ring-purple-200 placeholder:text-slate-400"
-                placeholder="e.g. G (sensor_temp > 25)"
-                type="text"
-              />
+            <!-- Step 3: Generated Rule Description -->
+            <div v-if="specForm.templateId" class="bg-red-50 rounded-lg p-3 border border-red-100">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="material-symbols-outlined text-red-400 text-sm">translate</span>
+                <span class="text-[10px] uppercase font-bold text-red-600">Rule Description</span>
+              </div>
+              <div class="text-xs text-slate-700 leading-relaxed pl-7">
+                {{ naturalLanguageRule }}
+              </div>
+              <div class="mt-2 pt-2 border-t border-red-200 flex items-center gap-2">
+                <span class="text-[10px] uppercase font-bold text-slate-400">LTL:</span>
+                <code class="text-xs bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 font-mono">
+                  {{ specForm.formula }}
+                </code>
+              </div>
             </div>
 
+            <!-- Create Button -->
             <button
               @click="createSpecification"
-              class="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-900 border border-slate-300 rounded-md text-xs font-bold uppercase tracking-wider transition-all"
+              :disabled="!specForm.templateId"
+              class="w-full py-2 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all"
             >
               Create Specification
             </button>
@@ -1428,6 +1995,128 @@ const createSpecification = () => {
     </div>
 
   </aside>
+
+  <!-- Specification Condition Dialog -->
+  <div v-if="showSpecDialog" class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" @click="showSpecDialog = false">
+    <div class="bg-white rounded-xl p-5 w-full max-w-sm shadow-xl" @click.stop>
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-base font-semibold text-slate-800">
+          {{ editingConditionIndex >= 0 ? 'Edit' : 'Add' }} Condition
+        </h3>
+        <button @click="showSpecDialog = false" class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+          <span class="material-symbols-outlined text-sm">close</span>
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <!-- Device Selection -->
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Device</label>
+          <select
+            v-model="editingConditionData.deviceId"
+            @change="editingConditionData.key = ''"
+            class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
+          >
+            <option value="" hidden>Select device</option>
+            <option
+              v-for="device in props.nodes"
+              :key="device.id"
+              :value="device.id"
+            >
+              {{ device.label }}
+            </option>
+          </select>
+        </div>
+
+        <!-- Target Type & Property Key in one row -->
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Type</label>
+            <select
+              v-model="editingConditionData.targetType"
+              @change="editingConditionData.key = ''"
+              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
+              :disabled="!editingConditionData.deviceId"
+            >
+              <option value="" hidden>Select type</option>
+              <option v-for="type in targetTypes" :key="type.value" :value="type.value">
+                {{ type.label }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Property</label>
+            <select
+              v-model="editingConditionData.key"
+              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
+              :disabled="!editingConditionData.deviceId || !editingConditionData.targetType"
+            >
+              <option value="" hidden>Select property</option>
+              <option
+                v-for="key in availableKeys"
+                :key="key.value"
+                :value="key.value"
+              >
+                {{ key.label }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Relation and Value (hidden for API type) -->
+        <div v-if="showRelationAndValue" class="grid grid-cols-3 gap-2">
+          <div class="col-span-1">
+            <label class="block text-xs font-medium text-slate-600 mb-1">Relation</label>
+            <select
+              v-model="editingConditionData.relation"
+              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm text-center"
+            >
+              <option v-for="op in relationOperators" :key="op.value" :value="op.value">
+                {{ op.label }}
+              </option>
+            </select>
+          </div>
+          <div class="col-span-2">
+            <label class="block text-xs font-medium text-slate-600 mb-1">Value</label>
+            <input
+              v-model="editingConditionData.value"
+              class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
+              placeholder="Value"
+            />
+          </div>
+        </div>
+
+        <!-- Preview -->
+        <div class="bg-slate-50 rounded-lg p-2 border border-slate-200">
+          <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Preview</div>
+          <div class="font-mono text-xs text-slate-700 break-all">
+            <span class="text-red-600">{{ getDeviceLabel(editingConditionData.deviceId || '-') }}</span>
+            <span class="text-slate-400">.</span>
+            <span class="text-orange-600">{{ editingConditionData.key || '-' }}</span>
+            <template v-if="showRelationAndValue">
+              <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
+              <span class="text-red-600">"{{ editingConditionData.value || '-' }}"</span>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 mt-4">
+        <button
+          @click="showSpecDialog = false"
+          class="px-4 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200"
+        >
+          Cancel
+        </button>
+        <button
+          @click="saveCondition"
+          class="px-4 py-1.5 text-xs font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors"
+        >
+          {{ editingConditionIndex >= 0 ? 'Update' : 'Add' }}
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- Variable Dialog -->
   <div v-if="showVariableDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showVariableDialog = false">
@@ -1623,6 +2312,144 @@ const createSpecification = () => {
           class="px-4 py-2 text-sm font-medium text-white bg-purple-600 border border-transparent rounded-lg hover:bg-purple-700 transition-all"
         >
           {{ editingWorkingStateIndex >= 0 ? 'Update' : 'Add' }} State
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Dialog -->
+  <div v-if="showApiDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showApiDialog = false">
+    <div class="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl" @click.stop>
+      <div class="flex justify-between items-center mb-6">
+        <h3 class="text-lg font-semibold text-secondary">
+          {{ editingApiIndex >= 0 ? 'Edit API' : 'Add API' }}
+        </h3>
+        <button @click="showApiDialog = false" class="text-slate-400 hover:text-secondary transition-colors">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
+            <input
+              v-model="editingApiData.name"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+              placeholder="API name"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+            <input
+              v-model="editingApiData.description"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+              placeholder="Description"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Start State</label>
+            <select
+              v-model="editingApiData.startState"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+            >
+              <option value="" hidden>Select state</option>
+              <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
+                {{ state.name }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">End State</label>
+            <select
+              v-model="editingApiData.endState"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+            >
+              <option value="" hidden>Select state</option>
+              <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
+                {{ state.name }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Trigger</label>
+            <select
+              v-model="editingApiData.trigger"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+            >
+              <option value="user">User Trigger</option>
+              <option value="auto">Auto Trigger</option>
+              <option value="event">Event Trigger</option>
+            </select>
+          </div>
+          <div class="flex items-center">
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                v-model="editingApiData.signal"
+                class="w-4 h-4 text-secondary rounded"
+              />
+              Is Signal API
+            </label>
+          </div>
+        </div>
+
+        <!-- Assignments -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-sm font-medium text-slate-700">Assignments</label>
+            <button
+              @click="editingApiData.assignments.push({variableName: '', changeRate: ''})"
+              class="text-xs text-secondary hover:text-secondary/80"
+            >
+              + Add Assignment
+            </button>
+          </div>
+          <div class="space-y-2 max-h-32 overflow-y-auto">
+            <div v-for="(assignment, index) in editingApiData.assignments" :key="index" class="flex items-center gap-2">
+              <select
+                v-model="assignment.variableName"
+                class="flex-1 px-2 py-1.5 border border-slate-200 rounded text-xs"
+              >
+                <option value="">Select variable</option>
+                <option v-for="v in customTemplateForm.variables.filter(v => v.name.trim())" :key="v.name" :value="v.name">
+                  {{ v.name }}
+                </option>
+              </select>
+              <input
+                v-model="assignment.changeRate"
+                class="w-20 px-2 py-1.5 border border-slate-200 rounded text-xs"
+                placeholder="Change rate"
+              />
+              <button
+                @click="editingApiData.assignments.splice(index, 1)"
+                class="p-1 text-red-400 hover:text-red-600"
+              >
+                <span class="material-symbols-outlined text-sm">close</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end space-x-3 mt-6">
+        <button
+          @click="showApiDialog = false"
+          class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-md hover:bg-slate-200"
+        >
+          Cancel
+        </button>
+        <button
+          @click="confirmSaveApi"
+          class="px-4 py-2 text-sm font-medium text-white bg-purple-600 border border-transparent rounded-lg hover:bg-purple-700 transition-all"
+        >
+          {{ editingApiIndex >= 0 ? 'Update' : 'Add' }} API
         </button>
       </div>
     </div>

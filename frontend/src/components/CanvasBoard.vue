@@ -143,7 +143,10 @@ const getArrowMarker = (edge: DeviceEdge): string => {
   if (!sourceNode) return 'url(#arrow-blue)' // fallback
 
   const colorIndex = getNodeColorIndex(sourceNode.id)
-  const markers = ['url(#arrow-blue)', 'url(#arrow-green)', 'url(#arrow-purple)', 'url(#arrow-orange)']
+  const markers = [
+    'url(#arrow-blue)', 'url(#arrow-green)', 'url(#arrow-purple)', 'url(#arrow-orange)',
+    'url(#arrow-red)', 'url(#arrow-teal)', 'url(#arrow-pink)', 'url(#arrow-yellow)'
+  ]
   return markers[colorIndex] || markers[0]
 }
 
@@ -422,6 +425,18 @@ onBeforeUnmount(() => {
           </marker>
           <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
             <path d="M0,0 L0,6 L9,3 z" fill="#dc2626"></path>
+          </marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L9,3 z" fill="#ef4444"></path>
+          </marker>
+          <marker id="arrow-teal" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L9,3 z" fill="#14b8a6"></path>
+          </marker>
+          <marker id="arrow-pink" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L9,3 z" fill="#ec4899"></path>
+          </marker>
+          <marker id="arrow-yellow" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L9,3 z" fill="#eab308"></path>
           </marker>
         </defs>
 

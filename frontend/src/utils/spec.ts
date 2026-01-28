@@ -209,7 +209,14 @@ export const updateSpecsForNodeRename = (
 }
 
 export const isSpecRelatedToNode = (spec: Specification, nodeId: string) => {
-    const check = (list: SpecCondition[]) => list.some(c => c.deviceId === nodeId)
+    // 检查单设备规约
+    if (spec.deviceId === nodeId) return true
+    
+    // 检查多设备规约
+    if (spec.devices && spec.devices.some(d => d.deviceId === nodeId)) return true
+    
+    // 检查条件中是否包含该设备
+    const check = (list: SpecCondition[]) => list && list.length > 0 && list.some(c => c.deviceId === nodeId)
     return check(spec.aConditions) || check(spec.ifConditions) || check(spec.thenConditions)
 }
 

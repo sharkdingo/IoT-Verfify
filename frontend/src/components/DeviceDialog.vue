@@ -4,8 +4,9 @@ import {useI18n} from 'vue-i18n'
 
 import type {DeviceManifest} from '../types/device'
 import type {DeviceEdge} from '../types/edge'
-import type {Specification} from '../types/spec'
+import type {Specification, SpecCondition} from '../types/spec'
 import {buildSpecText} from "../utils/spec"
+import {specTemplateDetails} from '../assets/config/specTemplates'
 
 const props = defineProps<{
   visible: boolean
@@ -36,6 +37,77 @@ const close = () => {
 }
 
 const onDelete = () => emit('delete')
+
+// 从条件生成LTL公式
+const generateFormulaFromConditions = (spec: Specification): string => {
+  const template = specTemplateDetails.find(t => t.id === spec.templateId)
+  if (!template) return spec.templateLabel || 'Unknown'
+
+  // 将条件转换为字符串
+  const conditionsToString = (conditions: SpecCondition[]) => {
+    return conditions
+      .filter(c => c && c.deviceId && c.key)
+      .map(c => {
+        const deviceName = (c.deviceLabel || c.deviceId).toLowerCase().replace(/\s+/g, '_')
+        const key = c.key
+        const relation = c.relation === '!=' ? '≠' : c.relation
+        const value = c.value ? ` ${relation} "${c.value}"` : ''
+        return `${deviceName}_${key}${value}`
+      })
+      .join(' ∧ ')
+  }
+
+  // 根据模板类型生成公式
+  switch (template.type) {
+    case 'always':
+      const aStr = conditionsToString(spec.aConditions || [])
+      return aStr ? `□(${aStr})` : '□A'
+    case 'eventually':
+      const evA = conditionsToString(spec.aConditions || [])
+      return evA ? `◇(${evA})` : '◇A'
+    case 'never':
+      const neverA = conditionsToString(spec.aConditions || [])
+      return neverA ? `□¬(${neverA})` : '□¬A'
+    case 'immediate':
+      const ifStr = conditionsToString(spec.ifConditions || [])
+      const thenStr = conditionsToString(spec.thenConditions || [])
+      if (ifStr && thenStr) {
+        return `□((${ifStr}) → (${thenStr}))`
+      } else if (ifStr) {
+        return `□((${ifStr}) → B)`
+      }
+      return '□(A → B)'
+    case 'response':
+      const respIf = conditionsToString(spec.ifConditions || [])
+      const respThen = conditionsToString(spec.thenConditions || [])
+      if (respIf && respThen) {
+        return `□((${respIf}) → ◇(${respThen}))`
+      } else if (respIf) {
+        return `□((${respIf}) → ◇B)`
+      }
+      return '□(A → ◇B)'
+    case 'persistence':
+      const persIf = conditionsToString(spec.ifConditions || [])
+      const persThen = conditionsToString(spec.thenConditions || [])
+      if (persIf && persThen) {
+        return `□((${persIf}) → □(${persThen}))`
+      } else if (persIf) {
+        return `□((${persIf}) → □B)`
+      }
+      return '□(A → □B)'
+    case 'safety':
+      const safeIf = conditionsToString(spec.ifConditions || [])
+      const safeThen = conditionsToString(spec.thenConditions || [])
+      if (safeIf && safeThen) {
+        return `□((${safeIf}) → ¬(${safeThen}))`
+      } else if (safeIf) {
+        return `□((${safeIf}) → ¬A)`
+      }
+      return '□(untrusted → ¬A)'
+    default:
+      return spec.templateLabel || 'Unknown'
+  }
+}
 
 /* ---------- 核心展示数据提取 ---------- */
 
@@ -110,6 +182,20 @@ const states = computed(() => {
   }))
 })
 
+// 4. API列表
+const apis = computed(() => {
+  const m = manifest.value
+  if (!m || !m.APIs) return []
+  return m.APIs.map(api => ({
+    name: api.Name,
+    description: api.Description || '',
+    startState: api.StartState,
+    endState: api.EndState,
+    trigger: api.Trigger || 'user',
+    signal: api.Signal || false
+  }))
+})
+
 // 生成设备ID（用于显示）
 const deviceId = computed(() => {
   // 这里可以根据实际需求生成设备ID
@@ -131,31 +217,75 @@ const getDeviceIcon = (deviceName: string) => {
 
 // 获取设备相关的规约
 const deviceSpecs = computed(() => {
-  if (!props.specs || !props.nodeId) return []
+  if (!props.specs || !props.nodeId) {
+    return []
+  }
 
   const currentDeviceId = props.nodeId // 使用正确的设备ID
+  
+  // 检查条件中是否包含该设备
+  const checkConditionsForDevice = (spec: Specification) => {
+    const allConditions = [
+      ...(spec.aConditions || []),
+      ...(spec.ifConditions || []),
+      ...(spec.thenConditions || [])
+    ]
+    return allConditions.some(cond => cond && cond.deviceId === currentDeviceId)
+  }
+  
   return props.specs
     .filter(spec => {
       // 检查单设备规约
       if (spec.deviceId === currentDeviceId) return true
       // 检查多设备规约
-      if (spec.devices && spec.devices.some(d => d.deviceId === currentDeviceId)) return true
+      if (spec.devices && Array.isArray(spec.devices) && spec.devices.some(d => d && d.deviceId === currentDeviceId)) return true
+      // 检查条件中是否包含该设备
+      if (checkConditionsForDevice(spec)) return true
       return false
     })
     .map(spec => {
-      let specType = 'Unknown'
+      // 使用templateLabel或根据templateId映射
+      let specType = spec.templateLabel || 'Unknown'
+      let specTypeColor = 'slate'
+      
+      // 根据templateId设置颜色和类型
       switch (spec.templateId) {
         case 'safety':
         case '1':
-          specType = 'Safety'
+          specType = spec.templateLabel || 'Safety'
+          specTypeColor = 'red'
           break
         case 'liveness':
         case '2':
-          specType = 'Liveness'
+          specType = spec.templateLabel || 'Liveness'
+          specTypeColor = 'blue'
           break
         case 'fairness':
         case '3':
-          specType = 'Fairness'
+          specType = spec.templateLabel || 'Fairness'
+          specTypeColor = 'green'
+          break
+        case 'always':
+        case '4':
+          specType = spec.templateLabel || 'Always'
+          specTypeColor = 'purple'
+          break
+        case 'eventually':
+        case '5':
+          specType = spec.templateLabel || 'Eventually'
+          specTypeColor = 'indigo'
+          break
+        case 'never':
+        case '6':
+          specType = spec.templateLabel || 'Never'
+          specTypeColor = 'orange'
+          break
+        case 'immediate':
+        case 'response':
+        case 'persistence':
+        case '7':
+          specType = spec.templateLabel || 'Response'
+          specTypeColor = 'teal'
           break
       }
 
@@ -163,17 +293,25 @@ const deviceSpecs = computed(() => {
       let deviceInfo = ''
       if (spec.devices && spec.devices.length > 0) {
         const deviceLabels = spec.devices.map(d => d.deviceLabel || d.deviceId).join(', ')
-        deviceInfo = ` (${deviceLabels})`
+        deviceInfo = deviceLabels
       } else if (spec.deviceId) {
-        deviceInfo = ` (${spec.deviceLabel || spec.deviceId})`
+        deviceInfo = spec.deviceLabel || spec.deviceId
       } else {
-        deviceInfo = ' (Global)'
+        deviceInfo = 'Global'
+      }
+
+      // 生成公式：如果formula不存在，从条件生成
+      let formula = spec.formula
+      if (!formula || formula === 'No formula defined') {
+        formula = generateFormulaFromConditions(spec)
       }
 
       return {
         id: spec.id,
-        name: `${specType} Property${deviceInfo}`,
-        formula: spec.formula || 'No formula defined',
+        type: specType,
+        typeColor: 'red', // 强制使用红色
+        formula: formula,
+        devices: deviceInfo,
         status: 'Active'
       }
     })
@@ -186,33 +324,33 @@ const deviceSpecs = computed(() => {
     <transition name="modal-fade" appear>
       <div v-if="innerVisible" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
         <transition name="modal-scale" appear>
-          <div class="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
 
             <!-- Header -->
-            <div class="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+            <div class="px-8 py-6 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50/50 flex justify-between items-center sticky top-0 z-10 shadow-sm">
               <div class="flex items-center gap-4">
-                <div class="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-primary">
-                  <span class="material-icons-round text-3xl">{{ getDeviceIcon(deviceName) }}</span>
+                <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 border-2 border-blue-200 flex items-center justify-center shadow-lg">
+                  <span class="material-icons-round text-3xl text-blue-600">{{ getDeviceIcon(deviceName) }}</span>
                 </div>
                 <div>
                   <h1 class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') || '设备信息' }}</h1>
-                  <p class="text-sm text-slate-500">{{ deviceName || 'Sensor' }} • ID: {{ deviceId }}</p>
+                  <p class="text-sm text-slate-500 mt-0.5">{{ basicInfo.instanceName || label }} • {{ deviceName || 'Sensor' }}</p>
                 </div>
               </div>
-              <button @click="close" class="text-slate-400 hover:text-slate-600 transition-colors">
-                <span class="material-icons-round">close</span>
+              <button @click="close" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                <span class="material-icons-round text-xl">close</span>
               </button>
             </div>
 
             <!-- Body -->
-            <div class="flex-1 overflow-y-auto custom-scrollbar px-8 py-6 space-y-10">
+            <div class="flex-1 overflow-y-auto custom-scrollbar px-8 py-6 space-y-8">
               <!-- Basic Info -->
               <section>
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') || '基本信息' }}</h2>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 bg-slate-50 p-6 rounded-2xl">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 bg-gradient-to-br from-slate-50 to-slate-100/50 p-6 rounded-2xl border border-slate-200/50">
                   <div class="flex flex-col gap-1">
                     <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.name') || '名称' }}</span>
                     <span class="text-sm font-medium text-slate-700">{{ basicInfo.name || deviceName }}</span>
@@ -251,21 +389,28 @@ const deviceSpecs = computed(() => {
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceVariables') || '变量' }}</h2>
                 </div>
-                <div class="overflow-hidden border border-slate-100 rounded-xl">
+                <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
-                      <tr class="bg-slate-50">
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.range') || '范围' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.trust') || '可信度' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.type') || '类型' }}</th>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.range') || '范围' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') || '可信度' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.type') || '类型' }}</th>
                       </tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-100">
-                      <tr v-for="(v, idx) in variables" :key="idx" class="hover:bg-slate-50/50 transition-colors">
+                    <tbody class="divide-y divide-slate-100 bg-white">
+                      <tr v-for="(v, idx) in variables" :key="idx" class="hover:bg-blue-50/30 transition-colors">
                         <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ v.name }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500">{{ v.range }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500">{{ v.trust || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 font-mono">{{ v.range || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                            :class="v.trust === 'high' || v.trust === 'trusted' ? 'bg-green-100 text-green-700' : 
+                                    v.trust === 'medium' ? 'bg-yellow-100 text-yellow-700' : 
+                                    'bg-slate-100 text-slate-600'">
+                            {{ v.trust || '-' }}
+                          </span>
+                        </td>
                         <td class="px-4 py-3">
                           <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
                             {{ v.type }}
@@ -283,55 +428,111 @@ const deviceSpecs = computed(() => {
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceStates') || '状态' }}</h2>
                 </div>
-                <div class="overflow-hidden border border-slate-100 rounded-xl">
+                <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
-                      <tr class="bg-slate-50">
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.description') || '描述' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.invariant') || '不变性' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">{{ t('app.privacy') || '隐私度' }}</th>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') || '描述' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.invariant') || '不变性' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') || '隐私度' }}</th>
                       </tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-100">
+                    <tbody class="divide-y divide-slate-100 bg-white">
                       <tr v-if="states.length === 0">
                         <td class="px-4 py-8 text-center text-slate-400 text-sm italic" colspan="4">
                           {{ t('app.noData') || '暂无状态数据' }}
                         </td>
                       </tr>
-                      <tr v-for="(s, idx) in states" :key="idx" class="hover:bg-slate-50/50 transition-colors">
+                      <tr v-for="(s, idx) in states" :key="idx" class="hover:bg-blue-50/30 transition-colors">
                         <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ s.name }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500">{{ s.description || '-' }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500">{{ s.invariant || '-' }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500">{{ s.privacy || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">{{ s.description || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 font-mono text-xs">{{ s.invariant || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                            :class="s.privacy === 'public' ? 'bg-blue-100 text-blue-700' : 
+                                    s.privacy === 'private' ? 'bg-purple-100 text-purple-700' : 
+                                    'bg-slate-100 text-slate-600'">
+                            {{ s.privacy || '-' }}
+                          </span>
+                        </td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               </section>
 
-              <!-- Specifications Section -->
-              <section v-if="deviceSpecs.length > 0" class="border-t border-dashed border-slate-200 pt-8">
-                <div class="flex items-center gap-2 mb-6">
-                  <div class="w-1 h-5 bg-primary rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceSpecs') || '设备规约' }}</h2>
+              <!-- APIs Section -->
+              <section v-if="apis.length > 0">
+                <div class="flex items-center gap-2 mb-4">
+                  <div class="w-1 h-5 bg-emerald-500 rounded-full"></div>
+                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') || 'API接口' }}</h2>
                 </div>
-                <div class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div
+                    v-for="(api, idx) in apis"
+                    :key="idx"
+                    class="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100 rounded-xl p-4 hover:shadow-md transition-all"
+                  >
+                    <div class="flex items-start justify-between mb-2">
+                      <div class="flex items-center gap-2">
+                        <span class="material-icons-round text-emerald-600 text-lg">api</span>
+                        <span class="text-sm font-bold text-slate-800">{{ api.name }}</span>
+                        <span v-if="api.signal" class="text-xs px-1.5 py-0.5 bg-emerald-200 text-emerald-700 rounded font-medium">
+                          Signal
+                        </span>
+                      </div>
+                    </div>
+                    <p v-if="api.description" class="text-xs text-slate-600 mb-3 line-clamp-2">
+                      {{ api.description }}
+                    </p>
+                    <div class="flex items-center gap-3 text-xs">
+                      <div class="flex items-center gap-1 text-slate-500">
+                        <span class="material-icons-round text-sm">play_arrow</span>
+                        <span class="font-medium">{{ api.startState }}</span>
+                      </div>
+                      <span class="text-slate-300">→</span>
+                      <div class="flex items-center gap-1 text-slate-500">
+                        <span class="material-icons-round text-sm">stop</span>
+                        <span class="font-medium">{{ api.endState }}</span>
+                      </div>
+                    </div>
+                    <div class="mt-2 pt-2 border-t border-emerald-100">
+                      <span class="text-[10px] text-slate-400 uppercase">Trigger: {{ api.trigger }}</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Specifications Section -->
+              <section v-if="deviceSpecs.length > 0">
+                <div class="flex items-center gap-2 mb-4">
+                  <div class="w-1 h-5 bg-rose-500 rounded-full"></div>
+                  <h2 class="text-lg font-semibold text-slate-800">Spec</h2>
+                </div>
+                <div v-if="deviceSpecs.length === 0" class="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center">
+                  <span class="material-icons-round text-slate-300 text-4xl mb-2 block">verified</span>
+                  <p class="text-sm text-slate-500">{{ t('app.noSpecs') || '该设备暂无关联的规约' }}</p>
+                </div>
+                <div v-else class="space-y-3">
                   <div
                     v-for="spec in deviceSpecs"
                     :key="spec.id"
-                    class="bg-red-50/50 border border-red-100 rounded-xl p-4"
+                    class="bg-red-50/50 border border-red-100 rounded-xl p-4 transition-all hover:shadow-md"
                   >
                     <div class="flex items-start justify-between mb-3">
-                      <div class="flex items-center gap-2">
-                        <div class="w-2 h-2 bg-red-500 rounded-full"></div>
-                        <span class="text-sm font-semibold text-red-700">{{ spec.name }}</span>
+                      <div class="flex items-center gap-2 flex-1">
+                        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                        <div class="flex-1 min-w-0">
+                          <span class="text-sm font-semibold block truncate text-red-700">{{ spec.type }}</span>
+                          <span class="text-xs text-slate-500 mt-0.5 block truncate">{{ spec.devices }}</span>
+                        </div>
                       </div>
-                      <span class="text-xs font-medium text-red-600 bg-red-100 px-2 py-1 rounded">
+                      <span class="text-xs font-medium px-2 py-1 rounded whitespace-nowrap text-red-600 bg-red-100">
                         {{ spec.status }}
                       </span>
                     </div>
-                    <div class="text-xs text-slate-600 leading-relaxed font-mono bg-white p-3 rounded border">
+                    <div class="text-xs text-slate-600 leading-relaxed font-mono bg-white/80 p-3 rounded border border-slate-200 break-all">
                       {{ spec.formula }}
                     </div>
                   </div>
@@ -340,12 +541,12 @@ const deviceSpecs = computed(() => {
             </div>
 
             <!-- Footer -->
-            <div class="px-8 py-6 border-t border-slate-100 bg-slate-50 flex justify-end items-center gap-3">
-                <button @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-xl transition-all">
+            <div class="px-8 py-5 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white flex justify-end items-center gap-3">
+                <button @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
                   关闭
                 </button>
-              <button @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-rose-500 hover:text-white border border-rose-200 hover:bg-rose-500 rounded-xl transition-all flex items-center gap-2">
-                <span class="material-icons-round text-lg">delete_outline</span>
+              <button @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 rounded-lg transition-all flex items-center gap-2 shadow-md hover:shadow-lg">
+                <span class="material-icons-round text-lg text-white">delete_outline</span>
                 {{ t('app.deleteDevice') || '删除设备' }}
               </button>
             </div>

@@ -29,6 +29,7 @@ import {
   updateSpecsForNodeRename
 } from '../utils/spec'
 import { getLinkPoints } from '../utils/rule'
+import { cacheManifestForNode, getCachedManifestForNode, hydrateManifestCacheForNodes } from '@/utils/templateCache'
 
 // Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -333,12 +334,32 @@ const onDeviceListClick = (deviceId: string) => {
   const node = nodes.value.find(n => n.id === deviceId)
   if (!node) return
 
-  const tpl = deviceTemplates.value.find(t => t.manifest.Name === node.templateName)
+  // Resolve template by name; if missing (e.g. template deleted), fallback to cached manifest snapshot
+  const resolveTemplateForNode = (n: DeviceNode) => {
+    let template = deviceTemplates.value.find(t => t.manifest?.Name === n.templateName)
+    if (!template && n.templateName) {
+      template = deviceTemplates.value.find(t => t.manifest?.Name?.toLowerCase() === n.templateName?.toLowerCase())
+    }
+    if (!template && n.templateName) {
+      template = deviceTemplates.value.find(t =>
+        n.templateName.toLowerCase().includes(t.manifest?.Name?.toLowerCase() || '') ||
+        (t.manifest?.Name?.toLowerCase() || '').includes(n.templateName.toLowerCase())
+      )
+    }
+    return template || null
+  }
+
+  const tpl = resolveTemplateForNode(node)
+  const cachedManifest = getCachedManifestForNode(node.id)
+  const manifest = tpl?.manifest || cachedManifest || null
+
+  // If we have a manifest (from template or cache), snapshot it for future template deletion
+  if (manifest) cacheManifestForNode(node.id, manifest)
   dialogMeta.nodeId = node.id
   dialogMeta.label = node.label
-  dialogMeta.deviceName = tpl ? tpl.manifest.Name : node.templateName
-  dialogMeta.description = tpl ? tpl.manifest.Description : ''
-  dialogMeta.manifest = tpl ? tpl.manifest : null
+  dialogMeta.deviceName = manifest?.Name || tpl?.manifest?.Name || node.templateName
+  dialogMeta.description = manifest?.Description || tpl?.manifest?.Description || ''
+  dialogMeta.manifest = manifest
   dialogMeta.rules = edges.value.filter(e => e.from === node.id || e.to === node.id)
   dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
   dialogVisible.value = true
@@ -803,6 +824,23 @@ onMounted(async () => {
   await refreshRules()
   await refreshSpecifications()
 
+  // Snapshot manifests for all nodes while templates still exist.
+  // This ensures deleting templates later won't affect existing nodes’ details (variables/states/APIs).
+  const resolveTemplateForHydration = (n: DeviceNode) => {
+    let template = deviceTemplates.value.find(t => t.manifest?.Name === n.templateName)
+    if (!template && n.templateName) {
+      template = deviceTemplates.value.find(t => t.manifest?.Name?.toLowerCase() === n.templateName?.toLowerCase())
+    }
+    if (!template && n.templateName) {
+      template = deviceTemplates.value.find(t =>
+        n.templateName.toLowerCase().includes(t.manifest?.Name?.toLowerCase() || '') ||
+        (t.manifest?.Name?.toLowerCase() || '').includes(n.templateName.toLowerCase())
+      )
+    }
+    return template || null
+  }
+  hydrateManifestCacheForNodes(nodes.value, deviceTemplates.value as any, resolveTemplateForHydration as any)
+
   // Load Layout (only canvas)
   try {
     const layout = await boardApi.getLayout()
@@ -976,26 +1014,36 @@ const openRuleBuilder = () => {
   ruleBuilderVisible.value = true
 }
 
-const handleAddSpec = async (data: { templateId: string, devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, formula: string }) => {
-  const { templateId, devices, formula } = data
+const handleAddSpec = async (data: { 
+  templateId: string, 
+  templateType: string,
+  devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, 
+  formula: string,
+  aConditions: SpecCondition[],
+  ifConditions: SpecCondition[],
+  thenConditions: SpecCondition[]
+}) => {
+  const { templateId, templateType, devices, formula, aConditions, ifConditions, thenConditions } = data
 
   // Create specification with LTL formula
   const specId = 'spec_' + Date.now()
-  const templateLabel = templateId === 'safety' ? 'Safety Property' :
-                       templateId === 'liveness' ? 'Liveness Property' :
-                       'Fairness Property'
+  
+  // Get template label from spec templates or use templateId
+  const specTemplate = defaultSpecTemplates.find(t => t.id === templateId)
+  const templateLabel = specTemplate?.label || templateId
 
   const newSpec: Specification = {
     id: specId,
-    templateId: '1' as any, // Use first template as fallback since we don't have LTL templates
-    templateLabel,
-    aConditions: [],
-    ifConditions: [],
-    thenConditions: [],
+    templateId: templateId as any,
+    templateLabel: templateLabel,
+    aConditions: aConditions || [],
+    ifConditions: ifConditions || [],
+    thenConditions: thenConditions || [],
     formula: formula,
     devices: devices
   }
 
+  console.log('[Board] Creating new spec:', newSpec)
   specifications.value.push(newSpec)
   await saveSpecsToServer()
 }

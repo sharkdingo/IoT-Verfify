@@ -60,6 +60,63 @@ const displayRules = computed(() => {
   })
 })
 
+// Helper function to generate formula from conditions if not already defined
+const generateFormulaFromConditions = (spec: any): string => {
+  // If formula already exists, use it
+  if (spec.formula && spec.formula !== 'No formula defined') {
+    return spec.formula
+  }
+
+  // Generate from conditions based on templateId
+  const conditionsToString = (conditions: any[] = []) => {
+    return conditions
+      .filter(c => c && c.deviceId && c.key)
+      .map(c => {
+        const deviceName = (c.deviceLabel || c.deviceId).toLowerCase().replace(/\s+/g, '_')
+        const key = c.key
+        const relation = c.relation === '!=' ? '≠' : c.relation
+        const value = c.value ? ` ${relation} "${c.value}"` : ''
+        return `${deviceName}_${key}${value}`
+      })
+      .join(' ∧ ')
+  }
+
+  switch (spec.templateId) {
+    case 'always':
+    case '1':
+    case 'safety':
+      const aStr = conditionsToString(spec.aConditions)
+      return aStr ? `□(${aStr})` : '□A'
+    case 'eventually':
+    case '2':
+    case 'liveness':
+      const evA = conditionsToString(spec.aConditions)
+      return evA ? `◇(${evA})` : '◇A'
+    case 'never':
+    case '3':
+    case 'fairness':
+      const neverA = conditionsToString(spec.aConditions)
+      return neverA ? `□¬(${neverA})` : '□¬A'
+    case 'immediate':
+    case '4':
+      const ifStr = conditionsToString(spec.ifConditions)
+      const thenStr = conditionsToString(spec.thenConditions)
+      return ifStr && thenStr ? `□((${ifStr}) → (${thenStr}))` : '□(A → B)'
+    case 'response':
+    case '5':
+      const respIf = conditionsToString(spec.ifConditions)
+      const respThen = conditionsToString(spec.thenConditions)
+      return respIf && respThen ? `□((${respIf}) → ◇(${respThen}))` : '□(A → ◇B)'
+    case 'persistence':
+    case '6':
+      const persIf = conditionsToString(spec.ifConditions)
+      const persThen = conditionsToString(spec.thenConditions)
+      return persIf && persThen ? `□((${persIf}) → □(${persThen}))` : '□(A → □B)'
+    default:
+      return 'No formula defined'
+  }
+}
+
 // Convert real specifications to display format
 const displaySpecs = computed(() => {
   return props.specifications.map(spec => {
@@ -86,7 +143,7 @@ const displaySpecs = computed(() => {
     return {
       id: spec.id,
       name: `${specType} Property${deviceInfo}`,
-      formula: spec.formula || 'No formula defined',
+      formula: generateFormulaFromConditions(spec),
       status: 'Active' as const,
       color: 'red' as const, // All specifications use red theme
       deviceId: spec.deviceId,
