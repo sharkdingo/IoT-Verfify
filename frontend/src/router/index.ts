@@ -47,6 +47,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'IoT-Verify' }
   },
   {
+    path: '/create-template',
+    name: 'create-template',
+    component: () => import('../views/TemplateCreate.vue'),
+    meta: { title: 'Create Template' }
+  },
+  {
     path: '/404',
     name: '404',
     component: () => import('../views/NotFound.vue'),

@@ -18,6 +18,7 @@ declare module 'vue' {
     CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
     ControlCenter: typeof import('./src/components/ControlCenter.vue')['default']
     ControlPanel: typeof import('./src/components/ControlPanel.vue')['default']
+    CustomTemplateCreator: typeof import('./src/components/CustomTemplateCreator.vue')['default']
     DeviceDialog: typeof import('./src/components/DeviceDialog.vue')['default']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElAvatar: typeof import('element-plus/es')['ElAvatar']
@@ -64,5 +65,6 @@ declare module 'vue' {
     RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']
     StatusPanel: typeof import('./src/components/StatusPanel.vue')['default']
     SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
+    TemplateList: typeof import('./src/components/TemplateList.vue')['default']
   }
 }

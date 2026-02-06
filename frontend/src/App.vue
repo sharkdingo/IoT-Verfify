@@ -2,7 +2,9 @@
 import Header from "./components/Header.vue";
 import ChatView from "./components/ChatView.vue";
 import {ref} from "vue";
+import { useRoute } from "vue-router";
 
+const route = useRoute();
 const routerViewRef = ref<any>(null);
 const handleSystemCommand = (cmd: any) => {
   console.log("App收到指令:", cmd);
@@ -28,7 +30,7 @@ const handleSystemCommand = (cmd: any) => {
 
 <template>
   <div class="app-layout">
-    <header class="app-header">
+    <header v-if="route.path !== '/create-template'" class="app-header">
       <Header />
     </header>
 
@@ -46,7 +48,7 @@ const handleSystemCommand = (cmd: any) => {
 
 <style scoped>
 .app-layout {
-  height: 100vh;              /* 整个应用占满视口 */
+  min-height: 100vh;              /* 改为最小高度，允许内容撑开 */
   display: flex;
   flex-direction: column;
 }
@@ -56,9 +58,10 @@ const handleSystemCommand = (cmd: any) => {
   flex: 0 0 auto;
 }
 
-/* 下面这一块才是可以滚动的区域 */
+/* 页面主内容区 */
 .app-main {
   flex: 1 1 auto;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 </style>

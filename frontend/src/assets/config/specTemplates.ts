@@ -79,7 +79,7 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     type: 'safety',
     label: 'A will not happen because of something untrusted',
     description: '当检测到不可信操作时，指定的事件A不会发生',
-    requiredSides: ['if', 'then'],
+    requiredSides: ['a'],
     ltlFormula: '□(untrusted → ¬A)'
   }
 ]
@@ -92,15 +92,15 @@ export const defaultSpecTemplates: SpecTemplate[] = specTemplateDetails.map(t =>
 
 // 可用的关系运算符
 export const relationOperators = [
-  { value: '=', label: '等于 (=)' },
-  { value: '!=', label: '不等于 (≠)' },
-  { value: '>', label: '大于 (>)' },
-  { value: '>=', label: '大于等于 (≥)' },
-  { value: '<', label: '小于 (<)' },
-  { value: '<=', label: '小于等于 (≤)' },
-  { value: 'contains', label: '包含' },
-  { value: 'not_contains', label: '不包含' },
-  { value: 'matches', label: '匹配正则' }
+  { value: '=', label: '=' },
+  { value: '!=', label: '≠' },
+  { value: '>', label: '>' },
+  { value: '>=', label: '≥' },
+  { value: '<', label: '<' },
+  { value: '<=', label: '≤' },
+
+  { value: 'in', label: 'in' },
+  { value: 'not_in', label: 'not in' }
 ]
 
 // 可用的目标类型

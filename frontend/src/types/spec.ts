@@ -72,7 +72,9 @@ export const relationOperators = [
     { value: '<=', label: '小于等于 (≤)' },
     { value: 'contains', label: '包含' },
     { value: 'not_contains', label: '不包含' },
-    { value: 'matches', label: '匹配正则' }
+    { value: 'matches', label: '匹配正则' },
+    { value: 'in', label: '在列表中 (in)' },
+    { value: 'not_in', label: '不在列表中 (not in)' }
 ] as const
 
 export type RelationOperator = typeof relationOperators[number]['value']

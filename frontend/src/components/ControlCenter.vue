@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import { 
   specTemplateDetails, 
@@ -16,6 +17,8 @@ import { getCachedManifestForNode } from '@/utils/templateCache'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
+
+const router = useRouter()
 
 // Props
 interface Props {
@@ -52,145 +55,6 @@ const deviceTypes = computed(() => {
   return [...hardCodedTypes, ...customTemplates]
 })
 
-// Custom template form data
-const customTemplateForm = reactive({
-  name: '',
-  description: '',
-  initState: '',
-  modes: [] as Array<string>,
-  apis: [] as Array<{
-    id: string,
-    name: string,
-    description: string,
-    signal: boolean,
-    startState: string,
-    endState: string,
-    trigger: string,
-    assignments: Array<{variableName: string, changeRate: string}>
-  }>,
-  variables: [] as Array<{
-    name: string,
-    description: string,
-    isInside: boolean,
-    publicVisible: boolean,
-    trust: string,
-    privacy: string,
-    lowerBound: number,
-    upperBound: number,
-    values: string[]
-  }>,
-  impactedVariables: [] as Array<string>,
-  workingStates: [] as Array<{
-    name: string,
-    description: string,
-    trust: string,
-    privacy: string,
-    invariant: string
-  }>
-})
-
-// Template creation mode
-const isCreatingCustomTemplate = ref(false)
-
-// JSON upload functionality
-const fileInput = ref<HTMLInputElement>()
-
-// Enhanced error handling utility with concise messages
-const handleApiError = async (response: Response, operation: string) => {
-  let errorMessage = 'Operation failed'
-
-  try {
-    const errorText = await response.text()
-    console.error(`${operation} error response:`, errorText)
-
-    // Try to parse as JSON error
-    try {
-      const errorData = JSON.parse(errorText)
-      if (errorData.message) {
-        // Shorten common error messages
-        errorMessage = shortenErrorMessage(errorData.message)
-      } else if (errorData.error) {
-        errorMessage = shortenErrorMessage(errorData.error)
-      }
-    } catch {
-      // Not JSON, use raw text but shorten it
-      if (errorText) {
-        errorMessage = errorText.length > 50 ? errorText.substring(0, 50) + '...' : errorText
-      }
-    }
-  } catch (textError) {
-    console.error('Failed to read error response:', textError)
-    errorMessage = 'Server error'
-  }
-
-  return errorMessage
-}
-
-const shortenErrorMessage = (message: string): string => {
-  // Shorten common error patterns
-  if (message.includes('Device template already exists')) {
-    return 'Template name already exists'
-  }
-  if (message.includes('Template not found')) {
-    return 'Template not found'
-  }
-  if (message.includes('Invalid template ID')) {
-    return 'Invalid template ID'
-  }
-  if (message.includes('Failed to delete template')) {
-    return 'Delete failed'
-  }
-  if (message.includes('Failed to create template')) {
-    return 'Create failed'
-  }
-
-  // For other messages, keep them short
-  return message.length > 40 ? message.substring(0, 40) + '...' : message
-}
-
-// Dialog states
-const showVariableDialog = ref(false)
-const showWorkingStateDialog = ref(false)
-const showApiDialog = ref(false)
-const showDeleteConfirmDialog = ref(false)
-const editingVariableIndex = ref(-1)
-const editingWorkingStateIndex = ref(-1)
-const editingApiIndex = ref(-1)
-const templateToDelete = ref<any>(null)
-
-// Dialog data
-const editingVariableData = reactive({
-  name: '',
-  description: '',
-  isInside: true,
-  publicVisible: true,
-  trust: 'high',
-  privacy: 'low',
-  lowerBound: 0,
-  upperBound: 100,
-  values: []
-})
-
-const editingWorkingStateData = reactive({
-  name: '',
-  description: '',
-  trust: 'high',
-  privacy: 'low',
-  invariant: 'true'
-})
-
-const editingApiData = reactive({
-  name: '',
-  description: '',
-  signal: false,
-  startState: '',
-  endState: '',
-  trigger: 'user',
-  assignments: [] as Array<{variableName: string, changeRate: string}>
-})
-
-// (removed unused `jsonExample`; UI provides direct JSON upload)
-
 // Specification form data
 const specForm = reactive({
   templateId: '' as SpecTemplateId | '',
@@ -218,6 +82,10 @@ const editingConditionData = reactive<Partial<SpecCondition>>({
   relation: '=',
   value: ''
 })
+
+// Dialog states
+const showDeleteConfirmDialog = ref(false)
+const templateToDelete = ref<any>(null)
 
 // Get current template details
 const currentTemplateDetail = computed(() => {
@@ -430,12 +298,46 @@ const availableKeys = computed(() => {
   return getAvailableKeys(editingConditionData.deviceId, editingConditionData.targetType || 'state')
 })
 
-// Check if relation and value fields should be shown (hidden for API type)
+// Handle target type change to reset related fields
+const handleTargetTypeChange = () => {
+  editingConditionData.key = ''
+  editingConditionData.value = ''
+  // Reset relation to default based on new type
+  if (editingConditionData.targetType === 'state') {
+    editingConditionData.relation = 'in'
+  } else {
+    editingConditionData.relation = '='
+  }
+}
+
+// Check if relation and value fields should be shown
+// Show for Variable and State. Hidden for API type.
+// Also, ensure it's shown if key is not selected (handled by disabled state), but here we specifically want Value for State.
 const showRelationAndValue = computed(() => {
+  // Always show relation/value for State type
+  if (editingConditionData.targetType === 'state') return true
+  // Hide for API type
   return editingConditionData.targetType !== 'api'
 })
 
-// (removed unused helpers getKeyLabel/getTargetTypeLabel)
+// Filter relation operators based on target type
+const filteredRelationOperators = computed(() => {
+  if (editingConditionData.targetType === 'state') {
+    return relationOperators.filter(op => ['in', 'not_in'].includes(op.value))
+  }
+  return relationOperators
+})
+
+// Helper to safely get relation value for template logic
+const currentRelation = computed(() => editingConditionData.relation || '=')
+
+// Computed available states for the selected device (for 'in'/'not_in' selection)
+const availableStates = computed(() => {
+  if (!editingConditionData.deviceId) return []
+  const manifest = getCachedManifestForNode(editingConditionData.deviceId)
+  if (!manifest || !manifest.WorkingStates) return []
+  return manifest.WorkingStates.map((s: any) => s.Name)
+})
 
 // Get relation label (accepts string for flexibility)
 const getRelationLabel = (relation: string) => {
@@ -549,7 +451,7 @@ const naturalLanguageRule = computed(() => {
     return conditions.map(c => {
       const deviceName = c.deviceLabel
       const keyName = c.key
-      const relationText = getRelationLabel(c.relation)
+      const relationText = getRelationLabel(c.relation || '=')
       const valueText = c.value ? ` ${relationText} "${c.value}"` : ''
 
       let prefix = ''
@@ -700,10 +602,6 @@ const resetSpecForm = () => {
   specForm.thenConditions = []
 }
 
-// (removed unused helper getConditionsCount)
-
-
-
 const handleCreateDevice = async () => {
   console.log('Available templates:', props.deviceTemplates)
   console.log('Selected type:', deviceForm.type)
@@ -734,11 +632,26 @@ const handleCreateDevice = async () => {
       console.warn(`Template for type "${deviceForm.type}" not found, using fallback:`, template.manifest.Name)
     }
   } else {
-    // If custom type, create a new template first
-    template = await createCustomTemplate()
-    if (!template) {
-      return // Template creation failed
-    }
+    // If custom type, we should navigate to templates or show error?
+    // The "Custom" option in dropdown was triggering this path.
+    // But we removed the "Custom Template" form from here.
+    // So if user selects "Custom" (which is not in deviceTypes), we should probably warn them to use the Templates tab.
+    
+    // Actually, "Custom" is filtered out in deviceTypes computed.
+    // deviceTypes = hardCoded + customTemplates.filter(!hardCoded)
+    // So if user selects "Custom", it's because it's in the list?
+    // Wait, in the old code:
+    // if (deviceForm.type === 'Custom') -> ...
+    // So if user selects "Custom", we should probably just show a message or do nothing.
+    // Or better, remove "Custom" from the list if we want to force them to use the new Tab.
+    // But for now, let's just warn.
+    
+    ElMessage({
+      message: 'Please use the Templates tab to create custom devices',
+      type: 'info',
+      center: true
+    })
+    return
   }
 
   if (!template) {
@@ -801,379 +714,8 @@ const createDevice = () => {
   handleCreateDevice()
 }
 
-const switchToCustomTemplate = () => {
-  if (!deviceForm.name.trim()) {
-    ElMessage({
-      message: 'Enter device name first',
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-
-  // Pre-fill the custom template form with device name
-  customTemplateForm.name = deviceForm.name
-  customTemplateForm.description = `${deviceForm.name} device`
-
-  // Switch to custom template mode
-  isCreatingCustomTemplate.value = true
-
-  ElMessage({
-    message: 'Switched to template mode',
-    type: 'info',
-    center: true
-  })
-}
-
-
-
-const addApiToTemplate = () => {
-  editingApiIndex.value = -1
-  Object.assign(editingApiData, {
-    name: '',
-    description: '',
-    signal: false,
-    startState: customTemplateForm.initState || '',
-    endState: customTemplateForm.initState || '',
-    trigger: 'user',
-    assignments: []
-  })
-  showApiDialog.value = true
-}
-
-const saveApi = (apiData: any) => {
-  if (editingApiIndex.value >= 0) {
-    customTemplateForm.apis[editingApiIndex.value] = { ...apiData, id: customTemplateForm.apis[editingApiIndex.value].id }
-  } else {
-    customTemplateForm.apis.push({ ...apiData, id: `api-${Date.now()}` })
-  }
-  showApiDialog.value = false
-}
-
-const editApi = (index: number) => {
-  editingApiIndex.value = index
-  const api = customTemplateForm.apis[index]
-  Object.assign(editingApiData, api)
-  showApiDialog.value = true
-}
-
-const confirmSaveApi = () => {
-  if (!editingApiData.name.trim()) {
-    ElMessage({
-      message: 'Enter API name',
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-  saveApi({ ...editingApiData })
-}
-
-const removeApiFromTemplate = (index: number) => {
-  customTemplateForm.apis.splice(index, 1)
-}
-
-const addVariableToTemplate = () => {
-  editingVariableIndex.value = -1
-  // Reset to default values
-  Object.assign(editingVariableData, {
-    name: '',
-    description: '',
-    isInside: true,
-    publicVisible: true,
-    trust: 'high',
-    privacy: 'low',
-    lowerBound: 0,
-    upperBound: 100,
-    values: []
-  })
-  showVariableDialog.value = true
-}
-
-const saveVariable = (variableData: any) => {
-  if (editingVariableIndex.value >= 0) {
-    // Edit existing variable
-    customTemplateForm.variables[editingVariableIndex.value] = variableData
-  } else {
-    // Add new variable
-    customTemplateForm.variables.push(variableData)
-  }
-  showVariableDialog.value = false
-}
-
-const editVariable = (index: number) => {
-  editingVariableIndex.value = index
-  // Load existing data
-  const variable = customTemplateForm.variables[index]
-  Object.assign(editingVariableData, variable)
-  showVariableDialog.value = true
-}
-
-const confirmSaveVariable = () => {
-  if (!editingVariableData.name.trim()) {
-    ElMessage({
-      message: 'Enter variable name',
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-  saveVariable({ ...editingVariableData })
-}
-
-const removeVariableFromTemplate = (index: number) => {
-  const variableName = customTemplateForm.variables[index].name
-  customTemplateForm.variables.splice(index, 1)
-
-  // Also remove from impacted variables if it was selected
-  const impactedIndex = customTemplateForm.impactedVariables.indexOf(variableName)
-  if (impactedIndex > -1) {
-    customTemplateForm.impactedVariables.splice(impactedIndex, 1)
-  }
-}
-
-const toggleImpactedVariable = (variableName: string) => {
-  if (!variableName.trim()) return // Don't allow empty variable names
-
-  const index = customTemplateForm.impactedVariables.indexOf(variableName)
-  if (index > -1) {
-    customTemplateForm.impactedVariables.splice(index, 1)
-  } else {
-    customTemplateForm.impactedVariables.push(variableName)
-  }
-}
-
-const addWorkingStateToTemplate = () => {
-  editingWorkingStateIndex.value = -1
-  // Reset to default values
-  Object.assign(editingWorkingStateData, {
-    name: '',
-    description: '',
-    trust: 'high',
-    privacy: 'low',
-    invariant: 'true'
-  })
-  showWorkingStateDialog.value = true
-}
-
-const saveWorkingState = (stateData: any) => {
-  if (editingWorkingStateIndex.value >= 0) {
-    // Edit existing state
-    customTemplateForm.workingStates[editingWorkingStateIndex.value] = stateData
-  } else {
-    // Add new state
-    customTemplateForm.workingStates.push(stateData)
-  }
-  showWorkingStateDialog.value = false
-}
-
-const editWorkingState = (index: number) => {
-  editingWorkingStateIndex.value = index
-  // Load existing data
-  const state = customTemplateForm.workingStates[index]
-  Object.assign(editingWorkingStateData, state)
-  showWorkingStateDialog.value = true
-}
-
-const confirmSaveWorkingState = () => {
-  if (!editingWorkingStateData.name.trim()) {
-    ElMessage({
-      message: 'Enter state name',
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-  saveWorkingState({ ...editingWorkingStateData })
-}
-
-const removeWorkingStateFromTemplate = (index: number) => {
-  customTemplateForm.workingStates.splice(index, 1)
-}
-
-const addModeToTemplate = () => {
-  customTemplateForm.modes.push('')
-}
-
-const removeModeFromTemplate = (index: number) => {
-  customTemplateForm.modes.splice(index, 1)
-}
-
-// JSON file upload handling
-const handleJsonFileUpload = (event: Event) => {
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file) return
-
-  if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
-      ElMessage({
-        message: 'Invalid file format',
-        type: 'error',
-        center: true
-      })
-    return
-  }
-
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      const jsonData = JSON.parse(e.target?.result as string)
-      console.log('Parsed JSON data:', jsonData)
-
-      // Validate JSON structure
-      if (!jsonData.Name || !jsonData.Description) {
-        ElMessage({
-          message: 'Missing required fields in JSON',
-          type: 'error',
-          center: true
-        })
-        return
-      }
-
-      // Directly create template from JSON data
-      createTemplateFromJson(jsonData)
-    } catch (error) {
-      ElMessage({
-        message: 'Invalid JSON format',
-        type: 'error',
-        center: true
-      })
-      console.error('JSON parse error:', error)
-    }
-  }
-  reader.readAsText(file)
-}
-
-
-
-const createCustomTemplate = async () => {
-  if (!customTemplateForm.name.trim()) {
-    ElMessage({
-      message: 'Enter template name',
-      type: 'warning',
-      center: true
-    })
-    return
-  }
-
-  try {
-    // Create manifest object
-    const manifest = {
-      Name: customTemplateForm.name,
-      Description: customTemplateForm.description || `${customTemplateForm.name} device`,
-      Modes: customTemplateForm.modes.filter(m => m.trim() !== ''),
-      InternalVariables: customTemplateForm.variables
-        .filter(v => v.name.trim() !== '')
-        .map(v => ({
-          Name: v.name,
-          Description: v.description,
-          IsInside: v.isInside,
-          PublicVisible: v.publicVisible,
-          Trust: v.trust,
-          Privacy: v.privacy,
-          LowerBound: v.lowerBound,
-          UpperBound: v.upperBound,
-          Values: v.values.filter(val => val.trim() !== '')
-        })),
-      ImpactedVariables: customTemplateForm.impactedVariables.filter(v => v.trim() !== ''),
-      InitState: customTemplateForm.initState,
-      WorkingStates: customTemplateForm.workingStates
-        .filter(s => s.name.trim() !== '')
-        .map(s => ({
-          Name: s.name,
-          Description: s.description,
-          Trust: s.trust,
-          Privacy: s.privacy,
-          Invariant: s.invariant,
-          Dynamics: []
-        })),
-      Transitions: [],
-      APIs: customTemplateForm.apis
-        .filter(api => api.name.trim() !== '')
-        .map(api => ({
-          Name: api.name,
-          Description: api.description,
-          Signal: api.signal,
-          StartState: api.startState,
-          EndState: api.endState,
-          Trigger: api.trigger,
-          Assignments: api.assignments.filter(a => a.variableName.trim() !== '').map(a => ({
-            VariableName: a.variableName,
-            ChangeRate: a.changeRate
-          }))
-        }))
-    }
-
-    // Call API to create template
-    console.log('Creating custom template:', { name: customTemplateForm.name, manifest })
-
-    const token = localStorage.getItem('iot_verify_token')
-    console.log('Token exists:', !!token)
-    console.log('Token value:', token ? token.substring(0, 20) + '...' : 'null')
-
-    if (!token) {
-      ElMessage({
-      message: 'Please login first',
-      type: 'error',
-      center: true
-    })
-      return
-    }
-
-    const response = await fetch('/api/board/templates', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        name: customTemplateForm.name,
-        manifest
-      })
-    })
-
-    console.log('API response status:', response.status)
-    console.log('API response ok:', response.ok)
-
-    if (!response.ok) {
-      const errorMessage = await handleApiError(response, 'Create custom template')
-      throw new Error(errorMessage)
-    }
-
-    const newTemplate = await response.json()
-
-    ElMessage({
-      message: 'Template created',
-      type: 'success',
-      center: true
-    })
-
-    // Reset form
-    customTemplateForm.name = ''
-    customTemplateForm.description = ''
-    customTemplateForm.initState = ''
-    customTemplateForm.modes = []
-    customTemplateForm.apis = []
-    customTemplateForm.variables = []
-    customTemplateForm.impactedVariables = []
-    customTemplateForm.workingStates = []
-
-    // Switch back to device creation mode
-    isCreatingCustomTemplate.value = false
-
-    // Emit event to refresh templates
-    emit('refresh-templates')
-
-    return newTemplate.data
-  } catch (error) {
-    console.error('Failed to create custom template:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-    ElMessage({
-      message: `Create failed: ${errorMessage}`,
-      type: 'error',
-      center: true
-    })
-    return null
-  }
+const goToCreateTemplate = () => {
+  router.push('/create-template')
 }
 
 const openRuleBuilder = () => {
@@ -1240,109 +782,57 @@ const confirmDeleteTemplate = async () => {
   }
 }
 
+// Enhanced error handling utility with concise messages
+const handleApiError = async (response: Response, operation: string) => {
+  let errorMessage = 'Operation failed'
 
-const createTemplateFromJson = async (jsonData: any) => {
   try {
-    console.log('Creating template from JSON:', jsonData)
+    const errorText = await response.text()
+    console.error(`${operation} error response:`, errorText)
 
-    // Build manifest from JSON data
-    const manifest = {
-      Name: jsonData.Name,
-      Description: jsonData.Description,
-      Modes: jsonData.Modes || [],
-      InternalVariables: (jsonData.InternalVariables || jsonData.variables || []).map((v: any) => ({
-        Name: v.Name || v.name || '',
-        Description: v.Description || v.description || '',
-        IsInside: v.IsInside !== undefined ? v.IsInside : (v.isInside !== undefined ? v.isInside : true),
-        PublicVisible: v.PublicVisible !== undefined ? v.PublicVisible : (v.publicVisible !== undefined ? v.publicVisible : true),
-        Trust: v.Trust || v.trust || 'high',
-        Privacy: v.Privacy || v.privacy || 'low',
-        LowerBound: v.LowerBound !== undefined ? v.LowerBound : (v.lowerBound !== undefined ? v.lowerBound : 0),
-        UpperBound: v.UpperBound !== undefined ? v.UpperBound : (v.upperBound !== undefined ? v.upperBound : 100),
-        Values: v.Values || v.values || [],
-        NaturalChangeRate: v.NaturalChangeRate || v.naturalChangeRate
-      })),
-      ImpactedVariables: jsonData.ImpactedVariables || jsonData.impactedVariables || [],
-      InitState: jsonData.InitState || jsonData.initState || '',
-      WorkingStates: (jsonData.WorkingStates || jsonData.workingStates || []).map((s: any) => ({
-        Name: s.Name || s.name || '',
-        Description: s.Description || s.description || '',
-        Trust: s.Trust || s.trust || 'high',
-        Privacy: s.Privacy || s.privacy || 'low',
-        Invariant: s.Invariant || s.invariant || 'true',
-        Dynamics: s.Dynamics || s.dynamics || []
-      })),
-      Transitions: jsonData.Transitions || jsonData.transitions || [],
-      APIs: (jsonData.APIs || jsonData.apis || []).map((api: any) => ({
-        Name: api.Name || api.name || '',
-        Description: api.Description || api.description || '',
-        Signal: api.Signal !== undefined ? api.Signal : (api.signal !== undefined ? api.signal : false),
-        StartState: api.StartState || api.startState || jsonData.InitState || jsonData.initState || '',
-        EndState: api.EndState || api.endState || jsonData.InitState || jsonData.initState || '',
-        Trigger: api.Trigger || api.trigger || 'user',
-        Assignments: api.Assignments || api.assignments || []
-      }))
+    // Try to parse as JSON error
+    try {
+      const errorData = JSON.parse(errorText)
+      if (errorData.message) {
+        // Shorten common error messages
+        errorMessage = shortenErrorMessage(errorData.message)
+      } else if (errorData.error) {
+        errorMessage = shortenErrorMessage(errorData.error)
+      }
+    } catch {
+      // Not JSON, use raw text but shorten it
+      if (errorText) {
+        errorMessage = errorText.length > 50 ? errorText.substring(0, 50) + '...' : errorText
+      }
     }
-
-    console.log('Built manifest:', manifest)
-
-    // Send to backend
-    const token = localStorage.getItem('iot_verify_token')
-    if (!token) {
-      ElMessage({
-      message: 'Please login first',
-      type: 'error',
-      center: true
-    })
-      return
-    }
-
-    const response = await fetch('/api/board/templates', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        name: jsonData.Name,
-        manifest: manifest
-      })
-    })
-
-    if (!response.ok) {
-      const errorMessage = await handleApiError(response, 'Create template from JSON')
-      throw new Error(errorMessage)
-    }
-
-    const result = await response.json()
-    console.log('Template created successfully:', result)
-
-    ElMessage({
-      message: `Template "${jsonData.Name}" created`,
-      type: 'success',
-      center: true,
-      duration: 2000
-    })
-    emit('refresh-templates')
-
-    // Switch to Add Device mode
-    isCreatingCustomTemplate.value = false
-
-    // Clear file input
-    if (fileInput.value) {
-      fileInput.value.value = ''
-    }
-
-  } catch (error) {
-    console.error('Failed to create template from JSON:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-    ElMessage({
-      message: errorMessage,
-      type: 'error',
-      center: true,
-      duration: 4000
-    })
+  } catch (textError) {
+    console.error('Failed to read error response:', textError)
+    errorMessage = 'Server error'
   }
+
+  return errorMessage
+}
+
+const shortenErrorMessage = (message: string): string => {
+  // Shorten common error patterns
+  if (message.includes('Device template already exists')) {
+    return 'Template name already exists'
+  }
+  if (message.includes('Template not found')) {
+    return 'Template not found'
+  }
+  if (message.includes('Invalid template ID')) {
+    return 'Invalid template ID'
+  }
+  if (message.includes('Failed to delete template')) {
+    return 'Delete failed'
+  }
+  if (message.includes('Failed to create template')) {
+    return 'Create failed'
+  }
+
+  // For other messages, keep them short
+  return message.length > 40 ? message.substring(0, 40) + '...' : message
 }
 
 const exportTemplate = (template: any) => {
@@ -1369,8 +859,6 @@ const exportTemplate = (template: any) => {
     })
   }
 }
-
-// (removed unused spec device helper functions; spec creation uses condition dialog + template-based keys)
 
 </script>
 
@@ -1403,17 +891,6 @@ const exportTemplate = (template: any) => {
     <div v-if="!isCollapsed" class="px-3 py-2 border-b border-slate-100 bg-white/60">
       <div class="grid grid-cols-4 gap-1">
         <button
-          @click="activeSection = 'devices'"
-          :class="[
-            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
-            activeSection === 'devices'
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
-          ]"
-        >
-          Devices
-        </button>
-        <button
           @click="activeSection = 'templates'"
           :class="[
             'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
@@ -1423,6 +900,17 @@ const exportTemplate = (template: any) => {
           ]"
         >
           Templates
+        </button>
+        <button
+          @click="activeSection = 'devices'"
+          :class="[
+            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            activeSection === 'devices'
+              ? 'bg-slate-200 text-slate-900 border-slate-300'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+          ]"
+        >
+          Devices
         </button>
         <button
           @click="activeSection = 'rules'"
@@ -1464,34 +952,8 @@ const exportTemplate = (template: any) => {
         </summary>
 
         <div class="px-4 pb-5 space-y-3 bg-slate-50/50 pt-2">
-          <!-- Mode Toggle -->
-          <div class="flex gap-2">
-            <button
-              @click="isCreatingCustomTemplate = false"
-              :class="[
-                'flex-1 py-1.5 px-2 rounded text-xs font-medium transition-all',
-                !isCreatingCustomTemplate
-                  ? 'bg-slate-200 text-slate-900 border border-slate-300'
-                  : 'bg-white text-secondary border border-secondary/20'
-              ]"
-            >
-              Add Device
-            </button>
-            <button
-              @click="isCreatingCustomTemplate = true"
-              :class="[
-                'flex-1 py-1.5 px-2 rounded text-xs font-medium transition-all',
-                isCreatingCustomTemplate
-                  ? 'bg-slate-200 text-slate-900 border border-slate-300'
-                  : 'bg-white text-secondary border border-secondary/20'
-              ]"
-            >
-              Custom Template
-            </button>
-          </div>
-
           <!-- Add Device Form -->
-          <div v-if="!isCreatingCustomTemplate" class="space-y-3">
+          <div class="space-y-3">
             <!-- Device Name -->
             <div>
               <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Device Name</label>
@@ -1518,183 +980,15 @@ const exportTemplate = (template: any) => {
             <div class="space-y-2">
               <!-- Drop Node Button for predefined types -->
               <button
-                v-if="deviceForm.type !== 'Custom'"
                 @click="createDevice()"
                 class="w-full py-2 bg-white hover:bg-secondary/[0.03] text-secondary border border-secondary/20 hover:border-secondary/40 rounded-md text-xs font-bold uppercase tracking-wider transition-all shadow-sm"
               >
                 + Drop Node
               </button>
-
-              <!-- Custom Device Options -->
-              <div v-if="deviceForm.type === 'Custom'" class="space-y-2">
-                <button
-                  @click="switchToCustomTemplate()"
-                  class="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-900 border border-slate-300 rounded-md text-xs font-bold uppercase tracking-wider transition-all shadow-sm"
-                  :disabled="!deviceForm.name.trim()"
-                >
-                  + Create Custom Template
-                </button>
-              </div>
             </div>
 
           </div>
 
-          <!-- Custom Template Form -->
-          <div v-if="isCreatingCustomTemplate" class="space-y-4">
-            <!-- JSON Import -->
-            <div class="border border-slate-200 rounded-lg p-4 hover:border-secondary/40 transition-colors cursor-pointer" @click="fileInput?.click()">
-              <input
-                ref="fileInput"
-                type="file"
-                accept=".json"
-                @change="handleJsonFileUpload"
-                class="hidden"
-              />
-              <div class="text-center">
-                <div class="material-symbols-outlined text-secondary text-2xl mb-2">upload_file</div>
-                <div class="text-sm font-medium text-slate-600 mb-1">Import JSON Template</div>
-                <div class="text-xs text-slate-500">Upload a JSON file to create template</div>
-              </div>
-            </div>
-
-            <!-- Basic Info -->
-            <div class="space-y-3">
-              <input
-                v-model="customTemplateForm.name"
-                class="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-xs text-slate-700 focus:border-secondary focus:ring-secondary/20 placeholder:text-slate-400 transition-all shadow-sm"
-                placeholder="Template name"
-              />
-              <input
-                v-model="customTemplateForm.description"
-                class="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-xs text-slate-700 focus:border-secondary focus:ring-secondary/20 placeholder:text-slate-400 transition-all shadow-sm"
-                placeholder="Description (optional)"
-              />
-              <input
-                v-model="customTemplateForm.initState"
-                class="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-xs text-slate-700 focus:border-secondary focus:ring-secondary/20 placeholder:text-slate-400 transition-all shadow-sm"
-                placeholder="Initial state"
-              />
-            </div>
-
-            <!-- Compact Sections -->
-            <div class="grid grid-cols-1 gap-3">
-              <!-- Modes -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Modes</span>
-                  <button @click="addModeToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
-                    + Add
-                  </button>
-                </div>
-                <div class="space-y-1.5 max-h-20 overflow-y-auto">
-                  <div v-for="(_, index) in customTemplateForm.modes" :key="`mode-${index}`" class="flex items-center gap-2">
-                    <input
-                      v-model="customTemplateForm.modes[index]"
-                      class="flex-1 bg-white border border-slate-200 rounded px-2 py-1 text-xs focus:border-secondary"
-                      placeholder="Mode name"
-                    />
-                    <button @click="removeModeFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- States -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">States</span>
-                  <button @click="addWorkingStateToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
-                    + Add
-                  </button>
-                </div>
-                <div class="space-y-1.5 max-h-20 overflow-y-auto">
-                  <div v-for="(state, index) in customTemplateForm.workingStates" :key="`state-${index}`" class="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100">
-                    <span class="text-xs text-slate-700 font-medium">{{ state.name || `State ${index + 1}` }}</span>
-                    <div class="flex gap-1">
-                      <button @click="editWorkingState(index)" class="text-blue-500 hover:text-blue-700 text-xs">✏️</button>
-                      <button @click="removeWorkingStateFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">✕</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Variables -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Variables</span>
-                  <button @click="addVariableToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
-                    + Add
-                  </button>
-                </div>
-                <div class="space-y-1.5 max-h-24 overflow-y-auto">
-                  <div v-for="(variable, index) in customTemplateForm.variables" :key="index" class="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-100">
-                    <span class="text-xs text-slate-700 font-medium">{{ variable.name || `Variable ${index + 1}` }}</span>
-                    <div class="flex gap-1">
-                      <button @click="editVariable(index)" class="text-blue-500 hover:text-blue-700 text-xs">✏️</button>
-                      <button @click="removeVariableFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">✕</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Impacted Variables -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Impacted Variables</span>
-                </div>
-                <div class="space-y-1.5 max-h-24 overflow-y-auto">
-                  <div v-for="variable in customTemplateForm.variables.filter(v => v.name.trim())" :key="`impacted-${variable.name}`" class="flex items-center gap-2">
-                    <input
-                      :id="`impacted-${variable.name}`"
-                      type="checkbox"
-                      :checked="customTemplateForm.impactedVariables.includes(variable.name)"
-                      @change="toggleImpactedVariable(variable.name)"
-                      class="w-3 h-3 text-secondary bg-white border-slate-300 rounded focus:ring-0 focus:outline-none"
-                    />
-                    <label :for="`impacted-${variable.name}`" class="text-xs text-slate-700 cursor-pointer flex-1">
-                      {{ variable.name }}
-                      <span v-if="variable.description" class="text-slate-400 text-[10px] ml-1">
-                        - {{ variable.description }}
-                      </span>
-                    </label>
-                  </div>
-                  <div v-if="customTemplateForm.variables.length === 0" class="text-[10px] text-slate-400 italic">
-                    No variables defined yet
-                  </div>
-                </div>
-              </div>
-
-              <!-- APIs -->
-              <div class="border border-slate-100 rounded-lg p-3 bg-slate-50/30">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">APIs</span>
-                  <button @click="addApiToTemplate" class="text-secondary text-xs font-medium hover:text-secondary/80">
-                    + Add
-                  </button>
-                </div>
-                <div class="space-y-1 max-h-32 overflow-y-auto">
-                  <div v-for="(api, index) in customTemplateForm.apis" :key="api.id" class="flex items-center justify-between bg-white rounded px-2 py-1.5 border border-slate-200">
-                    <span class="text-xs text-slate-700 font-medium">{{ api.name || `API ${index + 1}` }}</span>
-                    <div class="flex gap-1">
-                      <button @click="editApi(index)" class="text-blue-500 hover:text-blue-700 text-xs">✏️</button>
-                      <button @click="removeApiFromTemplate(index)" class="text-red-400 hover:text-red-600 text-xs">✕</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-
-            </div>
-
-            <!-- Create Button -->
-            <button
-              @click="createCustomTemplate"
-              class="w-full py-2 bg-white hover:bg-secondary/[0.03] text-secondary border border-secondary/20 hover:border-secondary/40 rounded-md text-xs font-bold uppercase tracking-wider transition-all shadow-sm"
-            >
-              Create Template
-            </button>
-          </div>
         </div>
       </details>
 
@@ -1708,58 +1002,88 @@ const exportTemplate = (template: any) => {
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
         </summary>
 
-        <div class="px-4 pb-5 bg-slate-50/50 pt-2 space-y-3">
-          <div class="space-y-2 max-h-64 overflow-y-auto">
-            <div v-for="template in props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name))" :key="template.id" class="bg-white border border-slate-200 rounded-lg p-3">
-              <div class="flex items-start justify-between mb-2">
-                <div class="flex-1">
-                  <h4 class="text-sm font-semibold text-slate-800">{{ template.manifest.Name }}</h4>
-                  <p v-if="template.manifest.Description" class="text-xs text-slate-600 mt-1">{{ template.manifest.Description }}</p>
+        <div class="px-4 pb-5 bg-slate-50/50 pt-2 space-y-4">
+          <!-- Create New Template Button -->
+          <div class="border border-orange-200 rounded-lg p-4 bg-orange-50/30 hover:bg-orange-50/50 transition-colors cursor-pointer" @click="goToCreateTemplate">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
+                  <span class="material-symbols-outlined">add</span>
                 </div>
-                <button
-                  @click="openDeleteConfirm(template)"
-                  class="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors"
-                  title="Delete Template"
-                >
-                  <span class="material-symbols-outlined text-base">delete</span>
-                </button>
-              </div>
-
-              <div class="grid grid-cols-2 gap-2 text-xs">
-                <div class="bg-slate-50 rounded px-2 py-1">
-                  <span class="text-slate-500">Variables:</span>
-                  <span class="font-medium text-slate-700">{{ template.manifest.InternalVariables?.length || 0 }}</span>
-                </div>
-                <div class="bg-slate-50 rounded px-2 py-1">
-                  <span class="text-slate-500">APIs:</span>
-                  <span class="font-medium text-slate-700">{{ template.manifest.APIs?.length || 0 }}</span>
-                </div>
-                <div class="bg-slate-50 rounded px-2 py-1">
-                  <span class="text-slate-500">States:</span>
-                  <span class="font-medium text-slate-700">{{ template.manifest.WorkingStates?.length || 0 }}</span>
-                </div>
-                <div class="bg-slate-50 rounded px-2 py-1">
-                  <span class="text-slate-500">Modes:</span>
-                  <span class="font-medium text-slate-700">{{ template.manifest.Modes?.length || 0 }}</span>
+                <div>
+                  <div class="text-sm font-semibold text-orange-800">Create New Template</div>
+                  <div class="text-xs text-orange-600/70">Design a new device template</div>
                 </div>
               </div>
+              <span class="material-symbols-outlined text-orange-400">chevron_right</span>
+            </div>
+          </div>
 
-              <div class="mt-3 pt-2 border-t border-slate-100">
-                <button
-                  @click="exportTemplate(template)"
-                  class="text-xs px-3 py-2 bg-green-50 text-green-700 rounded hover:bg-green-100 transition-colors flex items-center gap-1"
-                  title="Export Template"
-                >
-                  <span class="material-symbols-outlined text-sm">download</span>
-                  Export
-                </button>
+          <!-- Existing Templates List -->
+          <div class="space-y-2">
+            <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Existing Templates</h4>
+            
+            <div v-if="props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name)).length > 0" class="grid grid-cols-1 gap-3">
+              <div v-for="template in props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name))" :key="template.id" class="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-md transition-shadow group">
+                <div class="flex items-start justify-between mb-3">
+                  <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-orange-50 flex items-center justify-center text-orange-600 group-hover:bg-orange-100 transition-colors">
+                      <span class="material-symbols-outlined">devices</span>
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-bold text-slate-800">{{ template.manifest.Name }}</h4>
+                      <p v-if="template.manifest.Description" class="text-xs text-slate-500 mt-0.5 line-clamp-1">{{ template.manifest.Description }}</p>
+                    </div>
+                  </div>
+                  <div class="flex gap-1">
+                    <button
+                      @click.stop="openDeleteConfirm(template)"
+                      class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete Template"
+                    >
+                      <span class="material-symbols-outlined text-sm">delete</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="grid grid-cols-4 gap-2 mb-3">
+                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
+                    <div class="text-[10px] text-slate-400 uppercase font-bold">Vars</div>
+                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.InternalVariables?.length || 0 }}</div>
+                  </div>
+                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
+                    <div class="text-[10px] text-slate-400 uppercase font-bold">APIs</div>
+                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.APIs?.length || 0 }}</div>
+                  </div>
+                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
+                    <div class="text-[10px] text-slate-400 uppercase font-bold">States</div>
+                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.WorkingStates?.length || 0 }}</div>
+                  </div>
+                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
+                    <div class="text-[10px] text-slate-400 uppercase font-bold">Modes</div>
+                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.Modes?.length || 0 }}</div>
+                  </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="pt-2 border-t border-slate-100 flex justify-end">
+                  <button
+                    @click="exportTemplate(template)"
+                    class="text-xs px-3 py-1.5 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors flex items-center gap-1"
+                    title="Export Template"
+                  >
+                    <span class="material-symbols-outlined text-sm">download</span>
+                    Export
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div v-if="props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name)).length === 0" class="text-center py-8">
+            <div v-else class="text-center py-8 border border-dashed border-slate-200 rounded-lg bg-slate-50/50">
               <div class="material-symbols-outlined text-slate-300 text-3xl mb-2">inventory_2</div>
               <p class="text-sm text-slate-500 mb-2">No custom templates yet</p>
-              <p class="text-xs text-slate-400">Switch to "Custom Template" mode in Add Device to create your first template.</p>
+              <p class="text-xs text-slate-400">Click "Create New Template" to get started.</p>
             </div>
           </div>
         </div>
@@ -1853,7 +1177,7 @@ const exportTemplate = (template: any) => {
                       <span class="text-xs text-red-600 truncate">
                         {{ condition.key }}
                       </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
                       <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
                         {{ condition.value || '*' }}
                       </span>
@@ -1876,7 +1200,7 @@ const exportTemplate = (template: any) => {
               <!-- IF Conditions (Antecedent) -->
               <div v-if="isSideRequired('if')" class="border border-orange-200 rounded-lg p-2 bg-orange-50/50">
                 <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-bold text-orange-600 uppercase tracking-wide">IF Conditions</span>
+                  <span class="text-xs font-bold text-orange-600 uppercase tracking-wide">A Conditions</span>
                   <button
                     @click="openConditionDialog('if')"
                     class="text-xs px-2 py-0.5 bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
@@ -1898,7 +1222,7 @@ const exportTemplate = (template: any) => {
                       <span class="text-xs text-orange-600 truncate">
                         {{ condition.key }}
                       </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
                       <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
                         {{ condition.value || '*' }}
                       </span>
@@ -1921,7 +1245,7 @@ const exportTemplate = (template: any) => {
               <!-- THEN Conditions (Consequent) -->
               <div v-if="isSideRequired('then')" class="border border-rose-200 rounded-lg p-2 bg-rose-50/50">
                 <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-bold text-rose-600 uppercase tracking-wide">THEN Conditions</span>
+                  <span class="text-xs font-bold text-rose-600 uppercase tracking-wide">B Conditions</span>
                   <button
                     @click="openConditionDialog('then')"
                     class="text-xs px-2 py-0.5 bg-rose-500 text-white rounded hover:bg-rose-600 transition-colors"
@@ -1943,7 +1267,7 @@ const exportTemplate = (template: any) => {
                       <span class="text-xs text-rose-600 truncate">
                         {{ condition.key }}
                       </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation) }}</span>
+                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
                       <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
                         {{ condition.value || '*' }}
                       </span>
@@ -2034,7 +1358,7 @@ const exportTemplate = (template: any) => {
             <label class="block text-xs font-medium text-slate-600 mb-1">Type</label>
             <select
               v-model="editingConditionData.targetType"
-              @change="editingConditionData.key = ''"
+              @change="handleTargetTypeChange"
               class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
               :disabled="!editingConditionData.deviceId"
             >
@@ -2044,7 +1368,8 @@ const exportTemplate = (template: any) => {
               </option>
             </select>
           </div>
-          <div>
+          <!-- Property: Only show for Variable or API types -->
+          <div v-if="editingConditionData.targetType !== 'state'">
             <label class="block text-xs font-medium text-slate-600 mb-1">Property</label>
             <select
               v-model="editingConditionData.key"
@@ -2071,14 +1396,25 @@ const exportTemplate = (template: any) => {
               v-model="editingConditionData.relation"
               class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm text-center"
             >
-              <option v-for="op in relationOperators" :key="op.value" :value="op.value">
+              <option v-for="op in filteredRelationOperators" :key="op.value" :value="op.value">
                 {{ op.label }}
               </option>
             </select>
           </div>
           <div class="col-span-2">
             <label class="block text-xs font-medium text-slate-600 mb-1">Value</label>
+            <select
+              v-if="editingConditionData.targetType === 'state' && ['in', 'not_in'].includes(currentRelation)"
+              v-model="editingConditionData.value"
+              class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm bg-white"
+            >
+              <option value="" hidden>Select State</option>
+              <option v-for="state in availableStates" :key="state" :value="state">
+                {{ state }}
+              </option>
+            </select>
             <input
+              v-else
               v-model="editingConditionData.value"
               class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
               placeholder="Value"
@@ -2091,8 +1427,11 @@ const exportTemplate = (template: any) => {
           <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Preview</div>
           <div class="font-mono text-xs text-slate-700 break-all">
             <span class="text-red-600">{{ getDeviceLabel(editingConditionData.deviceId || '-') }}</span>
-            <span class="text-slate-400">.</span>
-            <span class="text-orange-600">{{ editingConditionData.key || '-' }}</span>
+            <!-- Only show .key for Variable and API types -->
+            <template v-if="editingConditionData.targetType !== 'state'">
+              <span class="text-slate-400">.</span>
+              <span class="text-orange-600">{{ editingConditionData.key || '-' }}</span>
+            </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
               <span class="text-red-600">"{{ editingConditionData.value || '-' }}"</span>
@@ -2113,343 +1452,6 @@ const exportTemplate = (template: any) => {
           class="px-4 py-1.5 text-xs font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors"
         >
           {{ editingConditionIndex >= 0 ? 'Update' : 'Add' }}
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Variable Dialog -->
-  <div v-if="showVariableDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showVariableDialog = false">
-    <div class="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" @click.stop>
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-lg font-semibold text-secondary">
-          {{ editingVariableIndex >= 0 ? 'Edit Variable' : 'Add Variable' }}
-        </h3>
-        <button @click="showVariableDialog = false" class="text-slate-400 hover:text-secondary transition-colors">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-
-      <div class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
-            <input
-              v-model="editingVariableData.name"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="Variable name"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
-            <input
-              v-model="editingVariableData.description"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="Description"
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Trust</label>
-            <select
-              v-model="editingVariableData.trust"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Privacy</label>
-            <select
-              v-model="editingVariableData.privacy"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="public">Public</option>
-              <option value="private">Private</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Lower Bound</label>
-            <input
-              v-model.number="editingVariableData.lowerBound"
-              type="number"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="0"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Upper Bound</label>
-            <input
-              v-model.number="editingVariableData.upperBound"
-              type="number"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="100"
-            />
-          </div>
-        </div>
-
-        <div class="flex items-center space-x-4">
-          <label class="flex items-center">
-            <input
-              v-model="editingVariableData.isInside"
-              type="checkbox"
-              class="w-4 h-4 text-secondary bg-gray-100 border-gray-300 rounded focus:ring-secondary"
-            />
-            <span class="ml-2 text-sm text-slate-700">Internal Variable</span>
-          </label>
-          <label class="flex items-center">
-            <input
-              v-model="editingVariableData.publicVisible"
-              type="checkbox"
-              class="w-4 h-4 text-secondary bg-gray-100 border-gray-300 rounded focus:ring-secondary"
-            />
-            <span class="ml-2 text-sm text-slate-700">Public Visible</span>
-          </label>
-        </div>
-      </div>
-
-      <div class="flex justify-end space-x-3 mt-6">
-        <button
-          @click="showVariableDialog = false"
-          class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-md hover:bg-slate-200"
-        >
-          Cancel
-        </button>
-        <button
-          @click="confirmSaveVariable"
-          class="px-4 py-2 text-sm font-medium text-white bg-purple-600 border border-transparent rounded-lg hover:bg-purple-700 transition-all"
-        >
-          {{ editingVariableIndex >= 0 ? 'Update' : 'Add' }} Variable
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Working State Dialog -->
-  <div v-if="showWorkingStateDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showWorkingStateDialog = false">
-    <div class="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" @click.stop>
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-lg font-semibold text-secondary">
-          {{ editingWorkingStateIndex >= 0 ? 'Edit Working State' : 'Add Working State' }}
-        </h3>
-        <button @click="showWorkingStateDialog = false" class="text-slate-400 hover:text-secondary transition-colors">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-
-      <div class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
-            <input
-              v-model="editingWorkingStateData.name"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="State name"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
-            <input
-              v-model="editingWorkingStateData.description"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="Description"
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Trust</label>
-            <select
-              v-model="editingWorkingStateData.trust"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Privacy</label>
-            <select
-              v-model="editingWorkingStateData.privacy"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="public">Public</option>
-              <option value="private">Private</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Invariant</label>
-          <input
-            v-model="editingWorkingStateData.invariant"
-            class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            placeholder="true"
-          />
-        </div>
-      </div>
-
-      <div class="flex justify-end space-x-3 mt-6">
-        <button
-          @click="showWorkingStateDialog = false"
-          class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-md hover:bg-slate-200"
-        >
-          Cancel
-        </button>
-        <button
-          @click="confirmSaveWorkingState"
-          class="px-4 py-2 text-sm font-medium text-white bg-purple-600 border border-transparent rounded-lg hover:bg-purple-700 transition-all"
-        >
-          {{ editingWorkingStateIndex >= 0 ? 'Update' : 'Add' }} State
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- API Dialog -->
-  <div v-if="showApiDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showApiDialog = false">
-    <div class="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl" @click.stop>
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-lg font-semibold text-secondary">
-          {{ editingApiIndex >= 0 ? 'Edit API' : 'Add API' }}
-        </h3>
-        <button @click="showApiDialog = false" class="text-slate-400 hover:text-secondary transition-colors">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-
-      <div class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
-            <input
-              v-model="editingApiData.name"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="API name"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
-            <input
-              v-model="editingApiData.description"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-              placeholder="Description"
-            />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Start State</label>
-            <select
-              v-model="editingApiData.startState"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="" hidden>Select state</option>
-              <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
-                {{ state.name }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">End State</label>
-            <select
-              v-model="editingApiData.endState"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="" hidden>Select state</option>
-              <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
-                {{ state.name }}
-              </option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Trigger</label>
-            <select
-              v-model="editingApiData.trigger"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
-            >
-              <option value="user">User Trigger</option>
-              <option value="auto">Auto Trigger</option>
-              <option value="event">Event Trigger</option>
-            </select>
-          </div>
-          <div class="flex items-center">
-            <label class="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                v-model="editingApiData.signal"
-                class="w-4 h-4 text-secondary rounded"
-              />
-              Is Signal API
-            </label>
-          </div>
-        </div>
-
-        <!-- Assignments -->
-        <div>
-          <div class="flex items-center justify-between mb-2">
-            <label class="text-sm font-medium text-slate-700">Assignments</label>
-            <button
-              @click="editingApiData.assignments.push({variableName: '', changeRate: ''})"
-              class="text-xs text-secondary hover:text-secondary/80"
-            >
-              + Add Assignment
-            </button>
-          </div>
-          <div class="space-y-2 max-h-32 overflow-y-auto">
-            <div v-for="(assignment, index) in editingApiData.assignments" :key="index" class="flex items-center gap-2">
-              <select
-                v-model="assignment.variableName"
-                class="flex-1 px-2 py-1.5 border border-slate-200 rounded text-xs"
-              >
-                <option value="">Select variable</option>
-                <option v-for="v in customTemplateForm.variables.filter(v => v.name.trim())" :key="v.name" :value="v.name">
-                  {{ v.name }}
-                </option>
-              </select>
-              <input
-                v-model="assignment.changeRate"
-                class="w-20 px-2 py-1.5 border border-slate-200 rounded text-xs"
-                placeholder="Change rate"
-              />
-              <button
-                @click="editingApiData.assignments.splice(index, 1)"
-                class="p-1 text-red-400 hover:text-red-600"
-              >
-                <span class="material-symbols-outlined text-sm">close</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex justify-end space-x-3 mt-6">
-        <button
-          @click="showApiDialog = false"
-          class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-md hover:bg-slate-200"
-        >
-          Cancel
-        </button>
-        <button
-          @click="confirmSaveApi"
-          class="px-4 py-2 text-sm font-medium text-white bg-purple-600 border border-transparent rounded-lg hover:bg-purple-700 transition-all"
-        >
-          {{ editingApiIndex >= 0 ? 'Update' : 'Add' }} API
         </button>
       </div>
     </div>
