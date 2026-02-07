@@ -2,9 +2,10 @@ package cn.edu.nju.Iot_Verify.po;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "device_rule")
+@Table(name = "rules")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -12,25 +13,28 @@ import lombok.*;
 public class RulePo {
 
     @Id
-    @Column(length = 100)
-    private String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-    @Column(name = "user_id", nullable = false)
+    @Column(nullable = false)
     private Long userId;
 
-    @Column(name = "sources_json", columnDefinition = "JSON", nullable = false)
-    private String sourcesJson;
+    @Column(name = "conditions_json", columnDefinition = "JSON")
+    private String conditionsJson;
 
-    @Column(name = "to_id", nullable = false, length = 100)
-    private String toId;
+    @Column(name = "command_json", columnDefinition = "JSON")
+    private String commandJson;
 
-    @Column(name = "to_api", nullable = false, length = 255)
-    private String toApi;
+    @Column(name = "rule_string", columnDefinition = "TEXT")
+    private String ruleString;
 
-    @Column(name = "template_label", length = 255)
-    private String templateLabel;
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
 }
-
-
-
-

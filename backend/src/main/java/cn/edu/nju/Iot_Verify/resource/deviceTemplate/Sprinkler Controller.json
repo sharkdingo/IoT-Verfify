@@ -1,0 +1,48 @@
+{
+	"Name": "Sprinkler Controller",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["Valve"],
+	"InitState": "closed",
+	"WorkingStates": [
+		{
+			"Name": "closed",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "open",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "close",
+			"StartState": "",
+			"EndState": "closed",
+			"Trigger": null,
+			"s": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "open",
+			"StartState": "",
+			"EndState": "open",
+			"Trigger": null,
+			"s": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

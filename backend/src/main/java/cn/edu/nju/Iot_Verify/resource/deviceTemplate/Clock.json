@@ -1,0 +1,41 @@
+{
+	"Name": "Clock",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "time",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 23,
+			"NaturalChangeRate": "1"
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+		{
+			"Name": "reset",
+			"Trigger": {
+				"Attribute": "time",
+				"Relation": "=",
+				"Value": "23"
+			},
+			"Assignments": [
+				{
+					"Attribute": "time",
+					"Value": "0"
+				}
+			],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+	]
+}

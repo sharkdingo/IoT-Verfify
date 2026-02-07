@@ -1,6 +1,12 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.*;
+import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 
 import java.util.List;
 

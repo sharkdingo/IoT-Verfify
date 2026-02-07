@@ -2,7 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
-import cn.edu.nju.Iot_Verify.dto.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;

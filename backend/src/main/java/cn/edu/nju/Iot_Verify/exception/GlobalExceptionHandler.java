@@ -69,7 +69,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleValidationException(ValidationException e) {
         log.warn("Validation error: {}", e.getMessage());
         return ResponseEntity
-                .status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .status(HttpStatus.BAD_REQUEST)  // 400 Bad Request
                 .body(Result.validationError(e.getMessage()));
     }
 
@@ -105,8 +105,8 @@ public class GlobalExceptionHandler {
                 .orElse("Validation failed");
         log.warn("Validation failed: {}", message);
         return ResponseEntity
-                .status(HttpStatus.UNPROCESSABLE_ENTITY)
-                .body(Result.validationError(message));
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Result.badRequest(message));
     }
 
     @ExceptionHandler(AuthenticationException.class)

@@ -1,13 +1,23 @@
 package cn.edu.nju.Iot_Verify.controller;
 
-import cn.edu.nju.Iot_Verify.dto.*;
+import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/board")
 @RequiredArgsConstructor
@@ -21,7 +31,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/nodes")
-    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @RequestBody List<DeviceNodeDto> nodes) {
+    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @Valid @RequestBody List<DeviceNodeDto> nodes) {
         return Result.success(boardService.saveNodes(userId, nodes));
     }
 
@@ -31,7 +41,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/edges")
-    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @RequestBody List<DeviceEdgeDto> edges) {
+    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @Valid @RequestBody List<DeviceEdgeDto> edges) {
         return Result.success(boardService.saveEdges(userId, edges));
     }
 
@@ -41,7 +51,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/specs")
-    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @RequestBody List<SpecificationDto> specs) {
+    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @Valid @RequestBody List<SpecificationDto> specs) {
         return Result.success(boardService.saveSpecs(userId, specs));
     }
 
@@ -51,7 +61,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/rules")
-    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @RequestBody List<RuleDto> rules) {
+    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @Valid @RequestBody List<RuleDto> rules) {
         return Result.success(boardService.saveRules(userId, rules));
     }
 
@@ -61,7 +71,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/layout")
-    public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @RequestBody BoardLayoutDto layout) {
+    public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @Valid @RequestBody BoardLayoutDto layout) {
         return Result.success(boardService.saveLayout(userId, layout));
     }
 
@@ -71,7 +81,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/active")
-    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @RequestBody BoardActiveDto active) {
+    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @Valid @RequestBody BoardActiveDto active) {
         return Result.success(boardService.saveActive(userId, active));
     }
 
@@ -81,20 +91,19 @@ public class BoardStorageController {
     }
 
     @PostMapping("/templates")
-    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @RequestBody DeviceTemplateDto dto) {
+    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @Valid @RequestBody DeviceTemplateDto dto) {
         return Result.success(boardService.addDeviceTemplate(userId, dto));
     }
 
     @DeleteMapping("/templates/{id}")
     public Result<Void> deleteTemplate(@CurrentUser Long userId, @PathVariable String id) {
         try {
-            System.out.println("Delete template request: userId=" + userId + ", templateId=" + id);
+            log.info("Delete template request: userId={}, templateId={}", userId, id);
             boardService.deleteDeviceTemplate(userId, id);
-            System.out.println("Template deleted successfully");
+            log.info("Template deleted successfully: templateId={}", id);
             return Result.success(null);
         } catch (Exception e) {
-            System.err.println("Error in deleteTemplate controller: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error in deleteTemplate controller: templateId={}", id, e);
             return Result.error(500, "Failed to delete template: " + e.getMessage());
         }
     }

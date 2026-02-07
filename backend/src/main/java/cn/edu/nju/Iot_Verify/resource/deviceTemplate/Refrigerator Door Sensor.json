@@ -1,0 +1,24 @@
+{
+	"Name": "Refrigerator Door Sensor",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "contact",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"Values": ["closed", "open"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

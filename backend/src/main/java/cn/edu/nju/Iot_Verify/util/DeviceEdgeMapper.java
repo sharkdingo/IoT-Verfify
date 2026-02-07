@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.util;
 
-import cn.edu.nju.Iot_Verify.dto.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.po.DeviceEdgePo;
 
 public class DeviceEdgeMapper {

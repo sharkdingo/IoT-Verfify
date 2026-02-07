@@ -1,0 +1,485 @@
+{
+  "info": {
+    "name": "IoT-Verify Complete Workflow",
+    "description": "Complete workflow: Register -> Login -> Create Template -> Create Device -> Create Rule -> Create Spec -> Verify with NuSMV",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variableDefinitions": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "phone",
+      "value": "13800138001",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "testuser1",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "123456",
+      "type": "string"
+    },
+    {
+      "key": "templateId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "deviceId1",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "deviceId2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ruleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "specId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/register",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{phone}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "description": "Register a new user. Note: Registration does not return a token, you must login after successful registration."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('userId', jsonData.data.userId);\n    console.log('User registered successfully. UserId: ' + jsonData.data.userId);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/login",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{phone}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "description": "Login and get JWT token"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('token', jsonData.data.token);\n    pm.collectionVariables.set('userId', jsonData.data.userId);\n    console.log('Login successful. Token: ' + jsonData.data.token.substring(0, 20) + '...');\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Device Template",
+      "item": [
+        {
+          "name": "Create AC Cooler Template",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/board/templates",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"AC Cooler\",\n  \"manifest\": {\n    \"Name\": \"AC Cooler\",\n    \"Description\": \"Air conditioner for cooling\",\n    \"Modes\": [\"Cooling\", \"Off\"],\n    \"InternalVariables\": [\n      {\n        \"Name\": \"temperature\",\n        \"Description\": \"Current temperature\",\n        \"IsInside\": false,\n        \"PublicVisible\": true,\n        \"Trust\": \"untrusted\",\n        \"Privacy\": \"private\",\n        \"LowerBound\": 16,\n        \"UpperBound\": 30,\n        \"InitialValue\": 24,\n        \"NaturalChangeRate\": \"[-1, 1]\"\n      }\n    ],\n    \"ImpactedVariables\": [\"temperature\"],\n    \"InitState\": \"Off\",\n    \"WorkingStates\": [\n      {\n        \"Name\": \"Off\",\n        \"Description\": \"Device is off\",\n        \"Trust\": \"trusted\",\n        \"Privacy\": \"public\",\n        \"Invariant\": \"true\",\n        \"Dynamics\": [\n          {\n            \"VariableName\": \"temperature\",\n            \"ChangeRate\": \"0\"\n          }\n        ]\n      },\n      {\n        \"Name\": \"Cooling\",\n        \"Description\": \"Device is cooling\",\n        \"Trust\": \"trusted\",\n        \"Privacy\": \"public\",\n        \"Invariant\": \"true\",\n        \"Dynamics\": [\n          {\n            \"VariableName\": \"temperature\",\n            \"ChangeRate\": \"-1\"\n          }\n        ]\n      }\n    ],\n    \"Transitions\": [],\n    \"APIs\": [\n      {\n        \"Name\": \"turnOn\",\n        \"Description\": \"Turn on the AC\",\n        \"Signal\": true,\n        \"StartState\": \"Off\",\n        \"EndState\": \"Cooling\",\n        \"Trigger\": null,\n        \"Assignments\": []\n      },\n      {\n        \"Name\": \"turnOff\",\n        \"Description\": \"Turn off the AC\",\n        \"Signal\": true,\n        \"StartState\": \"Cooling\",\n        \"EndState\": \"Off\",\n        \"Trigger\": null,\n        \"Assignments\": []\n      }\n    ]\n  }\n}"
+            },
+            "description": "Create AC Cooler device template based on original project manifest"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('templateId', jsonData.data.id);\n    console.log('Template created. Id: ' + jsonData.data.id);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Templates",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/board/templates",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Device Nodes",
+      "item": [
+        {
+          "name": "Create AC Device Instance",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/board/nodes",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"id\": \"device-001\",\n    \"templateName\": \"AC Cooler\",\n    \"label\": \"AC Living Room\",\n    \"position\": {\n      \"x\": 100,\n      \"y\": 200\n    },\n    \"state\": \"Off\",\n    \"width\": 150,\n    \"height\": 100\n  }\n]"
+            },
+            "description": "Create device instance on the board"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('deviceId1', jsonData.data[0].id);\n    console.log('Device created. Id: ' + jsonData.data[0].id);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Nodes",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/board/nodes",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Rules",
+      "item": [
+        {
+          "name": "Create IFTTT Rule",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/board/rules",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"id\": \"rule-001\",\n    \"sources\": [\n      {\n        \"fromId\": \"AC Living Room\",\n        \"fromLabel\": \"AC Living Room\",\n        \"targetType\": \"variable\",\n        \"property\": \"temperature\",\n        \"relation\": \">\",\n        \"value\": \"28\"\n      }\n    ],\n    \"toId\": \"device-001\",\n    \"toApi\": \"turnOn\",\n    \"templateLabel\": \"AC Cooler\"\n  }\n]"
+            },
+            "description": "Create IFTTT rule: IF temperature > 28 THEN turn on AC"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('ruleId', jsonData.data[0].id);\n    console.log('Rule created. Id: ' + jsonData.data[0].id);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Rules",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/board/rules",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Specifications",
+      "item": [
+        {
+          "name": "Create Safety Spec",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/board/specs",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"id\": \"spec-001\",\n    \"templateId\": \"1\",\n    \"templateLabel\": \"AC Cooler\",\n    \"aConditions\": [\n      {\n        \"id\": \"cond-001\",\n        \"side\": \"a\",\n        \"deviceId\": \"device-001\",\n        \"deviceLabel\": \"AC Living Room\",\n        \"targetType\": \"state\",\n        \"key\": \"state\",\n        \"relation\": \"=\",\n        \"value\": \"Cooling\"\n      }\n    ],\n    \"ifConditions\": [],\n    \"thenConditions\": []\n  }\n]"
+            },
+            "description": "Create spec: AC should NEVER be in Cooling state (will detect violation if temp > 28 triggers turnOn)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    pm.collectionVariables.set('specId', jsonData.data[0].id);\n    console.log('Specification created. Id: ' + jsonData.data[0].id);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Response Spec",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/board/specs",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"id\": \"spec-002\",\n    \"templateId\": \"5\",\n    \"templateLabel\": \"AC Cooler\",\n    \"aConditions\": [],\n    \"ifConditions\": [\n      {\n        \"id\": \"cond-if-001\",\n        \"side\": \"if\",\n        \"deviceId\": \"device-001\",\n        \"deviceLabel\": \"AC Living Room\",\n        \"targetType\": \"variable\",\n        \"key\": \"temperature\",\n        \"relation\": \">\",\n        \"value\": \"28\"\n      }\n    ],\n    \"thenConditions\": [\n      {\n        \"id\": \"cond-then-001\",\n        \"side\": \"then\",\n        \"deviceId\": \"device-001\",\n        \"deviceLabel\": \"AC Living Room\",\n        \"targetType\": \"state\",\n        \"key\": \"state\",\n        \"relation\": \"=\",\n        \"value\": \"Cooling\"\n      }\n    ]\n  }\n]"
+            },
+            "description": "Create spec: IF temperature > 28 THEN AC should be in Cooling state"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {\n    var jsonData = pm.response.json();\n    console.log('Response spec created. Id: ' + jsonData.data[0].id);\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Specs",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/board/specs",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. NuSMV Verification",
+      "item": [
+        {
+          "name": "Execute Verification (Save Trace)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/verify",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"devices\": [\n    {\n      \"id\": \"device-001\",\n      \"templateName\": \"AC Cooler\",\n      \"label\": \"AC Living Room\",\n      \"position\": {\n        \"x\": 100,\n        \"y\": 200\n      },\n      \"state\": \"Off\",\n      \"currentStateTrust\": \"trusted\",\n      \"variables\": [\n        {\n          \"name\": \"temperature\",\n          \"value\": \"24\",\n          \"trust\": \"untrusted\"\n        }\n      ],\n      \"privacies\": [\n        {\n          \"name\": \"temperature\",\n          \"privacy\": \"private\"\n        }\n      ]\n    }\n  ],\n  \"rules\": [\n    {\n      \"id\": \"rule-001\",\n      \"sources\": [\n        {\n          \"fromId\": \"AC Living Room\",\n          \"fromLabel\": \"AC Living Room\",\n          \"targetType\": \"variable\",\n          \"property\": \"temperature\",\n          \"relation\": \">\",\n          \"value\": \"28\"\n        }\n      ],\n      \"toId\": \"device-001\",\n      \"toApi\": \"turnOn\",\n      \"templateLabel\": \"AC Cooler\",\n      \"privacyDeviceId\": null,\n      \"privacyContent\": null\n    }\n  ],\n  \"specs\": [\n    {\n      \"id\": \"spec-001\",\n      \"aConditions\": [\n        {\n          \"id\": \"cond-001\",\n          \"side\": \"a\",\n          \"deviceId\": \"device-001\",\n          \"deviceLabel\": \"AC Living Room\",\n          \"targetType\": \"state\",\n          \"key\": \"state\",\n          \"relation\": \"=\",\n          \"value\": \"Cooling\"\n        }\n      ],\n      \"ifConditions\": [],\n      \"thenConditions\": []\n    }\n  ],\n  \"saveTrace\": true\n}"
+            },
+            "description": "Execute NuSMV verification. This will:\n1. Generate NuSMV model from devices/rules/specs\n2. Execute NuSMV\n3. Check if specs are satisfied\n4. If violated, generate counterexample trace\n5. Save trace to database (because saveTrace=true)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\nif (jsonData.data) {\n    console.log('=== Verification Result ===');\n    console.log('Safe: ' + jsonData.data.safe);\n    console.log('Spec Results: ' + JSON.stringify(jsonData.data.specResults));\n    console.log('Traces Count: ' + (jsonData.data.traces ? jsonData.data.traces.length : 0));\n    console.log('\\n=== Check Logs ===');\n    jsonData.data.checkLogs.forEach(log => console.log(log));\n    \n    if (!jsonData.data.safe) {\n        console.log('\\n=== Counterexample Detected! ===');\n        console.log('The system found a violation of the spec.');\n        console.log('Trace has ' + jsonData.data.traces[0].states.length + ' states.');\n    } else {\n        console.log('\\n=== All specs satisfied ===');\n        console.log('No counterexample found.');\n    }\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Traces",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/verify/traces",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "description": "Get all traces saved in database"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\nif (jsonData.data && jsonData.data.length > 0) {\n    console.log('\\n=== Saved Traces ===');\n    jsonData.data.forEach((trace, index) => {\n        console.log('Trace ' + (index + 1) + ':');\n        console.log('  ID: ' + trace.id);\n        console.log('  Violated Spec: ' + trace.violatedSpecId);\n        console.log('  States: ' + trace.states.length);\n        console.log('  Created: ' + trace.createdAt);\n    });\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Trace",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/verify/traces/1",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "description": "Get a specific trace by ID"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();\nif (jsonData.data && jsonData.data.states) {\n    console.log('\\n=== Trace Details ===');\n    console.log('Violated Spec: ' + jsonData.data.violatedSpecId);\n    console.log('States: ' + jsonData.data.states.length);\n    \n    jsonData.data.states.forEach((state, index) => {\n        console.log('\\nState ' + state.stateIndex + ':');\n        state.devices.forEach(device => {\n            console.log('  ' + device.deviceLabel + ':');\n            console.log('    State: ' + device.state);\n            device.variables.forEach(v => {\n                console.log('    ' + v.name + ': ' + v.value + ' (' + v.trust + ')');\n            });\n        });\n    });\n}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Cleanup",
+      "item": [
+        {
+          "name": "Delete Trace",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/verify/traces/1",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/logout",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

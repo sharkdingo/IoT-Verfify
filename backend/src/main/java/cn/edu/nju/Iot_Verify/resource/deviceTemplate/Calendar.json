@@ -1,0 +1,32 @@
+{
+	"Name": "Calendar",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "date",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"Values": ["weekdays", "weekend", "MothersDay"]
+		},
+		{
+			"Name": "season",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"Values": ["spring", "summer", "autumn", "winter"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+	]
+}

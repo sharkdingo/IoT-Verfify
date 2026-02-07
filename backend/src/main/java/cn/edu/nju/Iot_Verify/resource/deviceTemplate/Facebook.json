@@ -1,0 +1,52 @@
+{
+	"Name": "Facebook",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["State"],
+	"InitState": "idle",
+	"WorkingStates": [
+		{
+			"Name": "idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "posting",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "posted",
+			"StartState": "posting",
+			"EndState": "idle",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "posting"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "post",
+			"StartState": "idle",
+			"EndState": "posting",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

@@ -1,0 +1,202 @@
+{
+	"Name": "Air Conditioner",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"ImpactedVariables": ["temperature", "humidity"],
+	"Modes": ["HvacMode"],
+	"InitState": "auto",
+	"WorkingStates": [
+		{
+			"Name": "auto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "cool",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "dry",
+			"Dynamics": [
+				{
+					"VariableName": "humidity",
+					"ChangeRate": "-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "coolClean",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "dryClean",
+			"Dynamics": [
+				{
+					"VariableName": "humidity",
+					"ChangeRate": "-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "fanOnly",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				},
+				{
+					"VariableName": "humidity",
+					"ChangeRate": "-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "heatClean",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "auto",
+			"StartState": "",
+			"EndState": "auto",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "cool",
+			"StartState": "",
+			"EndState": "cool",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "dry",
+			"StartState": "",
+			"EndState": "dry",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "coolClean",
+			"StartState": "",
+			"EndState": "coolClean",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "dryClean",
+			"StartState": "",
+			"EndState": "dryClean",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "fanOnly",
+			"StartState": "",
+			"EndState": "fanOnly",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "heat",
+			"StartState": "",
+			"EndState": "heat",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "heatClean",
+			"StartState": "",
+			"EndState": "heatClean",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

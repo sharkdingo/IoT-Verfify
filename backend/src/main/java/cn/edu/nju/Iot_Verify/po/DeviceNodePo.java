@@ -39,4 +39,14 @@ public class DeviceNodePo {
 
     @Column(nullable = false)
     private Integer height;
+
+    // 运行时状态
+    @Column(name = "current_state_trust", length = 50)
+    private String currentStateTrust;
+
+    @Column(name = "variables_json", columnDefinition = "JSON")
+    private String variablesJson;
+
+    @Column(name = "privacies_json", columnDefinition = "JSON")
+    private String privaciesJson;
 }

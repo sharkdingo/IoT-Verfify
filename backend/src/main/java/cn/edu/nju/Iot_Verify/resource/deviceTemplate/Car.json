@@ -1,0 +1,23 @@
+{
+	"Name": "Car",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "location",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"Values": ["garage", "away"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+	]
+}

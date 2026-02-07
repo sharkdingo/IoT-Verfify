@@ -1,0 +1,24 @@
+{
+	"Name": "Motion Detector",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "motion",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "private",
+			"Values": ["active", "inactive"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

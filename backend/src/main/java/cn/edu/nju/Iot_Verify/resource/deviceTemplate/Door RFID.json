@@ -1,0 +1,23 @@
+{
+	"Name": "Door RFID",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "RFID",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "private",
+			"Values": ["authorized", "not authorized"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+	]
+}

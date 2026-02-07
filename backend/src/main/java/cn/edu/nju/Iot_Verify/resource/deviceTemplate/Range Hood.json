@@ -1,0 +1,48 @@
+{
+	"Name": "Range Hood",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["MachineState"],
+	"InitState": "off",
+	"WorkingStates": [
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

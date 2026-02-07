@@ -1,0 +1,7 @@
+new Json files
+从smartthings中抽取capabilities reference信息
+设备由capabilities信息组成
+生成了一套新的Json格式
+device.mode.state
+例如：Thermostat有thermostatFanMode和thermostatMode两个变量
+thermostatFanMode和thermostatMode各自有不同的state状态

@@ -1,0 +1,48 @@
+{
+	"Name": "Door",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["LockState"],
+	"InitState": "locked",
+	"WorkingStates": [
+		{
+			"Name": "locked",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "unlocked",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "lock",
+			"StartState": "",
+			"EndState": "locked",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "unlock",
+			"StartState": "",
+			"EndState": "unlocked",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

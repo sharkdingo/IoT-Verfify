@@ -1,0 +1,24 @@
+{
+	"Name": "Soil Moisture Sensor",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "water",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"Values": ["dry", "wet"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

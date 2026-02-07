@@ -1,0 +1,37 @@
+{
+	"Name": "Electricity Meter Sensor",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "energy",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		},
+		{
+			"Name": "power",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

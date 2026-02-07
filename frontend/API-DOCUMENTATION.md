@@ -284,6 +284,238 @@ interface StreamCommand {
   type: string;              // e.g., "REFRESH_DATA"
   payload?: Record<string, any>;  // Command parameters
 }
+
+---
+
+## Verification API
+
+### File: `src/api/verify.ts`
+
+The verification API handles IoT system verification using NuSMV model checking.
+
+#### Functions
+
+| Function | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| `verify(request)` | POST | `/verify` | Execute verification |
+| `getTraces()` | GET | `/verify/traces` | Get all user traces |
+| `getTrace(id)` | GET | `/verify/traces/{id}` | Get single trace |
+| `deleteTrace(id)` | DELETE | `/verify/traces/{id}` | Delete trace |
+
+#### Data Type Definitions
+
+```typescript
+// Rule with IF-THEN structure
+interface RuleDto {
+  id?: string;
+  sources: SourceEntryDto[];  // IF conditions (triggers)
+  toId: string;              // Target device ID
+  toApi: string;              // API to call on target
+  templateLabel?: string;
+  privacyDeviceId?: string;
+  privacyContent?: string;
+}
+
+// IF condition entry
+interface SourceEntryDto {
+  fromId: string;           // Trigger device label
+  fromLabel?: string;       // Display label
+  targetType: 'api' | 'variable';
+  fromApi?: string;         // For targetType="api"
+  property?: string;        // For targetType="variable"
+  relation?: string;        // "=", ">", "<", etc.
+  value?: string;           // Condition value
+}
+
+// Specification with seven types
+interface SpecificationDto {
+  id: string;
+  templateId: string;        // "1"-"7" for spec types
+  templateLabel: string;
+  aConditions: SpecConditionDto[];    // For always/eventually/never
+  ifConditions: SpecConditionDto[];     // For B-type specs (IF)
+  thenConditions: SpecConditionDto[];   // For B-type specs (THEN)
+}
+
+// Specification condition
+interface SpecConditionDto {
+  id: string;
+  side: 'a' | 'if' | 'then';
+  deviceId: string;
+  deviceLabel: string;
+  targetType: 'state' | 'variable' | 'api';
+  key: string;               // State/variable/API name
+  relation: string;
+  value: string;
+}
+
+// Seven Specification Types Mapping
+type SpecTemplateType = 
+  | 'always'      // templateId: "1" - AG(A) - A holds forever
+  | 'eventually'  // templateId: "2" - AF(A) - A will happen later
+  | 'never'       // templateId: "3" - AG !(A) - A never happens
+  | 'immediate'   // templateId: "4" - AG(A -> AX(B)) - A→B at same time
+  | 'response'    // templateId: "5" - AG(A -> AF(B)) - A→◇B eventually
+  | 'persistence' // templateId: "6" - LTL G(A -> F G(B)) - A→□B forever
+  | 'safety'      // templateId: "7" - AG(untrusted -> !A) - untrusted constraint
+```
+
+#### verify Function
+
+```typescript
+interface VerificationRequest {
+  devices: DeviceNodeDto[];
+  rules: RuleDto[];
+  specs: SpecificationDto[];
+  saveTrace: boolean;
+}
+
+interface VerificationResult {
+  safe: boolean;
+  traces: TraceDto[];
+  specResults: boolean[];
+  checkLogs: string[];
+  nusmvOutput: string;
+}
+
+export const verify = async (request: VerificationRequest): Promise<VerificationResult> => {
+  // POST /api/verify
+  // Returns: Result<VerificationResult>
+};
+```
+
+#### getTraces Function
+
+```typescript
+export const getTraces = async (): Promise<TraceDto[]> => {
+  // GET /api/verify/traces
+  // Returns: Result<TraceDto[]>
+};
+```
+
+#### getTrace Function
+
+```typescript
+export const getTrace = async (id: number): Promise<TraceDto | null> => {
+  // GET /api/verify/traces/{id}
+  // Returns: Result<TraceDto | null>
+};
+```
+
+#### deleteTrace Function
+
+```typescript
+export const deleteTrace = async (id: number): Promise<void> => {
+  // DELETE /api/verify/traces/{id}
+  // Returns: Result<void>
+};
+```
+
+#### Trace Type Definitions
+
+```typescript
+// frontend/src/types/trace.ts (new file)
+
+export interface TraceDto {
+  id: number;
+  userId: number;
+  violatedSpecId: string;
+  violatedSpecJson: string;
+  states: TraceStateDto[];
+  createdAt: string;  // ISO datetime
+}
+
+export interface TraceStateDto {
+  stateIndex: number;
+  devices: TraceDeviceDto[];
+}
+
+export interface TraceDeviceDto {
+  deviceId: string;
+  deviceLabel: string;
+  templateName: string;
+  newState: string;
+  variables: TraceVariableDto[];
+  trustPrivacy: TraceTrustPrivacyDto[];
+  privacies: TraceTrustPrivacyDto[];
+}
+
+export interface TraceVariableDto {
+  name: string;
+  value: string;
+  trust: string;  // "trusted" or "untrusted"
+}
+
+export interface TraceTrustPrivacyDto {
+  name: string;
+  trust: boolean;   // true = trusted, false = untrusted
+  privacy: string;  // "private" or "public"
+}
+```
+
+#### Usage Example
+
+```typescript
+import verificationApi from '@/api/verify';
+
+// Execute verification
+const result = await verificationApi.verify({
+  devices: [
+    {
+      id: 'device-001',
+      templateName: 'AirConditioner',
+      label: 'AC Cooler',
+      position: { x: 100, y: 200 },
+      state: 'Off',
+      variables: [{ name: 'temperature', value: '24', trust: 'trusted' }],
+      privacies: [{ name: 'temperature', privacy: 'private' }]
+    }
+  ],
+  rules: [
+    {
+      id: 'rule-001',
+      sources: [
+        { fromId: 'AC Cooler', targetType: 'variable', property: 'temperature', relation: '>', value: '28' }
+      ],
+      toId: 'device-001',
+      toApi: 'turnOn'
+    }
+  ],
+  specs: [
+    {
+      id: 'spec-001',
+      aConditions: [
+        { deviceId: 'device-001', targetType: 'state', key: 'state', relation: '=', value: 'Cooling' }
+      ]
+    }
+  ],
+  saveTrace: true
+});
+
+if (!result.safe) {
+  // Display violation traces
+  result.traces.forEach(trace => {
+    console.log(`Violation: ${trace.violatedSpecId}`);
+    trace.states.forEach((state, index) => {
+      console.log(`State ${index}:`, state.devices);
+    });
+  });
+}
+```
+
+#### Test Scenarios
+
+**Safe Configuration (No Violation):**
+```typescript
+// Spec: state != Cooling, temp=24, trigger when temp > 28
+// Expected: safe: true, traces: []
+```
+
+**Unsafe Configuration (Violation Detected):**
+```typescript
+// Spec: state == Cooling, temp can rise, trigger when temp > 28
+// Expected: safe: false, traces contains counterexample
+```
 ```
 
 ---

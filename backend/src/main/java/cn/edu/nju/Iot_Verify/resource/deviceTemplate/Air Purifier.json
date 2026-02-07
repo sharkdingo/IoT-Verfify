@@ -1,0 +1,57 @@
+{
+	"Name": "Air Purifier",
+	"Description": "",
+	"InternalVariables": [],
+	"ImpactedVariables": ["airQuality", "carbonDioxide"],
+	"Modes": ["MachineState"],
+	"InitState": "on",
+	"WorkingStates": [
+		{
+			"Name": "on",
+			"Dynamics": [
+				{
+					"VariableName":"airQuality",
+					"ChangeRate":"-1"
+				},
+				{
+					"VariableName":"carbonDioxide",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

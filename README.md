@@ -671,6 +671,78 @@ curl -X POST http://localhost:8080/api/chat/completions \
 - Edge 是 Rule 的可视化表示，包含连线端点坐标
 - 前端维护 Rule 和 Edge 的同步关系，后端只负责存储
 
+### 验证接口
+
+| 方法 | 路径 | 说明 | 需要认证 |
+|------|------|------|----------|
+| POST | `/api/verify` | 执行 IoT 系统形式化验证 | 是 |
+| GET | `/api/verify/traces` | 获取用户所有验证轨迹 | 是 |
+| GET | `/api/verify/traces/{id}` | 获取单个验证轨迹 | 是 |
+| DELETE | `/api/verify/traces/{id}` | 删除验证轨迹 | 是 |
+
+#### 验证请求示例
+
+```bash
+curl -X POST http://localhost:8080/api/verify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [
+      {
+        "id": "device-001",
+        "templateName": "AirConditioner",
+        "label": "AC Cooler",
+        "position": {"x": 100, "y": 200},
+        "state": "Off",
+        "variables": [{"name": "temperature", "value": "24", "trust": "trusted"}],
+        "privacies": [{"name": "temperature", "privacy": "private"}]
+      }
+    ],
+    "rules": [
+      {
+        "sources": [{"fromId": "AC Cooler", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}],
+        "toId": "device-001",
+        "toApi": "turnOn"
+      }
+    ],
+    "specs": [
+      {
+        "aConditions": [{"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "=", "value": "Cooling"}]
+      }
+    ],
+    "saveTrace": true
+  }'
+```
+
+#### 验证结果示例
+
+```json
+{
+  "safe": false,
+  "traces": [...],
+  "specResults": [false],
+  "checkLogs": ["Generating NuSMV model...", "Specification violation detected!"],
+  "nusmvOutput": "..."
+}
+```
+
+**说明：**
+- `safe: true` 表示所有规格都满足
+- `safe: false` 表示发现违反规格的轨迹
+- `traces` 包含违反规格的 counterexample（反例轨迹）
+- `checkLogs` 包含验证过程的日志
+- `nusmvOutput` 包含原始的 NuSMV 输出
+
+#### NuSMV 规格语法
+
+| 规格类型 | 约束 | NuSMV 语法 |
+|---------|------|-----------|
+| A | 始终成立 | `CTLSPEC AG(condition)` |
+| A | 终将发生 | `CTLSPEC AF(condition)` |
+| A | 永不发生 | `CTLSPEC AG !(condition)` |
+| B | 同时发生 | `CTLSPEC AG((A) -> AX(B))` |
+| B | 随后发生 | `CTLSPEC AG((A) -> AF(B))` |
+
 ### 响应格式
 
 所有 API 响应使用统一包装格式：

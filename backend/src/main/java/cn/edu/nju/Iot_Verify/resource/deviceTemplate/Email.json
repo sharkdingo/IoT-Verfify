@@ -1,0 +1,70 @@
+{
+	"Name": "Email",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "receiveKey",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "private",
+			"Values": ["Key", "others"]
+		},
+		{
+			"Name": "receiveMail",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "private",
+			"Values": ["idle", "receive"]
+		}
+	],
+	"Modes": ["State"],
+	"InitState": "idle",
+	"WorkingStates": [
+		{
+			"Name": "idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "sending",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "sent",
+			"StartState": "sending",
+			"EndState": "idle",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "sending"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "send mail",
+			"StartState": "idle",
+			"EndState": "sending",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

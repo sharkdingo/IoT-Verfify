@@ -80,4 +80,23 @@ public final class JsonUtils {
             return Collections.emptyList();
         }
     }
+    
+    /**
+     * 将 JSON 字符串转换为指定类型的 List
+     * @param json JSON 字符串
+     * @param clazz 元素类型
+     * @param <T> 元素类型
+     * @return 转换后的 List，失败返回空 List
+     */
+    public static <T> List<T> fromJsonList(String json, Class<T> clazz) {
+        if (json == null || json.isBlank()) {
+            return Collections.emptyList();
+        }
+        try {
+            return MAPPER.readValue(json, MAPPER.getTypeFactory()
+                    .constructCollectionType(List.class, clazz));
+        } catch (JsonProcessingException e) {
+            return Collections.emptyList();
+        }
+    }
 }

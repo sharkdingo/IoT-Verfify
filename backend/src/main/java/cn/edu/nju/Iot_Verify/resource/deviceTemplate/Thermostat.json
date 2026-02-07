@@ -1,0 +1,283 @@
+{
+	"Name": "Thermostat",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "temperature",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		},
+		{
+			"Name": "thermostatOperatingState",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": false,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"Values": ["cooling", "fan only", "heating", "idle", "pending cool", "pending heat", "vent economizer"]
+		},
+		{
+			"Name": "thermostatSetpoint",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
+	"ImpactedVariables": ["temperature"],
+	"Modes": ["ThermostatFanMode", "ThermostatMode"],
+	"InitState": "auto;auto",
+	"WorkingStates": [
+		{
+			"Name": "auto;auto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "auto;cool",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "auto;emergency heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "auto;heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "auto;off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "circulate;auto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "circulate;cool",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "circulate;emergency heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "circulate;heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "circulate;off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on;auto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on;cool",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on;emergency heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on;heat",
+			"Dynamics": [
+				{
+					"VariableName":"temperature",
+					"ChangeRate":"1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "on;off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "fanAuto",
+			"StartState": "",
+			"EndState": "auto;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "fanCirculate",
+			"StartState": "",
+			"EndState": "circulate;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "fanOn",
+			"StartState": "",
+			"EndState": "on;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "auto",
+			"StartState": "",
+			"EndState": ";auto",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "cool",
+			"StartState": "",
+			"EndState": ";cool",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "emergencyHeat",
+			"StartState": "",
+			"EndState": ";emergency heat",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "heat",
+			"StartState": "",
+			"EndState": ";heat",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": ";off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

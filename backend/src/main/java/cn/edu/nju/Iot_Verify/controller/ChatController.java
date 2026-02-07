@@ -1,11 +1,13 @@
 package cn.edu.nju.Iot_Verify.controller;
 
-import cn.edu.nju.Iot_Verify.dto.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
+import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -13,6 +15,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.concurrent.Executor;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
@@ -42,13 +45,15 @@ public class ChatController {
     }
 
     @PostMapping("/completions")
-    public SseEmitter chat(@CurrentUser Long userId, @RequestBody ChatRequestDto request) {
+    public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
+        log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
 
         executor.execute(() -> {
             try {
                 chatService.processStreamChat(userId, request.getSessionId(), request.getContent(), emitter);
             } catch (Exception e) {
+                log.error("Error processing chat request for userId={}", userId, e);
                 emitter.completeWithError(e);
             }
         });
@@ -57,6 +62,7 @@ public class ChatController {
 
     @DeleteMapping("/sessions/{sessionId}")
     public Result<Void> deleteSession(@CurrentUser Long userId, @PathVariable String sessionId) {
+        log.debug("Deleting session: userId={}, sessionId={}", userId, sessionId);
         chatService.deleteSession(userId, sessionId);
         return Result.success(null);
     }

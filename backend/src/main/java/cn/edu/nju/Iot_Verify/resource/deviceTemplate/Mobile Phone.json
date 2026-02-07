@@ -1,0 +1,109 @@
+{
+	"Name": "Mobile Phone",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "location",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"Values": ["home", "away", "garageDoor", "Shanghai"]
+		},
+		{
+			"Name": "steps",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		}
+	],
+	"Contents": [
+		{
+			"Name": "photo",
+			"Privacy": "private",
+			"IsChangeable": false
+		}
+	],
+	"Modes": ["State"],
+	"InitState": "on",
+	"WorkingStates": [
+		{
+			"Name": "on",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "taking photo",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "uploading to cloud",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "token photo",
+			"StartState": "taking photo",
+			"EndState": "on",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "taking photo"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		},
+		{
+			"Name": "uploaded to cloud",
+			"StartState": "uploading to cloud",
+			"EndState": "on",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "uploading to cloud"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "take photo",
+			"StartState": "on",
+			"EndState": "taking photo",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "upload to cloud",
+			"StartState": "on",
+			"EndState": "uploading to cloud",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

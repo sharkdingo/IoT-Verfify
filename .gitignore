@@ -71,3 +71,7 @@ docker-compose.override.yml
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Redis dump file
+dump.rdb
+*.rdb

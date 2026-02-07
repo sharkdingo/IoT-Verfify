@@ -1,0 +1,24 @@
+{
+	"Name": "Smoke Sensor",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "smoke",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"Values": ["clear", "detected", "tested"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
+import cn.edu.nju.Iot_Verify.util.LevenshteinDistanceUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,8 +27,23 @@ public class NodeServiceImpl implements NodeService {
     private final DeviceTemplateService deviceTemplateService;
     private final ObjectMapper objectMapper;
 
+    // 默认模板名称
     private static final String DEFAULT_TEMPLATE = "AC Cooler";
+    
+    // 硬编码回退状态
     private static final String HARD_FALLBACK_STATE = "Working";
+    
+    // 默认位置和尺寸常量
+    private static final double DEFAULT_POSITION_X = 250.0;
+    private static final double DEFAULT_POSITION_Y = 250.0;
+    private static final int DEFAULT_WIDTH = 110;
+    private static final int DEFAULT_HEIGHT = 90;
+    
+    // ID 生成相关常量
+    private static final int RANDOM_ID_RANGE = 1000;
+    private static final int MAX_RETRY_COUNT = 10;
+    private static final int UUID_SUFFIX_LENGTH = 6;
+    private static final int RANDOM_SEED = 36;
 
     @Override
     public String searchNodes(Long userId, String keyword) {
@@ -36,8 +52,8 @@ public class NodeServiceImpl implements NodeService {
         if (keyword == null || keyword.trim().isEmpty() || keyword.equalsIgnoreCase("所有设备")) {
             results = nodeRepo.findByUserId(userId);
         } else {
-            results = nodeRepo.findByUserIdAndTemplateNameContainingIgnoreCaseOrUserIdAndLabelContainingIgnoreCase(
-                    userId, keyword, userId, keyword);
+            results = nodeRepo.findByUserIdAndTemplateNameContainingIgnoreCaseOrLabelContainingIgnoreCase(
+                    userId, keyword, keyword);
         }
 
         try {
@@ -80,16 +96,16 @@ public class NodeServiceImpl implements NodeService {
                 resultMsg.append(String.format("【系统提示】无法识别模板 '%s'，已使用默认模板 '%s'。", rawTemplate, finalTemplate));
             }
         }
-        
+
         String finalState = state;
         if (finalState == null || finalState.trim().isEmpty() || finalState.equals("null")) {
             finalState = getInitStateFromTemplate(userId, finalTemplate);
         }
-        
-        double posX = (x != null) ? x : 250.0;
-        double posY = (y != null) ? y : 250.0;
-        int width = (w != null) ? w : 110;
-        int height = (h != null) ? h : 90;
+
+        double posX = (x != null) ? x : DEFAULT_POSITION_X;
+        double posY = (y != null) ? y : DEFAULT_POSITION_Y;
+        int width = (w != null) ? w : DEFAULT_WIDTH;
+        int height = (h != null) ? h : DEFAULT_HEIGHT;
 
         String generatedId;
 
@@ -104,12 +120,12 @@ public class NodeServiceImpl implements NodeService {
             int retryCount = 0;
 
             do {
-                int randomNum = random.nextInt(1000);
+                int randomNum = random.nextInt(RANDOM_ID_RANGE);
                 generatedId = finalTemplate + "_ai_" + randomNum;
                 retryCount++;
 
-                if (retryCount > 10) {
-                    generatedId = finalTemplate + "_ai_" + UUID.randomUUID().toString().substring(0, 6);
+                if (retryCount > MAX_RETRY_COUNT) {
+                    generatedId = finalTemplate + "_ai_" + UUID.randomUUID().toString().substring(0, UUID_SUFFIX_LENGTH);
                     break;
                 }
             } while (nodeRepo.existsById(generatedId));
@@ -149,17 +165,24 @@ public class NodeServiceImpl implements NodeService {
     }
 
     private String findBestMatch(String target, List<String> candidates) {
-        if (candidates == null || candidates.isEmpty()) return null;
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
 
         String best = null;
         int minDistance = Integer.MAX_VALUE;
+        String normalizedTarget = target.toLowerCase();
 
         for (String candidate : candidates) {
-            if (candidate.toLowerCase().contains(target.toLowerCase()) || target.toLowerCase().contains(candidate.toLowerCase())) {
+            String normalizedCandidate = candidate.toLowerCase();
+
+            // Check for substring match first
+            if (normalizedCandidate.contains(normalizedTarget) || normalizedTarget.contains(normalizedCandidate)) {
                 return candidate;
             }
 
-            int dist = calculateLevenshteinDistance(target.toLowerCase(), candidate.toLowerCase());
+            // Calculate Levenshtein distance using utility class
+            int dist = LevenshteinDistanceUtil.calculate(normalizedTarget, normalizedCandidate);
 
             if (dist < minDistance) {
                 minDistance = dist;
@@ -167,27 +190,11 @@ public class NodeServiceImpl implements NodeService {
             }
         }
 
+        // Return null if similarity is too low
         if (minDistance > target.length() / 2 + 2) {
             return null;
         }
         return best;
-    }
-
-    private int calculateLevenshteinDistance(String s1, String s2) {
-        int len1 = s1.length();
-        int len2 = s2.length();
-        int[][] dp = new int[len1 + 1][len2 + 1];
-
-        for (int i = 0; i <= len1; i++) dp[i][0] = i;
-        for (int j = 0; j <= len2; j++) dp[0][j] = j;
-
-        for (int i = 1; i <= len1; i++) {
-            for (int j = 1; j <= len2; j++) {
-                int cost = (s1.charAt(i - 1) == s2.charAt(j - 1)) ? 0 : 1;
-                dp[i][j] = Math.min(Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
-            }
-        }
-        return dp[len1][len2];
     }
 
     private String getInitStateFromTemplate(Long userId, String templateName) {

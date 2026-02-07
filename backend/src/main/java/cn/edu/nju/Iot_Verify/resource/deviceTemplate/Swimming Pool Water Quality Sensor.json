@@ -1,0 +1,26 @@
+{
+	"Name": "Swimming Pool Water Quality Sensor",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "waterQuality",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+
+	]
+}

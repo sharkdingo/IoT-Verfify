@@ -1,7 +1,13 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.dto.*;
-import cn.edu.nju.Iot_Verify.dto.manifest.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
@@ -9,15 +15,18 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class BoardStorageServiceImpl implements BoardStorageService {
@@ -29,6 +38,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardLayoutRepository layoutRepo;
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
+    private final SpecificationMapper specificationMapper;
+    private final RuleMapper ruleMapper;
 
     @Override
     public List<DeviceNodeDto> getNodes(Long userId) {
@@ -69,7 +80,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     public List<SpecificationDto> getSpecs(Long userId) {
         return specRepo.findByUserId(userId).stream()
-                .map(SpecificationMapper::toDto)
+                .map(specificationMapper::toDto)
                 .toList();
     }
 
@@ -78,68 +89,51 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     public List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs) {
         specRepo.deleteByUserId(userId);
         List<SpecificationPo> pos = specs.stream()
-                .map(dto -> SpecificationMapper.toPo(dto, userId))
+                .map(dto -> specificationMapper.toPo(dto, userId))
                 .toList();
         List<SpecificationPo> saved = specRepo.saveAll(pos);
-        return saved.stream().map(SpecificationMapper::toDto).toList();
+        return saved.stream().map(specificationMapper::toDto).toList();
     }
 
     @Override
     public List<RuleDto> getRules(Long userId) {
-        return ruleRepo.findByUserId(userId).stream().map(po -> {
-            RuleDto dto = new RuleDto();
-            dto.setId(po.getId());
-            dto.setToId(po.getToId());
-            dto.setToApi(po.getToApi());
-            dto.setTemplateLabel(po.getTemplateLabel());
-            List<SourceEntryDto> sources = JsonUtils.fromJsonOrDefault(
-                    po.getSourcesJson(),
-                    new TypeReference<List<SourceEntryDto>>() {},
-                    List.of()
-            );
-            dto.setSources(sources);
-            return dto;
-        }).toList();
+        return ruleRepo.findByUserId(userId).stream()
+                .map(ruleMapper::toDto)
+                .toList();
     }
 
     @Override
     @Transactional
     public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
         // 增量更新：获取现有规则
-        Map<String, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
+        Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
                 .collect(Collectors.toMap(RulePo::getId, r -> r));
 
         // 新规则 ID 集合
-        Set<String> newRuleIds = new HashSet<>();
+        Set<Long> newRuleIds = new HashSet<>();
 
         // 处理每个规则
         for (RuleDto r : rules) {
-            String ruleId = r.getId() == null ? UUID.randomUUID().toString() : r.getId();
+            Long ruleId = r.getId() == null ? null : r.getId();
             newRuleIds.add(ruleId);
 
-            RulePo po = existingRules.get(ruleId);
-            if (po == null) {
+            RulePo po = ruleMapper.toPo(r, userId);
+            if (ruleId == null) {
                 // 新增
-                po = RulePo.builder()
-                        .id(ruleId)
-                        .userId(userId)
-                        .sourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()))
-                        .toId(r.getToId())
-                        .toApi(r.getToApi())
-                        .templateLabel(r.getTemplateLabel())
-                        .build();
+                ruleRepo.save(po);
             } else {
                 // 更新
-                po.setSourcesJson(JsonUtils.toJsonOrEmpty(r.getSources()));
-                po.setToId(r.getToId());
-                po.setToApi(r.getToApi());
-                po.setTemplateLabel(r.getTemplateLabel());
+                if (existingRules.containsKey(ruleId)) {
+                    po.setId(ruleId);
+                    ruleRepo.save(po);
+                } else {
+                    ruleRepo.save(po);
+                }
             }
-            ruleRepo.save(po);
         }
 
         // 删除不再存在的规则
-        for (String existingId : existingRules.keySet()) {
+        for (Long existingId : existingRules.keySet()) {
             if (!newRuleIds.contains(existingId)) {
                 ruleRepo.deleteById(existingId);
             }
@@ -355,43 +349,36 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public void deleteDeviceTemplate(Long userId, String templateId) {
-        try {
-            // Log the input parameters for debugging
-            System.out.println("Attempting to delete template: userId=" + userId + ", templateId=" + templateId);
+        // Log the input parameters for debugging
+        log.debug("Attempting to delete template: userId={}, templateId={}", userId, templateId);
 
-            // Validate templateId format
-            if (templateId == null || templateId.trim().isEmpty()) {
-                throw new RuntimeException("Template ID cannot be null or empty");
-            }
-
-            Long id;
-            try {
-                id = Long.parseLong(templateId.trim());
-            } catch (NumberFormatException e) {
-                throw new RuntimeException("Invalid template ID format: " + templateId + ". Expected numeric value.");
-            }
-
-            System.out.println("Parsed template ID: " + id);
-
-            // Find the template
-            DeviceTemplatePo po = deviceTemplateRepo.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Template not found with ID: " + id));
-
-            System.out.println("Found template: " + po.getName() + ", owner: " + po.getUserId());
-
-            // Check if the template belongs to the current user
-            if (!po.getUserId().equals(userId)) {
-                throw new RuntimeException("Template not found or access denied. Template belongs to different user.");
-            }
-
-            // Perform the deletion
-            deviceTemplateRepo.delete(po);
-            System.out.println("Successfully deleted template: " + po.getName());
-
-        } catch (Exception e) {
-            System.err.println("Error deleting template: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("Failed to delete template: " + e.getMessage());
+        // Validate templateId format
+        if (templateId == null || templateId.trim().isEmpty()) {
+            throw new RuntimeException("Template ID cannot be null or empty");
         }
+
+        Long id;
+        try {
+            id = Long.parseLong(templateId.trim());
+        } catch (NumberFormatException e) {
+            throw new RuntimeException("Invalid template ID format: " + templateId + ". Expected numeric value.");
+        }
+
+        log.debug("Parsed template ID: {}", id);
+
+        // Find the template
+        DeviceTemplatePo po = deviceTemplateRepo.findById(id)
+                .orElseThrow(() -> new RuntimeException("Template not found with ID: " + id));
+
+        log.debug("Found template: {}, owner: {}", po.getName(), po.getUserId());
+
+        // Check if the template belongs to the current user
+        if (!po.getUserId().equals(userId)) {
+            throw new RuntimeException("Template not found or access denied. Template belongs to different user.");
+        }
+
+        // Perform the deletion
+        deviceTemplateRepo.delete(po);
+        log.info("Successfully deleted template: templateId={}, name={}", id, po.getName());
     }
 }

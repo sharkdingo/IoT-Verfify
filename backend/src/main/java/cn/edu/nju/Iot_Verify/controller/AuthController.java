@@ -1,6 +1,10 @@
 package cn.edu.nju.Iot_Verify.controller;
 
-import cn.edu.nju.Iot_Verify.dto.*;
+import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
+import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
+import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
+import cn.edu.nju.Iot_Verify.dto.auth.RegisterResponseDto;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;

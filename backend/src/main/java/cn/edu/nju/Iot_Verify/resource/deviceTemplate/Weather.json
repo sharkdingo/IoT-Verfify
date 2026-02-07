@@ -1,0 +1,23 @@
+{
+	"Name": "Weather",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "weather",
+			"Description": "",
+			"IsInside": false,
+			"PublicVisible": true,
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"Values": ["sunny", "rainy", "snowy", "cloudy", "windy", "foggy", "stormy"]
+		}
+	],
+	"Modes": [],
+	"InitState": "",
+	"WorkingStates": [
+	],
+	"Transitions": [
+	],
+	"APIs": [
+	]
+}

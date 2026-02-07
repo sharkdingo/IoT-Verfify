@@ -1,0 +1,69 @@
+{
+	"Name": "Garage Door",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "contact",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": true,
+			"Trust": "trusted",
+			"Privacy": "public",
+			"Values": ["closed", "open"]
+		}
+
+	],
+	"ImpactedVariables": ["contact"],
+	"Modes": ["DoorState"],
+	"InitState": "closed",
+	"WorkingStates": [
+		{
+			"Name": "closed",
+			"Dynamics": [
+				{
+					"VariableName":"contact",
+					"Value":"closed"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "open",
+			"Dynamics": [
+				{
+					"VariableName":"contact",
+					"Value":"open"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "close",
+			"StartState": "",
+			"EndState": "closed",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "open",
+			"StartState": "",
+			"EndState": "open",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

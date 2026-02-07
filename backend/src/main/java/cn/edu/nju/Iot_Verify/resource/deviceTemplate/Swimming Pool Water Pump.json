@@ -1,0 +1,54 @@
+{
+	"Name": "Swimming Pool Water Pump",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"ImpactedVariables": ["waterQuality"],
+	"Modes": ["MachineState"],
+	"InitState": "off",
+	"WorkingStates": [
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "on",
+			"Dynamics": [
+				{
+					"VariableName":"waterQuality",
+					"ChangeRate":"-1"
+				}
+			],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "off",
+			"StartState": "",
+			"EndState": "off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "on",
+			"StartState": "",
+			"EndState": "on",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

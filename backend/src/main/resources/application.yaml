@@ -39,3 +39,8 @@ jwt:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
+
+nusmv:
+  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}
+  command-prefix: ${NUSMV_PREFIX:}
+  timeout-ms: ${NUSMV_TIMEOUT_MS:120000}

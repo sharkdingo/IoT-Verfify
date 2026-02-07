@@ -9,8 +9,8 @@ import java.util.Optional;
 public interface DeviceNodeRepository extends JpaRepository<DeviceNodePo, String> {
     List<DeviceNodePo> findByUserId(Long userId);
     List<DeviceNodePo> findByUserIdAndLabelContaining(Long userId, String label);
-    List<DeviceNodePo> findByUserIdAndTemplateNameContainingIgnoreCaseOrUserIdAndLabelContainingIgnoreCase(
-            Long userId1, String templateKeyword, Long userId2, String labelKeyword);
+    List<DeviceNodePo> findByUserIdAndTemplateNameContainingIgnoreCaseOrLabelContainingIgnoreCase(
+            Long userId, String templateKeyword, String labelKeyword);
     Optional<DeviceNodePo> findByUserIdAndLabel(Long userId, String label);
     void deleteByUserId(Long userId);
 }

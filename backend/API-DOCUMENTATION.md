@@ -824,6 +824,21 @@ interface DeviceNodeDto {
   state: string;
   width: number;
   height: number;
+  // 运行时状态（验证时使用）
+  currentStateTrust?: string;           // "trusted" | "untrusted"
+  variables?: VariableStateDto[];       // 变量状态列表
+  privacies?: PrivacyStateDto[];        // 隐私状态列表
+}
+
+interface VariableStateDto {
+  name: string;
+  value: string;
+  trust: string;         // "trusted" | "untrusted"
+}
+
+interface PrivacyStateDto {
+  name: string;
+  privacy: string;       // "private" | "public"
 }
 ```
 
@@ -869,16 +884,22 @@ interface SpecConditionDto {
 ```typescript
 interface RuleDto {
   id?: string;              // Optional, auto-generated
-  sources: SourceEntryDto[];
-  toId: string;             // Required
-  toApi: string;            // Required
-  templateLabel: string;
+  sources: SourceEntryDto[]; // IF conditions (triggers)
+  toId: string;             // Required, target device ID
+  toApi: string;            // Required, target API name
+  templateLabel?: string;   // Target device template label
+  privacyDeviceId?: string; // Privacy operation: target device ID
+  privacyContent?: string;  // Privacy operation: content
 }
 
 interface SourceEntryDto {
-  fromId: string;
-  fromApi: string;
-  fromLabel?: string;       // Optional, for display
+  fromId: string;           // Source device ID
+  fromLabel?: string;       // Source device label (for display)
+  targetType: 'api' | 'variable';  // Trigger type
+  fromApi?: string;         // API name (when targetType='api')
+  property?: string;        // Variable name (when targetType='variable')
+  relation?: string;        // Comparison: "=", ">", "<", etc.
+  value?: string;           // Comparison value
 }
 ```
 
@@ -964,3 +985,404 @@ interface CommandDto {
   payload: Record<string, any>;  // Command parameters
 }
 ```
+
+---
+
+## 8. Verification API
+
+> All endpoints require authentication.
+
+### 8.1 Execute Verification
+
+**Endpoint:** `POST /api/verify`
+
+Execute IoT system verification using NuSMV model checking.
+
+**Request Body:**
+```json
+{
+  "devices": [
+    {
+      "id": "device-001",
+      "templateName": "AirConditioner",
+      "label": "AC Cooler",
+      "position": { "x": 100.0, "y": 200.0 },
+      "state": "Off",
+      "currentStateTrust": "trusted",
+      "variables": [
+        { "name": "temperature", "value": "24", "trust": "trusted" }
+      ],
+      "privacies": [
+        { "name": "temperature", "privacy": "private" }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule-001",
+      "sources": [
+        {
+          "fromId": "AC Cooler",
+          "fromLabel": "AC Cooler",
+          "targetType": "variable",
+          "property": "temperature",
+          "relation": ">",
+          "value": "28"
+        }
+      ],
+      "toId": "device-001",
+      "toApi": "turnOn",
+      "templateLabel": "AirConditioner",
+      "privacyDeviceId": null,
+      "privacyContent": null
+    }
+  ],
+  "specs": [
+    {
+      "id": "spec-001",
+      "templateId": "1",
+      "templateLabel": "always",
+      "aConditions": [
+        {
+          "id": "cond-001",
+          "side": "a",
+          "deviceId": "device-001",
+          "deviceLabel": "AC Cooler",
+          "targetType": "state",
+          "key": "state",
+          "relation": "=",
+          "value": "Cooling"
+        }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    }
+  ],
+  "saveTrace": true
+}
+```
+
+#### Device Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Unique device identifier |
+| `templateName` | string | Yes | Device template name (e.g., "AirConditioner") |
+| `label` | string | No | Display label |
+| `position` | object | Yes | Device position `{x, y}` |
+| `state` | string | No | Current state |
+| `currentStateTrust` | string | No | "trusted" or "untrusted" |
+| `variables` | array | No | List of variable states |
+| `privacies` | array | No | List of privacy states |
+
+#### VariableStateDto
+```json
+{ "name": "temperature", "value": "24", "trust": "trusted" }
+```
+
+#### PrivacyStateDto
+```json
+{ "name": "temperature", "privacy": "private" }
+```
+
+#### Rule Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sources` | array | IF conditions (triggers) |
+| `sources[].fromId` | string | Source device ID |
+| `sources[].targetType` | string | "api" or "variable" |
+| `sources[].property` | string | API name or variable name |
+| `sources[].relation` | string | "=", ">", "<", etc. |
+| `sources[].value` | string | Condition value |
+| `toId` | string | Target device ID |
+| `toApi` | string | API to call on target |
+
+#### Specification Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `templateId` | string | "1"-"7" for spec types |
+| `aConditions` | array | A-type spec conditions (always/eventually/never) |
+| `ifConditions` | array | IF conditions (for B-type specs) |
+| `thenConditions` | array | THEN conditions (for B-type specs) |
+| `targetType` | string | "state", "variable", or "api" |
+| `relation` | string | "=", "!=", ">", "<", etc. |
+
+#### Seven Specification Types
+
+| templateId | Type | NuSMV Syntax | Required Sides |
+|------------|------|--------------|----------------|
+| "1" | always | CTLSPEC AG(A) | aConditions only |
+| "2" | eventually | CTLSPEC AF(A) | aConditions only |
+| "3" | never | CTLSPEC AG !(A) | aConditions only |
+| "4" | immediate | CTLSPEC AG(A → AX(B)) | ifConditions + thenConditions |
+| "5" | response | CTLSPEC AG(A → AF(B)) | ifConditions + thenConditions |
+| "6" | persistence | LTLSPEC G(A → F G(B)) | ifConditions + thenConditions |
+| "7" | safety | CTLSPEC AG(untrusted → !(A)) | ifConditions + thenConditions |
+
+**Success Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "safe": false,
+    "traces": [
+      {
+        "id": 1,
+        "userId": 1,
+        "violatedSpecId": "spec-001",
+        "violatedSpecJson": "{\"id\":\"spec-001\",...}",
+        "states": [
+          {
+            "stateIndex": 0,
+            "devices": [
+              {
+                "deviceId": "device-001",
+                "deviceLabel": "AC Cooler",
+                "templateName": "AirConditioner",
+                "newState": "Off",
+                "variables": [...],
+                "trustPrivacy": [...],
+                "privacies": [...]
+              }
+            ]
+          }
+        ],
+        "createdAt": "2026-02-02T10:30:00"
+      }
+    ],
+    "specResults": [false],
+    "checkLogs": [
+      "Generating NuSMV model...",
+      "Model generated: /tmp/nusmv_xxx/model.smv",
+      "Executing NuSMV verification...",
+      "NuSMV execution completed successfully.",
+      "Specification violation detected!",
+      "Generated 1 violation trace(s)."
+    ],
+    "nusmvOutput": "..."
+  }
+}
+```
+
+#### VerificationResultDto
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `safe` | boolean | true if all specs satisfied |
+| `traces` | array | List of TraceDto (violation traces) |
+| `specResults` | array | Boolean result for each spec |
+| `checkLogs` | array | Execution logs |
+| `nusmvOutput` | string | Raw NuSMV output (truncated if >10000 chars) |
+
+---
+
+### 8.2 Get All Traces
+
+**Endpoint:** `GET /api/verify/traces`
+
+Get all traces for the current user.
+
+**Success Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [
+    {
+      "id": 1,
+      "userId": 1,
+      "violatedSpecId": "spec-001",
+      "violatedSpecJson": "{\"id\":\"spec-001\",...}",
+      "states": [...],
+      "createdAt": "2026-02-02T10:30:00"
+    }
+  ]
+}
+```
+
+---
+
+### 8.3 Get Single Trace
+
+**Endpoint:** `GET /api/verify/traces/{id}`
+
+Get a specific trace by ID.
+
+**Success Response (200):** Same format as above, returns single trace object.
+
+**Error Responses:**
+
+| Code | Message | Cause |
+|------|---------|-------|
+| 404 | Trace not found with id: {id} | Trace doesn't exist |
+
+---
+
+### 8.4 Delete Trace
+
+**Endpoint:** `DELETE /api/verify/traces/{id}`
+
+Delete a specific trace.
+
+**Success Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": null
+}
+```
+
+---
+
+### 8.5 Trace DTO Structure
+
+```typescript
+interface TraceDto {
+  id: Long;              // Database ID
+  userId: Long;          // Owner user ID
+  violatedSpecId: string;    // Violated spec ID
+  violatedSpecJson: string;  // Full spec as JSON
+  states: TraceStateDto[];   // State sequence
+  createdAt: DateTime;   // Creation timestamp
+}
+
+interface TraceStateDto {
+  stateIndex: number;    // 0, 1, 2, ...
+  devices: TraceDeviceDto[];
+}
+
+interface TraceDeviceDto {
+  deviceId: string;           // Device ID
+  deviceLabel: string;        // Device display label
+  templateName: string;       // Device template name
+  newState: string;           // Current state (renamed from state)
+  variables: TraceVariableDto[];
+  trustPrivacy: TraceTrustPrivacyDto[];  // State trust/privacy (renamed from stateTrusts)
+  privacies: TraceTrustPrivacyDto[];
+}
+
+interface TraceVariableDto {
+  name: string;
+  value: string;
+  trust: string;         // "trusted" or "untrusted"
+}
+
+interface TraceTrustPrivacyDto {
+  name: string;
+  trust: boolean;        // true=trusted, false=untrusted
+  privacy: string;       // "private" or "public"
+}
+```
+
+---
+
+### 8.6 Test Cases
+
+#### Test Case 1: Safe Configuration (No Violation)
+
+**Scenario**: AC is in Off state, temperature is 24, rule triggers when temperature > 28, spec checks that state != Cooling.
+
+**Expected Result**: `safe: true`, `traces: []`
+
+```bash
+curl -X POST http://localhost:8080/api/verify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [{"id":"device-001","templateName":"AirConditioner","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
+    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
+    "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
+    "saveTrace": false
+  }'
+```
+
+---
+
+#### Test Case 2: Unsafe Configuration (Violation Detected)
+
+**Scenario**: Temperature can rise to 30, rule triggers when temperature > 28, spec requires state == Cooling.
+
+**Expected Result**: `safe: false`, `traces` contains counterexample
+
+```bash
+curl -X POST http://localhost:8080/api/verify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [{"id":"device-001","templateName":"AirConditioner","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
+    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
+    "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"=","value":"Cooling"}]}],
+    "saveTrace": true
+  }'
+```
+
+**Expected Trace Flow**:
+1. State: Off, Temperature: 24
+2. State: Off, Temperature: 30 (temperature rises)
+3. Rule triggers: temperature > 28
+4. State: Cooling (API called)
+5. Violation: state = Cooling (spec requires != Cooling)
+
+---
+
+#### Test Case 3: Multiple Devices
+
+**Scenario**: Two AC units, one triggers the other.
+
+```bash
+curl -X POST http://localhost:8080/api/verify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [
+      {"id":"device-001","templateName":"AirConditioner","label":"AC Living Room","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[]},
+      {"id":"device-002","templateName":"AirConditioner","label":"AC Bedroom","position":{"x":300,"y":200},"state":"Off","variables":[{"name":"temperature","value":"22","trust":"trusted"}],"privacies":[]}
+    ],
+    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn"}],"toId":"device-002","toApi":"turnOn"}],
+    "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"!=","value":"Heating"}]}],
+    "saveTrace": true
+  }'
+```
+
+---
+
+### 8.7 Error Responses
+
+| Code | Message | Cause |
+|------|---------|-------|
+| 400 | Validation failed | Invalid request data |
+| 500 | Verification failed: {error} | NuSMV execution error |
+
+---
+
+## 9. NuSMV Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| NUSMV_PATH | NuSMV executable path | D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe |
+| NUSMV_PREFIX | Command prefix (e.g., "wsl" for Windows Subsystem Linux) | (empty) |
+
+### Configuration in application.yaml
+
+```yaml
+nusmv:
+  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}
+  command-prefix: ${NUSMV_PREFIX:}
+```
+
+### Supported Spec Types
+
+| Type | Constraint | NuSMV Syntax |
+|------|------------|--------------|
+| A | holds forever | CTLSPEC AG(condition) |
+| A | will happen later | CTLSPEC AF(condition) |
+| A | never happens | CTLSPEC AG !(condition) |
+| B | should happen at same time | CTLSPEC AG((A) -> AX(B)) |
+| B | should happen later | CTLSPEC AG((A) -> AF(B)) |
+| B | should happen forever | LTLSPEC G((A) -> F G(B))

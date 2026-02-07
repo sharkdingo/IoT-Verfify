@@ -1,0 +1,157 @@
+{
+	"Name": "Home Mode",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["Mode", "State"],
+	"InitState": "home;idle",
+	"WorkingStates": [
+		{
+			"Name": "home;idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "home;sendingAlertMessage",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "home;sendingPhoto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "away;idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "away;sendingAlertMessage",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "away;sendingPhoto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "sleep;idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "sleep;sendingAlertMessage",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "sleep;sendingPhoto",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "sentAlertMessage",
+			"StartState": ";sendingAlertMessage",
+			"EndState": ";idle",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "sendingAlertMessage"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		},
+		{
+			"Name": "sentPhoto",
+			"StartState": ";sendingPhoto",
+			"EndState": ";idle",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "sendingPhoto"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "set home mode",
+			"StartState": "",
+			"EndState": "home;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "set away mode",
+			"StartState": "",
+			"EndState": "away;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "set sleep mode",
+			"StartState": "",
+			"EndState": "sleep;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "send alert message",
+			"StartState": "",
+			"EndState": ";sendingAlertMessage",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "send photo",
+			"StartState": "",
+			"EndState": ";sendingPhoto",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

@@ -1,0 +1,48 @@
+{
+	"Name": "Window Shade",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["OpenableState"],
+	"InitState": "closed",
+	"WorkingStates": [
+		{
+			"Name": "closed",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		},
+		{
+			"Name": "open",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "public"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "close",
+			"StartState": "",
+			"EndState": "closed",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "open",
+			"StartState": "",
+			"EndState": "open",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

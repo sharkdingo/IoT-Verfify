@@ -1,0 +1,78 @@
+{
+	"Name": "Camera",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["MachineState"],
+	"InitState": "on",
+	"WorkingStates": [
+		{
+			"Name": "on",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "off",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "taking photo",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "token photo",
+			"StartState": "taking photo",
+			"EndState": "on",
+			"Trigger": {
+				"Attribute": "MachineState",
+				"Relation": "=",
+				"Value": "taking photo"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "on",
+			"StartState": "off",
+			"EndState": "on",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "off",
+			"StartState": "on",
+			"EndState": "off",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "take photo",
+			"StartState": "on",
+			"EndState": "taking photo",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

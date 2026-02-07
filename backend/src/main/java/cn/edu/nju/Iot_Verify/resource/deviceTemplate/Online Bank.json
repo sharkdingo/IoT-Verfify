@@ -1,0 +1,52 @@
+{
+	"Name": "Online Bank",
+	"Description": "",
+	"InternalVariables": [
+	],
+	"Modes": ["State"],
+	"InitState": "idle",
+	"WorkingStates": [
+		{
+			"Name": "idle",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "transfering",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+		{
+			"Name": "transferred",
+			"StartState": "transfering",
+			"EndState": "idle",
+			"Trigger": {
+				"Attribute": "State",
+				"Relation": "=",
+				"Value": "transfering"
+			},
+			"Assignments": [],
+			"Signal": false,
+			"Description": ""
+		}
+	],
+	"APIs": [
+		{
+			"Name": "transfer money",
+			"StartState": "idle",
+			"EndState": "transfering",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}

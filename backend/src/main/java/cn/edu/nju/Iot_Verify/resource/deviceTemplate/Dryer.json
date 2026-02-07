@@ -1,0 +1,149 @@
+{
+	"Name": "Dryer",
+	"Description": "",
+	"InternalVariables": [
+		{
+			"Name": "dryerJobState",
+			"Description": "",
+			"IsInside": true,
+			"PublicVisible": false,
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"Values": ["cooling", "delayWash", "drying", "finished", "none", "weightSensing", "wrinklePrevent"]
+		}
+	],
+	"Modes": ["DryerMode", "MachineState"],
+	"InitState": "regular;pause",
+	"WorkingStates": [
+		{
+			"Name": "regular;pause",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "regular;run",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "regular;stop",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "lowHeat;pause",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "lowHeat;run",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "lowHeat;stop",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "highHeat;pause",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "highHeat;run",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		},
+		{
+			"Name": "highHeat;stop",
+			"Dynamics": [],
+			"Invariant": "true",
+			"Description": "",
+			"Trust": "trusted",
+			"Privacy": "private"
+		}
+	],
+	"Transitions": [
+	],
+	"APIs": [
+		{
+			"Name": "regular",
+			"StartState": "",
+			"EndState": "regular;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "lowHeat",
+			"StartState": "",
+			"EndState": "lowHeat;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "highHeat",
+			"StartState": "",
+			"EndState": "highHeat;",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "pause",
+			"StartState": "",
+			"EndState": ";pause",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "run",
+			"StartState": "",
+			"EndState": ";run",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		},
+		{
+			"Name": "stop",
+			"StartState": "",
+			"EndState": ";stop",
+			"Trigger": null,
+			"Assignments": [],
+			"Signal": true,
+			"Description": ""
+		}
+	]
+}
