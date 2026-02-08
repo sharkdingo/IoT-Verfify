@@ -994,9 +994,137 @@ interface CommandDto {
 
 ### 8.1 Execute Verification
 
+#### Synchronous Verification
+
 **Endpoint:** `POST /api/verify`
 
-Execute IoT system verification using NuSMV model checking.
+Execute IoT system verification synchronously. Returns result when complete.
+
+**Note:** For long-running verifications (>30s), use the async endpoint instead.
+
+---
+
+#### Asynchronous Verification
+
+**Endpoint:** `POST /api/verify/async?taskId={taskId}`
+
+Execute verification asynchronously. Returns immediately with task ID.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | Long | Yes | Unique task identifier (create via task API) |
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8080/api/verify/async?taskId=123" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"devices": [...], "specs": [...]}'
+```
+
+**Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": 123
+}
+```
+
+---
+
+### 8.2 Task Management
+
+#### Get Task Status
+
+**Endpoint:** `GET /api/verify/tasks/{id}`
+
+Retrieve task status and results.
+
+**Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "id": 123,
+    "userId": 1,
+    "status": "COMPLETED",
+    "createdAt": "2026-02-08T10:00:00",
+    "startedAt": "2026-02-08T10:00:01",
+    "completedAt": "2026-02-08T10:00:05",
+    "processingTimeMs": 4000,
+    "isSafe": false,
+    "violatedSpecCount": 1,
+    "checkLogs": ["Generating NuSMV model...", "Executing...", "Violation detected!"],
+    "nusmvOutput": "...",
+    "errorMessage": null
+  }
+}
+```
+
+**TaskStatus Enum:**
+- `PENDING` - Task created, waiting to start
+- `RUNNING` - Verification in progress
+- `COMPLETED` - Successfully completed (check `isSafe` for result)
+- `FAILED` - Execution failed (check `errorMessage`)
+- `CANCELLED` - Cancelled by user
+
+---
+
+#### Get Task Progress
+
+**Endpoint:** `GET /api/verify/tasks/{id}/progress`
+
+Get verification progress percentage (0-100).
+
+**Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": 75
+}
+```
+
+**Progress Stages:**
+| Progress | Stage |
+|----------|-------|
+| 0% | Task started |
+| 20% | Generating SMV model |
+| 50% | Executing NuSMV |
+| 80% | Parsing results |
+| 100% | Verification completed |
+
+---
+
+#### Cancel Task
+
+**Endpoint:** `POST /api/verify/tasks/{id}/cancel`
+
+Cancel a running or pending verification task.
+
+**Response (200):**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": true
+}
+```
+
+**Error Responses:**
+
+| Code | Message | Cause |
+|------|---------|-------|
+| 404 | Task not found | Task doesn't exist or not owned by user |
+| 400 | Task cannot be cancelled | Task is already COMPLETED/FAILED/CANCELLED |
+
+---
+
+### 8.3 Trace Operations
 
 **Request Body:**
 ```json
@@ -1188,7 +1316,7 @@ If your database already has the `verification_task` table, add:
 ALTER TABLE verification_task ADD COLUMN nusmv_output TEXT;
 ```
 
-### 8.2 Get All Traces
+### 8.4 Get All Traces
 
 **Endpoint:** `GET /api/verify/traces`
 
@@ -1214,7 +1342,7 @@ Get all traces for the current user.
 
 ---
 
-### 8.3 Get Single Trace
+### 8.5 Get Single Trace
 
 **Endpoint:** `GET /api/verify/traces/{id}`
 
@@ -1230,7 +1358,7 @@ Get a specific trace by ID.
 
 ---
 
-### 8.4 Delete Trace
+### 8.6 Delete Trace
 
 **Endpoint:** `DELETE /api/verify/traces/{id}`
 
@@ -1247,7 +1375,7 @@ Delete a specific trace.
 
 ---
 
-### 8.5 Trace DTO Structure
+### 8.7 Trace DTO Structure
 
 ```typescript
 interface TraceDto {
@@ -1289,7 +1417,7 @@ interface TraceTrustPrivacyDto {
 
 ---
 
-### 8.6 Test Cases
+### 8.8 Test Cases
 
 #### Test Case 1: Safe Configuration (No Violation)
 
@@ -1362,11 +1490,12 @@ curl -X POST http://localhost:8080/api/verify \
 
 ---
 
-### 8.7 Error Responses
+### 8.9 Error Responses
 
 | Code | Message | Cause |
 |------|---------|-------|
 | 400 | Validation failed | Invalid request data |
+| 404 | Task not found | Task doesn't exist or unauthorized |
 | 500 | Verification failed: {error} | NuSMV execution error |
 
 ---

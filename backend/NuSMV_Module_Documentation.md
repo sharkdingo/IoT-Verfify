@@ -1,7 +1,7 @@
 # NuSMV 模块完整架构与实现文档
 
-> **最后更新**: 2025年2月
-> **基于实现版本**: SmvGenerator + generator package
+> **最后更新**: 2026年2月8日
+> **基于实现版本**: SmvGenerator + generator package + Async Support + Enhanced Parser
 > **文档状态**: ✅ 已验证与代码同步
 
 ---
@@ -16,6 +16,8 @@
 6. [使用示例](#6-使用示例)
 7. [验证结果](#7-验证结果)
 8. [已知问题与改进建议](#8-已知问题与改进建议)
+9. [增强版Trace解析器](#9-增强版trace解析器)
+10. [异步验证架构](#10-异步验证架构)
 
 ---
 
@@ -67,8 +69,18 @@
     └───────────────────────────────────────────────────────────────┘
 
     ┌───────────────────────────────────────────────────────────────┐
-    │ SmvTraceParser (解析器)                                        │
+    │ SmvTraceParser (解析器 - 基础版)                               │
     │ └── 解析NuSMV输出为TraceDto列表                                │
+    └───────────────────────────────────────────────────────────────┘
+
+    ┌───────────────────────────────────────────────────────────────┐
+    │ EnhancedSmvTraceParser (增强版解析器)                          │
+    │ ├── 支持多种NuSMV输出格式                                      │
+    │ │   - 标准NuSMV格式                                            │
+    │ │   - MEDIC-test格式                                           │
+    │ │   - 简单状态序列格式                                          │
+    │ ├── 自动格式检测                                               │
+    │ └── 从文件或字符串解析                                          │
     └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -84,6 +96,7 @@
 | **Layer 1: 生成** | 规格模块生成器 | `generator/SmvSpecificationBuilder.java` |
 | **Layer 2: 执行** | 执行器 | `executor/NusmvExecutor.java` |
 | **Layer 3: 解析** | Trace 解析器 | `parser/SmvTraceParser.java` |
+| **Layer 3: 解析** | 增强版解析器 | `parser/EnhancedSmvTraceParser.java` |
 | **共享数据** | SMV 数据模型 | `data/DeviceSmvData.java` |
 | **共享数据** | 模板包装器 | `data/TemplateWrapper.java` |
 
@@ -690,9 +703,11 @@ System.out.println(specString);
 | **Layer 1: 生成** | `generator/SmvRulesModuleBuilder.java` | 规则模块生成器 |
 | **Layer 1: 生成** | `generator/SmvSpecificationBuilder.java` | 规格模块生成器 |
 | **Layer 2: 执行** | `executor/NusmvExecutor.java` | 执行器 |
-| **Layer 3: 解析** | `parser/SmvTraceParser.java` | Trace 解析器 |
+| **Layer 3: 解析** | `parser/SmvTraceParser.java` | Trace 解析器（基础版） |
+| **Layer 3: 解析** | `parser/EnhancedSmvTraceParser.java` | 增强版解析器 |
 | **数据** | `data/DeviceSmvData.java` | SMV 数据模型 |
 | **数据** | `data/TemplateWrapper.java` | 模板包装器 |
+| **配置** | `configure/ThreadConfig.java` | 线程池配置 |
 | Builder | SmvDeviceModuleBuilder.java | 设备模块 |
 | Builder | SmvMainModuleBuilder.java | 主模块 |
 | Builder | SmvRulesModuleBuilder.java | 规则模块 |
@@ -701,7 +716,9 @@ System.out.println(specString);
 | 数据 | TransitionInfo.java | 转换信息 |
 | Executor | NusmvExecutorImpl.java | NuSMV执行器 |
 | Parser | SmvTraceParser.java | 反例解析器 |
-| 验证 | NusmvVerificationServiceImpl.java | 验证服务 |
+| Parser | EnhancedSmvTraceParser.java | 增强版解析器 |
+| 验证 | VerificationServiceImpl.java | 验证服务 |
+| 验证 | VerificationController.java | 验证控制器 |
 
 ### B. 外部依赖
 
@@ -716,3 +733,140 @@ System.out.println(specString);
 - [NuSMV官方文档](https://nusmv.fbk.eu/)
 - [CTL语法说明](https://nusmv.fbk.eu/userman/node23.html)
 - [MEDIC论文](https://github.com/DependableSystemsLab/medic) - IoT安全验证框架
+
+---
+
+## 9. Enhanced Trace Parser
+
+### 9.1 组件介绍
+
+`EnhancedSmvTraceParser` 是增强版的 NuSMV 输出解析器，支持多种输出格式：
+
+- **标准 NuSMV 格式**：`Trace Description` 和 `State 1.x:` 格式
+- **MEDIC-test 格式**：包含 `-- At time` 时间标记的格式
+- **简单格式**：纯状态序列
+
+### 9.2 自动格式检测
+
+```java
+public List<TraceStateDto> parse(String content, Map<String, DeviceSmvData> deviceSmvMap) {
+    FormatType formatType = detectFormat(content);
+    
+    switch (formatType) {
+        case MEDIC -> parseMedicFormat(content, deviceSmvMap);
+        case STANDARD -> parseStandardFormat(content, deviceSmvMap);
+        case SIMPLE -> parseSimpleFormat(content, deviceSmvMap);
+    }
+}
+```
+
+### 9.3 MEDIC 格式示例
+
+```
+-- At time 0:
+State 1.1:
+-> Input: toggle_ac_1 = TRUE
+   ac_1.state = Off
+   ac_1.temperature = 24
+-- At time 1:
+State 1.2:
+   ac_1.state = Cooling
+```
+
+### 9.4 使用方法
+
+```java
+// 从文件解析
+File outputFile = new File("D:/MEDIC-test/output/trace_001.txt");
+List<TraceStateDto> states = parser.parseFromFile(outputFile, deviceSmvMap);
+
+// 从字符串解析
+String nusmvOutput = "...";
+List<TraceStateDto> states = parser.parse(nusmvOutput, deviceSmvMap);
+```
+
+### 9.5 格式检测规则
+
+| 格式 | 检测标志 |
+|------|----------|
+| MEDIC | 包含 `MEDIC` 或 `-- At time` |
+| STANDARD | 包含 `Trace Description` 或 `Trace Type` |
+| SIMPLE | 其他格式 |
+
+---
+
+## 10. Async Verification Architecture
+
+### 10.1 异步验证流程
+
+```
+[Controller]
+    POST /api/verify/async?taskId=123
+    └── verificationService.verifyAsync()
+
+[Service Layer]
+    @Async("verificationTaskExecutor")
+    verifyAsync()
+    ├── 1. 存储任务线程引用
+    ├── 2. 更新进度 (0%, 20%, 50%, 80%, 100%)
+    ├── 3. 检查中断状态 (支持取消)
+    └── 4. 清理资源
+
+[Thread Pool]
+    verificationTaskExecutor
+    ├── Core Pool Size: 5
+    ├── Max Pool Size: 20
+    └── Queue Capacity: 100
+```
+
+### 10.2 任务管理
+
+**取消机制：**
+```java
+public boolean cancelTask(Long userId, Long taskId) {
+    // 1. 查找任务线程
+    Thread taskThread = runningTasks.get(taskId);
+    
+    // 2. 中断线程
+    if (taskThread != null) {
+        taskThread.interrupt();
+    }
+    
+    // 3. 更新状态
+    task.setStatus(CANCELLED);
+}
+```
+
+**进度跟踪：**
+```java
+public void updateTaskProgress(Long taskId, int progress, String message) {
+    taskProgress.put(taskId, progress);
+    // 进度阶段：
+    // 0% - 任务启动
+    // 20% - 生成SMV模型
+    // 50% - 执行NuSMV
+    // 80% - 解析结果
+    // 100% - 验证完成
+}
+```
+
+### 10.3 API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/verify/async` | POST | 启动异步验证 |
+| `/api/verify/tasks/{id}` | GET | 获取任务状态 |
+| `/api/verify/tasks/{id}/progress` | GET | 获取进度(0-100) |
+| `/api/verify/tasks/{id}/cancel` | POST | 取消任务 |
+
+### 10.4 任务状态
+
+```java
+enum TaskStatus {
+    PENDING,    // 任务已创建，等待执行
+    RUNNING,    // 验证进行中
+    COMPLETED,  // 验证成功完成
+    FAILED,     // 执行失败
+    CANCELLED   // 用户取消
+}
+```

@@ -235,6 +235,164 @@ curl -X POST http://localhost:8080/api/verify \
 
 ---
 
+## Async Verification Tests
+
+### Test Case 5: Asynchronous Verification
+
+**Scenario**: Start a verification asynchronously and poll for completion.
+
+```bash
+# 1. Start async verification with task ID 123
+curl -X POST "http://localhost:8080/api/verify/async?taskId=123" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [
+      {
+        "id": "device-001",
+        "templateName": "AirConditioner",
+        "label": "AC Cooler",
+        "position": {"x": 100.0, "y": 200.0},
+        "state": "Off",
+        "variables": [{"name": "temperature", "value": "24", "trust": "trusted"}],
+        "privacies": []
+      }
+    ],
+    "rules": [
+      {
+        "id": "rule-001",
+        "sources": [
+          {"fromId": "AC Cooler", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}
+        ],
+        "toId": "device-001",
+        "toApi": "turnOn"
+      }
+    ],
+    "specs": [
+      {
+        "id": "spec-001",
+        "templateId": "1",
+        "aConditions": [
+          {"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "!=", "value": "Cooling"}
+        ]
+      }
+    ],
+    "isAttack": false,
+    "intensity": 3
+  }'
+
+# 2. Poll progress every 2 seconds
+while true; do
+  PROGRESS=$(curl -s http://localhost:8080/api/verify/tasks/123/progress \
+    -H "Authorization: Bearer $TOKEN" | jq -r '.data')
+  echo "Progress: $PROGRESS%"
+  
+  if [ "$PROGRESS" = "100" ]; then
+    break
+  fi
+  sleep 2
+done
+
+# 3. Get final result
+curl http://localhost:8080/api/verify/tasks/123 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Expected Result:** 
+- Task status transitions: PENDING → RUNNING → COMPLETED
+- Progress increases from 0% to 100%
+- Final result contains `safe`, `traces`, `specResults`
+
+---
+
+### Test Case 6: Task Cancellation
+
+**Scenario**: Start a long-running verification and cancel it.
+
+```bash
+# 1. Start async verification
+curl -X POST "http://localhost:8080/api/verify/async?taskId=456" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "devices": [...],
+    "rules": [...],
+    "specs": [...],
+    "isAttack": false,
+    "intensity": 3
+  }'
+
+# 2. Check it's running
+curl http://localhost:8080/api/verify/tasks/456 \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: status = "RUNNING"
+
+# 3. Cancel the task
+curl -X POST http://localhost:8080/api/verify/tasks/456/cancel \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: {"code": 200, "data": true}
+
+# 4. Verify cancellation
+curl http://localhost:8080/api/verify/tasks/456 \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: status = "CANCELLED"
+```
+
+**Expected Result:** 
+- Cancellation returns `true`
+- Task status becomes `CANCELLED`
+- No trace is saved for cancelled tasks
+
+---
+
+### Test Case 7: Progress Tracking
+
+**Scenario**: Verify progress stages during async verification.
+
+```bash
+# Create a script to monitor progress
+#!/bin/bash
+TASK_ID=789
+TOKEN="your-jwt-token"
+
+# Start verification
+curl -X POST "http://localhost:8080/api/verify/async?taskId=$TASK_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"devices": [...], "specs": [...]}'
+
+# Monitor progress
+echo "Monitoring task $TASK_ID..."
+while true; do
+  RESPONSE=$(curl -s http://localhost:8080/api/verify/tasks/$TASK_ID/progress \
+    -H "Authorization: Bearer $TOKEN")
+  PROGRESS=$(echo $RESPONSE | jq -r '.data')
+  STATUS=$(curl -s http://localhost:8080/api/verify/tasks/$TASK_ID \
+    -H "Authorization: Bearer $TOKEN" | jq -r '.data.status')
+  
+  echo "$(date '+%H:%M:%S') - Status: $STATUS, Progress: $PROGRESS%"
+  
+  if [ "$STATUS" = "COMPLETED" ] || [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELLED" ]; then
+    break
+  fi
+  sleep 1
+done
+
+echo "Task completed with status: $STATUS"
+```
+
+**Expected Progress Flow:**
+```
+10:00:01 - Status: PENDING, Progress: 0%
+10:00:02 - Status: RUNNING, Progress: 0%
+10:00:03 - Status: RUNNING, Progress: 20%
+10:00:05 - Status: RUNNING, Progress: 50%
+10:00:08 - Status: RUNNING, Progress: 80%
+10:00:10 - Status: COMPLETED, Progress: 100%
+```
+
+---
+
 ## Error Responses
 
 ### 400 Bad Request
@@ -315,11 +473,15 @@ If `safe: false` but traces array is empty:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Generate NuSMV Model | ✅ Done | `NusmvModelGeneratorServiceImpl` |
-| Execute NuSMV | ✅ Done | `NusmvExecutorServiceImpl` |
-| Parse Counterexample | ✅ Done | `generateTraceStates()` |
+| Generate NuSMV Model | ✅ Done | `SmvGenerator` |
+| Execute NuSMV | ✅ Done | `NusmvExecutor` |
+| Parse Counterexample | ✅ Done | `SmvTraceParser`, `EnhancedSmvTraceParser` |
 | Trace Persistence | ✅ Done | `TraceRepository` |
 | API Verification | ✅ Done | `VerificationServiceImpl` |
+| Async Verification | ✅ Done | `@Async` with thread pool |
+| Task Cancellation | ✅ Done | `cancelTask()` API |
+| Progress Tracking | ✅ Done | Progress API (0-100%) |
+| MEDIC Format Support | ✅ Done | `EnhancedSmvTraceParser` |
 | Random Simulation | ❌ Not Implemented | Future enhancement |
 | Auto Rule Fix | ❌ Not Implemented | Future enhancement |
 

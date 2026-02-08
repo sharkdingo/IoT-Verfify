@@ -666,10 +666,47 @@ data: [DONE]
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/verify` | Execute verification |
+| POST | `/api/verify` | Execute verification (synchronous) |
+| POST | `/api/verify/async` | Execute verification (asynchronous) |
+| GET | `/api/verify/tasks/{id}` | Get task status |
+| POST | `/api/verify/tasks/{id}/cancel` | Cancel running task |
+| GET | `/api/verify/tasks/{id}/progress` | Get task progress (0-100) |
 | GET | `/api/verify/traces` | Get all traces |
 | GET | `/api/verify/traces/{id}` | Get single trace |
 | DELETE | `/api/verify/traces/{id}` | Delete trace |
+
+#### Asynchronous Verification
+
+For long-running verifications, use the async endpoint:
+
+```bash
+# 1. Start async verification
+curl -X POST http://localhost:8080/api/verify/async?taskId=123 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"devices": [...], "rules": [...], "specs": [...]}'
+
+# 2. Check progress
+curl http://localhost:8080/api/verify/tasks/123/progress \
+  -H "Authorization: Bearer <token>"
+# Response: 50 (percentage)
+
+# 3. Cancel if needed
+curl -X POST http://localhost:8080/api/verify/tasks/123/cancel \
+  -H "Authorization: Bearer <token>"
+# Response: true
+
+# 4. Get final result
+curl http://localhost:8080/api/verify/tasks/123 \
+  -H "Authorization: Bearer <token>"
+```
+
+**Task Status Values:**
+- `PENDING` - Task created but not started
+- `RUNNING` - Verification in progress
+- `COMPLETED` - Verification succeeded (safe or unsafe)
+- `FAILED` - Verification failed with error
+- `CANCELLED` - Task was cancelled by user
 
 #### Execute Verification
 
@@ -1086,6 +1123,33 @@ nusmv:
 2. Check `violatedSpecId` matches your spec ID
 3. Look at `nusmvOutput` for debugging info
 
+### Async Verification Not Working
+
+**Error:** Asynchronous verification runs synchronously
+
+**Solution:**
+1. Ensure `@EnableAsync` annotation is present on main application class
+2. Check thread pool configuration in `ThreadConfig.java`
+3. Verify task status is being updated in database
+
+### Task Cancellation Failed
+
+**Error:** Cannot cancel running verification task
+
+**Solution:**
+1. Only `PENDING` or `RUNNING` tasks can be cancelled
+2. Task must belong to the requesting user
+3. Cancellation may take a few seconds to take effect
+
+### MEDIC Format Not Parsed
+
+**Error:** Cannot parse MEDIC-test output files
+
+**Solution:**
+1. Use `EnhancedSmvTraceParser` instead of legacy `SmvTraceParser`
+2. Ensure output file contains MEDIC markers (`-- At time`)
+3. Check file encoding (UTF-8 recommended)
+
 ---
 
 ## 10. Quick Reference
@@ -1169,11 +1233,15 @@ Import the following collection for complete workflow testing:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Generate NuSMV Model | ✅ Done | `NusmvModelGeneratorServiceImpl` |
-| Execute NuSMV | ✅ Done | `NusmvExecutorServiceImpl` |
-| Parse Counterexample | ✅ Done | `generateTraceStates()` |
+| Generate NuSMV Model | ✅ Done | `SmvGenerator` |
+| Execute NuSMV | ✅ Done | `NusmvExecutor` |
+| Parse Counterexample | ✅ Done | `SmvTraceParser`, `EnhancedSmvTraceParser` |
 | Trace Persistence | ✅ Done | `TraceRepository` |
 | API Verification | ✅ Done | `VerificationServiceImpl` |
+| Async Verification | ✅ Done | `@Async` with thread pool |
+| Task Cancellation | ✅ Done | `cancelTask()` API |
+| Progress Tracking | ✅ Done | Progress API (0-100%) |
+| MEDIC Format Support | ✅ Done | `EnhancedSmvTraceParser` |
 | Random Simulation | ❌ Not Implemented | Future enhancement |
 | Auto Rule Fix | ❌ Not Implemented | Future enhancement |
 
