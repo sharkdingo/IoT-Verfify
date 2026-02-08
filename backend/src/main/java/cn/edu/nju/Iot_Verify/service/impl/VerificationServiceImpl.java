@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.*;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 验证服务实现类
@@ -46,8 +47,10 @@ public class VerificationServiceImpl implements VerificationService {
     private final SpecificationMapper specificationMapper;
     private final ObjectMapper objectMapper;
 
-    // 输出截断最大长度
     private static final int MAX_OUTPUT_LENGTH = 10000;
+
+    private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
 
     /**
      * 执行形式化验证（支持攻击模式）
@@ -219,13 +222,20 @@ public class VerificationServiceImpl implements VerificationService {
                              boolean isAttack, int intensity) {
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
         LocalDateTime startTime = LocalDateTime.now();
-        
+
+        runningTasks.put(taskId, Thread.currentThread());
+        updateTaskProgress(taskId, 0, "Task started");
+
         VerificationTaskPo task = null;
         File smvFile = null;
         boolean smvFileCreated = false;
 
         try {
-            // 更新任务状态
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Task {} was cancelled before start", taskId);
+                return;
+            }
+
             task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
             if (task == null) {
                 log.warn("Async verification task not found or unauthorized: taskId={}, userId={}", taskId, userId);
@@ -252,46 +262,56 @@ public class VerificationServiceImpl implements VerificationService {
                 return;
             }
 
-            // 生成 SMV
+            updateTaskProgress(taskId, 20, "Generating NuSMV model");
             addLog(task, "Generating NuSMV model...");
             smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity);
             smvFileCreated = true;
-            
+
+            if (Thread.currentThread().isInterrupted()) {
+                handleCancellation(taskId, task);
+                return;
+            }
+
             if (smvFile == null || !smvFile.exists()) {
-                completeTask(taskId, task, false, 0, 
-                    addLog(task, "Failed to generate NuSMV model file"), 
+                completeTask(taskId, task, false, 0,
+                    addLog(task, "Failed to generate NuSMV model file"),
                     "Generation failed");
                 return;
             }
-            
+
             addLog(task, "Model generated: " + smvFile.getAbsolutePath());
 
-            // 执行 NuSMV
+            updateTaskProgress(taskId, 50, "Executing NuSMV verification");
             addLog(task, "Executing NuSMV verification...");
             NusmvExecutor.NusmvResult result = nusmvExecutor.execute(smvFile);
             String nusmvOutput = result.getOutput();
 
+            if (Thread.currentThread().isInterrupted()) {
+                handleCancellation(taskId, task);
+                return;
+            }
+
             if (!result.isSuccess()) {
-                completeTask(taskId, task, false, 0, 
-                    addLog(task, "NuSMV execution failed: " + result.getErrorMessage()), 
+                completeTask(taskId, task, false, 0,
+                    addLog(task, "NuSMV execution failed: " + result.getErrorMessage()),
                     "Execution failed");
                 return;
             }
 
             addLog(task, "NuSMV execution completed successfully.");
 
-            // 解析结果
+            updateTaskProgress(taskId, 80, "Parsing results");
             List<String> checkLogs = new ArrayList<>(readCheckLogs(task));
             List<Boolean> specResults = new ArrayList<>();
             List<TraceDto> traces = new ArrayList<>();
 
             if (result.hasCounterexample()) {
                 addLog(task, "Specification violation detected!");
-                
+
                 String counterexample = result.getCounterexample();
                 List<TraceDto> violationTraces = generateTracesFromCounterexample(
                         counterexample, devices, specs, userId);
-                
+
                 traces.addAll(violationTraces);
                 addLog(task, "Generated " + violationTraces.size() + " violation trace(s).");
 
@@ -300,19 +320,18 @@ public class VerificationServiceImpl implements VerificationService {
                 }
             } else {
                 addLog(task, "All specifications satisfied (no counterexample).");
-                
+
                 for (int i = 0; i < specs.size(); i++) {
                     specResults.add(true);
                 }
             }
 
-            // 保存违规 Trace
             if (!traces.isEmpty()) {
                 addLog(task, "Auto-saving " + traces.size() + " violation trace(s) to database.");
                 saveTraces(traces, userId, taskId);
             }
 
-            // 完成任务
+            updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(taskId, task, traces.isEmpty(), traces.size(), checkLogs, nusmvOutput);
 
         } catch (Exception e) {
@@ -321,11 +340,23 @@ public class VerificationServiceImpl implements VerificationService {
                 addLog(task, "Error: " + e.getMessage()), 
                 "Verification failed: " + e.getMessage());
         } finally {
-            // 清理
             if (smvFileCreated && smvFile != null) {
                 cleanupTempFile(smvFile);
             }
+            runningTasks.remove(taskId);
+            taskProgress.remove(taskId);
         }
+    }
+
+    private void handleCancellation(Long taskId, VerificationTaskPo task) {
+        log.info("Handling cancellation for task: {}", taskId);
+        if (task != null) {
+            task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
+            task.setCompletedAt(LocalDateTime.now());
+            taskRepository.save(task);
+        }
+        runningTasks.remove(taskId);
+        taskProgress.remove(taskId);
     }
 
     /**
@@ -450,6 +481,49 @@ public class VerificationServiceImpl implements VerificationService {
         log.debug("Deleting trace {} for user {}", traceId, userId);
         traceRepository.findByIdAndUserId(traceId, userId)
                 .ifPresent(traceRepository::delete);
+    }
+
+    @Override
+    public boolean cancelTask(Long userId, Long taskId) {
+        log.info("Attempting to cancel task {} for user {}", taskId, userId);
+
+        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
+        if (task == null) {
+            log.warn("Task not found or unauthorized: taskId={}, userId={}", taskId, userId);
+            return false;
+        }
+
+        if (task.getStatus() != VerificationTaskPo.TaskStatus.RUNNING &&
+            task.getStatus() != VerificationTaskPo.TaskStatus.PENDING) {
+            log.warn("Task cannot be cancelled, status: {}", task.getStatus());
+            return false;
+        }
+
+        Thread taskThread = runningTasks.get(taskId);
+        if (taskThread != null && taskThread.isAlive()) {
+            taskThread.interrupt();
+            log.info("Interrupted task thread: {}", taskId);
+        }
+
+        task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
+        task.setCompletedAt(LocalDateTime.now());
+        taskRepository.save(task);
+
+        runningTasks.remove(taskId);
+        taskProgress.remove(taskId);
+
+        log.info("Task {} cancelled successfully", taskId);
+        return true;
+    }
+
+    @Override
+    public void updateTaskProgress(Long taskId, int progress, String message) {
+        taskProgress.put(taskId, Math.min(100, Math.max(0, progress)));
+        log.debug("Task {} progress: {}% - {}", taskId, progress, message);
+    }
+
+    public int getTaskProgress(Long taskId) {
+        return taskProgress.getOrDefault(taskId, 0);
     }
 
     /**

@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
+import cn.edu.nju.Iot_Verify.service.impl.VerificationServiceImpl;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -93,14 +94,27 @@ public class VerificationController {
         return Result.success(verificationService.getTrace(userId, id));
     }
     
-    /**
-     * 删除 Trace
-     */
     @DeleteMapping("/traces/{id}")
     public Result<Void> deleteTrace(
-            @CurrentUser Long userId, 
+            @CurrentUser Long userId,
             @PathVariable Long id) {
         verificationService.deleteTrace(userId, id);
         return Result.success();
+    }
+
+    @PostMapping("/tasks/{id}/cancel")
+    public Result<Boolean> cancelTask(
+            @CurrentUser Long userId,
+            @PathVariable Long id) {
+        boolean cancelled = verificationService.cancelTask(userId, id);
+        return Result.success(cancelled);
+    }
+
+    @GetMapping("/tasks/{id}/progress")
+    public Result<Integer> getTaskProgress(
+            @CurrentUser Long userId,
+            @PathVariable Long id) {
+        int progress = ((VerificationServiceImpl) verificationService).getTaskProgress(id);
+        return Result.success(progress);
     }
 }

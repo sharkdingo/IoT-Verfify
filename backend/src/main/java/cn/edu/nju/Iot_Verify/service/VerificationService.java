@@ -80,9 +80,27 @@ public interface VerificationService {
     
     /**
      * 删除 Trace
-     * 
+     *
      * @param userId 用户ID
      * @param traceId Trace ID
      */
     void deleteTrace(Long userId, Long traceId);
+
+    /**
+     * 取消验证任务
+     *
+     * @param userId 用户ID
+     * @param taskId 任务ID
+     * @return 是否成功取消
+     */
+    boolean cancelTask(Long userId, Long taskId);
+
+    /**
+     * 更新任务进度
+     *
+     * @param taskId 任务ID
+     * @param progress 进度 (0-100)
+     * @param message 进度消息
+     */
+    void updateTaskProgress(Long taskId, int progress, String message);
 }
