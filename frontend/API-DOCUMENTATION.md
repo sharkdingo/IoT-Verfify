@@ -4,6 +4,27 @@
 
 This document describes the frontend API layer, including HTTP client configuration, API service functions, and type definitions.
 
+### What's New
+
+- **Asynchronous Verification**: Long-running verifications now support async mode with progress tracking
+- **Task Management**: New APIs for task status, progress polling, and cancellation
+- **Enhanced Trace Parser**: Backend now supports MEDIC-test output format
+
+### Documentation Sections
+
+1. [API Directory Structure](#api-directory-structure)
+2. [HTTP Client Configuration](#http-client-configuration)
+3. [Result Unpacking](#result-unpacking)
+4. [Authentication API](#authentication-api)
+5. [Board Storage API](#board-storage-api)
+6. [Chat API (SSE Streaming)](#chat-api-sse-streaming)
+7. [Verification API](#verification-api) ⭐ **Updated with async support**
+8. [Frontend Type Definitions](#frontend-type-definitions)
+9. [Authentication State Management](#authentication-state-management)
+10. [Environment Variables](#environment-variables)
+11. [Error Handling](#error-handling)
+12. [Quick Start for Frontend Developers](#quick-start-for-frontend-developers)
+
 ---
 
 ## API Directory Structure
@@ -14,7 +35,8 @@ frontend/src/
 │   ├── http.ts          # Axios instance with interceptors
 │   ├── auth.ts          # Authentication API
 │   ├── board.ts         # Board storage API (nodes, edges, specs, rules, etc.)
-│   └── chat.ts          # Chat API (SSE streaming)
+│   ├── chat.ts          # Chat API (SSE streaming)
+│   └── verify.ts        # Verification API (sync/async verification, traces)
 ├── types/
 │   ├── auth.ts          # Auth-related types
 │   ├── chat.ts          # Chat types
@@ -23,7 +45,9 @@ frontend/src/
 │   ├── node.ts          # Node types
 │   ├── panel.ts         # Panel/layout types
 │   ├── rule.ts          # Rule types
-│   └── spec.ts          # Specification types
+│   ├── spec.ts          # Specification types
+│   ├── trace.ts         # Trace types (counterexample traces)
+│   └── verify.ts        # Verification types (tasks, results)
 └── stores/
     └── auth.ts          # Auth state management (Vue reactive)
 ```
@@ -293,14 +317,25 @@ interface StreamCommand {
 
 The verification API handles IoT system verification using NuSMV model checking.
 
+**Note:** The API now supports both synchronous and asynchronous verification modes.
+
 #### Functions
 
 | Function | Method | Endpoint | Description |
 |----------|--------|----------|-------------|
-| `verify(request)` | POST | `/verify` | Execute verification |
+| `verify(request)` | POST | `/verify` | Execute verification (synchronous) |
+| `verifyAsync(request, taskId)` | POST | `/verify/async?taskId={taskId}` | Execute verification (asynchronous) |
+| `getTask(taskId)` | GET | `/verify/tasks/{taskId}` | Get task status and result |
+| `getTaskProgress(taskId)` | GET | `/verify/tasks/{taskId}/progress` | Get task progress (0-100) |
+| `cancelTask(taskId)` | POST | `/verify/tasks/{taskId}/cancel` | Cancel a running task |
 | `getTraces()` | GET | `/verify/traces` | Get all user traces |
 | `getTrace(id)` | GET | `/verify/traces/{id}` | Get single trace |
 | `deleteTrace(id)` | DELETE | `/verify/traces/{id}` | Delete trace |
+
+#### When to Use Async Verification
+
+- **Synchronous** (`verify`): Use for quick verifications (< 10 seconds). Blocks UI until complete.
+- **Asynchronous** (`verifyAsync`): Use for long-running verifications. Returns immediately, poll for progress.
 
 #### Data Type Definitions
 
@@ -380,9 +415,50 @@ interface VerificationResult {
   nusmvOutput: string;
 }
 
+// Task status for async verification
+type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+interface VerificationTask {
+  id: number;
+  userId: number;
+  status: TaskStatus;
+  createdAt: string;      // ISO datetime
+  startedAt?: string;     // ISO datetime
+  completedAt?: string;   // ISO datetime
+  processingTimeMs?: number;
+  isSafe?: boolean;
+  violatedSpecCount?: number;
+  checkLogs: string[];
+  nusmvOutput?: string;
+  errorMessage?: string;
+}
+
 export const verify = async (request: VerificationRequest): Promise<VerificationResult> => {
   // POST /api/verify
   // Returns: Result<VerificationResult>
+};
+
+export const verifyAsync = async (
+  request: VerificationRequest, 
+  taskId: number
+): Promise<number> => {
+  // POST /api/verify/async?taskId={taskId}
+  // Returns: Result<number> (taskId)
+};
+
+export const getTask = async (taskId: number): Promise<VerificationTask> => {
+  // GET /api/verify/tasks/{taskId}
+  // Returns: Result<VerificationTask>
+};
+
+export const getTaskProgress = async (taskId: number): Promise<number> => {
+  // GET /api/verify/tasks/{taskId}/progress
+  // Returns: Result<number> (0-100)
+};
+
+export const cancelTask = async (taskId: number): Promise<boolean> => {
+  // POST /api/verify/tasks/{taskId}/cancel
+  // Returns: Result<boolean>
 };
 ```
 
@@ -455,12 +531,12 @@ export interface TraceTrustPrivacyDto {
 }
 ```
 
-#### Usage Example
+#### Usage Example - Synchronous Verification
 
 ```typescript
 import verificationApi from '@/api/verify';
 
-// Execute verification
+// Execute verification (blocks until complete)
 const result = await verificationApi.verify({
   devices: [
     {
@@ -505,6 +581,145 @@ if (!result.safe) {
 }
 ```
 
+#### Usage Example - Asynchronous Verification
+
+```typescript
+import verificationApi from '@/api/verify';
+
+// Start async verification
+const taskId = 123; // Generate or get from backend
+await verificationApi.verifyAsync(verificationRequest, taskId);
+
+// Poll progress every 2 seconds
+const pollProgress = async () => {
+  const progress = await verificationApi.getTaskProgress(taskId);
+  console.log(`Progress: ${progress}%`);
+  
+  if (progress < 100) {
+    setTimeout(pollProgress, 2000);
+  } else {
+    // Get final result
+    const task = await verificationApi.getTask(taskId);
+    console.log('Task completed:', task.status);
+    
+    if (task.status === 'COMPLETED') {
+      console.log('Safe:', task.isSafe);
+      console.log('Logs:', task.checkLogs);
+    }
+  }
+};
+
+pollProgress();
+
+// Cancel if needed (e.g., user clicks cancel button)
+const handleCancel = async () => {
+  const cancelled = await verificationApi.cancelTask(taskId);
+  if (cancelled) {
+    console.log('Task cancelled successfully');
+  }
+};
+```
+
+#### Async Verification with Progress UI
+
+```typescript
+import { ref, onUnmounted } from 'vue';
+import verificationApi from '@/api/verify';
+
+const useAsyncVerification = () => {
+  const isVerifying = ref(false);
+  const progress = ref(0);
+  const taskStatus = ref<TaskStatus>('PENDING');
+  const result = ref<VerificationTask | null>(null);
+  let pollInterval: number | null = null;
+
+  const startVerification = async (request: VerificationRequest, taskId: number) => {
+    isVerifying.value = true;
+    progress.value = 0;
+    taskStatus.value = 'PENDING';
+    result.value = null;
+
+    try {
+      // Start async verification
+      await verificationApi.verifyAsync(request, taskId);
+      taskStatus.value = 'RUNNING';
+
+      // Poll progress
+      pollInterval = window.setInterval(async () => {
+        try {
+          progress.value = await verificationApi.getTaskProgress(taskId);
+          
+          if (progress.value >= 100) {
+            // Get final result
+            const task = await verificationApi.getTask(taskId);
+            result.value = task;
+            taskStatus.value = task.status;
+            
+            // Stop polling
+            if (pollInterval) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+            }
+            isVerifying.value = false;
+          }
+        } catch (error) {
+          console.error('Poll error:', error);
+          stopPolling();
+        }
+      }, 2000);
+    } catch (error) {
+      console.error('Start verification error:', error);
+      isVerifying.value = false;
+    }
+  };
+
+  const cancelVerification = async (taskId: number) => {
+    try {
+      const cancelled = await verificationApi.cancelTask(taskId);
+      if (cancelled) {
+        taskStatus.value = 'CANCELLED';
+        stopPolling();
+      }
+      return cancelled;
+    } catch (error) {
+      console.error('Cancel error:', error);
+      return false;
+    }
+  };
+
+  const stopPolling = () => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+    isVerifying.value = false;
+  };
+
+  // Cleanup on component unmount
+  onUnmounted(() => {
+    stopPolling();
+  });
+
+  return {
+    isVerifying,
+    progress,
+    taskStatus,
+    result,
+    startVerification,
+    cancelVerification
+  };
+};
+
+// Usage in component
+const { isVerifying, progress, taskStatus, result, startVerification, cancelVerification } = useAsyncVerification();
+
+// Template
+// <div v-if="isVerifying">
+//   <progress :value="progress" max="100">{{ progress }}%</progress>
+//   <button @click="cancelVerification(taskId)">Cancel</button>
+// </div>
+```
+
 #### Test Scenarios
 
 **Safe Configuration (No Violation):**
@@ -517,6 +732,38 @@ if (!result.safe) {
 ```typescript
 // Spec: state == Cooling, temp can rise, trigger when temp > 28
 // Expected: safe: false, traces contains counterexample
+```
+
+**Async Verification Flow:**
+```typescript
+// 1. Start async verification
+const taskId = 123;
+await verifyAsync(request, taskId);
+
+// 2. Poll progress (0% -> 20% -> 50% -> 80% -> 100%)
+// Expected progress stages:
+// 0%   - Task started
+// 20%  - Generating SMV model
+// 50%  - Executing NuSMV
+// 80%  - Parsing results
+// 100% - Verification completed
+
+// 3. Get final result
+const task = await getTask(taskId);
+// Expected: status = 'COMPLETED', isSafe = true/false
+```
+
+**Task Cancellation:**
+```typescript
+// 1. Start async verification
+const taskId = 456;
+await verifyAsync(request, taskId);
+
+// 2. Cancel after 3 seconds
+setTimeout(async () => {
+  const cancelled = await cancelTask(taskId);
+  // Expected: cancelled = true, task status = 'CANCELLED'
+}, 3000);
 ```
 ```
 
@@ -535,6 +782,8 @@ if (!result.safe) {
 | `DeviceTemplate` | `DeviceTemplateDto` | `types/device.ts` |
 | `ChatSession` | `ChatSessionPo` | `types/chat.ts` |
 | `ChatMessage` | `ChatMessagePo` | `types/chat.ts` |
+| `VerificationTask` | `VerificationTaskPo` | `types/verify.ts` |
+| `TraceDto` | `TraceDto` | `types/trace.ts` |
 
 ### Example: DeviceNode Type
 
@@ -566,6 +815,65 @@ export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant' | 'tool';
   content: string;
+}
+```
+
+### Example: VerificationTask Type
+
+```typescript
+// frontend/src/types/verify.ts
+
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface VerificationTask {
+  id: number;
+  userId: number;
+  status: TaskStatus;
+  createdAt: string;      // ISO datetime
+  startedAt?: string;     // ISO datetime
+  completedAt?: string;   // ISO datetime
+  processingTimeMs?: number;
+  isSafe?: boolean;
+  violatedSpecCount?: number;
+  checkLogs: string[];
+  nusmvOutput?: string;
+  errorMessage?: string;
+}
+
+export interface TraceDto {
+  id: number;
+  userId: number;
+  violatedSpecId: string;
+  violatedSpecJson: string;
+  states: TraceStateDto[];
+  createdAt: string;
+}
+
+export interface TraceStateDto {
+  stateIndex: number;
+  devices: TraceDeviceDto[];
+}
+
+export interface TraceDeviceDto {
+  deviceId: string;
+  deviceLabel: string;
+  templateName: string;
+  newState: string;
+  variables: TraceVariableDto[];
+  trustPrivacy: TraceTrustPrivacyDto[];
+  privacies: TraceTrustPrivacyDto[];
+}
+
+export interface TraceVariableDto {
+  name: string;
+  value: string;
+  trust: string;  // "trusted" or "untrusted"
+}
+
+export interface TraceTrustPrivacyDto {
+  name: string;
+  trust: boolean;
+  privacy: string;  // "private" or "public"
 }
 ```
 
@@ -678,6 +986,38 @@ import { useAuth } from '@/stores/auth';
 
 const { getToken, getUser, logout } = useAuth();
 const token = getToken();  // Use in custom fetch calls
+```
+
+### 4. Execute Async Verification
+```typescript
+import verificationApi from '@/api/verify';
+
+// For long-running verifications, use async mode
+const taskId = 123; // Generate unique task ID
+
+// Start async verification
+await verificationApi.verifyAsync(verificationRequest, taskId);
+
+// Poll progress
+const checkProgress = async () => {
+  const progress = await verificationApi.getTaskProgress(taskId);
+  updateProgressBar(progress);
+  
+  if (progress < 100) {
+    setTimeout(checkProgress, 2000);
+  } else {
+    // Get result
+    const result = await verificationApi.getTask(taskId);
+    displayResult(result);
+  }
+};
+
+checkProgress();
+
+// Allow user to cancel
+const handleCancel = async () => {
+  await verificationApi.cancelTask(taskId);
+};
 ```
 
 ---
