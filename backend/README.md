@@ -350,7 +350,8 @@ interface VerificationRequestDto {
   devices: DeviceNodeDto[];      // Device nodes with runtime state
   rules: RuleDto[];              // IFTTT rules
   specs: SpecificationDto[];     // Specifications to verify
-  saveTrace: boolean;            // Whether to save violation traces
+  isAttack: boolean;             // Enable attack mode
+  intensity: number;             // Attack intensity (0-50)
 }
 ```
 
@@ -364,6 +365,14 @@ interface VerificationResultDto {
   checkLogs: string[];           // Execution logs
   nusmvOutput: string;           // Raw NuSMV output (truncated)
 }
+```
+
+### Database Migration Note
+
+If your database already has the `verification_task` table, add the column below:
+
+```
+ALTER TABLE verification_task ADD COLUMN nusmv_output TEXT;
 ```
 
 ### 4.6 Authentication Models
@@ -700,7 +709,8 @@ curl -X POST http://localhost:8080/api/verify \
         ]
       }
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -875,7 +885,8 @@ curl -X POST http://localhost:8080/api/verify \
     "specs": [
       {"id": "spec-001", "aConditions": [{"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "!=", "value": "Cooling"}]}
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -897,7 +908,8 @@ curl -X POST http://localhost:8080/api/verify \
     "devices": [{"id":"device-001","templateName":"AC Cooler","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
-    "saveTrace": false
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -917,7 +929,8 @@ curl -X POST http://localhost:8080/api/verify \
     "devices": [{"id":"device-001","templateName":"AC Cooler","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"untrusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -945,7 +958,8 @@ curl -X POST http://localhost:8080/api/verify \
     ],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn"}],"toId":"device-002","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"!=","value":"Heating"}]}],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -966,7 +980,8 @@ curl -X POST http://localhost:8080/api/verify \
     ],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn_a","relation":"=","value":"TRUE"}],"toId":"device-002","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","templateId":"5","templateLabel":"response","ifConditions":[{"deviceId":"device-001","targetType":"api","key":"turnOn_a","relation":"=","value":"TRUE"}],"thenConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"=","value":"Cooling"}]}],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -1064,7 +1079,7 @@ nusmv:
 
 ### Trace Empty
 
-**Error:** `saveTrace: true` but traces array is empty
+**Error:** `safe: false` but traces array is empty
 
 **Solution:**
 1. Verify the specification was actually violated

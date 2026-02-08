@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.po;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -7,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 验证任务持久化实体
@@ -48,7 +50,14 @@ public class VerificationTaskPo {
     private Integer violatedSpecCount;
 
     @Column(columnDefinition = "TEXT")
+    @JsonIgnore
     private String checkLogsJson;
+
+    @Transient
+    private List<String> checkLogs;
+
+    @Column(columnDefinition = "TEXT")
+    private String nusmvOutput;
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;

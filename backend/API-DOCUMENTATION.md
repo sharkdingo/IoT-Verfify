@@ -1058,7 +1058,8 @@ Execute IoT system verification using NuSMV model checking.
       "thenConditions": []
     }
   ],
-  "saveTrace": true
+  "isAttack": false,
+  "intensity": 3
 }
 ```
 
@@ -1179,6 +1180,14 @@ Execute IoT system verification using NuSMV model checking.
 
 ---
 
+#### Database Migration Note
+
+If your database already has the `verification_task` table, add:
+
+```
+ALTER TABLE verification_task ADD COLUMN nusmv_output TEXT;
+```
+
 ### 8.2 Get All Traces
 
 **Endpoint:** `GET /api/verify/traces`
@@ -1296,7 +1305,8 @@ curl -X POST http://localhost:8080/api/verify \
     "devices": [{"id":"device-001","templateName":"AirConditioner","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
-    "saveTrace": false
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -1316,7 +1326,8 @@ curl -X POST http://localhost:8080/api/verify \
     "devices": [{"id":"device-001","templateName":"AirConditioner","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"=","value":"Cooling"}]}],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -1344,7 +1355,8 @@ curl -X POST http://localhost:8080/api/verify \
     ],
     "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn"}],"toId":"device-002","toApi":"turnOn"}],
     "specs": [{"id":"spec-001","aConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"!=","value":"Heating"}]}],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 

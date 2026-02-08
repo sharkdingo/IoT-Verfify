@@ -17,6 +17,7 @@ import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.TraceMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.*;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 验证服务实现类
@@ -46,9 +46,6 @@ public class VerificationServiceImpl implements VerificationService {
     private final SpecificationMapper specificationMapper;
     private final ObjectMapper objectMapper;
 
-    // 临时文件目录
-    private static final String TEMP_DIR = System.getProperty("java.io.tmpdir");
-    
     // 输出截断最大长度
     private static final int MAX_OUTPUT_LENGTH = 10000;
 
@@ -99,7 +96,7 @@ public class VerificationServiceImpl implements VerificationService {
                     .nusmvOutput("")
                     .build();
         }
-        if (intensity < 0 || intensity > 10) {
+        if (intensity < 0 || intensity > 50) {
             log.warn("Verification rejected: invalid intensity {} for user {}", intensity, userId);
         }
 
@@ -229,18 +226,22 @@ public class VerificationServiceImpl implements VerificationService {
 
         try {
             // 更新任务状态
-            task = taskRepository.findById(taskId).orElse(null);
-            if (task != null) {
-                task.setStatus(VerificationTaskPo.TaskStatus.RUNNING);
-                task.setStartedAt(startTime);
-                task.setCheckLogs(new ArrayList<>());
-                task.getCheckLogs().add("Starting verification task: " + taskId);
-                task.getCheckLogs().add("Devices: " + (devices != null ? devices.size() : 0));
-                task.getCheckLogs().add("Rules: " + (rules != null ? rules.size() : 0));
-                task.getCheckLogs().add("Specifications: " + (specs != null ? specs.size() : 0));
-                task.getCheckLogs().add("Attack mode: " + isAttack + ", Intensity: " + intensity);
-                taskRepository.save(task);
+            task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
+            if (task == null) {
+                log.warn("Async verification task not found or unauthorized: taskId={}, userId={}", taskId, userId);
+                return;
             }
+
+            task.setStatus(VerificationTaskPo.TaskStatus.RUNNING);
+            task.setStartedAt(startTime);
+            List<String> initLogs = new ArrayList<>();
+            initLogs.add("Starting verification task: " + taskId);
+            initLogs.add("Devices: " + (devices != null ? devices.size() : 0));
+            initLogs.add("Rules: " + (rules != null ? rules.size() : 0));
+            initLogs.add("Specifications: " + (specs != null ? specs.size() : 0));
+            initLogs.add("Attack mode: " + isAttack + ", Intensity: " + intensity);
+            writeCheckLogs(task, initLogs);
+            taskRepository.save(task);
 
             if (devices == null || devices.isEmpty()) {
                 completeTask(taskId, task, false, 0, Arrays.asList("Error: devices list cannot be empty"), "Invalid input");
@@ -252,10 +253,7 @@ public class VerificationServiceImpl implements VerificationService {
             }
 
             // 生成 SMV
-            if (task != null) {
-                task.getCheckLogs().add("Generating NuSMV model...");
-                taskRepository.save(task);
-            }
+            addLog(task, "Generating NuSMV model...");
             smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity);
             smvFileCreated = true;
             
@@ -283,7 +281,7 @@ public class VerificationServiceImpl implements VerificationService {
             addLog(task, "NuSMV execution completed successfully.");
 
             // 解析结果
-            List<String> checkLogs = new ArrayList<>(task.getCheckLogs());
+            List<String> checkLogs = new ArrayList<>(readCheckLogs(task));
             List<Boolean> specResults = new ArrayList<>();
             List<TraceDto> traces = new ArrayList<>();
 
@@ -311,11 +309,11 @@ public class VerificationServiceImpl implements VerificationService {
             // 保存违规 Trace
             if (!traces.isEmpty()) {
                 addLog(task, "Auto-saving " + traces.size() + " violation trace(s) to database.");
-                saveTraces(traces, userId);
+                saveTraces(traces, userId, taskId);
             }
 
             // 完成任务
-            completeTask(taskId, task, traces.isEmpty(), traces.size(), task.getCheckLogs(), nusmvOutput);
+            completeTask(taskId, task, traces.isEmpty(), traces.size(), checkLogs, nusmvOutput);
 
         } catch (Exception e) {
             log.error("Async verification failed for task: {}", taskId, e);
@@ -339,11 +337,26 @@ public class VerificationServiceImpl implements VerificationService {
             if (task != null) {
                 task.setStatus(isSafe ? VerificationTaskPo.TaskStatus.COMPLETED : VerificationTaskPo.TaskStatus.FAILED);
                 task.setCompletedAt(LocalDateTime.now());
+                task.setIsSafe(isSafe);
+                task.setViolatedSpecCount(traceCount);
+                if (task.getStartedAt() != null && task.getCompletedAt() != null) {
+                    long duration = java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis();
+                    task.setProcessingTimeMs(duration);
+                }
                 if (nusmvOutput != null && nusmvOutput.length() > 10000) {
                     nusmvOutput = nusmvOutput.substring(0, 10000) + "\n... (truncated)";
                 }
                 task.setNusmvOutput(nusmvOutput);
+                writeCheckLogs(task, checkLogs);
                 task.setCheckLogs(checkLogs);
+                if (!isSafe) {
+                    String err = (checkLogs != null && !checkLogs.isEmpty())
+                            ? checkLogs.get(checkLogs.size() - 1)
+                            : "Verification failed";
+                    task.setErrorMessage(err);
+                } else {
+                    task.setErrorMessage(null);
+                }
                 taskRepository.save(task);
             }
             log.info("Completed verification task: {}, safe: {}, traces: {}", taskId, isSafe, traceCount);
@@ -356,10 +369,10 @@ public class VerificationServiceImpl implements VerificationService {
      * 添加日志
      */
     private List<String> addLog(VerificationTaskPo task, String message) {
-        List<String> logs = task != null ? new ArrayList<>(task.getCheckLogs()) : new ArrayList<>();
+        List<String> logs = task != null ? new ArrayList<>(readCheckLogs(task)) : new ArrayList<>();
         logs.add(message);
         if (task != null) {
-            task.setCheckLogs(logs);
+            writeCheckLogs(task, logs);
             try {
                 taskRepository.save(task);
             } catch (Exception e) {
@@ -369,12 +382,38 @@ public class VerificationServiceImpl implements VerificationService {
         return logs;
     }
 
+    private List<String> readCheckLogs(VerificationTaskPo task) {
+        if (task == null || task.getCheckLogsJson() == null || task.getCheckLogsJson().isBlank()) {
+            return new ArrayList<>();
+        }
+        try {
+            return objectMapper.readValue(task.getCheckLogsJson(), new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse checkLogsJson for task {}", task.getId(), e);
+            return new ArrayList<>();
+        }
+    }
+
+    private void writeCheckLogs(VerificationTaskPo task, List<String> logs) {
+        if (task == null) return;
+        try {
+            String json = objectMapper.writeValueAsString(logs == null ? Collections.emptyList() : logs);
+            task.setCheckLogsJson(json);
+        } catch (Exception e) {
+            log.warn("Failed to serialize check logs for task {}", task.getId(), e);
+        }
+    }
+
     /**
      * 获取任务状态
      */
     @Override
     public VerificationTaskPo getTask(Long userId, Long taskId) {
-        return taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
+        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
+        if (task != null) {
+            task.setCheckLogs(readCheckLogs(task));
+        }
+        return task;
     }
 
     @Override
@@ -467,6 +506,17 @@ public class VerificationServiceImpl implements VerificationService {
     private void saveTraces(List<TraceDto> traces, Long userId) {
         for (TraceDto trace : traces) {
             trace.setUserId(userId);
+            TracePo po = traceMapper.toPo(trace);
+            if (po != null) {
+                traceRepository.save(po);
+            }
+        }
+    }
+
+    private void saveTraces(List<TraceDto> traces, Long userId, Long taskId) {
+        for (TraceDto trace : traces) {
+            trace.setUserId(userId);
+            trace.setVerificationTaskId(taskId);
             TracePo po = traceMapper.toPo(trace);
             if (po != null) {
                 traceRepository.save(po);

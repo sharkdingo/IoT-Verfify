@@ -6,8 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * SMV 设备模块构建器
@@ -22,7 +20,6 @@ public class SmvDeviceModuleBuilder {
     private static final String DEFAULT_PRIVACY = "public";
     private static final String DEFAULT_TRUST = "trusted";
     private static final String API_SIGNAL_TYPE = "api";
-    private static final String CONDITION_SEPARATOR = " & ";
 
     public String build(DeviceSmvData smv, boolean isAttack) {
         // 参数验证
@@ -61,7 +58,7 @@ public class SmvDeviceModuleBuilder {
         boolean hasFrozenVar = false;
         StringBuilder frozenVars = new StringBuilder();
 
-        if (isAttack && isSensor) {
+        if (isAttack) {
             frozenVars.append("\n\tis_attack: boolean;");
             hasFrozenVar = true;
         }
@@ -69,6 +66,7 @@ public class SmvDeviceModuleBuilder {
         if (isSensor) {
             for (DeviceManifest.InternalVariable var : smv.variables) {
                 frozenVars.append("\n\ttrust_").append(var.getName()).append(": {trusted, untrusted};");
+                frozenVars.append("\n\tprivacy_").append(var.getName()).append(": {public, private};");
                 hasFrozenVar = true;
             }
         }
@@ -94,12 +92,12 @@ public class SmvDeviceModuleBuilder {
 
         appendInitialValues(content, smv, isSensor);
 
-        if (isAttack && isSensor) {
-            content.append("\n\tinit(is_attack) := FALSE;");
+        if (isAttack) {
+            content.append("\n\tinit(is_attack) := {TRUE, FALSE};");
         }
 
         appendInitialPrivacy(content, smv, isSensor);
-        appendInitialTrust(content, smv, isSensor);
+        appendInitialTrust(content, smv, isAttack, isSensor);
         appendTransitions(content, smv, isAttack, isSensor);
     }
 
@@ -152,25 +150,21 @@ public class SmvDeviceModuleBuilder {
         List<String> modes = smv.modes;
         if (modes.size() <= 1) {
             for (String state : smv.states) {
-                String trustValue = smv.stateTrust.getOrDefault(state, DEFAULT_TRUST);
-                content.append("\n\ttrust_").append(state).append(": {").append(trustValue).append("};");
+                content.append("\n\ttrust_").append(state).append(": ").append(TRUST_TYPE).append(";");
             }
         } else {
             for (String mode : modes) {
                 List<String> states = smv.modeStates.get(mode);
                 if (states != null) {
                     for (String state : states) {
-                        String trustKey = mode + "_" + state;
-                        String trustValue = smv.modeStateTrust.getOrDefault(trustKey, DEFAULT_TRUST);
-                        content.append("\n\ttrust_").append(mode).append("_").append(state).append(": {").append(trustValue).append("};");
+                        content.append("\n\ttrust_").append(mode).append("_").append(state).append(": ").append(TRUST_TYPE).append(";");
                     }
                 }
             }
         }
 
         for (DeviceManifest.InternalVariable var : smv.variables) {
-            String trust = var.getTrust() != null ? var.getTrust() : DEFAULT_TRUST;
-            content.append("\n\ttrust_").append(var.getName()).append(": {").append(trust).append("};");
+            content.append("\n\ttrust_").append(var.getName()).append(": ").append(TRUST_TYPE).append(";");
         }
     }
 
@@ -196,8 +190,7 @@ public class SmvDeviceModuleBuilder {
         }
 
         for (DeviceManifest.InternalVariable var : smv.variables) {
-            String privacy = var.getPrivacy() != null ? var.getPrivacy() : DEFAULT_PRIVACY;
-            content.append("\n\tprivacy_").append(var.getName()).append(": {").append(privacy).append("};");
+            content.append("\n\tprivacy_").append(var.getName()).append(": {public, private};");
         }
     }
 
@@ -237,69 +230,119 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    private void appendInitialTrust(StringBuilder content, DeviceSmvData smv, boolean isSensor) {
-        if (!isSensor) {
-            return;
-        }
-
+    private void appendInitialTrust(StringBuilder content, DeviceSmvData smv, boolean isAttack, boolean isSensor) {
         String instanceTrust = smv.instanceStateTrust;
         List<String> modes = smv.modes;
         if (modes.size() > 1) {
             Set<String> initializedStates = new HashSet<>();
-            for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
-                String[] mStates = state.getName().split(";");
-                for (int i = 0; i < modes.size() && i < mStates.length; i++) {
-                    String stateKey = modes.get(i) + "_" + mStates[i].replace(" ", "");
-                    if (initializedStates.contains(stateKey)) {
-                        continue;
+            if (smv.manifest != null && smv.manifest.getWorkingStates() != null) {
+                for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
+                    String[] mStates = state.getName().split(";");
+                    for (int i = 0; i < modes.size() && i < mStates.length; i++) {
+                        String stateKey = modes.get(i) + "_" + mStates[i].replace(" ", "");
+                        if (initializedStates.contains(stateKey)) {
+                            continue;
+                        }
+                        initializedStates.add(stateKey);
+                        String trust = instanceTrust != null ? instanceTrust :
+                                (state.getTrust() != null ? state.getTrust() : DEFAULT_TRUST);
+                        content.append("\n\tinit(trust_").append(modes.get(i)).append("_").append(mStates[i].replace(" ", ""))
+                               .append(") := ").append(trust).append(";");
                     }
-                    initializedStates.add(stateKey);
-                    String trust = instanceTrust != null ? instanceTrust : state.getTrust();
-                    content.append("\n\tinit(trust_").append(modes.get(i)).append("_").append(mStates[i].replace(" ", ""))
+                }
+            }
+            for (String mode : modes) {
+                List<String> states = smv.modeStates.get(mode);
+                if (states == null) continue;
+                for (String state : states) {
+                    String key = mode + "_" + state;
+                    if (initializedStates.contains(key)) continue;
+                    initializedStates.add(key);
+                    String trust = instanceTrust != null ? instanceTrust :
+                            smv.modeStateTrust.getOrDefault(key, DEFAULT_TRUST);
+                    content.append("\n\tinit(trust_").append(mode).append("_").append(state.replace(" ", ""))
                            .append(") := ").append(trust).append(";");
                 }
             }
         } else {
-            for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
-                String trust = instanceTrust != null ? instanceTrust : state.getTrust();
-                content.append("\n\tinit(trust_").append(state.getName()).append(") := ").append(trust).append(";");
+            if (smv.manifest != null && smv.manifest.getWorkingStates() != null) {
+                for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
+                    String trust = instanceTrust != null ? instanceTrust :
+                            (state.getTrust() != null ? state.getTrust() : DEFAULT_TRUST);
+                    content.append("\n\tinit(trust_").append(state.getName()).append(") := ").append(trust).append(";");
+                }
+            } else {
+                for (String state : smv.states) {
+                    String trust = instanceTrust != null ? instanceTrust :
+                            smv.stateTrust.getOrDefault(state, DEFAULT_TRUST);
+                    content.append("\n\tinit(trust_").append(state).append(") := ").append(trust).append(";");
+                }
             }
         }
 
         for (DeviceManifest.InternalVariable var : smv.variables) {
             String instanceVarTrust = smv.instanceVariableTrust.get(var.getName());
             String trust = instanceVarTrust != null ? instanceVarTrust : (var.getTrust() != null ? var.getTrust() : DEFAULT_TRUST);
-            content.append("\n\tinit(trust_").append(var.getName()).append(") := ").append(trust).append(";");
+            if (isAttack && isSensor) {
+                content.append("\n\tinit(trust_").append(var.getName()).append(") :=\n");
+                content.append("\tcase\n");
+                content.append("\t\tis_attack=TRUE: untrusted;\n");
+                content.append("\t\tTRUE: ").append(trust).append(";\n");
+                content.append("\tesac;");
+            } else {
+                content.append("\n\tinit(trust_").append(var.getName()).append(") := ").append(trust).append(";");
+            }
         }
     }
 
     private void appendInitialPrivacy(StringBuilder content, DeviceSmvData smv, boolean isSensor) {
-        if (!isSensor) {
-            return;
-        }
-
         List<String> modes = smv.modes;
         if (modes.size() > 1) {
             Set<String> initializedStates = new HashSet<>();
-            for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
-                String[] mStates = state.getName().split(";");
-                for (int i = 0; i < modes.size() && i < mStates.length; i++) {
-                    String stateKey = modes.get(i) + "_" + mStates[i].replace(" ", "");
-                    if (initializedStates.contains(stateKey)) {
-                        continue;
+            if (smv.manifest != null && smv.manifest.getWorkingStates() != null) {
+                for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
+                    String[] mStates = state.getName().split(";");
+                    for (int i = 0; i < modes.size() && i < mStates.length; i++) {
+                        String stateKey = modes.get(i) + "_" + mStates[i].replace(" ", "");
+                        if (initializedStates.contains(stateKey)) {
+                            continue;
+                        }
+                        initializedStates.add(stateKey);
+                        String instancePrivacy = smv.instanceVariablePrivacy.get(stateKey);
+                        String privacy = instancePrivacy != null ? instancePrivacy :
+                                (state.getPrivacy() != null ? state.getPrivacy() : DEFAULT_PRIVACY);
+                        content.append("\n\tinit(privacy_").append(modes.get(i)).append("_").append(mStates[i].replace(" ", ""))
+                               .append(") := ").append(privacy).append(";");
                     }
+                }
+            }
+            for (String mode : modes) {
+                List<String> states = smv.modeStates.get(mode);
+                if (states == null) continue;
+                for (String state : states) {
+                    String stateKey = mode + "_" + state.replace(" ", "");
+                    if (initializedStates.contains(stateKey)) continue;
                     initializedStates.add(stateKey);
                     String instancePrivacy = smv.instanceVariablePrivacy.get(stateKey);
-                    String privacy = instancePrivacy != null ? instancePrivacy : (state.getPrivacy() != null ? state.getPrivacy() : DEFAULT_PRIVACY);
-                    content.append("\n\tinit(privacy_").append(modes.get(i)).append("_").append(mStates[i].replace(" ", ""))
+                    String privacy = instancePrivacy != null ? instancePrivacy : DEFAULT_PRIVACY;
+                    content.append("\n\tinit(privacy_").append(mode).append("_").append(state.replace(" ", ""))
                            .append(") := ").append(privacy).append(";");
                 }
             }
         } else {
-            for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
-                String instancePrivacy = smv.instanceVariablePrivacy.get(state.getName());
-                String privacy = instancePrivacy != null ? instancePrivacy : (state.getPrivacy() != null ? state.getPrivacy() : DEFAULT_PRIVACY);
-                content.append("\n\tinit(privacy_").append(state.getName()).append(") := ").append(privacy).append(";");
+            if (smv.manifest != null && smv.manifest.getWorkingStates() != null) {
+                for (DeviceManifest.WorkingState state : smv.manifest.getWorkingStates()) {
+                    String instancePrivacy = smv.instanceVariablePrivacy.get(state.getName());
+                    String privacy = instancePrivacy != null ? instancePrivacy :
+                            (state.getPrivacy() != null ? state.getPrivacy() : DEFAULT_PRIVACY);
+                    content.append("\n\tinit(privacy_").append(state.getName()).append(") := ").append(privacy).append(";");
+                }
+            } else {
+                for (String state : smv.states) {
+                    String instancePrivacy = smv.instanceVariablePrivacy.get(state);
+                    String privacy = instancePrivacy != null ? instancePrivacy : DEFAULT_PRIVACY;
+                    content.append("\n\tinit(privacy_").append(state).append(") := ").append(privacy).append(";");
+                }
             }
         }
 
@@ -348,7 +391,6 @@ public class SmvDeviceModuleBuilder {
 
         for (int i = 0; i < smv.modes.size(); i++) {
             String mode = smv.modes.get(i);
-            List<String> modeStates = smv.modeStates.get(mode);
 
             content.append("\t-- Mode: ").append(mode).append("\n");
             content.append("\tnext(").append(mode).append(") := case\n");

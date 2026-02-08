@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.component.nusmv.SmvTraceParser;
+import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.component.nusmv.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.data.TemplateWrapper;
 import cn.edu.nju.Iot_Verify.dto.trace.*;

@@ -305,26 +305,27 @@ The verification API handles IoT system verification using NuSMV model checking.
 #### Data Type Definitions
 
 ```typescript
-// Rule with IF-THEN structure
+// Backend RuleDto (used by /verify and /board/rules)
 interface RuleDto {
   id?: string;
-  sources: SourceEntryDto[];  // IF conditions (triggers)
-  toId: string;              // Target device ID
-  toApi: string;              // API to call on target
-  templateLabel?: string;
-  privacyDeviceId?: string;
-  privacyContent?: string;
+  userId?: number;
+  conditions: RuleConditionDto[];
+  command: RuleCommandDto;
+  ruleString?: string;
 }
 
-// IF condition entry
-interface SourceEntryDto {
-  fromId: string;           // Trigger device label
-  fromLabel?: string;       // Display label
-  targetType: 'api' | 'variable';
-  fromApi?: string;         // For targetType="api"
-  property?: string;        // For targetType="variable"
-  relation?: string;        // "=", ">", "<", etc.
-  value?: string;           // Condition value
+interface RuleConditionDto {
+  deviceName: string;   // Source device name or ID
+  attribute: string;    // State/variable/API name
+  relation?: string;    // "=", ">", "<", etc. If null => API signal
+  value?: string;       // Condition value
+}
+
+interface RuleCommandDto {
+  deviceName: string;   // Target device name or ID
+  action: string;       // API/action name
+  contentDevice?: string;
+  content?: string;
 }
 
 // Specification with seven types
@@ -367,7 +368,8 @@ interface VerificationRequest {
   devices: DeviceNodeDto[];
   rules: RuleDto[];
   specs: SpecificationDto[];
-  saveTrace: boolean;
+  isAttack: boolean;
+  intensity: number; // 0-50
 }
 
 interface VerificationResult {
@@ -474,11 +476,10 @@ const result = await verificationApi.verify({
   rules: [
     {
       id: 'rule-001',
-      sources: [
-        { fromId: 'AC Cooler', targetType: 'variable', property: 'temperature', relation: '>', value: '28' }
+      conditions: [
+        { deviceName: 'AC Cooler', attribute: 'temperature', relation: '>', value: '28' }
       ],
-      toId: 'device-001',
-      toApi: 'turnOn'
+      command: { deviceName: 'device-001', action: 'turnOn' }
     }
   ],
   specs: [
@@ -489,7 +490,8 @@ const result = await verificationApi.verify({
       ]
     }
   ],
-  saveTrace: true
+  isAttack: false,
+  intensity: 3
 });
 
 if (!result.safe) {

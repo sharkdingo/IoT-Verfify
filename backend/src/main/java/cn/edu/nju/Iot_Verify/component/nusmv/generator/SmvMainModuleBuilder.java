@@ -36,7 +36,7 @@ public class SmvMainModuleBuilder {
         
         if (isAttack && intensity > 0) {
             content.append("\nFROZENVAR");
-            content.append("\n\tintensity: 0..").append(intensity).append(";");
+            content.append("\n\tintensity: 0..50;");
         }
         
         content.append("\nVAR\n");
@@ -77,8 +77,7 @@ public class SmvMainModuleBuilder {
             content.append("\n\tinit(intensity) := 0");
             for (DeviceNodeDto device : devices) {
                 DeviceSmvData smv = deviceSmvMap.get(device.getId());
-                if (smv != null && smv.manifest != null && 
-                    (smv.manifest.getApis() == null || smv.manifest.getApis().isEmpty())) {
+                if (smv != null) {
                     String varName = smv.getVarName();
                     content.append(" + toint(").append(varName).append(".is_attack)");
                 }
@@ -302,7 +301,7 @@ public class SmvMainModuleBuilder {
                     content.append(varName).append(".").append(condition.getAttribute())
                            .append(condition.getRelation()).append(condition.getValue());
                 } else {
-                    // API signal condition: look up API endState and check mode=endState
+                    // API signal condition: use api signal OR state-based condition
                     DeviceManifest manifest = condSmv.manifest;
                     if (manifest != null && manifest.getApis() != null) {
                         for (DeviceManifest.API api : manifest.getApis()) {
@@ -310,20 +309,32 @@ public class SmvMainModuleBuilder {
                                 api.getName().equals(condition.getAttribute())) {
                                 String endState = api.getEndState();
                                 if (endState != null) {
+                                    String apiSignal = buildApiSignalName(api.getName());
+                                    String apiSignalExpr = apiSignal != null
+                                            ? varName + "." + apiSignal + "=TRUE"
+                                            : null;
                                     // Handle multi-mode devices
                                     if (condSmv.modes != null && !condSmv.modes.isEmpty()) {
                                         int modeIdx = getModeIndexOfState(condSmv, endState);
                                         if (modeIdx >= 0 && modeIdx < condSmv.modes.size()) {
                                             String mode = condSmv.modes.get(modeIdx);
                                             String cleanEndState = endState.replace(";", "").replace(" ", "");
-                                            content.append(varName).append(".").append(mode)
-                                                   .append("=").append(cleanEndState);
+                                            String stateExpr = varName + "." + mode + "=" + cleanEndState;
+                                            if (apiSignalExpr != null) {
+                                                content.append("(").append(apiSignalExpr).append(" | ").append(stateExpr).append(")");
+                                            } else {
+                                                content.append(stateExpr);
+                                            }
                                         }
                                     } else {
                                         // Single mode device
                                         String cleanEndState = endState.replace(";", "").replace(" ", "");
-                                        content.append(varName).append(".state=")
-                                               .append(cleanEndState);
+                                        String stateExpr = varName + ".state=" + cleanEndState;
+                                        if (apiSignalExpr != null) {
+                                            content.append("(").append(apiSignalExpr).append(" | ").append(stateExpr).append(")");
+                                        } else {
+                                            content.append(stateExpr);
+                                        }
                                     }
                                 }
                                 break;
@@ -485,7 +496,10 @@ public class SmvMainModuleBuilder {
             for (DeviceManifest.API api : smv.manifest.getApis()) {
                 if (api.getSignal() == null || !api.getSignal()) continue;
 
-                String signalName = api.getName().replace(" ", "") + "_a";
+                String signalName = buildApiSignalName(api.getName());
+                if (signalName == null) {
+                    continue;
+                }
                 
                 content.append("\n\tnext(").append(varName).append(".").append(signalName).append(") :=\n");
                 content.append("\tcase\n");
@@ -544,6 +558,10 @@ public class SmvMainModuleBuilder {
         for (DeviceNodeDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getId());
             if (smv == null) continue;
+
+            if (isSensorDevice(smv)) {
+                continue;
+            }
 
             String varName = smv.getVarName();
             List<RuleDto> deviceRules = rulesByTarget.get(device.getId());
@@ -646,6 +664,10 @@ public class SmvMainModuleBuilder {
         for (DeviceNodeDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getId());
             if (smv == null) continue;
+
+            if (isSensorDevice(smv)) {
+                continue;
+            }
 
             String varName = smv.getVarName();
             List<RuleDto> deviceRules = rulesByTarget.get(device.getId());
@@ -973,5 +995,19 @@ public class SmvMainModuleBuilder {
             }
         }
         return 0;
+    }
+
+    private boolean isSensorDevice(DeviceSmvData smv) {
+        return smv != null && smv.manifest != null &&
+                (smv.manifest.getApis() == null || smv.manifest.getApis().isEmpty());
+    }
+
+    private String buildApiSignalName(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw.replaceAll("[^a-zA-Z0-9_]", "_");
+        if (cleaned.isBlank()) {
+            return null;
+        }
+        return cleaned + "_a";
     }
 }

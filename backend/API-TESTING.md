@@ -59,7 +59,8 @@ curl -X POST http://localhost:8080/api/verify \
         ]
       }
     ],
-    "saveTrace": false
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -106,7 +107,8 @@ curl -X POST http://localhost:8080/api/verify \
         ]
       }
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -167,7 +169,8 @@ curl -X POST http://localhost:8080/api/verify \
         ]
       }
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -225,7 +228,8 @@ curl -X POST http://localhost:8080/api/verify \
         ]
       }
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3
   }'
 ```
 
@@ -300,7 +304,7 @@ If all specifications are marked as `true` but you expect violations:
 
 ### Trace Empty
 
-If `saveTrace: true` but traces array is empty:
+If `safe: false` but traces array is empty:
 1. Verify the specification was actually violated
 2. Check that `violatedSpecId` in the response matches your spec ID
 3. Look at `nusmvOutput` in the response for debugging info

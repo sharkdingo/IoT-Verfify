@@ -103,17 +103,40 @@ public class SmvContentBuilder {
         Map<String, DeviceSmvData> deviceSmvMap = new LinkedHashMap<>();
 
         for (DeviceNodeDto device : devices) {
+            if (device == null) {
+                continue;
+            }
+            if (device.getId() == null || device.getId().isBlank()) {
+                log.warn("Skip device with empty id");
+                continue;
+            }
+            if (device.getTemplateName() == null || device.getTemplateName().isBlank()) {
+                log.warn("Skip device {} with empty templateName", device.getId());
+                continue;
+            }
             DeviceSmvData smv = new DeviceSmvData();
             smv.id = device.getId();
             smv.name = device.getTemplateName();
             smv.deviceNo = extractDeviceNo(device.getId());
             smv.currentState = device.getState();
             smv.currentStateTrust = device.getCurrentStateTrust();
+            smv.instanceStateTrust = device.getCurrentStateTrust();
 
             if (device.getVariables() != null) {
                 for (DeviceNodeDto.VariableStateDto var : device.getVariables()) {
                     if (var.getName() != null && var.getValue() != null) {
                         smv.variableValues.put(var.getName(), var.getValue());
+                    }
+                    if (var.getName() != null && var.getTrust() != null) {
+                        smv.instanceVariableTrust.put(var.getName(), var.getTrust());
+                    }
+                }
+            }
+
+            if (device.getPrivacies() != null) {
+                for (DeviceNodeDto.PrivacyStateDto privacy : device.getPrivacies()) {
+                    if (privacy.getName() != null && privacy.getPrivacy() != null) {
+                        smv.instanceVariablePrivacy.put(privacy.getName(), privacy.getPrivacy());
                     }
                 }
             }
@@ -154,26 +177,34 @@ public class SmvContentBuilder {
 
     private TemplateWrapper getTemplateFromCache(Map<String, TemplateWrapper> cache,
                                                    Long userId, String templateName) {
+        if (templateName == null) {
+            return null;
+        }
         if (cache.containsKey(templateName)) {
             return cache.get(templateName);
         }
 
-        TemplateWrapper wrapper = new TemplateWrapper();
         try {
             Optional<DeviceTemplatePo> templatePo = deviceTemplateService.findTemplateByName(userId, templateName);
-            if (templatePo.isPresent()) {
-                wrapper.setTemplatePo(templatePo.get());
-                try {
-                    wrapper.setManifest(objectMapper.readValue(templatePo.get().getManifestJson(), DeviceManifest.class));
-                } catch (Exception e) {
-                    log.warn("Failed to parse manifest JSON for template {}: {}", templateName, e.getMessage());
-                }
+            if (templatePo.isEmpty()) {
+                return null;
             }
+
+            DeviceManifest manifest;
+            try {
+                manifest = objectMapper.readValue(templatePo.get().getManifestJson(), DeviceManifest.class);
+            } catch (Exception e) {
+                log.warn("Failed to parse manifest JSON for template {}: {}", templateName, e.getMessage());
+                return null;
+            }
+
+            TemplateWrapper wrapper = new TemplateWrapper(templatePo.get(), manifest);
             cache.put(templateName, wrapper);
+            return wrapper;
         } catch (Exception e) {
             log.warn("Failed to load template {}: {}", templateName, e.getMessage());
+            return null;
         }
-        return wrapper;
     }
 
     private void extractModes(DeviceSmvData smv, DeviceManifest manifest) {
@@ -259,7 +290,7 @@ public class SmvContentBuilder {
             for (DeviceManifest.Transition trans : manifest.getTransitions()) {
                 if (trans.getSignal() != null && trans.getSignal()) {
                     DeviceSmvData.SignalInfo sig = new DeviceSmvData.SignalInfo();
-                    sig.setName(trans.getName());
+                    sig.setName(formatSignalName(trans.getName()));
                     sig.setStart(trans.getStartState());
                     sig.setEnd(trans.getEndState());
                     sig.setTrigger(formatTrigger(trans.getTrigger()));
@@ -272,7 +303,7 @@ public class SmvContentBuilder {
             for (DeviceManifest.API api : manifest.getApis()) {
                 if (api.getSignal() != null && api.getSignal()) {
                     DeviceSmvData.SignalInfo sig = new DeviceSmvData.SignalInfo();
-                    sig.setName(api.getName());
+                    sig.setName(formatApiSignalName(api.getName()));
                     sig.setStart(api.getStartState());
                     sig.setEnd(api.getEndState());
                     sig.setTrigger(formatTrigger(api.getTrigger()));
@@ -362,8 +393,13 @@ public class SmvContentBuilder {
             }
             
             String sigName = getSignalName(deviceSmvMap, condition.getDeviceName(), condition.getAttribute());
-            if (sigName != null) {
+            String apiCondition = buildApiCondition(deviceSmvMap, condition);
+            if (sigName != null && apiCondition != null) {
+                conditionBuilder.append("(").append(sigName).append("=TRUE | ").append(apiCondition).append(") & ");
+            } else if (sigName != null) {
                 conditionBuilder.append(sigName).append("=TRUE & ");
+            } else if (apiCondition != null) {
+                conditionBuilder.append(apiCondition).append(" & ");
             } else {
                 conditionBuilder.append(condition.getDeviceName()).append(".")
                         .append(condition.getAttribute());
@@ -383,6 +419,34 @@ public class SmvContentBuilder {
         return conditionBuilder.toString();
     }
 
+    private String buildApiCondition(Map<String, DeviceSmvData> deviceSmvMap, RuleDto.Condition condition) {
+        if (condition == null || condition.getRelation() != null) {
+            return null;
+        }
+        DeviceSmvData smv = deviceSmvMap.get(condition.getDeviceName());
+        if (smv == null || smv.manifest == null || smv.manifest.getApis() == null) {
+            return null;
+        }
+        for (DeviceManifest.API api : smv.manifest.getApis()) {
+            if (api.getSignal() != null && api.getSignal() && api.getName().equals(condition.getAttribute())) {
+                String endState = api.getEndState();
+                if (endState == null) return null;
+                String varName = smv.getVarName();
+                if (smv.modes != null && !smv.modes.isEmpty()) {
+                    int modeIdx = getModeIndexOfState(smv, endState);
+                    if (modeIdx >= 0 && modeIdx < smv.modes.size()) {
+                        String mode = smv.modes.get(modeIdx);
+                        String cleanEndState = endState.replace(";", "").replace(" ", "");
+                        return varName + "." + mode + "=" + cleanEndState;
+                    }
+                }
+                String cleanEndState = endState.replace(";", "").replace(" ", "");
+                return varName + ".state=" + cleanEndState;
+            }
+        }
+        return null;
+    }
+
     private String getSignalName(Map<String, DeviceSmvData> deviceSmvMap, String deviceId, String attribute) {
         DeviceSmvData smv = deviceSmvMap.get(deviceId);
         if (smv == null) return null;
@@ -390,6 +454,13 @@ public class SmvContentBuilder {
         for (DeviceSmvData.SignalInfo sig : smv.signalVars) {
             if (attribute != null && attribute.equals(sig.getName())) {
                 return sig.getName();
+            }
+            if (attribute != null && sig.getType() != null && "api".equals(sig.getType())
+                    && sig.getName() != null && sig.getName().endsWith("_a")) {
+                String base = sig.getName().substring(0, sig.getName().length() - 2);
+                if (attribute.equals(base)) {
+                    return sig.getName();
+                }
             }
             if (attribute != null && sig.getTrigger() != null &&
                     sig.getTrigger().equalsIgnoreCase(attribute)) {
@@ -468,8 +539,21 @@ public class SmvContentBuilder {
     }
 
     private String formatTrigger(DeviceManifest.Trigger trigger) {
-        if (trigger == null) return null;
+        if (trigger == null || trigger.getAttribute() == null || trigger.getRelation() == null || trigger.getValue() == null) {
+            return null;
+        }
         return trigger.getAttribute() + trigger.getRelation() + trigger.getValue();
+    }
+
+    private String formatApiSignalName(String apiName) {
+        String base = formatSignalName(apiName);
+        return base == null ? null : base + "_a";
+    }
+
+    private String formatSignalName(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw.replaceAll("[^a-zA-Z0-9_]", "_");
+        return cleaned.isBlank() ? raw : cleaned;
     }
 
     private int extractDeviceNo(String deviceId) {
@@ -482,5 +566,15 @@ public class SmvContentBuilder {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    private int getModeIndexOfState(DeviceSmvData smv, String state) {
+        if (smv == null || smv.modes == null || state == null) return -1;
+        for (int i = 0; i < smv.modes.size(); i++) {
+            if (state.contains(smv.modes.get(i))) {
+                return i;
+            }
+        }
+        return 0;
     }
 }
