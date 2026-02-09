@@ -4,7 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
-import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.service.impl.VerificationServiceImpl;
@@ -70,8 +70,8 @@ public class VerificationController {
      * 获取任务状态
      */
     @GetMapping("/tasks/{id}")
-    public Result<VerificationTaskPo> getTask(
-            @CurrentUser Long userId, 
+    public Result<VerificationTaskDto> getTask(
+            @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(verificationService.getTask(userId, id));
     }

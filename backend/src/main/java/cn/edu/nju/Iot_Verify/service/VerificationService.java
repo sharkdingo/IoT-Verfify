@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import java.util.List;
 
 /**
@@ -57,9 +58,9 @@ public interface VerificationService {
      *
      * @param userId 用户ID
      * @param taskId 任务ID
-     * @return 任务状态
+     * @return 任务状态DTO
      */
-    cn.edu.nju.Iot_Verify.po.VerificationTaskPo getTask(Long userId, Long taskId);
+    VerificationTaskDto getTask(Long userId, Long taskId);
     
     /**
      * 获取用户的所有 Trace

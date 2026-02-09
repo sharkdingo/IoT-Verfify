@@ -9,14 +9,16 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
-import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
-import cn.edu.nju.Iot_Verify.util.TraceMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +47,7 @@ public class VerificationServiceImpl implements VerificationService {
     private final TraceRepository traceRepository;
     private final TraceMapper traceMapper;
     private final SpecificationMapper specificationMapper;
+    private final VerificationTaskMapper verificationTaskMapper;
     private final ObjectMapper objectMapper;
 
     private static final int MAX_OUTPUT_LENGTH = 10000;
@@ -435,37 +438,27 @@ public class VerificationServiceImpl implements VerificationService {
         }
     }
 
-    /**
-     * 获取任务状态
-     */
     @Override
-    public VerificationTaskPo getTask(Long userId, Long taskId) {
+    public VerificationTaskDto getTask(Long userId, Long taskId) {
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
         if (task != null) {
             task.setCheckLogs(readCheckLogs(task));
         }
-        return task;
+        return verificationTaskMapper.toDto(task);
     }
 
     @Override
     public List<TraceDto> getUserTraces(Long userId) {
         log.debug("Getting traces for user {}", userId);
         List<TracePo> traces = traceRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        return traceMapper.fromPoList(traces);
+        return traceMapper.toDtoList(traces);
     }
 
-    /**
-     * 获取单个 Trace
-     * 
-     * @param userId 用户ID
-     * @param traceId Trace ID
-     * @return Trace DTO，如果不存在或不属于该用户则返回 null
-     */
     @Override
     public TraceDto getTrace(Long userId, Long traceId) {
         log.debug("Getting trace {} for user {}", traceId, userId);
         return traceRepository.findByIdAndUserId(traceId, userId)
-                .map(traceMapper::fromPo)
+                .map(traceMapper::toDto)
                 .orElse(null);
     }
 

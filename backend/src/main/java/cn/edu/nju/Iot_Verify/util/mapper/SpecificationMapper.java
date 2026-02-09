@@ -50,4 +50,12 @@ public class SpecificationMapper {
 
         return po;
     }
+
+    public SpecificationPo toPo(SpecificationDto dto, Long userId) {
+        return toEntity(dto, userId);
+    }
+
+    public String toJson(SpecificationDto dto) {
+        return JsonUtils.toJson(dto);
+    }
 }

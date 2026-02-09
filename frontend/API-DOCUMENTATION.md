@@ -827,7 +827,6 @@ export type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCE
 
 export interface VerificationTask {
   id: number;
-  userId: number;
   status: TaskStatus;
   createdAt: string;      // ISO datetime
   startedAt?: string;     // ISO datetime
@@ -836,7 +835,6 @@ export interface VerificationTask {
   isSafe?: boolean;
   violatedSpecCount?: number;
   checkLogs: string[];
-  nusmvOutput?: string;
   errorMessage?: string;
 }
 

@@ -12,11 +12,11 @@ import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
-import cn.edu.nju.Iot_Verify.util.DeviceEdgeMapper;
-import cn.edu.nju.Iot_Verify.util.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
-import cn.edu.nju.Iot_Verify.util.RuleMapper;
-import cn.edu.nju.Iot_Verify.util.SpecificationMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.DeviceEdgeMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,11 +40,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateRepository deviceTemplateRepo;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;
+    private final DeviceNodeMapper deviceNodeMapper;
+    private final DeviceEdgeMapper deviceEdgeMapper;
 
     @Override
     public List<DeviceNodeDto> getNodes(Long userId) {
         return nodeRepo.findByUserId(userId).stream()
-                .map(DeviceNodeMapper::toDto)
+                .map(deviceNodeMapper::toDto)
                 .toList();
     }
 
@@ -53,16 +55,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     public List<DeviceNodeDto> saveNodes(Long userId, List<DeviceNodeDto> nodes) {
         nodeRepo.deleteByUserId(userId);
         List<DeviceNodePo> pos = nodes.stream()
-                .map(dto -> DeviceNodeMapper.toPo(dto, userId))
+                .map(dto -> deviceNodeMapper.toEntity(dto, userId))
                 .toList();
         List<DeviceNodePo> saved = nodeRepo.saveAll(pos);
-        return saved.stream().map(DeviceNodeMapper::toDto).toList();
+        return saved.stream().map(deviceNodeMapper::toDto).toList();
     }
 
     @Override
     public List<DeviceEdgeDto> getEdges(Long userId) {
         return edgeRepo.findByUserId(userId).stream()
-                .map(DeviceEdgeMapper::toDto)
+                .map(deviceEdgeMapper::toDto)
                 .toList();
     }
 
@@ -71,10 +73,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     public List<DeviceEdgeDto> saveEdges(Long userId, List<DeviceEdgeDto> edges) {
         edgeRepo.deleteByUserId(userId);
         List<DeviceEdgePo> pos = edges.stream()
-                .map(dto -> DeviceEdgeMapper.toPo(dto, userId))
+                .map(dto -> deviceEdgeMapper.toEntity(dto, userId))
                 .toList();
         List<DeviceEdgePo> saved = edgeRepo.saveAll(pos);
-        return saved.stream().map(DeviceEdgeMapper::toDto).toList();
+        return saved.stream().map(deviceEdgeMapper::toDto).toList();
     }
 
     @Override
