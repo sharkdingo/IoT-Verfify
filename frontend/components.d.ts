@@ -61,6 +61,7 @@ declare module 'vue' {
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     InputPanel: typeof import('./src/components/InputPanel.vue')['default']
     InspectorPanel: typeof import('./src/components/InspectorPanel.vue')['default']
+    LogoutConfirm: typeof import('./src/components/LogoutConfirm.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']

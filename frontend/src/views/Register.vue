@@ -90,256 +90,501 @@ const goToLogin = () => {
 </script>
 
 <template>
-  <div class="auth-container">
-    <div class="auth-card">
-      <!-- Logo区域 -->
-      <div class="auth-header">
-        <img src="/IoT-Verify.png" alt="Logo" class="auth-logo" />
-        <h1 class="auth-title">IoT-Verify</h1>
-        <p class="auth-subtitle">{{ t('auth.createAccount') }}</p>
+  <div class="auth-wrapper">
+    <!-- Left Panel (Branding) -->
+    <div class="brand-panel">
+      <div class="bg-effects">
+        <div class="grid-pattern"></div>
+        <div class="gradient-overlay"></div>
+        <div class="glow-blue"></div>
       </div>
-      
-      <!-- 表单区域 -->
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        class="auth-form"
-        size="large"
-      >
-        <el-form-item prop="phone">
-          <el-input
-            v-model="form.phone"
-            :placeholder="t('auth.phonePlaceholder')"
-            prefix-icon="Phone"
-            clearable
-          />
-        </el-form-item>
-        
-        <el-form-item prop="username">
-          <el-input
-            v-model="form.username"
-            :placeholder="t('auth.usernamePlaceholder')"
-            prefix-icon="User"
-            clearable
-          />
-        </el-form-item>
-        
-        <el-form-item prop="password">
-          <el-input
-            v-model="form.password"
-            :placeholder="t('auth.passwordPlaceholder')"
-            type="password"
-            prefix-icon="Lock"
-            show-password
-          />
-        </el-form-item>
-        
-        <el-form-item prop="confirmPassword">
-          <el-input
-            v-model="form.confirmPassword"
-            :placeholder="t('auth.confirmPasswordPlaceholder')"
-            type="password"
-            prefix-icon="Lock"
-            show-password
-            @keyup.enter="handleRegister"
-          />
-        </el-form-item>
-        
-        <el-form-item>
-          <el-button
-            type="primary"
-            :loading="loading"
-            class="auth-btn"
-            @click="handleRegister"
-          >
-            {{ t('auth.register') }}
-          </el-button>
-        </el-form-item>
-      </el-form>
-      
-      <!-- 底部链接 -->
-      <div class="auth-footer">
-        <span class="auth-link-text">{{ t('auth.haveAccount') }}</span>
-        <el-link type="primary" @click="goToLogin">
-          {{ t('auth.loginNow') }}
-        </el-link>
+
+      <div class="brand-content">
+        <!-- Brand Header -->
+        <div class="brand-header">
+          <div class="brand-logo">
+            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <path clip-rule="evenodd" d="M24 18.4228L42 11.475V34.3663C42 34.7796 41.7457 35.1504 41.3601 35.2992L24 42V18.4228Z" fill="currentColor" fill-rule="evenodd"></path>
+              <path clip-rule="evenodd" d="M24 8.18819L33.4123 11.574L24 15.2071L14.5877 11.574L24 8.18819ZM9 15.8487L21 20.4805V37.6263L9 32.9945V15.8487ZM27 37.6263V20.4805L39 15.8487V32.9945L27 37.6263ZM25.354 2.29885C24.4788 1.98402 23.5212 1.98402 22.646 2.29885L4.98454 8.65208C3.7939 9.08038 3 10.2097 3 11.475V34.3663C3 36.0196 4.01719 37.5026 5.55962 38.098L22.9197 44.7987C23.6149 45.0671 24.3851 45.0671 25.0803 44.7987L42.4404 38.098C43.9828 37.5026 45 36.0196 45 34.3663V11.475C45 10.2097 44.2061 9.08038 43.0155 8.65208L25.354 2.29885Z" fill="currentColor" fill-rule="evenodd"></path>
+            </svg>
+          </div>
+          <span class="brand-name">IoT Nexus</span>
+        </div>
+
+        <!-- Hero Text -->
+        <div class="hero-text">
+          <h2>Master Your <br/><span>Smart Ecosystem</span></h2>
+          <p>Join the world's most advanced IoT management platform. Connect, automate, and scale your network with ease.</p>
+        </div>
+
+        <!-- Hero Image Placeholder -->
+        <div class="hero-image-placeholder">
+             <img src="/IoT-Verify.png" alt="IoT-Verify Logo" class="hero-logo">
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-icon"><span class="material-symbols-outlined">hub</span></div>
+            <div class="stat-label">GLOBAL NETWORK</div>
+            <div class="stat-value">124 Nodes</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><span class="material-symbols-outlined">shield</span></div>
+            <div class="stat-label">SECURE PROTOCOL</div>
+            <div class="stat-value">AES-256</div>
+          </div>
+        </div>
       </div>
     </div>
-    
-    <!-- 装饰背景 -->
-    <div class="auth-decoration">
-      <div class="decoration-circle circle-1"></div>
-      <div class="decoration-circle circle-2"></div>
-      <div class="decoration-circle circle-3"></div>
+
+    <!-- Right Panel (Form) -->
+    <div class="form-panel">
+      <!-- Mobile Header -->
+      <div class="mobile-header">
+        <div class="brand-logo">
+          <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+            <path clip-rule="evenodd" d="M24 18.4228L42 11.475V34.3663C42 34.7796 41.7457 35.1504 41.3601 35.2992L24 42V18.4228Z" fill="currentColor" fill-rule="evenodd"></path>
+          </svg>
+        </div>
+        <span class="brand-name">IoT Nexus</span>
+      </div>
+
+      <div class="form-container">
+        <div class="form-header">
+          <h3>Get Started</h3>
+          <p>Create your management account in minutes.</p>
+        </div>
+
+        <el-form
+          ref="formRef"
+          :model="form"
+          :rules="rules"
+          class="auth-form"
+        >
+          <!-- Phone -->
+          <div class="form-group">
+            <label>Phone Number</label>
+            <div class="input-wrapper">
+              <div class="input-icon">
+                <span class="material-symbols-outlined">phone</span>
+              </div>
+              <el-input
+                v-model="form.phone"
+                placeholder="Please enter your phone number"
+                class="custom-input"
+              />
+            </div>
+          </div>
+
+          <!-- Username -->
+          <div class="form-group">
+            <label>Full Name</label>
+            <div class="input-wrapper">
+              <div class="input-icon">
+                <span class="material-symbols-outlined">person</span>
+              </div>
+              <el-input
+                v-model="form.username"
+                placeholder="John Doe"
+                class="custom-input"
+              />
+            </div>
+          </div>
+
+          <!-- Password -->
+          <div class="form-group">
+            <label>Password</label>
+            <div class="input-wrapper">
+              <div class="input-icon">
+                <span class="material-symbols-outlined">lock</span>
+              </div>
+              <el-input
+                v-model="form.password"
+                type="password"
+                placeholder="Enter password"
+                class="custom-input"
+                show-password
+              />
+            </div>
+          </div>
+
+          <!-- Confirm Password -->
+          <div class="form-group">
+            <label>Confirm Password</label>
+            <div class="input-wrapper">
+              <div class="input-icon">
+                <span class="material-symbols-outlined">verified_user</span>
+              </div>
+              <el-input
+                v-model="form.confirmPassword"
+                type="password"
+                placeholder="Confirm password"
+                class="custom-input"
+                show-password
+                @keyup.enter="handleRegister"
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="submit-btn"
+            :loading="loading"
+            @click="handleRegister"
+          >
+            Register Now
+          </button>
+        </el-form>
+
+
+        <!-- Login Link -->
+        <div class="footer-link">
+          <span>Already have an account?</span>
+          <button @click="goToLogin">Login here</button>
+        </div>
+      </div>
+      
     </div>
   </div>
 </template>
 
-<style scoped>
-.auth-container {
-  min-height: 100vh;
+<style>
+@import '@/assets/auth-styles.css';
+
+/* Component-specific overrides for Register page */
+.auth-wrapper {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--iot-color-bg-body);
-  position: relative;
-  overflow: hidden;
-  transition: background-color 0.3s ease;
-}
-
-.auth-card {
-  width: 440px;
-  padding: 48px 40px;
-  background: var(--iot-color-card-bg);
-  border: 1px solid var(--iot-color-card-border);
-  border-radius: var(--iot-radius-card);
-  box-shadow: var(--iot-color-card-shadow);
-  position: relative;
-  z-index: 10;
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
-}
-
-.auth-header {
-  text-align: center;
-  margin-bottom: 32px;
-}
-
-.auth-logo {
-  width: 72px;
-  height: 72px;
-  margin-bottom: 16px;
-  border-radius: 16px;
-  box-shadow: var(--iot-node-shadow);
-}
-
-.auth-title {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--iot-color-title);
-  margin: 0 0 8px;
-  letter-spacing: -0.5px;
-}
-
-.auth-subtitle {
-  font-size: 15px;
-  color: var(--iot-color-text-muted);
-  margin: 0;
-}
-
-.auth-form {
-  margin-bottom: 24px;
-}
-
-.auth-btn {
   width: 100%;
-  height: 48px;
-  font-size: 16px;
-  font-weight: 600;
-  border-radius: var(--iot-radius-input);
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  border: none;
-  transition: all 0.3s ease;
+  height: 100%;
+  background-color: var(--bg-page);
+  overflow: hidden;
 }
 
-.auth-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4);
+/* Brand Panel */
+.brand-panel {
+  display: none;
+  width: var(--brand-panel-width);
+  position: relative;
+  background-color: var(--bg-brand-panel);
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3rem;
+  overflow: hidden;
+  border-right: 1px solid #f1f5f9;
 }
 
-.auth-footer {
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+@media (min-width: 1024px) {
+  .brand-panel {
+    display: flex;
+  }
 }
 
-.auth-link-text {
-  font-size: 14px;
-  color: var(--iot-color-text-muted);
-}
-
-/* 装饰背景 */
-.auth-decoration {
+.bg-effects {
   position: absolute;
   inset: 0;
+  z-index: 0;
   pointer-events: none;
 }
 
-.decoration-circle {
+.grid-pattern {
   position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, #cbd5e1 1px, transparent 1px);
+  background-size: 30px 30px;
+  opacity: 0.4;
+}
+
+.gradient-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom right, rgba(219, 234, 254, 0.5), rgba(255, 255, 255, 0.5));
+}
+
+.glow-blue {
+  position: absolute;
+  width: 50%;
+  height: 50%;
+  background: #bfdbfe;
+  filter: blur(100px);
   border-radius: 50%;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.08));
-  backdrop-filter: blur(60px);
+  top: -10%;
+  left: -10%;
 }
 
-.circle-1 {
-  width: 400px;
-  height: 400px;
-  top: -100px;
-  left: -100px;
+.brand-content {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  justify-content: space-between;
 }
 
-.circle-2 {
-  width: 300px;
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-primary);
+  margin-bottom: 2rem;
+}
+
+.brand-logo {
+  background: white;
+  padding: 4px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.brand-logo svg {
+  width: 20px;
+  height: 20px;
+  color: var(--color-primary);
+}
+
+.brand-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.hero-text h2 {
+  font-size: 3rem;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+}
+
+.hero-text h2 span {
+  color: var(--color-primary);
+}
+
+.hero-text p {
+  font-size: 1.125rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.hero-image-placeholder {
+  position: relative;
+  width: 100%;
   height: 300px;
-  bottom: -50px;
-  right: -50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2rem 0;
 }
 
-.circle-3 {
-  width: 200px;
-  height: 200px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+.hero-logo {
+  max-width: 80%;
+  max-height: 120%;
+  object-fit: contain;
+  filter: drop-shadow(0 20px 50px rgba(0,0,0,0.1));
+  transition: transform 0.3s ease;
+}
+.hero-logo:hover {
+    transform: scale(1.02);
 }
 
-/* Element Plus 覆盖样式 - 使用主题变量 */
-:deep(.el-input__wrapper) {
-  border-radius: var(--iot-radius-input);
-  padding: 4px 16px;
-  background: var(--iot-color-input-bg);
-  box-shadow: 0 0 0 1px var(--iot-color-input-border);
-  transition: all 0.3s ease;
+.stats-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
 }
 
-:deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+.stat-card {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
+  padding: 1.25rem;
+  border-radius: 16px;
+  border: 1px solid #bfdbfe;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
 
-:deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.4);
+.stat-icon {
+  color: var(--color-primary);
+  margin-bottom: 0.5rem;
 }
 
-:deep(.el-form-item) {
-  margin-bottom: 20px;
+.stat-icon .material-symbols-outlined {
+  font-size: 24px;
 }
 
-:deep(.el-input__prefix) {
-  color: var(--iot-color-text-muted);
+.stat-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
 }
 
-:deep(.el-input__inner) {
-  height: 48px;
-  font-size: 15px;
-  color: var(--iot-color-text);
-  background: transparent;
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
-:deep(.el-input__inner::placeholder) {
-  color: var(--iot-color-text-muted);
+.stat-value span {
+  font-size: 1.25rem;
+  color: var(--color-primary);
 }
 
-:deep(.el-form-item__error) {
-  color: #ef4444;
+/* Form Panel */
+.form-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-form-panel);
+  position: relative;
+  z-index: 10;
 }
 
-/* 亮色主题下的卡片样式 */
-:root[data-theme='light'] .auth-card {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(148, 163, 184, 0.55);
+@media (min-width: 1024px) {
+  .form-panel {
+    width: var(--form-panel-width);
+  }
 }
+
+.mobile-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding-top: 3rem;
+  padding-bottom: 2rem;
+}
+
+@media (min-width: 1024px) {
+  .mobile-header {
+    display: none;
+  }
+}
+
+.form-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2rem 3rem;
+  max-width: 36rem;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.form-header {
+  margin-bottom: 2rem;
+}
+
+.form-header h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.025em;
+  margin-bottom: 0.25rem;
+}
+
+.form-header p {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.form-group {
+  margin-bottom: 1.25rem;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-label);
+  margin-bottom: 0.25rem;
+}
+
+.input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-icon {
+  position: absolute;
+  left: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.custom-input {
+  width: 100%;
+  height: 3rem; /* py-2.5 approx 40px + padding */
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  padding-left: 2.5rem !important;
+  padding-right: 1rem;
+  transition: all 0.2s;
+}
+
+.custom-input:hover {
+  background-color: var(--bg-input-hover);
+  border-color: var(--border-color-hover);
+}
+
+.custom-input:focus {
+  background-color: var(--bg-input-hover);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--color-primary-light) !important;
+  outline: none;
+}
+
+.submit-btn {
+  width: 100%;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  background-color: var(--color-primary);
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 700;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: 0 10px 15px -3px rgba(53, 158, 255, 0.2);
+  transition: all 0.2s;
+  margin-top: 1rem;
+}
+
+.submit-btn:hover {
+  background-color: var(--color-primary-hover);
+}
+
+
+.footer-link {
+  margin-top: 2rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.footer-link button {
+  color: var(--color-primary);
+  font-weight: 700;
+  margin-left: 0.25rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
 </style>

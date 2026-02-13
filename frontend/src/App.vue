@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import Header from "./components/Header.vue";
 import ChatView from "./components/ChatView.vue";
-import {ref} from "vue";
+import {ref, computed} from "vue";
 import { useRoute } from "vue-router";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
+
+const isAuthPage = computed(() => {
+  return route.path === '/login' || route.path === '/register';
+});
 const handleSystemCommand = (cmd: any) => {
   console.log("App收到指令:", cmd);
 
@@ -30,7 +34,7 @@ const handleSystemCommand = (cmd: any) => {
 
 <template>
   <div class="app-layout">
-    <header v-if="route.path !== '/create-template'" class="app-header">
+    <header v-if="!isAuthPage" class="app-header">
       <Header />
     </header>
 

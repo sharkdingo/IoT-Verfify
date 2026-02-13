@@ -3,6 +3,7 @@ import './style.css'
 import './styles/base.css'
 import './styles/board.css'
 import './styles/tailwind.css'
+import './assets/auth-styles.css'
 import App from './App.vue'
 import {router} from './router';
 import ElementPlus from 'element-plus';

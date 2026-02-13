@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessageBox } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { useAuth } from '@/stores/auth';
 import { authApi } from '@/api/auth';
+import LogoutConfirm from './LogoutConfirm.vue';
 
 const { locale } = useI18n();
 const router = useRouter();
 const { state, logout, getUser } = useAuth();
+const showLogoutConfirm = ref(false);
 
 // 移除主题切换功能，固定使用亮色主题
 onMounted(() => {
@@ -20,26 +21,19 @@ const currentUser = computed(() => getUser());
 const isLoggedIn = computed(() => state.isLoggedIn);
 
 const handleLogout = async () => {
+  showLogoutConfirm.value = true;
+};
+
+const confirmLogout = async () => {
+  // 调用登出API（可选，失败也清除本地状态）
   try {
-    await ElMessageBox.confirm(
-      '确定要退出登录吗？',
-      '提示',
-      { type: 'warning' }
-    );
-
-    // 调用登出API（可选，失败也清除本地状态）
-    try {
-      await authApi.logout();
-    } catch {
-      // API失败不影响本地登出
-    }
-
-    logout();
-    ElMessageBox.close();
-    router.push('/login');
+    await authApi.logout();
   } catch {
-    // 用户取消
+    // API失败不影响本地登出
   }
+
+  logout();
+  router.push('/login');
 };
 
 const goToLogin = () => {
@@ -110,6 +104,12 @@ const goToRegister = () => {
 
       </el-col>
     </el-row>
+    
+    <!-- Logout Confirmation Modal -->
+    <LogoutConfirm 
+      v-model:visible="showLogoutConfirm" 
+      @confirm="confirmLogout" 
+    />
   </el-header>
 </template>
 

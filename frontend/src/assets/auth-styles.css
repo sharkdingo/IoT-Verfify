@@ -1,0 +1,93 @@
+:root {
+  /* Brand Colors */
+  --color-primary: #359EFF;
+  --color-primary-hover: #2563eb;
+  --color-primary-light: rgba(53, 158, 255, 0.2);
+
+  /* Backgrounds */
+  --bg-page: #f5f7f8;
+  --bg-brand-panel: #eff6ff;
+  --bg-form-panel: #ffffff;
+  --bg-input: #f8fafc;
+  --bg-input-hover: #ffffff;
+
+  /* Text Colors */
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-label: #334155;
+
+  /* Borders */
+  --border-color: #e2e8f0;
+  --border-color-hover: #cbd5e1;
+  --border-focus: #359EFF;
+
+  /* Spacing */
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+
+  /* Layout */
+  --brand-panel-width: 60%;
+  --form-panel-width: 40%;
+
+  /* Fonts */
+  --font-family: 'Space Grotesk', sans-serif;
+}
+
+/* Global Imports - moved from components */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL@24,400,0,0');
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Shared Utility Classes (if any) */
+.brand-logo svg {
+  width: 36px;
+  height: 36px;
+  color: var(--color-primary);
+}
+
+.brand-logo {
+  background: white;
+  padding: 4px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.submit-btn {
+  width: 100%;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  background-color: var(--color-primary);
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 700;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.2);
+  transition: all 0.2s;
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.submit-btn:hover {
+  background-color: var(--color-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 20px 25px -5px rgba(37, 99, 235, 0.2);
+}
+
+.custom-input:focus {
+  background-color: var(--bg-input-hover);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1) !important;
+  outline: none;
+}
