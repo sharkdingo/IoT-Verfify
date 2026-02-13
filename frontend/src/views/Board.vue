@@ -1259,8 +1259,8 @@ defineExpose({
         @save-rule="handleAddRule"
     />
 
-    <!-- Canvas Map - Fixed at bottom left -->
-    <div class="fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
+    <!-- Canvas Map - Fixed at top right -->
+    <div class="fixed bottom-4 right-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
       <div class="flex items-center justify-between mb-2">
         <span class="text-[10px] uppercase font-bold text-slate-400">Canvas Map</span>
         <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>

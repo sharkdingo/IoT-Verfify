@@ -39,6 +39,7 @@ const displayDevices = computed(() => {
   return props.devices.map(device => ({
     id: device.id,
     name: device.label,
+    type: device.templateName || 'Device',
     status: 'online' as const // Simplified - in real app, this would come from device state
   }))
 })
@@ -204,20 +205,28 @@ const togglePanel = () => {
     class="absolute right-0 top-0 bottom-0 glass-panel z-40 flex flex-col border-l border-slate-200 transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'w-12' : 'w-80'"
   >
-    <div class="p-3 border-b border-slate-100 bg-white/50 flex items-center justify-center">
+    <div class="relative overflow-hidden p-4 bg-white border-b border-slate-200">
       <div v-if="!isCollapsed" class="flex items-center justify-between w-full">
-        <h2 class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">System Inspector</h2>
+        <div class="flex items-center gap-3">
+          <div class="p-2 bg-blue-50 rounded-lg border border-blue-100/50 shadow-sm">
+            <span class="material-symbols-outlined text-blue-600">fact_check</span>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-slate-800 leading-none">System Inspector</h2>
+            <p class="text-[10px] text-slate-500 font-medium mt-0.5">Device Management</p>
+          </div>
+        </div>
         <button
           @click="togglePanel"
-          class="text-slate-400 hover:text-slate-700 transition-colors"
+          class="text-slate-400 hover:text-slate-800 hover:bg-slate-100 p-1.5 rounded-lg transition-all"
         >
-          <span class="material-symbols-outlined text-lg transition-transform duration-200">dock_to_right</span>
+        <span class="material-symbols-outlined text-base">dock_to_left</span>
         </button>
       </div>
       <div v-else class="flex items-center justify-center p-1">
         <button
           @click="togglePanel"
-          class="text-slate-400 hover:text-slate-700 transition-colors p-1 rounded hover:bg-white/20"
+          class="text-slate-400 hover:text-slate-800 hover:bg-slate-100 p-1.5 rounded-lg transition-all"
         >
           <span class="material-symbols-outlined text-base">dock_to_left</span>
         </button>
@@ -230,40 +239,58 @@ const togglePanel = () => {
     >
       <!-- Device List Section -->
       <div>
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">Device List</h3>
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-slate-400">devices</span>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Device List</h3>
+          </div>
         </div>
 
-        <div class="space-y-2">
+        <div class="space-y-2.5">
           <div
             v-for="device in displayDevices"
             :key="device.id"
             @click="handleDeviceClick(device.id)"
-            class="flex items-center justify-between p-3 rounded-xl bg-white border border-slate-100 hover:bg-slate-50 hover:border-primary/30 transition-all cursor-pointer group shadow-sm"
+            class="group relative p-4 rounded-xl bg-white border border-slate-200/60 hover:border-blue-300/50 shadow-sm hover:shadow-md transition-all cursor-pointer overflow-hidden"
           >
-            <div class="flex items-center gap-3">
-              <div class="size-2 rounded-full shadow-sm bg-green-500"></div>
-              <span class="text-sm font-medium text-slate-700 group-hover:text-primary transition-colors">
-                {{ device.name }}
-              </span>
+            <!-- Hover gradient background -->
+            <div class="absolute inset-0 bg-gradient-to-r from-blue-50/0 to-indigo-50/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+
+            <div class="relative flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="relative">
+                  <div class="w-2.5 h-2.5 rounded-full shadow-sm" :class="device.status === 'online' ? 'bg-green-500' : 'bg-red-500'"></div>
+                  <div class="absolute inset-0 w-2.5 h-2.5 rounded-full animate-ping opacity-75" :class="device.status === 'online' ? 'bg-green-400' : 'bg-red-400'"></div>
+                </div>
+                <span class="text-sm font-semibold text-slate-700 group-hover:text-blue-600 transition-colors">
+                  {{ device.name }}
+                </span>
+                <span v-if="device.type" class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                  {{ device.type }}
+                </span>
+              </div>
+              <button
+                @click.stop="handleDeleteDevice(device.id)"
+                class="text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 p-1.5 rounded-lg"
+                title="Remove device"
+              >
+                <span class="material-symbols-outlined text-sm">close</span>
+              </button>
             </div>
-            <button
-              @click.stop="handleDeleteDevice(device.id)"
-              class="text-red-500 hover:text-red-700 transition-colors opacity-0 group-hover:opacity-100"
-            >
-              <span class="material-symbols-outlined text-sm">delete</span>
-            </button>
           </div>
         </div>
       </div>
 
       <!-- Active Global Rules Section -->
       <div>
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">Active Global Rules</h3>
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-slate-400">rule</span>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Global Rules</h3>
+          </div>
           <button
             @click="handleAddRule"
-            class="text-primary hover:text-primary/70 transition-colors"
+            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
           >
             <span class="material-symbols-outlined text-sm">add</span>
           </button>
@@ -274,127 +301,106 @@ const togglePanel = () => {
             v-for="rule in displayRules"
             :key="rule.id"
             :class="[
-              'p-3 rounded-xl border relative overflow-hidden shadow-sm',
+              'p-3 rounded-lg border relative overflow-hidden transition-all hover:shadow-md',
               rule.color === 'blue'
-                ? 'bg-blue-50/50 border-blue-100'
-                : 'bg-purple-50/50 border-purple-100'
+                ? 'bg-white border-blue-100 hover:border-blue-200'
+                : 'bg-white border-purple-100 hover:border-purple-200'
             ]"
           >
-            <!-- Background icon -->
-            <div class="absolute right-0 top-0 p-2 opacity-10">
-              <span
-                class="material-symbols-outlined text-4xl"
-                :class="rule.color === 'blue' ? 'text-blue-600' : 'text-purple-600'"
-              >
-                {{ rule.color === 'blue' ? 'nightlight' : 'thermostat_auto' }}
-              </span>
+            <div class="flex items-start justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span :class="[
+                  'material-symbols-outlined text-sm',
+                  rule.color === 'blue' ? 'text-blue-500' : 'text-purple-500'
+                ]">
+                  {{ rule.color === 'blue' ? 'nightlight' : 'thermostat_auto' }}
+                </span>
+                <h4 :class="[
+                  'text-sm font-bold',
+                  rule.color === 'blue' ? 'text-blue-700' : 'text-purple-700'
+                ]">
+                  {{ rule.name }}
+                </h4>
+              </div>
+              
+              <!-- Rule toggle switch -->
+              <label class="relative inline-flex items-center cursor-pointer scale-75 origin-right">
+                <input
+                  type="checkbox"
+                  :checked="rule.enabled"
+                  @change="rule.id && handleToggleRule(rule.id)"
+                  class="sr-only peer"
+                >
+                <div class="w-8 h-4 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
+              </label>
             </div>
 
-            <!-- Rule content -->
-            <h4 :class="[
-              'text-sm font-bold mb-1',
-              rule.color === 'blue' ? 'text-blue-700' : 'text-purple-700'
-            ]">
-              {{ rule.name }}
-            </h4>
-
-            <p class="text-[11px] text-slate-600 leading-tight font-medium mb-2">
+            <p class="text-[11px] text-slate-500 leading-tight font-medium ml-7">
               {{ rule.description }}
             </p>
 
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span :class="[
-                  'px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border shadow-sm',
-                  rule.color === 'blue'
-                    ? 'bg-white text-blue-600 border-blue-200'
-                    : 'bg-white text-purple-600 border-purple-200'
-                ]">
-                  {{ rule.status }}
-                </span>
-
-                <!-- Rule toggle switch -->
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    :checked="rule.enabled"
-                    @change="rule.id && handleToggleRule(rule.id)"
-                    class="sr-only peer"
-                  >
-                  <div class="w-8 h-4 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
-                </label>
-              </div>
-
+            <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 @click="rule.id && handleDeleteRule(rule.id)"
-                class="text-slate-400 hover:text-red-500 transition-colors p-1 rounded"
+                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50"
                 title="Delete rule"
               >
-                <span class="material-symbols-outlined text-sm">delete</span>
+                <span class="material-symbols-outlined text-xs">delete</span>
               </button>
             </div>
           </div>
 
           <!-- Empty state when no rules -->
-          <div v-if="displayRules.length === 0" class="text-center py-8 text-slate-400">
-            <span class="material-symbols-outlined text-4xl mb-2 block">rule</span>
-            <p class="text-sm">No rules created yet</p>
-            <p class="text-xs">Drag IF/THEN blocks from the left panel to create rules</p>
+          <div v-if="displayRules.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+            <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">rule</span>
+            <p class="text-xs">No rules active</p>
           </div>
         </div>
       </div>
 
       <!-- Specifications Section -->
       <div>
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">Specifications</h3>
-          <span class="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-medium border border-slate-200">
-            {{ activeSpecsCount }} Active
-          </span>
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-slate-400">verified</span>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Specifications</h3>
+          </div>
         </div>
 
         <div class="space-y-3">
           <div
             v-for="spec in displaySpecs"
             :key="spec.id"
-            class="p-3 rounded-xl border relative overflow-hidden shadow-sm bg-red-50/50 border-red-100"
+            class="p-3 rounded-lg border border-red-100 relative overflow-hidden transition-all hover:shadow-md bg-white group"
           >
-            <!-- Background icon -->
-            <div class="absolute right-0 top-0 p-2 opacity-10">
-              <span class="material-symbols-outlined text-4xl text-red-600">
-                warning
-              </span>
-            </div>
+            <!-- Subtle background pulse -->
+            <div class="absolute inset-0 bg-red-50/30 pointer-events-none"></div>
 
-            <!-- Spec content -->
-            <h4 class="text-sm font-bold mb-1 text-red-700">
-              {{ spec.name }}
-            </h4>
-
-            <p class="text-[11px] text-slate-600 leading-tight font-medium mb-2 font-mono">
-              {{ spec.formula }}
-            </p>
-
-            <div class="flex items-center justify-between">
-              <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border shadow-sm bg-white text-red-600 border-red-200">
-                {{ spec.status }}
-              </span>
-
+            <div class="relative flex items-start justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-sm text-red-500">warning</span>
+                <h4 class="text-sm font-bold text-slate-800">
+                  {{ spec.name }}
+                </h4>
+              </div>
               <button
                 @click="handleDeleteSpec(spec.id)"
-                class="text-slate-400 hover:text-red-500 transition-colors p-1 rounded"
+                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
                 title="Delete specification"
               >
-                <span class="material-symbols-outlined text-sm">delete</span>
+                <span class="material-symbols-outlined text-xs">delete</span>
               </button>
             </div>
+
+            <p class="text-[11px] text-slate-600 leading-tight font-mono ml-7 bg-slate-50 p-1.5 rounded border border-slate-100 inline-block">
+              {{ spec.formula }}
+            </p>
           </div>
 
           <!-- Empty state when no specifications -->
-          <div v-if="displaySpecs.length === 0" class="text-center py-8 text-slate-400">
-            <span class="material-symbols-outlined text-4xl mb-2 block">description</span>
-            <p class="text-sm">No specifications created yet</p>
-            <p class="text-xs">Use the Templates panel on the left to create LTL specifications</p>
+          <div v-if="displaySpecs.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+            <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">verified</span>
+            <p class="text-xs">No specifications verified</p>
           </div>
         </div>
       </div>

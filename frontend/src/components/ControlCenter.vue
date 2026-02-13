@@ -160,7 +160,7 @@ const saveCondition = () => {
     })
     return
   }
-  if (!editingConditionData.key) {
+  if (editingConditionData.targetType !== 'state' && !editingConditionData.key) {
     ElMessage.warning({
       message: 'Please select a property',
       center: true
@@ -864,204 +864,244 @@ const exportTemplate = (template: any) => {
 
 <template>
   <aside
-    class="absolute left-0 top-0 bottom-0 glass-panel z-40 flex flex-col border-r border-slate-200 transition-all duration-300 ease-in-out"
-    :class="isCollapsed ? 'w-12' : 'w-72'"
+    class="absolute left-0 top-0 bottom-0 modern-panel z-40 flex flex-col border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
+    :class="isCollapsed ? 'w-16' : 'w-80'"
   >
-    <div class="p-3 border-b border-slate-100 bg-white/50 flex items-center justify-center">
-      <div v-if="!isCollapsed" class="flex items-center justify-between w-full">
-        <h2 class="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Control Center</h2>
+    <!-- 顶部标题区域 -->
+    <div class="relative overflow-hidden p-4 bg-white border-b border-slate-200">
+      <!-- 装饰性背景 -->
+      <div class="absolute top-0 right-0 w-32 h-32 bg-slate-100 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
+      <div class="absolute bottom-0 left-0 w-24 h-24 bg-slate-100 rounded-full translate-y-1/2 -translate-x-1/2 blur-2xl"></div>
+      
+      <div v-if="!isCollapsed" class="relative flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
+            <span class="material-symbols-outlined text-slate-600 text-xl">dashboard</span>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-slate-800 tracking-wide">Control Center</h2>
+            <p class="text-xs text-slate-500">Device Management</p>
+          </div>
+        </div>
         <button
           @click="togglePanel"
-          class="text-slate-400 hover:text-slate-700 transition-colors"
+          class="w-8 h-8 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
         >
-          <span class="material-symbols-outlined text-lg transition-transform duration-200">dock_to_left</span>
+          <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200">dock_to_left</span>
         </button>
       </div>
-      <div v-else class="flex items-center justify-center p-1">
+      <div v-else class="flex items-center justify-center">
         <button
           @click="togglePanel"
-          class="text-slate-400 hover:text-slate-700 transition-colors p-1 rounded hover:bg-white/20"
+          class="w-10 h-10 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
         >
-          <span class="material-symbols-outlined text-base">dock_to_right</span>
+          <span class="material-symbols-outlined text-slate-600 text-base">dock_to_right</span>
         </button>
       </div>
     </div>
 
     <!-- Section tabs (only when expanded) -->
-    <div v-if="!isCollapsed" class="px-3 py-2 border-b border-slate-100 bg-white/60">
-      <div class="grid grid-cols-4 gap-1">
+    <div v-if="!isCollapsed" class="px-4 py-3 bg-white border-b border-slate-200">
+      <div class="grid grid-cols-4 gap-2 p-1 bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
         <button
           @click="activeSection = 'templates'"
           :class="[
-            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'templates'
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+              ? 'bg-orange-500 text-white shadow-md'
+              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
-          Templates
+          <span class="material-symbols-outlined text-sm">inventory_2</span>
+          <span class="text-[10px]">Templates</span>
         </button>
         <button
           @click="activeSection = 'devices'"
           :class="[
-            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'devices'
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+              ? 'bg-purple-500 text-white shadow-md'
+              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
-          Devices
+          <span class="material-symbols-outlined text-sm">devices</span>
+          <span class="text-[10px]">Devices</span>
         </button>
         <button
           @click="activeSection = 'rules'"
           :class="[
-            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'rules'
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+              ? 'bg-blue-500 text-white shadow-md'
+              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
-          Rules
+          <span class="material-symbols-outlined text-sm">rule</span>
+          <span class="text-[10px]">Rules</span>
         </button>
         <button
           @click="activeSection = 'specs'"
           :class="[
-            'py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border',
+            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'specs'
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+              ? 'bg-red-500 text-white shadow-md'
+              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
-          Specs
+          <span class="material-symbols-outlined text-sm">verified</span>
+          <span class="text-[10px]">Specs</span>
         </button>
       </div>
     </div>
 
     <div
-      class="flex-1 overflow-y-auto custom-scrollbar bg-white transition-all duration-300 max-h-[calc(100vh-120px)]"
-      :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-0'"
+      class="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 transition-all duration-300 max-h-[calc(100vh-140px)]"
+      :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-2'"
     >
       <!-- Devices -->
-      <details v-if="activeSection === 'devices'" class="group border-b border-slate-100" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
+      <details v-if="activeSection === 'devices'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-purple-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-lg text-secondary">add_circle</span>
-            <span class="text-sm font-semibold text-slate-700">Device Manager</span>
+            <div class="w-10 h-10 bg-purple-500 rounded-xl flex items-center justify-center">
+                <span class="material-symbols-outlined text-black text-lg">add_circle</span>
+            </div>
+            <div>
+              <span class="text-sm font-bold text-slate-800">Device Manager</span>
+              <p class="text-xs text-slate-500">Add and manage devices</p>
+            </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
+          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
-        <div class="px-4 pb-5 space-y-3 bg-slate-50/50 pt-2">
+        <div class="px-3 pb-4 space-y-3 bg-slate-50/50 pt-2">
           <!-- Add Device Form -->
           <div class="space-y-3">
             <!-- Device Name -->
-            <div>
-              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Device Name</label>
-              <input
-                v-model="deviceForm.name"
-                class="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-xs text-slate-700 focus:border-secondary focus:ring-secondary/20 placeholder:text-slate-400 transition-all shadow-sm"
-                placeholder="e.g. Kitchen Sensor"
-                type="text"
-              />
+            <div class="relative">
+              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">Device Name</label>
+              <div class="relative">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">badge</span>
+                <input
+                  v-model="deviceForm.name"
+                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 placeholder:text-slate-400 transition-all shadow-sm"
+                  placeholder="e.g. Kitchen Sensor"
+                  type="text"
+                />
+              </div>
             </div>
 
             <!-- Device Type -->
-            <div>
-              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">Type</label>
-              <select
-                v-model="deviceForm.type"
-                class="w-full bg-white border border-slate-200 rounded-md px-2 py-2 text-xs text-slate-700 focus:border-secondary focus:ring-secondary/20 shadow-sm"
-              >
-                <option v-for="type in deviceTypes" :key="type" :value="type">{{ type }}</option>
-              </select>
+            <div class="relative">
+              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">Type</label>
+              <div class="relative">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">devices</span>
+                <select
+                  v-model="deviceForm.type"
+                  class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 transition-all appearance-none cursor-pointer shadow-sm"
+                >
+                  <option v-for="type in deviceTypes" :key="type" :value="type">{{ type }}</option>
+                </select>
+              </div>
             </div>
 
             <!-- Action Buttons -->
-            <div class="space-y-2">
+            <div class="space-y-2 pt-1">
               <!-- Drop Node Button for predefined types -->
               <button
                 @click="createDevice()"
-                class="w-full py-2 bg-white hover:bg-secondary/[0.03] text-secondary border border-secondary/20 hover:border-secondary/40 rounded-md text-xs font-bold uppercase tracking-wider transition-all shadow-sm"
+                class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
               >
+                <span class="material-symbols-outlined text-sm">add_location</span>
                 + Drop Node
               </button>
             </div>
-
           </div>
-
         </div>
       </details>
 
       <!-- Templates -->
-      <details v-if="activeSection === 'templates'" class="group border-b border-slate-100" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
+      <details v-if="activeSection === 'templates'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-orange-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-lg text-orange-500">inventory_2</span>
-            <span class="text-sm font-semibold text-slate-700">Template Manager</span>
+            <div class="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center">
+              <span class="material-symbols-outlined text-white text-lg">inventory_2</span>
+            </div>
+            <div>
+              <span class="text-sm font-bold text-slate-800">Template Manager</span>
+              <p class="text-xs text-slate-500">Design and manage templates</p>
+            </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
+          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
-        <div class="px-4 pb-5 bg-slate-50/50 pt-2 space-y-4">
+        <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
           <!-- Create New Template Button -->
-          <div class="border border-orange-200 rounded-lg p-4 bg-orange-50/30 hover:bg-orange-50/50 transition-colors cursor-pointer" @click="goToCreateTemplate">
-            <div class="flex items-center justify-between">
+          <div class="relative overflow-hidden group cursor-pointer rounded-xl bg-orange-500 hover:bg-orange-600 transition-all" @click="goToCreateTemplate">
+            <div class="relative p-3 flex items-center justify-between">
               <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
-                  <span class="material-symbols-outlined">add</span>
+                <div class="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
+                  <span class="material-symbols-outlined text-white text-lg">add</span>
                 </div>
                 <div>
-                  <div class="text-sm font-semibold text-orange-800">Create New Template</div>
-                  <div class="text-xs text-orange-600/70">Design a new device template</div>
+                  <div class="text-sm font-bold text-white">Create New Template</div>
                 </div>
               </div>
-              <span class="material-symbols-outlined text-orange-400">chevron_right</span>
+              <div class="w-8 h-8 bg-orange-400 rounded-lg flex items-center justify-center group-hover:bg-orange-300 transition-colors">
+                <span class="material-symbols-outlined text-white text-sm">chevron_right</span>
+              </div>
             </div>
           </div>
 
           <!-- Existing Templates List -->
           <div class="space-y-2">
-            <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Existing Templates</h4>
+            <div class="flex items-center gap-2 px-1">
+              <span class="material-symbols-outlined text-slate-400 text-xs">folder</span>
+              <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Existing Templates</h4>
+              <div class="flex-1 h-px bg-slate-200"></div>
+            </div>
             
-            <div v-if="props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name)).length > 0" class="grid grid-cols-1 gap-3">
-              <div v-for="template in props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name))" :key="template.id" class="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-md transition-shadow group">
-                <div class="flex items-start justify-between mb-3">
-                  <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-lg bg-orange-50 flex items-center justify-center text-orange-600 group-hover:bg-orange-100 transition-colors">
-                      <span class="material-symbols-outlined">devices</span>
+            <div v-if="props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name)).length > 0" class="grid grid-cols-1 gap-2">
+              <div v-for="template in props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name))" :key="template.id" class="group relative bg-white rounded-lg p-3 border-2 border-slate-200 hover:border-orange-300 hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
+                <!-- 装饰 -->
+                <div class="absolute top-0 right-0 w-16 h-16 bg-orange-100 rounded-full -translate-y-1/2 translate-x-1/2 opacity-50 group-hover:opacity-70 transition-opacity"></div>
+                
+                <div class="relative flex items-start justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <div class="w-9 h-9 bg-orange-100 rounded-lg flex items-center justify-center text-orange-600 group-hover:bg-orange-500 group-hover:text-white transition-all shadow-sm">
+                      <span class="material-symbols-outlined text-lg">devices</span>
                     </div>
                     <div>
-                      <h4 class="text-sm font-bold text-slate-800">{{ template.manifest.Name }}</h4>
-                      <p v-if="template.manifest.Description" class="text-xs text-slate-500 mt-0.5 line-clamp-1">{{ template.manifest.Description }}</p>
+                      <h4 class="text-xs font-bold text-slate-800 group-hover:text-orange-600 transition-colors">{{ template.manifest.Name }}</h4>
+                      <p v-if="template.manifest.Description" class="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{{ template.manifest.Description }}</p>
                     </div>
                   </div>
                   <div class="flex gap-1">
                     <button
                       @click.stop="openDeleteConfirm(template)"
-                      class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
                       title="Delete Template"
                     >
-                      <span class="material-symbols-outlined text-sm">delete</span>
+                      <span class="material-symbols-outlined text-xs">delete</span>
                     </button>
                   </div>
                 </div>
 
                 <!-- Stats Grid -->
-                <div class="grid grid-cols-4 gap-2 mb-3">
-                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
-                    <div class="text-[10px] text-slate-400 uppercase font-bold">Vars</div>
+                <div class="grid grid-cols-4 gap-1 mb-2">
+                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
+                    <div class="text-[8px] text-slate-400 uppercase font-bold">Vars</div>
                     <div class="text-xs font-bold text-slate-700">{{ template.manifest.InternalVariables?.length || 0 }}</div>
                   </div>
-                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
-                    <div class="text-[10px] text-slate-400 uppercase font-bold">APIs</div>
+                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
+                    <div class="text-[8px] text-slate-400 uppercase font-bold">APIs</div>
                     <div class="text-xs font-bold text-slate-700">{{ template.manifest.APIs?.length || 0 }}</div>
                   </div>
-                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
-                    <div class="text-[10px] text-slate-400 uppercase font-bold">States</div>
+                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
+                    <div class="text-[8px] text-slate-400 uppercase font-bold">States</div>
                     <div class="text-xs font-bold text-slate-700">{{ template.manifest.WorkingStates?.length || 0 }}</div>
                   </div>
-                  <div class="bg-slate-50 rounded px-2 py-1.5 text-center border border-slate-100">
-                    <div class="text-[10px] text-slate-400 uppercase font-bold">Modes</div>
+                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
+                    <div class="text-[8px] text-slate-400 uppercase font-bold">Modes</div>
                     <div class="text-xs font-bold text-slate-700">{{ template.manifest.Modes?.length || 0 }}</div>
                   </div>
                 </div>
@@ -1070,238 +1110,330 @@ const exportTemplate = (template: any) => {
                 <div class="pt-2 border-t border-slate-100 flex justify-end">
                   <button
                     @click="exportTemplate(template)"
-                    class="text-xs px-3 py-1.5 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors flex items-center gap-1"
+                    class="text-[10px] px-3 py-1.5 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors flex items-center gap-1 font-medium"
                     title="Export Template"
                   >
-                    <span class="material-symbols-outlined text-sm">download</span>
+                    <span class="material-symbols-outlined text-xs">download</span>
                     Export
                   </button>
                 </div>
               </div>
             </div>
 
-            <div v-else class="text-center py-8 border border-dashed border-slate-200 rounded-lg bg-slate-50/50">
-              <div class="material-symbols-outlined text-slate-300 text-3xl mb-2">inventory_2</div>
-              <p class="text-sm text-slate-500 mb-2">No custom templates yet</p>
-              <p class="text-xs text-slate-400">Click "Create New Template" to get started.</p>
+            <div v-else class="relative overflow-hidden text-center py-6 border-2 border-dashed border-slate-200 rounded-lg bg-slate-50">
+              <div class="relative">
+                <div class="w-12 h-12 mx-auto bg-slate-100 rounded-xl flex items-center justify-center mb-2 shadow-inner">
+                  <span class="material-symbols-outlined text-slate-400 text-2xl">inventory_2</span>
+                </div>
+                <p class="text-xs text-slate-600 mb-0.5 font-medium">No custom templates yet</p>
+                <p class="text-[10px] text-slate-400">Click "Create New Template" to get started.</p>
+              </div>
             </div>
           </div>
         </div>
       </details>
 
       <!-- Rules -->
-      <details v-if="activeSection === 'rules'" class="group border-b border-slate-100" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
+      <details v-if="activeSection === 'rules'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-lg text-primary">function</span>
-            <span class="text-sm font-semibold text-slate-700">IFTTT Rule</span>
+            <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center">
+              <span class="material-symbols-outlined text-white text-lg">function</span>
+            </div>
+            <div>
+              <span class="text-sm font-bold text-slate-800">IFTTT Rule</span>
+              <p class="text-xs text-slate-500">Create conditional logic</p>
+            </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
+          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
-        <div class="px-4 pb-5 bg-slate-50/50 pt-2 grid grid-cols-1 gap-2">
+        <div class="px-3 pb-4 bg-slate-50/50 pt-2 grid grid-cols-1 gap-3">
           <!-- Rule Creation Block -->
           <div
-            class="flex items-center gap-2 p-3 rounded bg-white border border-blue-200 cursor-pointer hover:bg-blue-50 transition-colors shadow-sm"
+            class="relative overflow-hidden group cursor-pointer rounded-xl bg-blue-500 hover:bg-blue-600 transition-all hover:shadow-lg hover:-translate-y-0.5"
             @click="openRuleBuilder"
           >
-            <div class="flex flex-col">
-              <span class="text-xs font-bold text-blue-700">Create Rule</span>
-              <span class="text-[10px] text-slate-500">IF → THEN logic</span>
+            <div class="relative p-3 flex items-center gap-3">
+              <div class="w-10 h-10 bg-blue-400 rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined text-black text-lg">add_circle</span>
+              </div>
+              <div class="flex-1">
+                <span class="text-sm font-bold text-white block">Create Rule</span>
+                <span class="text-xs text-blue-100">IF → THEN logic</span>
+              </div>
+              <div class="w-7 h-7 bg-blue-400 rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
+              </div>
             </div>
           </div>
         </div>
       </details>
 
       <!-- Specs -->
-      <details v-if="activeSection === 'specs'" class="group border-b border-slate-100" open>
-        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors list-none select-none">
+      <details v-if="activeSection === 'specs'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+        <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-red-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined text-lg text-red-500">verified</span>
-            <span class="text-sm font-semibold text-slate-700">Specifications</span>
+            <div class="w-10 h-10 bg-red-500 rounded-xl flex items-center justify-center">
+              <span class="material-symbols-outlined text-white text-lg">verified</span>
+            </div>
+            <div>
+              <span class="text-sm font-bold text-slate-800">Specifications</span>
+              <p class="text-xs text-slate-500">LTL verification rules</p>
+            </div>
           </div>
-          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-sm">expand_more</span>
+          <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
         </summary>
 
-        <div class="px-4 pb-5 bg-slate-50/50 pt-2 space-y-2">
+        <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
           <!-- Specification Creation -->
-          <div class="space-y-4">
+          <div class="space-y-3">
             <!-- Step 1: Select Template -->
             <div>
-              <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5">1. Select Template</label>
+              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">Select Template</label>
               <select
                 v-model="specForm.templateId"
                 @change="handleTemplateChange"
-                class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all"
+                class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-red-400 focus:ring-2 focus:ring-red-100/50 transition-all shadow-sm appearance-none cursor-pointer"
               >
                 <option value="" disabled hidden>Select a specification template</option>
                 <option
                   v-for="template in specTemplateDetails"
                   :key="template.id"
                   :value="template.id"
+                  class="truncate"
                 >
                   {{ template.label }}
                 </option>
               </select>
-              <p v-if="currentTemplateDetail" class="text-xs text-slate-500 mt-1.5 px-1">
-                {{ currentTemplateDetail.description }}
+              <p v-if="currentTemplateDetail" class="text-[10px] text-slate-500 mt-1.5 px-1">
+                <span class="line-clamp-2">{{ currentTemplateDetail.description }}</span>
               </p>
             </div>
 
             <!-- Step 2: Add Conditions based on template requirements -->
             <div v-if="specForm.templateId" class="space-y-2">
-              <label class="block text-[10px] uppercase font-bold text-slate-500">2. Configure Conditions</label>
+              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide">Configure Conditions</label>
 
               <!-- A Conditions (Always/Forall) -->
-              <div v-if="isSideRequired('a')" class="border border-red-200 rounded-lg p-2 bg-red-50/50">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-bold text-red-600 uppercase tracking-wide">A Conditions</span>
+              <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg bg-red-50 border border-red-200 p-2.5">
+                <div class="relative flex items-center justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-6 h-6 bg-red-500 rounded-md flex items-center justify-center">
+                      <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                      </svg>
+                    </span>
+                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">A Conditions</span>
+                  </div>
                   <button
                     @click="openConditionDialog('a')"
-                    class="text-xs px-2 py-0.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+                    class="px-2.5 py-1 bg-red-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-red-600 transition-all shadow-sm flex items-center gap-1"
                   >
-                    + Add
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Add
                   </button>
                 </div>
-                <div class="space-y-1 max-h-28 overflow-y-auto">
+                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
                   <div
                     v-for="(condition, index) in specForm.aConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-red-100"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-red-100 shadow-sm hover:shadow-md transition-all"
                   >
-                    <div class="flex items-center gap-1.5 overflow-hidden">
-                      <span class="text-xs text-slate-700 font-medium truncate">
-                        {{ getDeviceLabel(condition.deviceId) }}
-                      </span>
-                      <span class="text-slate-300">·</span>
-                      <span class="text-xs text-red-600 truncate">
-                        {{ condition.key }}
-                      </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
-                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
-                        {{ condition.value || '*' }}
-                      </span>
+                    <div class="flex items-center gap-2 overflow-hidden flex-1">
+                      <div class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                        </svg>
+                      </div>
+                      <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
+                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0">
+                          {{ getDeviceLabel(condition.deviceId) }}
+                        </span>
+                        <span class="text-slate-300 flex-shrink-0">·</span>
+                        <span class="text-[10px] text-red-600 font-medium truncate flex-shrink-0">{{ condition.key }}</span>
+                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                          {{ getRelationLabel(condition.relation || '=') }}
+                        </span>
+                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0">
+                          {{ condition.value || '*' }}
+                        </span>
+                      </div>
                     </div>
-                    <div class="flex gap-0.5 ml-1">
-                      <button @click="openConditionDialog('a', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
-                        <span class="material-symbols-outlined text-xs">edit</span>
+                    <div class="flex gap-1 ml-2 flex-shrink-0">
+                      <button @click="openConditionDialog('a', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
                       </button>
-                      <button @click="removeCondition('a', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
-                        <span class="material-symbols-outlined text-xs">close</span>
+                      <button @click="removeCondition('a', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.aConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
-                    No conditions
+                  <div v-if="specForm.aConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
+                    No conditions added yet
                   </div>
                 </div>
               </div>
 
               <!-- IF Conditions (Antecedent) -->
-              <div v-if="isSideRequired('if')" class="border border-orange-200 rounded-lg p-2 bg-orange-50/50">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-bold text-orange-600 uppercase tracking-wide">A Conditions</span>
+              <div v-if="isSideRequired('if')" class="relative overflow-hidden rounded-lg bg-red-50 border border-red-200 p-2.5">
+                <div class="relative flex items-center justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-6 h-6 bg-red-500 rounded-md flex items-center justify-center">
+                      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                      </svg>
+                    </span>
+                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">IF Conditions</span>
+                  </div>
                   <button
                     @click="openConditionDialog('if')"
-                    class="text-xs px-2 py-0.5 bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
+                    class="px-2.5 py-1 bg-red-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-red-600 transition-all shadow-sm flex items-center gap-1"
                   >
-                    + Add
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Add
                   </button>
                 </div>
-                <div class="space-y-1 max-h-28 overflow-y-auto">
+                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
                   <div
                     v-for="(condition, index) in specForm.ifConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-orange-100"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-red-100 shadow-sm hover:shadow-md transition-all"
                   >
-                    <div class="flex items-center gap-1.5 overflow-hidden">
-                      <span class="text-xs text-slate-700 font-medium truncate">
-                        {{ getDeviceLabel(condition.deviceId) }}
-                      </span>
-                      <span class="text-slate-300">·</span>
-                      <span class="text-xs text-orange-600 truncate">
-                        {{ condition.key }}
-                      </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
-                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
-                        {{ condition.value || '*' }}
-                      </span>
+                    <div class="flex items-center gap-2 overflow-hidden flex-1">
+                      <div class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                        </svg>
+                      </div>
+                      <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
+                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0">
+                          {{ getDeviceLabel(condition.deviceId) }}
+                        </span>
+                        <span class="text-slate-300 flex-shrink-0">·</span>
+                        <span class="text-[10px] text-red-600 font-medium truncate flex-shrink-0">{{ condition.key }}</span>
+                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                          {{ getRelationLabel(condition.relation || '=') }}
+                        </span>
+                        <span class="text-[10px] bg-red-50 text-red-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-red-200 flex-shrink-0">
+                          {{ condition.value || '*' }}
+                        </span>
+                      </div>
                     </div>
-                    <div class="flex gap-0.5 ml-1">
-                      <button @click="openConditionDialog('if', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
-                        <span class="material-symbols-outlined text-xs">edit</span>
+                    <div class="flex gap-1 ml-2 flex-shrink-0">
+                      <button @click="openConditionDialog('if', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
                       </button>
-                      <button @click="removeCondition('if', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
-                        <span class="material-symbols-outlined text-xs">close</span>
+                      <button @click="removeCondition('if', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.ifConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
-                    No conditions
+                  <div v-if="specForm.ifConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
+                    No conditions added yet
                   </div>
                 </div>
               </div>
 
               <!-- THEN Conditions (Consequent) -->
-              <div v-if="isSideRequired('then')" class="border border-rose-200 rounded-lg p-2 bg-rose-50/50">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-bold text-rose-600 uppercase tracking-wide">B Conditions</span>
+              <div v-if="isSideRequired('then')" class="relative overflow-hidden rounded-lg bg-yellow-50 border border-yellow-200 p-2.5">
+                <div class="relative flex items-center justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-6 h-6 bg-yellow-500 rounded-md flex items-center justify-center">
+                      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                      </svg>
+                    </span>
+                    <span class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide">THEN Conditions</span>
+                  </div>
                   <button
                     @click="openConditionDialog('then')"
-                    class="text-xs px-2 py-0.5 bg-rose-500 text-white rounded hover:bg-rose-600 transition-colors"
+                    class="px-2.5 py-1 bg-yellow-500 text-white rounded-md text-[10px] font-bold uppercase tracking-wide hover:bg-yellow-600 transition-all shadow-sm flex items-center gap-1"
                   >
-                    + Add
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Add
                   </button>
                 </div>
-                <div class="space-y-1 max-h-28 overflow-y-auto">
+                <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
                   <div
                     v-for="(condition, index) in specForm.thenConditions"
                     :key="condition.id"
-                    class="flex items-center justify-between bg-white rounded px-2 py-1 border border-rose-100"
+                    class="flex items-center justify-between bg-white rounded-md px-2.5 py-1.5 border border-yellow-100 shadow-sm hover:shadow-md transition-all"
                   >
-                    <div class="flex items-center gap-1.5 overflow-hidden">
-                      <text class="text-xs text-slate-700 font-medium truncate">
-                        {{ getDeviceLabel(condition.deviceId) }}
-                      </text>
-                      <span class="text-slate-300">·</span>
-                      <span class="text-xs text-rose-600 truncate">
-                        {{ condition.key }}
-                      </span>
-                      <span class="text-xs text-slate-400">{{ getRelationLabel(condition.relation || '=') }}</span>
-                      <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[50px]">
-                        {{ condition.value || '*' }}
-                      </span>
+                    <div class="flex items-center gap-2 overflow-hidden flex-1">
+                      <div class="w-6 h-6 bg-yellow-100 rounded-md flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                        </svg>
+                      </div>
+                      <div class="flex items-center gap-1 overflow-hidden flex-1 min-w-0">
+                        <span class="text-[10px] text-slate-700 font-medium truncate min-w-0">
+                          {{ getDeviceLabel(condition.deviceId) }}
+                        </span>
+                        <span class="text-slate-300 flex-shrink-0">·</span>
+                        <span class="text-[10px] text-yellow-600 font-medium truncate flex-shrink-0">{{ condition.key }}</span>
+                        <span class="text-[10px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded flex-shrink-0">
+                          {{ getRelationLabel(condition.relation || '=') }}
+                        </span>
+                        <span class="text-[10px] bg-yellow-50 text-yellow-600 px-1 py-0.5 rounded truncate max-w-[60px] border border-yellow-200 flex-shrink-0">
+                          {{ condition.value || '*' }}
+                        </span>
+                      </div>
                     </div>
-                    <div class="flex gap-0.5 ml-1">
-                      <button @click="openConditionDialog('then', index)" class="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded">
-                        <span class="material-symbols-outlined text-xs">edit</span>
+                    <div class="flex gap-1 ml-2 flex-shrink-0">
+                      <button @click="openConditionDialog('then', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
                       </button>
-                      <button @click="removeCondition('then', index)" class="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded">
-                        <span class="material-symbols-outlined text-xs">close</span>
+                      <button @click="removeCondition('then', index)" class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors" title="Delete">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
                       </button>
                     </div>
                   </div>
-                  <div v-if="specForm.thenConditions.length === 0" class="text-[10px] text-slate-400 italic text-center py-1">
-                    No conditions
+                  <div v-if="specForm.thenConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-yellow-200">
+                    No conditions added yet
                   </div>
                 </div>
               </div>
             </div>
 
             <!-- Step 3: Generated Rule Description -->
-            <div v-if="specForm.templateId" class="bg-red-50 rounded-lg p-3 border border-red-100">
-              <div class="flex items-center gap-2 mb-1">
-                <span class="material-symbols-outlined text-red-400 text-sm">translate</span>
-                <span class="text-[10px] uppercase font-bold text-red-600">Rule Description</span>
-              </div>
-              <div class="text-xs text-slate-700 leading-relaxed pl-7">
-                {{ naturalLanguageRule }}
-              </div>
-              <div class="mt-2 pt-2 border-t border-red-200 flex items-center gap-2">
-                <span class="text-[10px] uppercase font-bold text-slate-400">LTL:</span>
-                <code class="text-xs bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 font-mono">
-                  {{ specForm.formula }}
-                </code>
+            <div v-if="specForm.templateId" class="relative overflow-hidden rounded-lg bg-white border border-red-200 p-3 shadow-sm">
+              <div class="relative">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="w-6 h-6 bg-red-100 rounded-md flex items-center justify-center">
+                    <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/>
+                    </svg>
+                  </span>
+                  <span class="text-[10px] font-bold text-red-600 uppercase tracking-wide">Rule Description</span>
+                </div>
+                <div class="text-xs text-slate-700 leading-relaxed pl-8">
+                  {{ naturalLanguageRule }}
+                </div>
+                <div class="mt-2 pt-2 border-t border-slate-200 flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-600 uppercase">LTL</span>
+                  <code class="flex-1 text-[10px] bg-slate-100 text-slate-700 px-2 py-1 rounded font-mono overflow-x-auto">
+                    {{ specForm.formula }}
+                  </code>
+                </div>
               </div>
             </div>
 
@@ -1309,8 +1441,11 @@ const exportTemplate = (template: any) => {
             <button
               @click="createSpecification"
               :disabled="!specForm.templateId"
-              class="w-full py-2 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all"
+              class="w-full py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
             >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
               Create Specification
             </button>
           </div>
@@ -1321,62 +1456,99 @@ const exportTemplate = (template: any) => {
   </aside>
 
   <!-- Specification Condition Dialog -->
-  <div v-if="showSpecDialog" class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" @click="showSpecDialog = false">
-    <div class="bg-white rounded-xl p-5 w-full max-w-sm shadow-xl" @click.stop>
-      <div class="flex justify-between items-center mb-4">
-        <h3 class="text-base font-semibold text-slate-800">
-          {{ editingConditionIndex >= 0 ? 'Edit' : 'Add' }} Condition
-        </h3>
-        <button @click="showSpecDialog = false" class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-          <span class="material-symbols-outlined text-sm">close</span>
-        </button>
+  <div v-if="showSpecDialog" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50" @click="showSpecDialog = false">
+    <div class="bg-white rounded-2xl w-full max-w-md shadow-2xl transform transition-all overflow-hidden" @click.stop>
+      <!-- Header with light background -->
+      <div class="relative bg-slate-100 border-b border-slate-200 p-6">
+        <div class="absolute top-0 right-0 w-32 h-32 bg-slate-200/50 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+        <div class="absolute bottom-0 left-0 w-24 h-24 bg-slate-200/50 rounded-full translate-y-1/2 -translate-x-1/2"></div>
+        
+        <div class="relative flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 bg-white shadow-sm rounded-xl flex items-center justify-center">
+              <svg class="w-6 h-6 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+              </svg>
+            </div>
+            <div>
+              <h3 class="text-xl font-bold text-black">
+                {{ editingConditionIndex >= 0 ? 'Edit Condition' : 'Add Condition' }}
+              </h3>
+              <p class="text-sm text-slate-600">Configure your specification</p>
+            </div>
+          </div>
+          <button 
+            @click="showSpecDialog = false" 
+            class="w-10 h-10 bg-white hover:bg-slate-50 rounded-lg flex items-center justify-center transition-all hover:rotate-90 shadow-sm"
+          >
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
-      <div class="space-y-3">
+      <!-- Content Body -->
+      <div class="p-6 space-y-6">
         <!-- Device Selection -->
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Device</label>
-          <select
-            v-model="editingConditionData.deviceId"
-            @change="editingConditionData.key = ''"
-            class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
-          >
-            <option value="" hidden>Select device</option>
-            <option
-              v-for="device in props.nodes"
-              :key="device.id"
-              :value="device.id"
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-bold text-black">Device Selection</span>
+          </div>
+          <div class="relative w-full">
+            <select
+              v-model="editingConditionData.deviceId"
+              @change="editingConditionData.key = ''"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              {{ device.label }}
-            </option>
-          </select>
+              <option value="" hidden>Select a device</option>
+              <option
+                v-for="device in props.nodes"
+                :key="device.id"
+                :value="device.id"
+              >
+                {{ device.label }}
+              </option>
+            </select>
+          </div>
         </div>
 
-        <!-- Target Type & Property Key in one row -->
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-xs font-medium text-slate-600 mb-1">Type</label>
+        <!-- Type -->
+        <div class="space-y-2" v-if="editingConditionData.deviceId">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/>
+            </svg>
+            <span class="text-sm font-bold text-black">Type</span>
+          </div>
+          <div class="relative w-full">
             <select
               v-model="editingConditionData.targetType"
               @change="handleTargetTypeChange"
-              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
-              :disabled="!editingConditionData.deviceId"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              <option value="" hidden>Select type</option>
+              <option value="" hidden>Type</option>
               <option v-for="type in targetTypes" :key="type.value" :value="type.value">
                 {{ type.label }}
               </option>
             </select>
           </div>
-          <!-- Property: Only show for Variable or API types -->
-          <div v-if="editingConditionData.targetType !== 'state'">
-            <label class="block text-xs font-medium text-slate-600 mb-1">Property</label>
+        </div>
+
+        <!-- Property -->
+        <div class="space-y-2" v-if="editingConditionData.targetType !== 'state' && editingConditionData.deviceId">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+            </svg>
+            <span class="text-sm font-bold text-black">Property</span>
+          </div>
+          <div class="relative w-full">
             <select
               v-model="editingConditionData.key"
-              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
-              :disabled="!editingConditionData.deviceId || !editingConditionData.targetType"
+              class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              <option value="" hidden>Select property</option>
+              <option value="" hidden>Property</option>
               <option
                 v-for="key in availableKeys"
                 :key="key.value"
@@ -1388,69 +1560,87 @@ const exportTemplate = (template: any) => {
           </div>
         </div>
 
-        <!-- Relation and Value (hidden for API type) -->
-        <div v-if="showRelationAndValue" class="grid grid-cols-3 gap-2">
-          <div class="col-span-1">
-            <label class="block text-xs font-medium text-slate-600 mb-1">Relation</label>
-            <select
-              v-model="editingConditionData.relation"
-              class="w-full px-2 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm text-center"
-            >
-              <option v-for="op in filteredRelationOperators" :key="op.value" :value="op.value">
-                {{ op.label }}
-              </option>
-            </select>
+        <!-- Condition Details -->
+        <div class="space-y-2" v-if="showRelationAndValue">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+            </svg>
+            <span class="text-sm font-bold text-black">Condition Details</span>
           </div>
-          <div class="col-span-2">
-            <label class="block text-xs font-medium text-slate-600 mb-1">Value</label>
-            <select
-              v-if="editingConditionData.targetType === 'state' && ['in', 'not_in'].includes(currentRelation)"
-              v-model="editingConditionData.value"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm bg-white"
-            >
-              <option value="" hidden>Select State</option>
-              <option v-for="state in availableStates" :key="state" :value="state">
-                {{ state }}
-              </option>
-            </select>
-            <input
-              v-else
-              v-model="editingConditionData.value"
-              class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-red-100 focus:border-red-400 transition-all text-sm"
-              placeholder="Value"
-            />
+          <div class="flex gap-2 w-full">
+            <!-- Operator -->
+            <div class="relative w-1/4">
+              <select
+                v-model="editingConditionData.relation"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-2 py-2.5 text-sm text-center font-bold text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              >
+                <option v-for="op in filteredRelationOperators" :key="op.value" :value="op.value">
+                  {{ op.label }}
+                </option>
+              </select>
+            </div>
+            <!-- Value -->
+            <div class="relative w-3/4">
+              <select
+                v-if="editingConditionData.targetType === 'state' && ['in', 'not_in'].includes(currentRelation)"
+                v-model="editingConditionData.value"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              >
+                <option value="" hidden>State</option>
+                <option v-for="state in availableStates" :key="state" :value="state">
+                  {{ state }}
+                </option>
+              </select>
+              <input
+                v-else
+                v-model="editingConditionData.value"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black placeholder:text-slate-400 focus:border-red-400 focus:outline-none"
+                placeholder="Enter value"
+              />
+            </div>
           </div>
         </div>
 
         <!-- Preview -->
-        <div class="bg-slate-50 rounded-lg p-2 border border-slate-200">
-          <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Preview</div>
-          <div class="font-mono text-xs text-slate-700 break-all">
-            <span class="text-red-600">{{ getDeviceLabel(editingConditionData.deviceId || '-') }}</span>
-            <!-- Only show .key for Variable and API types -->
-            <template v-if="editingConditionData.targetType !== 'state'">
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            <span class="text-xs font-bold uppercase text-black tracking-wider">Preview</span>
+          </div>
+          <div class="font-mono text-xs bg-slate-100 rounded-lg px-3 py-2.5 border border-slate-300 text-black break-all w-full">
+            <span class="text-red-600 font-bold">{{ getDeviceLabel(editingConditionData.deviceId || 'Device') }}</span>
+            <template v-if="editingConditionData.targetType !== 'state' && editingConditionData.key">
               <span class="text-slate-400">.</span>
-              <span class="text-orange-600">{{ editingConditionData.key || '-' }}</span>
+              <span class="text-red-600 font-bold">{{ editingConditionData.key }}</span>
             </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
-              <span class="text-red-600">"{{ editingConditionData.value || '-' }}"</span>
+              <span class="text-black">"{{ editingConditionData.value || 'value' }}"</span>
             </template>
           </div>
         </div>
       </div>
 
-      <div class="flex justify-end gap-2 mt-4">
+      <!-- Footer Actions -->
+      <div class="bg-slate-100 px-6 py-4 flex justify-end gap-3 border-t border-slate-200">
         <button
           @click="showSpecDialog = false"
-          class="px-4 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200"
+          class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
         >
           Cancel
         </button>
         <button
           @click="saveCondition"
-          class="px-4 py-1.5 text-xs font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors"
+          class="px-5 py-2.5 text-sm font-bold text-black bg-gradient-to-r from-red-500 to-red-600 rounded-lg hover:from-red-600 hover:to-red-700 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          :disabled="!editingConditionData.deviceId || !editingConditionData.targetType || (editingConditionData.targetType !== 'state' && !editingConditionData.key)"
         >
+          <svg class="w-4 h-4" :fill="editingConditionIndex >= 0 ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="editingConditionIndex >= 0 ? 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' : 'M12 4v16m8-8H4'"/>
+          </svg>
           {{ editingConditionIndex >= 0 ? 'Update' : 'Add' }}
         </button>
       </div>
@@ -1458,35 +1648,54 @@ const exportTemplate = (template: any) => {
   </div>
 
   <!-- Delete Confirmation Dialog -->
-  <div v-if="showDeleteConfirmDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showDeleteConfirmDialog = false">
-    <div class="bg-white rounded-lg p-6 w-80 max-w-[90vw]" @click.stop>
-      <div v-if="templateToDelete" class="text-center">
-        <div class="mb-4">
-          <p class="text-base text-slate-700 mb-2">You are about to delete:</p>
-          <p class="text-xl font-bold text-red-600">{{ templateToDelete.manifest.Name }}</p>
+  <div v-if="showDeleteConfirmDialog" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50" @click="showDeleteConfirmDialog = false">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-slate-200 transform transition-all" @click.stop>
+      <!-- 警告头部 -->
+      <div class="relative -mx-6 -top-6 mb-6 bg-red-600 rounded-t-2xl p-6 text-center">
+        <div class="relative">
+          <div class="w-16 h-16 mx-auto bg-white/20 rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined text-white text-3xl">warning</span>
+          </div>
+          <p class="text-base text-white/90">You are about to delete</p>
         </div>
       </div>
 
-      <div class="flex justify-end space-x-3">
+      <div v-if="templateToDelete" class="text-center mb-6">
+        <div class="inline-flex items-center gap-3 px-6 py-3 bg-red-50 rounded-xl border-2 border-red-200">
+          <span class="material-symbols-outlined text-red-500 text-xl">inventory_2</span>
+          <p class="text-lg font-bold text-red-600">{{ templateToDelete.manifest.Name }}</p>
+        </div>
+        <p class="text-xs text-slate-400 mt-3">This action cannot be undone</p>
+      </div>
+
+      <div class="flex justify-center gap-3">
         <button
           @click="showDeleteConfirmDialog = false"
-          class="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors"
+          class="px-6 py-2.5 text-sm font-semibold text-slate-600 bg-white border-2 border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
         >
           Cancel
         </button>
         <button
           @click="confirmDeleteTemplate"
-          class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 transition-colors"
+          class="px-6 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-xl hover:bg-red-500 transition-all shadow-md flex items-center gap-2"
         >
+          <span class="material-symbols-outlined text-sm">delete</span>
           Delete Template
         </button>
       </div>
     </div>
-    </div>
+  </div>
 </template>
 
 <style scoped>
-/* Glass panel effect */
+/* Modern panel effect */
+.modern-panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Glass panel effect (legacy support) */
 .glass-panel {
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(16px);
@@ -1495,25 +1704,26 @@ const exportTemplate = (template: any) => {
 
 /* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
+  width: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.02);
+  border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
+  background: #cbd5e1;
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
+  background: #94a3b8;
 }
 
 /* Utility classes */
 .text-primary {
-  color: #2563EB;
+  color: #8B5CF6;
 }
 
 .text-secondary {
@@ -1521,15 +1731,102 @@ const exportTemplate = (template: any) => {
 }
 
 .bg-online {
-  background-color: #059669;
+  background-color: #10B981;
 }
 
 .bg-offline {
-  background-color: #dc2626;
+  background-color: #EF4444;
 }
 
 /* Material Symbols font */
 .material-symbols-outlined {
   font-family: 'Material Symbols Outlined';
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Details/Summary styling */
+details > summary {
+  list-style: none;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Animation utilities */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(100, 116, 139, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(100, 116, 139, 0);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+/* Text color */
+.text-primary {
+  color: #334155;
+}
+
+.text-secondary {
+  color: #475569;
+}
+
+/* Input focus animation */
+input:focus,
+select:focus {
+  animation: focus-ring 0.3s ease-out;
+}
+
+@keyframes focus-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(100, 116, 139, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 4px rgba(100, 116, 139, 0.1);
+  }
+}
+
+/* Button hover effects */
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+button:not(:disabled):active {
+  transform: translateY(0);
+}
+
+/* Card hover effects */
+.group:hover .group-hover\:scale-105 {
+  transform: scale(1.05);
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Backdrop blur support */
+@supports (-webkit-backdrop-filter: blur(20px)) {
+  .backdrop-blur-sm {
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+  }
 }
 </style>
+

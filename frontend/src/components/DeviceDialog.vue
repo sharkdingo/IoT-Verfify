@@ -333,8 +333,12 @@ const deviceSpecs = computed(() => {
                   <span class="material-icons-round text-3xl text-blue-600">{{ getDeviceIcon(deviceName) }}</span>
                 </div>
                 <div>
-                  <h1 class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') || '设备信息' }}</h1>
-                  <p class="text-sm text-slate-500 mt-0.5">{{ basicInfo.instanceName || label }} • {{ deviceName || 'Sensor' }}</p>
+                  <h1 class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') || 'Device Details' }}</h1>
+                  <div class="flex items-center gap-2 mt-1">
+                    <p class="text-sm text-slate-500 font-medium">{{ label }}</p>
+                    <span class="text-slate-300">•</span>
+                    <p class="text-sm text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded text-xs">ID: {{ nodeId?.substring(0, 8) }}</p>
+                  </div>
                 </div>
               </div>
               <button @click="close" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
@@ -348,38 +352,75 @@ const deviceSpecs = computed(() => {
               <section>
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') || '基本信息' }}</h2>
+                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceBasic') || 'Basic Information' }}</h2>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 bg-gradient-to-br from-slate-50 to-slate-100/50 p-6 rounded-2xl border border-slate-200/50">
-                  <div class="flex flex-col gap-1">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.name') || '名称' }}</span>
-                    <span class="text-sm font-medium text-slate-700">{{ basicInfo.name || deviceName }}</span>
+                
+                <!-- 基本信息表格 -->
+                <div class="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-sm">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="bg-slate-50 border-b border-slate-200">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-1/3">Property</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                      <!-- Template Name -->
+                      <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.name') || 'Template Name' }}</td>
+                        <td class="px-4 py-3 text-sm font-bold text-slate-800">{{ basicInfo.name || deviceName }}</td>
+                      </tr>
+                      
+                      <!-- Instance Name -->
+                      <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.instanceName') || 'Instance Name' }}</td>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ basicInfo.instanceName || label }}</td>
+                      </tr>
+
+                      <!-- Modes -->
+                      <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.modes') || 'Modes' }}</td>
+                        <td class="px-4 py-3">
+                          <div class="flex flex-wrap gap-1.5">
+                            <span v-for="(mode, idx) in (basicInfo.modes || 'Working, Off').split(',')" :key="idx" 
+                                  class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200">
+                              {{ mode.trim() }}
+                            </span>
                   </div>
-                  <div class="flex flex-col gap-1">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.instanceName') || '实例名称' }}</span>
-                    <span class="text-sm font-medium text-slate-700">{{ basicInfo.instanceName || '1' }}</span>
-                  </div>
-                  <div class="flex flex-col gap-1 md:col-span-2">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.description') || '描述' }}</span>
-                    <span class="text-sm font-medium text-slate-700">{{ basicInfo.description }}</span>
-                  </div>
-                  <div class="flex flex-col gap-1">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.initState') || '初始状态' }}</span>
+                        </td>
+                      </tr>
+
+                      <!-- Initial State -->
+                      <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.initState') || 'Initial State' }}</td>
+                        <td class="px-4 py-3">
+                          <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
                     <span class="text-sm font-medium text-slate-700">{{ basicInfo.initState || 'Working' }}</span>
                   </div>
-                  <div class="flex flex-col gap-1">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.modes') || '模式' }}</span>
-                    <span class="text-sm font-medium text-slate-700">{{ basicInfo.modes || 'Working, Off' }}</span>
-                  </div>
-                  <div v-if="basicInfo.impactedVariables && basicInfo.impactedVariables.length" class="flex flex-col gap-1 md:col-span-2">
-                    <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">{{ t('app.impactedVariables') || '受影响变量' }}</span>
-                    <div class="flex flex-wrap gap-2 mt-1">
+                        </td>
+                      </tr>
+
+                      <!-- Description -->
+                      <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.description') || 'Description' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 leading-relaxed">{{ basicInfo.description || '-' }}</td>
+                      </tr>
+
+                      <!-- Impacted Variables -->
+                      <tr v-if="basicInfo.impactedVariables && basicInfo.impactedVariables.length" class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.impactedVariables') || 'Impacted Variables' }}</td>
+                        <td class="px-4 py-3">
+                          <div class="flex flex-wrap gap-2">
                       <span v-for="variable in basicInfo.impactedVariables" :key="variable"
-                            class="px-2 py-1 bg-white text-[11px] font-medium text-slate-600 rounded border border-slate-200">
+                                  class="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md border border-blue-100">
                         {{ variable }}
                       </span>
                     </div>
-                  </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </section>
 
@@ -392,11 +433,11 @@ const deviceSpecs = computed(() => {
                 <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
-                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100">
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.range') || '范围' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') || '可信度' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.type') || '类型' }}</th>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || 'Name' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.range') || 'Range/Values' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') || 'Trust Level' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.type') || 'Type' }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white">
@@ -431,11 +472,11 @@ const deviceSpecs = computed(() => {
                 <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
-                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100">
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || '名称' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') || '描述' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.invariant') || '不变性' }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') || '隐私度' }}</th>
+                      <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') || 'Name' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') || 'Description' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.invariant') || 'Invariant' }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') || 'Privacy' }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white">
@@ -466,39 +507,40 @@ const deviceSpecs = computed(() => {
               <section v-if="apis.length > 0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-emerald-500 rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') || 'API接口' }}</h2>
+                  <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') || 'API Interfaces' }}</h2>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div
                     v-for="(api, idx) in apis"
                     :key="idx"
-                    class="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100 rounded-xl p-4 hover:shadow-md transition-all"
+                    class="bg-white border border-slate-200 rounded-xl p-4 hover:shadow-md transition-all hover:border-emerald-200 group"
                   >
-                    <div class="flex items-start justify-between mb-2">
+                    <div class="flex items-start justify-between mb-3">
                       <div class="flex items-center gap-2">
+                        <div class="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center group-hover:bg-emerald-100 transition-colors">
                         <span class="material-icons-round text-emerald-600 text-lg">api</span>
+                        </div>
                         <span class="text-sm font-bold text-slate-800">{{ api.name }}</span>
-                        <span v-if="api.signal" class="text-xs px-1.5 py-0.5 bg-emerald-200 text-emerald-700 rounded font-medium">
-                          Signal
-                        </span>
                       </div>
+                      <span v-if="api.signal" class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium border border-amber-200">
+                        Signal
+                      </span>
                     </div>
-                    <p v-if="api.description" class="text-xs text-slate-600 mb-3 line-clamp-2">
+                    <p v-if="api.description" class="text-xs text-slate-600 mb-4 line-clamp-2">
                       {{ api.description }}
                     </p>
-                    <div class="flex items-center gap-3 text-xs">
+                    <div class="flex items-center gap-2 text-xs bg-slate-50 p-2 rounded-lg border border-slate-100">
                       <div class="flex items-center gap-1 text-slate-500">
-                        <span class="material-icons-round text-sm">play_arrow</span>
-                        <span class="font-medium">{{ api.startState }}</span>
+                        <span class="material-icons-round text-sm font-bold">play_arrow</span>
+                        <span class="font-medium text-slate-700">{{ api.startState }}</span>
                       </div>
                       <span class="text-slate-300">→</span>
                       <div class="flex items-center gap-1 text-slate-500">
-                        <span class="material-icons-round text-sm">stop</span>
-                        <span class="font-medium">{{ api.endState }}</span>
+                        <span class="material-icons-round text-sm font-bold">stop</span>
+                        <span class="font-medium text-slate-700">{{ api.endState }}</span>
                       </div>
-                    </div>
-                    <div class="mt-2 pt-2 border-t border-emerald-100">
-                      <span class="text-[10px] text-slate-400 uppercase">Trigger: {{ api.trigger }}</span>
+                      <div class="flex-1"></div>
+                      <span class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Trigger: {{ api.trigger }}</span>
                     </div>
                   </div>
                 </div>
@@ -508,32 +550,36 @@ const deviceSpecs = computed(() => {
               <section v-if="deviceSpecs.length > 0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-rose-500 rounded-full"></div>
-                  <h2 class="text-lg font-semibold text-slate-800">Spec</h2>
+                  <h2 class="text-lg font-semibold text-slate-800">Specifications</h2>
                 </div>
-                <div v-if="deviceSpecs.length === 0" class="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center">
+                  <div v-if="deviceSpecs.length === 0" class="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
                   <span class="material-icons-round text-slate-300 text-4xl mb-2 block">verified</span>
-                  <p class="text-sm text-slate-500">{{ t('app.noSpecs') || '该设备暂无关联的规约' }}</p>
+                    <p class="text-sm text-slate-500">{{ t('app.noSpecs') || 'No associated specifications' }}</p>
                 </div>
                 <div v-else class="space-y-3">
                   <div
                     v-for="spec in deviceSpecs"
                     :key="spec.id"
-                    class="bg-red-50/50 border border-red-100 rounded-xl p-4 transition-all hover:shadow-md"
+                    class="bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-rose-200"
                   >
                     <div class="flex items-start justify-between mb-3">
                       <div class="flex items-center gap-2 flex-1">
-                        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                        <div class="w-8 h-8 bg-rose-50 rounded-lg flex items-center justify-center">
+                          <span class="material-icons-round text-rose-500 text-lg">verified</span>
+                        </div>
                         <div class="flex-1 min-w-0">
-                          <span class="text-sm font-semibold block truncate text-red-700">{{ spec.type }}</span>
-                          <span class="text-xs text-slate-500 mt-0.5 block truncate">{{ spec.devices }}</span>
+                          <span class="text-sm font-bold block truncate text-slate-800">{{ spec.type }}</span>
+                          <span class="text-xs text-slate-500 mt-0.5 block truncate">
+                            <span class="font-medium text-slate-400">Target:</span> {{ spec.devices }}
+                          </span>
                         </div>
                       </div>
-                      <span class="text-xs font-medium px-2 py-1 rounded whitespace-nowrap text-red-600 bg-red-100">
-                        {{ spec.status }}
-                      </span>
                     </div>
-                    <div class="text-xs text-slate-600 leading-relaxed font-mono bg-white/80 p-3 rounded border border-slate-200 break-all">
+                    <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                      <p class="text-[11px] text-slate-400 uppercase font-bold tracking-wider mb-1">LTL Formula</p>
+                      <div class="text-xs text-slate-700 leading-relaxed font-mono break-all">
                       {{ spec.formula }}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -545,8 +591,8 @@ const deviceSpecs = computed(() => {
                 <button @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
                   关闭
                 </button>
-              <button @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-600 hover:to-rose-700 rounded-lg transition-all flex items-center gap-2 shadow-md hover:shadow-lg">
-                <span class="material-icons-round text-lg text-white">delete_outline</span>
+              <button @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-rose-900 bg-rose-100 hover:bg-rose-200 rounded-lg transition-all flex items-center gap-2 border border-rose-200">
+                <span class="material-icons-round text-lg text-rose-600">delete_outline</span>
                 {{ t('app.deleteDevice') || '删除设备' }}
               </button>
             </div>
