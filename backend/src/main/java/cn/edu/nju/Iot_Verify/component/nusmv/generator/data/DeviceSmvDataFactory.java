@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.data;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvModelValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
@@ -24,6 +25,7 @@ public class DeviceSmvDataFactory {
 
     private final ObjectMapper objectMapper;
     private final DeviceTemplateService deviceTemplateService;
+    private final SmvModelValidator modelValidator;
 
     // ==================== 公共入口 ====================
 
@@ -81,23 +83,9 @@ public class DeviceSmvDataFactory {
             extractContents(smv, manifest);
             computeIdentifiers(smv, device.getVarName());
 
-            // Bug2: 检查用户传入的变量名是否存在于模板中
-            validateUserVariables(smv, device);
-            // Bug3: 传感器设备传入 state 时警告
-            if (smv.getModes().isEmpty() && device.getState() != null && !device.getState().isBlank()) {
-                log.warn("Device '{}' (template '{}') has no modes; user-provided state '{}' is ignored",
-                        device.getVarName(), device.getTemplateName(), device.getState());
-            }
-            // P5: 多模式设备 API EndState 分号格式校验
-            if (smv.getModes().size() > 1 && manifest.getApis() != null) {
-                for (DeviceManifest.API api : manifest.getApis()) {
-                    String endState = api.getEndState();
-                    if (endState != null && !endState.contains(";")) {
-                        log.warn("Device '{}' (template '{}'): API '{}' EndState '{}' missing semicolons for multi-mode device (modes={})",
-                                device.getVarName(), device.getTemplateName(), api.getName(), endState, smv.getModes());
-                    }
-                }
-            }
+            // 软性校验：委托给 SmvModelValidator（集中管理）
+            modelValidator.warnUnknownUserVariables(smv, device);
+            modelValidator.warnStatelessDeviceWithState(smv, device);
 
             deviceSmvMap.put(device.getVarName(), smv);
         }
@@ -273,23 +261,6 @@ public class DeviceSmvDataFactory {
             info.setPrivacy(c.getPrivacy() != null ? c.getPrivacy() : "public");
             info.setChangeable(c.getIsChangeable() != null && c.getIsChangeable());
             smv.getContents().add(info);
-        }
-    }
-
-    // ==================== 验证方法 ====================
-
-    private void validateUserVariables(DeviceSmvData smv, DeviceVerificationDto device) {
-        if (device.getVariables() == null) return;
-        Set<String> knownNames = new HashSet<>();
-        for (DeviceManifest.InternalVariable v : smv.getVariables()) knownNames.add(v.getName());
-        knownNames.addAll(smv.getEnvVariables().keySet());
-        for (String mode : smv.getModes()) knownNames.add(mode);
-
-        for (VariableStateDto var : device.getVariables()) {
-            if (var.getName() != null && !knownNames.contains(var.getName())) {
-                log.warn("Device '{}' (template '{}'): user-provided variable '{}' not found in template, ignored",
-                        device.getVarName(), device.getTemplateName(), var.getName());
-            }
         }
     }
 

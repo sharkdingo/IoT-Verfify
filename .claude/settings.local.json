@@ -20,7 +20,9 @@
       "Bash(git rm:*)",
       "Bash(find:*)",
       "WebFetch(domain:github.com)",
-      "Read(//d/MEDIC-test/MEDIC-test/**)"
+      "Read(//d/MEDIC-test/MEDIC-test/**)",
+      "Bash(./mvnw test:*)",
+      "Bash(mvn test:*)"
     ]
   }
 }

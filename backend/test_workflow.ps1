@@ -183,26 +183,38 @@ $GET_ACTIVE = GetJson "$BASE_URL/board/active" $AUTH
 Assert-Equal $GET_ACTIVE.code 200 "Get active returns 200"
 
 Write-Host "`n--- Step 11: Add & Delete Custom Template ---"
-# DeviceTemplateDto: id, name(@NotBlank), manifest(@Valid DeviceManifest)
-# DeviceManifest: Name, Description, Modes, InternalVariables(List), WorkingStates(List), Transitions(List), APIs(List), Contents(List)
-# WorkingState: Name, Trust, Privacy, Mode
-# InternalVariable: Name, Description, IsInside, Range, Trust, Privacy, Mode
+# DeviceTemplateDto: id(String), name(@NotBlank), manifest(@Valid DeviceManifest)
+# DeviceManifest: Name, Description, Modes, InternalVariables(List), ImpactedVariables(List), InitState, WorkingStates(List), Transitions(List), APIs(List), Contents(List)
+# WorkingState: Name, Description, Trust, Privacy, Invariant, Dynamics(List<Dynamic>)
+# InternalVariable: Name, Description, IsInside, PublicVisible, Trust, Privacy, LowerBound, UpperBound, NaturalChangeRate, Values(List<String>)
+# Transition: Name, Description, Signal, StartState, EndState, Trigger({Attribute,Relation,Value}), Assignments(List<{Attribute,Value}>)
+# API: Name, Description, Signal, StartState, EndState, Trigger, Assignments
+# Content: Name, Privacy, IsChangeable
 $CUSTOM_TPL = @{
   name="TestDevice"
   manifest=@{
     Name="TestDevice"
     Description="A test device"
+    Modes=@("normal")
+    InitState="idle"
     WorkingStates=@(
-      @{ Name="idle"; Trust="trusted"; Privacy="public" },
-      @{ Name="running"; Trust="trusted"; Privacy="public" }
+      @{ Name="idle"; Description="Device is idle"; Trust="trusted"; Privacy="public" },
+      @{ Name="running"; Description="Device is running"; Trust="trusted"; Privacy="public" }
     )
     InternalVariables=@(
-      @{ Name="speed"; IsInside=$true; Range="0,1,2,3"; Trust="trusted"; Privacy="public" }
+      @{ Name="speed"; Description="Motor speed"; IsInside=$true; Values=@("0","1","2","3") }
     )
-    Contents=@()
+    ImpactedVariables=@()
+    Transitions=@(
+      @{ Name="start"; StartState="idle"; EndState="running"; Trigger=@{ Attribute="speed"; Relation=">"; Value="0" }; Assignments=@() },
+      @{ Name="stop"; StartState="running"; EndState="idle"; Trigger=@{ Attribute="speed"; Relation="="; Value="0" }; Assignments=@() }
+    )
     APIs=@(
-      @{ Name="start"; StartState="idle"; EndState="running" },
-      @{ Name="stop"; StartState="running"; EndState="idle" }
+      @{ Name="startAPI"; Description="Start the device"; StartState="idle"; EndState="running" },
+      @{ Name="stopAPI"; Description="Stop the device"; StartState="running"; EndState="idle" }
+    )
+    Contents=@(
+      @{ Name="log"; Privacy="public"; IsChangeable=$true }
     )
   }
 }
@@ -220,18 +232,18 @@ if ($TPL_ID) {
 
 Write-Host "`n--- Step 12: Sync Verify ---"
 # VerificationRequestDto: devices(@Valid @NotNull List<DeviceVerificationDto>), rules(List<RuleDto>), specs(@Valid @NotNull List<SpecificationDto>), isAttack(boolean), intensity(@Min(0) @Max(50) int), enablePrivacy(boolean, default false)
-# DeviceVerificationDto: id(@NotBlank), templateName(@NotBlank), state, currentStateTrust, variables(List<VariableStateDto>), privacies(List<PrivacyStateDto>)
+# DeviceVerificationDto: varName(@NotBlank), templateName(@NotBlank), state, currentStateTrust, variables(List<VariableStateDto>), privacies(List<PrivacyStateDto>)
 # VariableStateDto: name, value, trust
 # PrivacyStateDto: name, privacy
 $VERIFY_DEVICES = @(
   @{
-    id="light_1"; templateName="Light"; state="on"
+    varName="light_1"; templateName="Light"; state="on"
     currentStateTrust="trusted"
     variables=@(@{ name="brightness"; value="80"; trust="trusted" })
     privacies=@(@{ name="brightness"; privacy="private" })
   },
   @{
-    id="tempsensor_1"; templateName="Temperature Sensor"; state="active"
+    varName="tempsensor_1"; templateName="Temperature Sensor"; state="active"
     variables=@(@{ name="temperature"; value="25"; trust="trusted" })
   }
 )

@@ -36,6 +36,7 @@ public class SmvGenerator {
     private final SmvRuleCommentWriter ruleCommentWriter;
     private final SmvMainModuleBuilder mainModuleBuilder;
     private final SmvSpecificationBuilder specBuilder;
+    private final SmvModelValidator modelValidator;
 
     /**
      * 生成完整的 NuSMV 模型文件并写入临时目录
@@ -82,6 +83,9 @@ public class SmvGenerator {
             devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, intensity, enablePrivacy);
 
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+
+        // 前置校验：P1/P2/P3/P5 — 在生成 SMV 文本前检测模板数据不合法项
+        modelValidator.validate(deviceSmvMap);
 
         StringBuilder content = new StringBuilder();
 

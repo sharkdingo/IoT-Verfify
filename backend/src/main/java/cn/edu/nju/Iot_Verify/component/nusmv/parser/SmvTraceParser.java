@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -169,16 +170,17 @@ public class SmvTraceParser {
         if (value == null || smv.getStates() == null) {
             return null;
         }
+        String cleanValue = DeviceSmvDataFactory.cleanStateName(value);
 
         for (String state : smv.getStates()) {
-            if (state.equals(value)) {
+            if (state.equals(value) || state.equals(cleanValue)) {
                 return state;
             }
         }
 
         if (smv.getModes() != null) {
             for (String mode : smv.getModes()) {
-                String modeState = mode + "_" + value;
+                String modeState = mode + "_" + cleanValue;
                 if (smv.getStates().contains(modeState)) {
                     return modeState;
                 }

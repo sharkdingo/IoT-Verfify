@@ -131,21 +131,23 @@ public class SmvMainModuleBuilder {
             appendContentPrivacyTransitions(content, devices, rules, deviceSmvMap);
         }
         appendVariableRateTransitions(content, devices, deviceSmvMap);
-        appendSensorEnvAssignments(content, devices, deviceSmvMap);
+        appendExternalVariableAssignments(content, devices, deviceSmvMap);
         appendInternalVariableTransitions(content, devices, deviceSmvMap, isAttack);
 
         return content.toString();
     }
 
-    private void appendSensorEnvAssignments(StringBuilder content,
-                                           List<DeviceVerificationDto> devices,
-                                           Map<String, DeviceSmvData> deviceSmvMap) {
+    /**
+     * 为所有设备的 IsInside=false 变量生成简单赋值（镜像环境变量）。
+     * 例如：thermostat.temperature := a_temperature;
+     * 不限于传感器设备——非传感器设备（如 Thermostat）的外部变量也需要连接到环境变量。
+     */
+    private void appendExternalVariableAssignments(StringBuilder content,
+                                                   List<DeviceVerificationDto> devices,
+                                                   Map<String, DeviceSmvData> deviceSmvMap) {
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv == null || smv.getManifest() == null) continue;
-
-            boolean isSensor = smv.isSensor();
-            if (!isSensor) continue;
 
             String varName = smv.getVarName();
 
@@ -318,7 +320,11 @@ public class SmvMainModuleBuilder {
                     attr = condSmv.getModes().get(0);
                 }
             }
-            return varName + "." + attr + condition.getRelation() + condition.getValue();
+            String rhsValue = condition.getValue();
+            if (rhsValue != null && condSmv.getModes() != null && condSmv.getModes().contains(attr)) {
+                rhsValue = DeviceSmvDataFactory.cleanStateName(rhsValue);
+            }
+            return varName + "." + attr + condition.getRelation() + rhsValue;
         }
 
         // API signal condition
@@ -393,8 +399,14 @@ public class SmvMainModuleBuilder {
                             if (varName.equals(assignment.getAttribute())) {
                                 DeviceManifest.Trigger trigger = trans.getTrigger();
                                 if (trigger != null) {
-                                    content.append("\t\t").append(transSmv.getVarName()).append(".")
-                                           .append(trigger.getAttribute()).append(" ")
+                                    // P4: 若 trigger.attribute 本身是 env var，直接用 a_<attr>
+                                    String triggerRef;
+                                    if (isEnvVariable(trigger.getAttribute(), devices, deviceSmvMap)) {
+                                        triggerRef = "a_" + trigger.getAttribute();
+                                    } else {
+                                        triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
+                                    }
+                                    content.append("\t\t").append(triggerRef).append(" ")
                                            .append(trigger.getRelation()).append(" ")
                                            .append(trigger.getValue()).append(": ").append(assignment.getValue()).append(";\n");
                                 }
@@ -1028,7 +1040,7 @@ public class SmvMainModuleBuilder {
         if (multiModeState == null) return null;
         String[] states = multiModeState.split(";");
         if (modeIndex < states.length) {
-            return states[modeIndex].trim();
+            return DeviceSmvDataFactory.cleanStateName(states[modeIndex]);
         }
         return null;
     }
@@ -1080,5 +1092,21 @@ public class SmvMainModuleBuilder {
             }
         }
         return userInit;
+    }
+
+    /**
+     * 判断某个属性名是否是任意设备声明的环境变量（IsInside=false）。
+     */
+    private boolean isEnvVariable(String attrName,
+                                  List<DeviceVerificationDto> devices,
+                                  Map<String, DeviceSmvData> deviceSmvMap) {
+        if (attrName == null) return false;
+        for (DeviceVerificationDto dev : devices) {
+            DeviceSmvData smv = deviceSmvMap.get(dev.getVarName());
+            if (smv != null && smv.getEnvVariables().containsKey(attrName)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
