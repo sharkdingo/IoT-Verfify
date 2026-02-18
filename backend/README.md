@@ -166,12 +166,10 @@ interface DeviceEdgeDto {
   id: string;        // Required, unique edge ID
   from: string;      // Required, source node ID
   to: string;        // Required, target node ID
-  fromLabel: string; // Source node label
-  toLabel: string;   // Target node label
-  fromApi: string;   // Source API name
-  toApi: string;     // Target API name
-  fromPos: { x: number; y: number }; // Source position
-  toPos: { x: number; y: number };   // Target position
+  fromLabel: string; // Required, source node label
+  toLabel: string;   // Required, target node label
+  fromPos: { x: number; y: number }; // Required, source position
+  toPos: { x: number; y: number };   // Required, target position
 }
 ```
 
@@ -1071,6 +1069,12 @@ volcengine:
 
 nusmv:
   path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/bin/NuSMV.exe}
+  command-prefix: ${NUSMV_PREFIX:}
+  timeout-ms: ${NUSMV_TIMEOUT_MS:120000}
+
+spring.data.redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
 ```
 
 ---
@@ -1235,13 +1239,13 @@ Import the following collection for complete workflow testing:
 |---------|--------|-------|
 | Generate NuSMV Model | ✅ Done | `SmvGenerator` |
 | Execute NuSMV | ✅ Done | `NusmvExecutor` |
-| Parse Counterexample | ✅ Done | `SmvTraceParser`, `EnhancedSmvTraceParser` |
+| Parse Counterexample | ✅ Done | `SmvTraceParser` |
 | Trace Persistence | ✅ Done | `TraceRepository` |
 | API Verification | ✅ Done | `VerificationServiceImpl` |
 | Async Verification | ✅ Done | `@Async` with thread pool |
 | Task Cancellation | ✅ Done | `cancelTask()` API |
 | Progress Tracking | ✅ Done | Progress API (0-100%) |
-| MEDIC Format Support | ✅ Done | `EnhancedSmvTraceParser` |
+| MEDIC Format Support | ✅ Done | `SmvTraceParser` |
 | Random Simulation | ❌ Not Implemented | Future enhancement |
 | Auto Rule Fix | ❌ Not Implemented | Future enhancement |
 

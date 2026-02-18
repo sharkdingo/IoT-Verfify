@@ -7,7 +7,6 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
-import cn.edu.nju.Iot_Verify.service.impl.VerificationServiceImpl;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -21,9 +20,9 @@ import java.util.List;
 @RequestMapping("/api/verify")
 @RequiredArgsConstructor
 public class VerificationController {
-    
+
     private final VerificationService verificationService;
-    
+
     /**
      * 同步验证（立即返回结果）
      */
@@ -31,28 +30,30 @@ public class VerificationController {
     public Result<VerificationResultDto> verify(
             @CurrentUser Long userId,
             @Valid @RequestBody VerificationRequestDto request) {
-        
+
         VerificationResultDto result = verificationService.verify(
                 userId,
                 request.getDevices(),
                 request.getRules(),
                 request.getSpecs(),
                 request.isAttack(),
-                request.getIntensity()
+                request.getIntensity(),
+                request.isEnablePrivacy()
         );
-        
+
         return Result.success(result);
     }
-    
+
     /**
-     * 异步验证（通过任务ID回调）
+     * 异步验证（后端创建任务，返回任务ID）
      */
     @PostMapping("/async")
     public Result<Long> verifyAsync(
             @CurrentUser Long userId,
-            @Valid @RequestBody VerificationRequestDto request,
-            @RequestParam Long taskId) {
-        
+            @Valid @RequestBody VerificationRequestDto request) {
+
+        Long taskId = verificationService.createTask(userId);
+
         verificationService.verifyAsync(
                 userId,
                 taskId,
@@ -60,12 +61,13 @@ public class VerificationController {
                 request.getRules(),
                 request.getSpecs(),
                 request.isAttack(),
-                request.getIntensity()
+                request.getIntensity(),
+                request.isEnablePrivacy()
         );
-        
+
         return Result.success(taskId);
     }
-    
+
     /**
      * 获取任务状态
      */
@@ -75,7 +77,7 @@ public class VerificationController {
             @PathVariable Long id) {
         return Result.success(verificationService.getTask(userId, id));
     }
-    
+
     /**
      * 获取用户的所有 Trace
      */
@@ -83,17 +85,17 @@ public class VerificationController {
     public Result<List<TraceDto>> getTraces(@CurrentUser Long userId) {
         return Result.success(verificationService.getUserTraces(userId));
     }
-    
+
     /**
      * 获取单个 Trace
      */
     @GetMapping("/traces/{id}")
     public Result<TraceDto> getTrace(
-            @CurrentUser Long userId, 
+            @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(verificationService.getTrace(userId, id));
     }
-    
+
     @DeleteMapping("/traces/{id}")
     public Result<Void> deleteTrace(
             @CurrentUser Long userId,
@@ -114,7 +116,7 @@ public class VerificationController {
     public Result<Integer> getTaskProgress(
             @CurrentUser Long userId,
             @PathVariable Long id) {
-        int progress = ((VerificationServiceImpl) verificationService).getTaskProgress(id);
+        int progress = verificationService.getTaskProgress(id);
         return Result.success(progress);
     }
 }

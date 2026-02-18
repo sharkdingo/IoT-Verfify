@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
@@ -26,14 +26,16 @@ public interface VerificationService {
      * @param specs 规格列表
      * @param isAttack 是否启用攻击模式
      * @param intensity 攻击强度 0-50
+     * @param enablePrivacy 是否启用隐私维度建模
      * @return 验证结果
      */
-    VerificationResultDto verify(Long userId, 
-                                  List<DeviceNodeDto> devices,
+    VerificationResultDto verify(Long userId,
+                                  List<DeviceVerificationDto> devices,
                                   List<RuleDto> rules,
                                   List<SpecificationDto> specs,
                                   boolean isAttack,
-                                  int intensity);
+                                  int intensity,
+                                  boolean enablePrivacy);
     
     /**
      * 异步验证（通过任务ID回调）
@@ -45,13 +47,15 @@ public interface VerificationService {
      * @param specs 规格列表
      * @param isAttack 是否启用攻击模式
      * @param intensity 攻击强度 0-50
+     * @param enablePrivacy 是否启用隐私维度建模
      */
     void verifyAsync(Long userId, Long taskId,
-                      List<DeviceNodeDto> devices,
+                      List<DeviceVerificationDto> devices,
                       List<RuleDto> rules,
                       List<SpecificationDto> specs,
                       boolean isAttack,
-                      int intensity);
+                      int intensity,
+                      boolean enablePrivacy);
     
     /**
      * 获取任务状态
@@ -104,4 +108,20 @@ public interface VerificationService {
      * @param message 进度消息
      */
     void updateTaskProgress(Long taskId, int progress, String message);
+
+    /**
+     * 获取任务进度
+     *
+     * @param taskId 任务ID
+     * @return 进度 (0-100)
+     */
+    int getTaskProgress(Long taskId);
+
+    /**
+     * 创建验证任务（异步验证前调用）
+     *
+     * @param userId 用户ID
+     * @return 任务ID
+     */
+    Long createTask(Long userId);
 }

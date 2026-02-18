@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 
-import cn.edu.nju.Iot_Verify.component.nusmv.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -17,8 +17,9 @@ import java.util.regex.Pattern;
 @Component
 public class SmvTraceParser {
 
-    private static final Pattern STATE_PATTERN = Pattern.compile("State\\s+1\\.(\\d+):\\s*(\\w+)?");
-    private static final Pattern STATE_LINE_PATTERN = Pattern.compile("State\\s+1\\.(\\d+):");
+    // 兼容旧格式 "State 1.1:" 和 NuSMV 2.7.1 格式 "-> State: 1.1 <-"
+    private static final Pattern STATE_PATTERN = Pattern.compile("(?:->\\s*)?State[:\\s]\\s*1\\.(\\d+)(?:\\s*<-|:)?\\s*(\\w+)?");
+    private static final Pattern STATE_LINE_PATTERN = Pattern.compile("(?:->\\s*)?State[:\\s]\\s*1\\.(\\d+)");
     private static final Pattern VAR_PATTERN = Pattern.compile("(\\w+)\\.(\\w+)\\s*=\\s*(\\S+)");
 
     public List<TraceStateDto> parseCounterexampleStates(String counterexample, Map<String, DeviceSmvData> deviceSmvMap) {
@@ -30,7 +31,6 @@ public class SmvTraceParser {
 
         String[] lines = counterexample.split("\n");
         TraceStateDto currentState = null;
-        int currentStateIndex = 0;
         String pendingStateName = null;
 
         for (String line : lines) {
@@ -50,7 +50,6 @@ public class SmvTraceParser {
                 currentState = new TraceStateDto();
                 currentState.setStateIndex(stateIdx);
                 currentState.setDevices(new ArrayList<>());
-                currentStateIndex = stateIdx;
 
                 Matcher stateNameMatcher = STATE_PATTERN.matcher(line);
                 if (stateNameMatcher.find() && stateNameMatcher.group(2) != null) {
@@ -126,20 +125,23 @@ public class SmvTraceParser {
             return null;
         }
 
+        // 直接按 key 查找（varName 或 templateName）
         DeviceSmvData directMatch = deviceSmvMap.get(id);
         if (directMatch != null) {
             return directMatch;
         }
 
+        // 按 varName（NuSMV 输出中的实际变量名）匹配
         for (DeviceSmvData smv : deviceSmvMap.values()) {
-            if (smv.name != null && smv.name.equals(id)) {
+            if (id.equals(smv.getVarName())) {
                 return smv;
             }
-            if (id.contains("_")) {
-                String baseName = id.substring(0, id.lastIndexOf('_'));
-                if (smv.name != null && smv.name.equals(baseName)) {
-                    return smv;
-                }
+        }
+
+        // 按 templateName 匹配
+        for (DeviceSmvData smv : deviceSmvMap.values()) {
+            if (smv.getTemplateName() != null && smv.getTemplateName().equals(id)) {
+                return smv;
             }
         }
 
@@ -164,20 +166,22 @@ public class SmvTraceParser {
     }
 
     private String matchState(DeviceSmvData smv, String value) {
-        if (value == null) {
+        if (value == null || smv.getStates() == null) {
             return null;
         }
 
-        for (String state : smv.states) {
+        for (String state : smv.getStates()) {
             if (state.equals(value)) {
                 return state;
             }
         }
 
-        for (String mode : smv.modes) {
-            String modeState = mode + "_" + value;
-            if (smv.states.contains(modeState)) {
-                return modeState;
+        if (smv.getModes() != null) {
+            for (String mode : smv.getModes()) {
+                String modeState = mode + "_" + value;
+                if (smv.getStates().contains(modeState)) {
+                    return modeState;
+                }
             }
         }
 

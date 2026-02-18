@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -10,6 +12,7 @@ import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.ChatService;
+import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.*;
 import lombok.RequiredArgsConstructor;
@@ -34,28 +37,29 @@ public class ChatServiceImpl implements ChatService {
     private final ArkAiClient arkAiClient;
     private final AiToolManager aiToolManager;
     private final ObjectMapper objectMapper;
+    private final ChatMapper chatMapper;
 
     @Override
-    public List<ChatSessionPo> getUserSessions(Long userId) {
-        return sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+    public List<ChatSessionResponseDto> getUserSessions(Long userId) {
+        return chatMapper.toChatSessionDtoList(sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId));
     }
 
     @Override
     @Transactional
-    public ChatSessionPo createSession(Long userId) {
+    public ChatSessionResponseDto createSession(Long userId) {
         ChatSessionPo session = new ChatSessionPo();
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
         session.setTitle("New Chat");
         session.setUpdatedAt(LocalDateTime.now());
-        return sessionRepo.save(session);
+        return chatMapper.toChatSessionDto(sessionRepo.save(session));
     }
 
     @Override
-    public List<ChatMessagePo> getHistory(Long userId, String sessionId) {
+    public List<ChatMessageResponseDto> getHistory(Long userId, String sessionId) {
         sessionRepo.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-        return messageRepo.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        return chatMapper.toChatMessageDtoList(messageRepo.findBySessionIdOrderByCreatedAtAsc(sessionId));
     }
 
     @Override

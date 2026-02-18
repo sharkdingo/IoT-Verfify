@@ -1,18 +1,16 @@
-package cn.edu.nju.Iot_Verify.component.nusmv.generator;
+package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
-import cn.edu.nju.Iot_Verify.component.nusmv.data.DeviceSmvData;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Component
-public class SmvRulesModuleBuilder {
+public class SmvRuleCommentWriter {
 
-    public String build(List<RuleDto> rules, Map<String, DeviceSmvData> deviceSmvMap) {
+    public String build(List<RuleDto> rules) {
         StringBuilder content = new StringBuilder();
         
         appendRulesAsComments(content, rules);

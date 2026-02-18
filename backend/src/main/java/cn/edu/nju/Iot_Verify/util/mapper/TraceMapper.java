@@ -73,15 +73,4 @@ public class TraceMapper {
     public List<TraceDto> toDtoList(List<TracePo> tracePoList) {
         return tracePoList.stream().map(this::toDto).toList();
     }
-
-    /**
-     * List<TraceDto> -> List<TracePo>
-     */
-    public List<TracePo> toEntityList(List<TraceDto> traceDtoList) {
-        return traceDtoList.stream().map(this::toEntity).toList();
-    }
-
-    public TracePo toPo(TraceDto traceDto) {
-        return toEntity(traceDto);
-    }
 }

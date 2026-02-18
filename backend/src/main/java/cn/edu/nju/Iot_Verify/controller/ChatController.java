@@ -1,9 +1,9 @@
 package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
-import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
-import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import jakarta.validation.Valid;
@@ -30,17 +30,17 @@ public class ChatController {
     }
 
     @GetMapping("/sessions")
-    public Result<List<ChatSessionPo>> getSessions(@CurrentUser Long userId) {
+    public Result<List<ChatSessionResponseDto>> getSessions(@CurrentUser Long userId) {
         return Result.success(chatService.getUserSessions(userId));
     }
 
     @PostMapping("/sessions")
-    public Result<ChatSessionPo> createSession(@CurrentUser Long userId) {
+    public Result<ChatSessionResponseDto> createSession(@CurrentUser Long userId) {
         return Result.success(chatService.createSession(userId));
     }
 
     @GetMapping("/sessions/{sessionId}/messages")
-    public Result<List<ChatMessagePo>> getMessages(@CurrentUser Long userId, @PathVariable String sessionId) {
+    public Result<List<ChatMessageResponseDto>> getMessages(@CurrentUser Long userId, @PathVariable String sessionId) {
         return Result.success(chatService.getHistory(userId, sessionId));
     }
 
@@ -64,6 +64,6 @@ public class ChatController {
     public Result<Void> deleteSession(@CurrentUser Long userId, @PathVariable String sessionId) {
         log.debug("Deleting session: userId={}, sessionId={}", userId, sessionId);
         chatService.deleteSession(userId, sessionId);
-        return Result.success(null);
+        return Result.success();
     }
 }

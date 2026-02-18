@@ -19,10 +19,10 @@ public class RulePo {
     @Column(nullable = false)
     private Long userId;
 
-    @Column(name = "conditions_json", columnDefinition = "JSON")
+    @Column(name = "conditions_json", columnDefinition = "JSON", nullable = false)
     private String conditionsJson;
 
-    @Column(name = "command_json", columnDefinition = "JSON")
+    @Column(name = "command_json", columnDefinition = "JSON", nullable = false)
     private String commandJson;
 
     @Column(name = "rule_string", columnDefinition = "TEXT")

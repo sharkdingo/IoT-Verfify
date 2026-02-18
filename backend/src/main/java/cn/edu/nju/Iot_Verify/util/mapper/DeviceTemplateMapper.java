@@ -46,7 +46,7 @@ public class DeviceTemplateMapper {
         }
         DeviceTemplatePo po = new DeviceTemplatePo();
         po.setName(dto.getName());
-        po.setManifestJson(JsonUtils.toJsonOrEmpty(dto.getManifest()));
+        po.setManifestJson(JsonUtils.toJson(dto.getManifest()));
         return po;
     }
 

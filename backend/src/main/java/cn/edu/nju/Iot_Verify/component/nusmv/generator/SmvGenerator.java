@@ -1,6 +1,12 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
-import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvDeviceModuleBuilder;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuilder;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWriter;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import lombok.RequiredArgsConstructor;
@@ -12,42 +18,35 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
+import java.util.*;
 
 /**
- * SMV 生成器 - 协调器
- * 职责：协调三层架构的入口
- * 
- * Layer 1: 生成 SMV → SmvContentBuilder
- * Layer 2: 执行 SMV → NusmvExecutor
- * Layer 3: 解析 Trace → SmvTraceParser
+ * SMV 生成器
+ *
+ * 职责：协调数据准备 + 各模块构建器，生成完整 NuSMV 模型文件
+ * 同时提供 buildDeviceSmvMap（供 trace 解析复用）和 generateSpecString（预览）
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class SmvGenerator {
 
-    private final SmvContentBuilder smvContentBuilder;
+    private final DeviceSmvDataFactory deviceSmvDataFactory;
+    private final SmvDeviceModuleBuilder deviceModuleBuilder;
+    private final SmvRuleCommentWriter ruleCommentWriter;
+    private final SmvMainModuleBuilder mainModuleBuilder;
+    private final SmvSpecificationBuilder specBuilder;
 
     /**
-     * 生成完整的 NuSMV 模型文件
-     * 
-     * @param userId 用户ID，用于查询设备模板
-     * @param devices 设备节点列表
-     * @param rules 规则列表
-     * @param specs 规格列表
-     * @param isAttack 是否启用攻击模式
-     * @param intensity 攻击强度 (0-10)
-     * @return 生成的 SMV 临时文件
-     * @throws Exception 生成过程中的异常
+     * 生成完整的 NuSMV 模型文件并写入临时目录
      */
-    public File generate(Long userId, List<DeviceNodeDto> devices,
+    public File generate(Long userId, List<DeviceVerificationDto> devices,
                         List<RuleDto> rules, List<SpecificationDto> specs,
-                        boolean isAttack, int intensity) throws Exception {
-        log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}",
-                userId, devices.size(), rules.size(), specs.size(), isAttack, intensity);
+                        boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+        log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}, privacy={}",
+                userId, devices.size(), rules.size(), specs.size(), isAttack, intensity, enablePrivacy);
 
-        String smvContent = smvContentBuilder.build(userId, devices, rules, specs, isAttack, intensity);
+        String smvContent = buildSmvContent(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
 
         Path tempDir = Files.createTempDirectory("nusmv_");
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -62,14 +61,43 @@ public class SmvGenerator {
     }
 
     /**
-     * 生成规格字符串预览
-     * 
-     * @param spec 规格定义
-     * @param isAttack 是否启用攻击模式
-     * @param intensity 攻击强度
-     * @return 规格对应的 NuSMV 语法字符串
+     * 构建设备 SMV 数据映射（供 trace 解析复用）
      */
-    public String generateSpecString(SpecificationDto spec, boolean isAttack, int intensity) {
-        return smvContentBuilder.generateSpecString(spec, isAttack, intensity);
+    public Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
+                                                         List<DeviceVerificationDto> devices) {
+        return deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+    }
+
+    // ==================== 内部方法 ====================
+
+    private String buildSmvContent(Long userId,
+                                   List<DeviceVerificationDto> devices,
+                                   List<RuleDto> rules,
+                                   List<SpecificationDto> specs,
+                                   boolean isAttack,
+                                   int intensity,
+                                   boolean enablePrivacy) {
+
+        log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
+            devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, intensity, enablePrivacy);
+
+        Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+
+        StringBuilder content = new StringBuilder();
+
+        content.append(ruleCommentWriter.build(rules));
+
+        Set<String> generatedModules = new HashSet<>();
+        for (DeviceVerificationDto device : devices) {
+            DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
+            if (smv != null && generatedModules.add(smv.getModuleName())) {
+                content.append(deviceModuleBuilder.build(smv, isAttack, enablePrivacy));
+            }
+        }
+
+        content.append(mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy));
+        content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap));
+
+        return content.toString();
     }
 }

@@ -69,8 +69,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleValidationException(ValidationException e) {
         log.warn("Validation error: {}", e.getMessage());
         return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)  // 400 Bad Request
+                .status(HttpStatus.UNPROCESSABLE_ENTITY)  // 422
                 .body(Result.validationError(e.getMessage()));
+    }
+
+    @ExceptionHandler(SmvGenerationException.class)
+    public ResponseEntity<Result<Void>> handleSmvGenerationException(SmvGenerationException e) {
+        log.error("SMV generation error [{}]: {}", e.getErrorCategory(), e.getMessage(), e);
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error("[" + e.getErrorCategory() + "] " + e.getMessage()));
     }
 
     @ExceptionHandler(InternalServerException.class)

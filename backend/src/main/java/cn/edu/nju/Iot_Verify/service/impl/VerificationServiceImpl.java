@@ -3,8 +3,10 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
-import cn.edu.nju.Iot_Verify.component.nusmv.data.DeviceSmvData;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
@@ -34,6 +36,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 验证服务实现类
+ *
+ * 统一管理同步/异步验证流程、任务生命周期、Trace 持久化
  */
 @Slf4j
 @Service
@@ -55,365 +59,351 @@ public class VerificationServiceImpl implements VerificationService {
     private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
 
-    /**
-     * 执行形式化验证（支持攻击模式）
-     * 
-     * 核心流程：
-     * 1. 验证输入参数有效性
-     * 2. 生成 NuSMV 模型文件
-     * 3. 执行 NuSMV 验证
-     * 4. 解析验证结果，生成 Trace
-     * 5. 自动持久化违规 Trace（检测到违规时自动保存）
-     * 
-     * @param userId 用户ID
-     * @param devices 设备节点列表
-     * @param rules 规则列表
-     * @param specs 规格列表
-     * @param isAttack 是否启用攻击模式（参考 MEDIC-test isAttack）
-     * @param intensity 攻击强度 0-50（参考 MEDIC-test intensity）
-     * @return 验证结果 DTO，包含验证输出、Trace 列表、规格检查结果
-     */
+    // ==================== 同步验证 ====================
+
     @Override
     @Transactional
-    public VerificationResultDto verify(Long userId, 
-                                        List<DeviceNodeDto> devices,
+    public VerificationResultDto verify(Long userId,
+                                        List<DeviceVerificationDto> devices,
                                         List<RuleDto> rules,
                                         List<SpecificationDto> specs,
                                         boolean isAttack,
-                                        int intensity) {
-        // 请求验证
+                                        int intensity,
+                                        boolean enablePrivacy) {
         if (devices == null || devices.isEmpty()) {
-            log.warn("Verification rejected: devices list is empty for user {}", userId);
-            return VerificationResultDto.builder()
-                    .safe(false)
-                    .traces(Collections.emptyList())
-                    .specResults(Collections.emptyList())
-                    .checkLogs(Collections.singletonList("Error: devices list cannot be empty"))
-                    .nusmvOutput("")
-                    .build();
+            return buildErrorResult("", List.of("Error: devices list cannot be empty"));
         }
         if (specs == null || specs.isEmpty()) {
-            log.warn("Verification rejected: specs list is empty for user {}", userId);
             return VerificationResultDto.builder()
-                    .safe(true)
-                    .traces(Collections.emptyList())
-                    .specResults(Collections.emptyList())
-                    .checkLogs(Collections.singletonList("Error: specs list cannot be empty"))
-                    .nusmvOutput("")
-                    .build();
-        }
-        if (intensity < 0 || intensity > 50) {
-            log.warn("Verification rejected: invalid intensity {} for user {}", intensity, userId);
+                    .safe(true).traces(List.of()).specResults(List.of())
+                    .checkLogs(List.of("No specifications to verify")).nusmvOutput("").build();
         }
 
-        log.info("Starting verification for user {}, devices: {}, rules: {}, specs: {}, isAttack: {}, intensity: {}",
-                userId, devices.size(), rules.size(), specs.size(), isAttack, intensity);
+        log.info("Starting sync verification: userId={}, devices={}, specs={}, attack={}, intensity={}",
+                userId, devices.size(), specs.size(), isAttack, intensity);
 
         List<String> checkLogs = new ArrayList<>();
-        List<Boolean> specResults = new ArrayList<>();
-        List<TraceDto> traces = new ArrayList<>();
-        String nusmvOutput = "";
+        File smvFile = null;
 
         try {
-            // 1. 生成 NuSMV 模型文件（支持攻击模式）
             checkLogs.add("Generating NuSMV model...");
-            File smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity);
-            
-            // 验证生成的 SMV 文件
+            smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
             if (smvFile == null || !smvFile.exists()) {
                 checkLogs.add("Failed to generate NuSMV model file");
                 return buildErrorResult("", checkLogs);
             }
-            
             checkLogs.add("Model generated: " + smvFile.getAbsolutePath());
 
-            // 2. 执行 NuSMV 验证
             checkLogs.add("Executing NuSMV verification...");
-            NusmvExecutor.NusmvResult result = nusmvExecutor.execute(smvFile);
-            nusmvOutput = result.getOutput();
+            NusmvResult result = nusmvExecutor.execute(smvFile);
 
             if (!result.isSuccess()) {
                 checkLogs.add("NuSMV execution failed: " + result.getErrorMessage());
-                return buildErrorResult(nusmvOutput, checkLogs);
+                return buildErrorResult("", checkLogs);
             }
+            checkLogs.add("NuSMV execution completed.");
 
-            checkLogs.add("NuSMV execution completed successfully.");
+            // Build per-spec results
+            return buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs);
 
-            // 3. 解析验证结果
-            if (result.hasCounterexample()) {
-                checkLogs.add("Specification violation detected!");
-                
-                // 为每个违反的规格生成 Trace
-                String counterexample = result.getCounterexample();
-                List<TraceDto> violationTraces = generateTracesFromCounterexample(
-                        counterexample, devices, specs, userId);
-                
-                traces.addAll(violationTraces);
-                checkLogs.add("Generated " + violationTraces.size() + " violation trace(s).");
-
-                // 所有规格检查结果为 false（因为有反例）
-                for (int i = 0; i < specs.size(); i++) {
-                    specResults.add(false);
-                }
-            } else {
-                checkLogs.add("All specifications satisfied (no counterexample).");
-                // 所有规格检查结果为 true
-                for (int i = 0; i < specs.size(); i++) {
-                    specResults.add(true);
-                }
-            }
-
-            // 4. 自动持久化违规 Trace
-            if (!traces.isEmpty()) {
-                log.debug("Auto-saving {} violation trace(s) for user {}", traces.size(), userId);
-                saveTraces(traces, userId);
-                checkLogs.add("Auto-saved " + traces.size() + " violation trace(s) to database.");
-            }
-
-            // 清理临时文件
-            cleanupTempFile(smvFile);
-
-        } catch (IOException e) {
-            log.error("IO error during verification", e);
-            checkLogs.add("IO Error: " + e.getMessage());
-            return buildErrorResult(nusmvOutput, checkLogs);
-        } catch (InterruptedException e) {
-            log.error("NuSMV execution interrupted", e);
-            Thread.currentThread().interrupt();
-            checkLogs.add("Execution interrupted: " + e.getMessage());
-            return buildErrorResult(nusmvOutput, checkLogs);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.error("Verification error", e);
+            checkLogs.add("Error: " + e.getMessage());
+            return buildErrorResult("", checkLogs);
         } catch (Exception e) {
             log.error("Verification failed", e);
-            checkLogs.add("Verification failed: " + e.getMessage());
             throw new InternalServerException("Verification failed: " + e.getMessage());
+        } finally {
+            cleanupTempFile(smvFile);
         }
-
-        // 构建结果
-        return VerificationResultDto.builder()
-                .safe(traces.isEmpty())
-                .traces(traces)
-                .specResults(specResults)
-                .checkLogs(checkLogs)
-                .nusmvOutput(truncateOutput(nusmvOutput))
-                .build();
     }
 
-    /**
-     * 异步验证（通过任务ID回调）
-     * 
-     * 核心流程：
-     * 1. 更新任务状态为 RUNNING
-     * 2. 执行验证（同同步方法）
-     * 3. 更新任务状态为 COMPLETED 或 FAILED
-     * 4. 更新任务结果
-     * 
-     * @param userId 用户ID
-     * @param taskId 任务ID
-     * @param devices 设备节点列表
-     * @param rules 规则列表
-     * @param specs 规格列表
-     * @param isAttack 是否启用攻击模式
-     * @param intensity 攻击强度 0-50
-     */
+    // ==================== 异步验证 ====================
+
+    @Override
+    @Transactional
+    public Long createTask(Long userId) {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .userId(userId)
+                .status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now())
+                .build();
+        task = taskRepository.save(task);
+        log.info("Created verification task: {} for user: {}", task.getId(), userId);
+        return task.getId();
+    }
+
     @Override
     @Async("verificationTaskExecutor")
-    @Transactional
     public void verifyAsync(Long userId, Long taskId,
-                             List<DeviceNodeDto> devices,
-                             List<RuleDto> rules,
-                             List<SpecificationDto> specs,
-                             boolean isAttack, int intensity) {
+                            List<DeviceVerificationDto> devices,
+                            List<RuleDto> rules,
+                            List<SpecificationDto> specs,
+                            boolean isAttack, int intensity,
+                            boolean enablePrivacy) {
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
-        LocalDateTime startTime = LocalDateTime.now();
 
         runningTasks.put(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
 
-        VerificationTaskPo task = null;
+        VerificationTaskPo task = taskRepository.findById(taskId).orElse(null);
+        if (task == null) {
+            log.error("Task not found: {}", taskId);
+            return;
+        }
+
         File smvFile = null;
-        boolean smvFileCreated = false;
-
         try {
-            if (Thread.currentThread().isInterrupted()) {
-                log.info("Task {} was cancelled before start", taskId);
-                return;
-            }
-
-            task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
-            if (task == null) {
-                log.warn("Async verification task not found or unauthorized: taskId={}, userId={}", taskId, userId);
-                return;
-            }
-
             task.setStatus(VerificationTaskPo.TaskStatus.RUNNING);
-            task.setStartedAt(startTime);
-            List<String> initLogs = new ArrayList<>();
-            initLogs.add("Starting verification task: " + taskId);
-            initLogs.add("Devices: " + (devices != null ? devices.size() : 0));
-            initLogs.add("Rules: " + (rules != null ? rules.size() : 0));
-            initLogs.add("Specifications: " + (specs != null ? specs.size() : 0));
-            initLogs.add("Attack mode: " + isAttack + ", Intensity: " + intensity);
-            writeCheckLogs(task, initLogs);
+            task.setStartedAt(LocalDateTime.now());
+            writeCheckLogs(task, List.of("Task started"));
             taskRepository.save(task);
 
             if (devices == null || devices.isEmpty()) {
-                completeTask(taskId, task, false, 0, Arrays.asList("Error: devices list cannot be empty"), "Invalid input");
+                failTask(task, "Invalid input: devices list cannot be empty");
                 return;
             }
             if (specs == null || specs.isEmpty()) {
-                completeTask(taskId, task, true, 0, Arrays.asList("Error: specs list cannot be empty"), "No specifications");
+                completeTask(task, true, 0, List.of("No specifications to verify"), "");
                 return;
             }
 
             updateTaskProgress(taskId, 20, "Generating NuSMV model");
-            addLog(task, "Generating NuSMV model...");
-            smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity);
-            smvFileCreated = true;
-
+            smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
             if (Thread.currentThread().isInterrupted()) {
-                handleCancellation(taskId, task);
+                handleCancellation(task);
                 return;
             }
-
             if (smvFile == null || !smvFile.exists()) {
-                completeTask(taskId, task, false, 0,
-                    addLog(task, "Failed to generate NuSMV model file"),
-                    "Generation failed");
+                failTask(task, "Failed to generate NuSMV model file");
                 return;
             }
 
-            addLog(task, "Model generated: " + smvFile.getAbsolutePath());
 
-            updateTaskProgress(taskId, 50, "Executing NuSMV verification");
-            addLog(task, "Executing NuSMV verification...");
-            NusmvExecutor.NusmvResult result = nusmvExecutor.execute(smvFile);
-            String nusmvOutput = result.getOutput();
+            updateTaskProgress(taskId, 50, "Executing NuSMV");
+            NusmvResult result = nusmvExecutor.execute(smvFile);
 
             if (Thread.currentThread().isInterrupted()) {
-                handleCancellation(taskId, task);
+                handleCancellation(task);
                 return;
             }
 
             if (!result.isSuccess()) {
-                completeTask(taskId, task, false, 0,
-                    addLog(task, "NuSMV execution failed: " + result.getErrorMessage()),
-                    "Execution failed");
+                failTask(task, "NuSMV execution failed: " + result.getErrorMessage());
                 return;
             }
 
-            addLog(task, "NuSMV execution completed successfully.");
-
             updateTaskProgress(taskId, 80, "Parsing results");
-            List<String> checkLogs = new ArrayList<>(readCheckLogs(task));
-            List<Boolean> specResults = new ArrayList<>();
-            List<TraceDto> traces = new ArrayList<>();
-
-            if (result.hasCounterexample()) {
-                addLog(task, "Specification violation detected!");
-
-                String counterexample = result.getCounterexample();
-                List<TraceDto> violationTraces = generateTracesFromCounterexample(
-                        counterexample, devices, specs, userId);
-
-                traces.addAll(violationTraces);
-                addLog(task, "Generated " + violationTraces.size() + " violation trace(s).");
-
-                for (int i = 0; i < specs.size(); i++) {
-                    specResults.add(false);
-                }
-            } else {
-                addLog(task, "All specifications satisfied (no counterexample).");
-
-                for (int i = 0; i < specs.size(); i++) {
-                    specResults.add(true);
-                }
-            }
-
-            if (!traces.isEmpty()) {
-                addLog(task, "Auto-saving " + traces.size() + " violation trace(s) to database.");
-                saveTraces(traces, userId, taskId);
-            }
+            VerificationResultDto vResult = buildVerificationResult(
+                    result, devices, rules, specs, userId, taskId, new ArrayList<>());
 
             updateTaskProgress(taskId, 100, "Verification completed");
-            completeTask(taskId, task, traces.isEmpty(), traces.size(), checkLogs, nusmvOutput);
+            completeTask(task, vResult.isSafe(),
+                    vResult.getTraces() != null ? vResult.getTraces().size() : 0,
+                    vResult.getCheckLogs(), truncateOutput(result.getOutput()));
 
         } catch (Exception e) {
             log.error("Async verification failed for task: {}", taskId, e);
-            completeTask(taskId, task, false, 0, 
-                addLog(task, "Error: " + e.getMessage()), 
-                "Verification failed: " + e.getMessage());
+            failTask(task, "Verification failed: " + e.getMessage());
         } finally {
-            if (smvFileCreated && smvFile != null) {
-                cleanupTempFile(smvFile);
-            }
+            cleanupTempFile(smvFile);
             runningTasks.remove(taskId);
             taskProgress.remove(taskId);
         }
     }
 
-    private void handleCancellation(Long taskId, VerificationTaskPo task) {
-        log.info("Handling cancellation for task: {}", taskId);
+    // ==================== 查询方法 ====================
+
+    @Override
+    public VerificationTaskDto getTask(Long userId, Long taskId) {
+        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
         if (task != null) {
-            task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
-            task.setCompletedAt(LocalDateTime.now());
-            taskRepository.save(task);
+            task.setCheckLogs(readCheckLogs(task));
         }
+        return verificationTaskMapper.toDto(task);
+    }
+
+    @Override
+    public List<TraceDto> getUserTraces(Long userId) {
+        return traceMapper.toDtoList(traceRepository.findByUserIdOrderByCreatedAtDesc(userId));
+    }
+
+    @Override
+    public TraceDto getTrace(Long userId, Long traceId) {
+        return traceRepository.findByIdAndUserId(traceId, userId)
+                .map(traceMapper::toDto).orElse(null);
+    }
+
+    @Override
+    @Transactional
+    public void deleteTrace(Long userId, Long traceId) {
+        traceRepository.findByIdAndUserId(traceId, userId).ifPresent(traceRepository::delete);
+    }
+
+    @Override
+    public boolean cancelTask(Long userId, Long taskId) {
+        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
+        if (task == null) return false;
+        if (task.getStatus() != VerificationTaskPo.TaskStatus.RUNNING &&
+            task.getStatus() != VerificationTaskPo.TaskStatus.PENDING) return false;
+
+        Thread taskThread = runningTasks.get(taskId);
+        if (taskThread != null && taskThread.isAlive()) taskThread.interrupt();
+
+        task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
+        task.setCompletedAt(LocalDateTime.now());
+        taskRepository.save(task);
         runningTasks.remove(taskId);
         taskProgress.remove(taskId);
+        return true;
     }
 
-    /**
-     * 完成任务
-     */
-    private void completeTask(Long taskId, VerificationTaskPo task, boolean isSafe, int traceCount, 
-                             List<String> checkLogs, String nusmvOutput) {
+    @Override
+    public void updateTaskProgress(Long taskId, int progress, String message) {
+        taskProgress.put(taskId, Math.min(100, Math.max(0, progress)));
+        log.debug("Task {} progress: {}% - {}", taskId, progress, message);
+    }
+
+    @Override
+    public int getTaskProgress(Long taskId) {
+        return taskProgress.getOrDefault(taskId, 0);
+    }
+
+    // ==================== 核心：构建 per-spec 验证结果 ====================
+
+    private VerificationResultDto buildVerificationResult(NusmvResult result,
+                                                          List<DeviceVerificationDto> devices,
+                                                          List<RuleDto> rules,
+                                                          List<SpecificationDto> specs,
+                                                          Long userId, Long taskId,
+                                                          List<String> checkLogs) {
+        List<Boolean> specResults = new ArrayList<>();
+        List<TraceDto> traces = new ArrayList<>();
+        List<SpecCheckResult> specCheckResults = result.getSpecResults();
+
+        if (specCheckResults.isEmpty()) {
+            // Fallback: NuSMV output didn't match per-spec pattern
+            checkLogs.add("Warning: could not parse per-spec results, treating as all passed");
+            for (int i = 0; i < specs.size(); i++) specResults.add(true);
+        } else {
+            Map<String, DeviceSmvData> deviceSmvMap = smvGenerator.buildDeviceSmvMap(userId, devices);
+            int specIdx = 0;
+            for (SpecCheckResult scr : specCheckResults) {
+                specResults.add(scr.isPassed());
+                if (!scr.isPassed() && scr.getCounterexample() != null) {
+                    checkLogs.add("Spec " + (specIdx + 1) + " violated: " + scr.getSpecExpression());
+                    List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
+                            scr.getCounterexample(), deviceSmvMap);
+                    if (!states.isEmpty()) {
+                        SpecificationDto violatedSpec = specIdx < specs.size() ? specs.get(specIdx) : null;
+                        TraceDto trace = TraceDto.builder()
+                                .userId(userId)
+                                .verificationTaskId(taskId)
+                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : null)
+                                .violatedSpecJson(violatedSpec != null ? specificationMapper.toJson(violatedSpec) : null)
+                                .states(states)
+                                .createdAt(LocalDateTime.now())
+                                .build();
+                        traces.add(trace);
+                    }
+                } else if (scr.isPassed()) {
+                    checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
+                }
+                specIdx++;
+            }
+        }
+
+        // safe 基于 specResults 判定，而非 traces 是否为空（trace 解析可能失败）
+        boolean safe = specResults.stream().allMatch(r -> r);
+        if (!traces.isEmpty()) {
+            saveTraces(traces, userId, taskId);
+            checkLogs.add("Auto-saved " + traces.size() + " violation trace(s).");
+        }
+        if (!safe) {
+            checkLogs.add("Some specifications violated.");
+        } else {
+            checkLogs.add("All specifications satisfied.");
+        }
+
+        return VerificationResultDto.builder()
+                .safe(safe)
+                .traces(traces)
+                .specResults(specResults)
+                .checkLogs(checkLogs)
+                .nusmvOutput(truncateOutput(result.getOutput()))
+                .build();
+    }
+
+    // ==================== 任务状态管理 ====================
+
+    private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
+                              List<String> checkLogs, String nusmvOutput) {
         try {
-            if (task != null) {
-                task.setStatus(isSafe ? VerificationTaskPo.TaskStatus.COMPLETED : VerificationTaskPo.TaskStatus.FAILED);
-                task.setCompletedAt(LocalDateTime.now());
-                task.setIsSafe(isSafe);
-                task.setViolatedSpecCount(traceCount);
-                if (task.getStartedAt() != null && task.getCompletedAt() != null) {
-                    long duration = java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis();
-                    task.setProcessingTimeMs(duration);
-                }
-                if (nusmvOutput != null && nusmvOutput.length() > 10000) {
-                    nusmvOutput = nusmvOutput.substring(0, 10000) + "\n... (truncated)";
-                }
-                task.setNusmvOutput(nusmvOutput);
-                writeCheckLogs(task, checkLogs);
-                task.setCheckLogs(checkLogs);
-                if (!isSafe) {
-                    String err = (checkLogs != null && !checkLogs.isEmpty())
-                            ? checkLogs.get(checkLogs.size() - 1)
-                            : "Verification failed";
-                    task.setErrorMessage(err);
-                } else {
-                    task.setErrorMessage(null);
-                }
-                taskRepository.save(task);
+            task.setStatus(VerificationTaskPo.TaskStatus.COMPLETED);
+            task.setCompletedAt(LocalDateTime.now());
+            task.setIsSafe(isSafe);
+            task.setViolatedSpecCount(traceCount);
+            if (task.getStartedAt() != null) {
+                task.setProcessingTimeMs(
+                        java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
             }
-            log.info("Completed verification task: {}, safe: {}, traces: {}", taskId, isSafe, traceCount);
+            task.setNusmvOutput(truncateOutput(nusmvOutput));
+            writeCheckLogs(task, checkLogs);
+            task.setErrorMessage(null);
+            taskRepository.save(task);
         } catch (Exception e) {
-            log.error("Failed to complete task: {}", taskId, e);
+            log.error("Failed to complete task: {}", task.getId(), e);
         }
     }
 
-    /**
-     * 添加日志
-     */
-    private List<String> addLog(VerificationTaskPo task, String message) {
-        List<String> logs = task != null ? new ArrayList<>(readCheckLogs(task)) : new ArrayList<>();
-        logs.add(message);
-        if (task != null) {
-            writeCheckLogs(task, logs);
-            try {
-                taskRepository.save(task);
-            } catch (Exception e) {
-                log.warn("Failed to save task logs: {}", e.getMessage());
+    private void failTask(VerificationTaskPo task, String errorMessage) {
+        try {
+            task.setStatus(VerificationTaskPo.TaskStatus.FAILED);
+            task.setCompletedAt(LocalDateTime.now());
+            task.setIsSafe(false);
+            task.setErrorMessage(errorMessage);
+            if (task.getStartedAt() != null) {
+                task.setProcessingTimeMs(
+                        java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
             }
+            writeCheckLogs(task, List.of(errorMessage));
+            taskRepository.save(task);
+        } catch (Exception e) {
+            log.error("Failed to mark task as failed: {}", task.getId(), e);
         }
-        return logs;
+    }
+
+    private void handleCancellation(VerificationTaskPo task) {
+        log.info("Handling cancellation for task: {}", task.getId());
+        task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
+        task.setCompletedAt(LocalDateTime.now());
+        taskRepository.save(task);
+        runningTasks.remove(task.getId());
+        taskProgress.remove(task.getId());
+    }
+
+    // ==================== 工具方法 ====================
+
+    private void saveTraces(List<TraceDto> traces, Long userId, Long taskId) {
+        for (TraceDto trace : traces) {
+            trace.setUserId(userId);
+            if (taskId != null) trace.setVerificationTaskId(taskId);
+            TracePo po = traceMapper.toEntity(trace);
+            if (po != null) traceRepository.save(po);
+        }
+    }
+
+    private VerificationResultDto buildErrorResult(String nusmvOutput, List<String> checkLogs) {
+        return VerificationResultDto.builder()
+                .safe(false).traces(List.of()).specResults(List.of())
+                .checkLogs(checkLogs).nusmvOutput(truncateOutput(nusmvOutput)).build();
+    }
+
+    private String truncateOutput(String output) {
+        if (output == null) return null;
+        return output.length() > MAX_OUTPUT_LENGTH
+                ? output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)" : output;
     }
 
     private List<String> readCheckLogs(VerificationTaskPo task) {
@@ -431,242 +421,15 @@ public class VerificationServiceImpl implements VerificationService {
     private void writeCheckLogs(VerificationTaskPo task, List<String> logs) {
         if (task == null) return;
         try {
-            String json = objectMapper.writeValueAsString(logs == null ? Collections.emptyList() : logs);
-            task.setCheckLogsJson(json);
+            task.setCheckLogsJson(objectMapper.writeValueAsString(logs == null ? List.of() : logs));
         } catch (Exception e) {
             log.warn("Failed to serialize check logs for task {}", task.getId(), e);
         }
     }
 
-    @Override
-    public VerificationTaskDto getTask(Long userId, Long taskId) {
-        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
-        if (task != null) {
-            task.setCheckLogs(readCheckLogs(task));
-        }
-        return verificationTaskMapper.toDto(task);
-    }
-
-    @Override
-    public List<TraceDto> getUserTraces(Long userId) {
-        log.debug("Getting traces for user {}", userId);
-        List<TracePo> traces = traceRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        return traceMapper.toDtoList(traces);
-    }
-
-    @Override
-    public TraceDto getTrace(Long userId, Long traceId) {
-        log.debug("Getting trace {} for user {}", traceId, userId);
-        return traceRepository.findByIdAndUserId(traceId, userId)
-                .map(traceMapper::toDto)
-                .orElse(null);
-    }
-
-    /**
-     * 删除 Trace
-     * 
-     * @param userId 用户ID
-     * @param traceId Trace ID
-     */
-    @Override
-    @Transactional
-    public void deleteTrace(Long userId, Long traceId) {
-        log.debug("Deleting trace {} for user {}", traceId, userId);
-        traceRepository.findByIdAndUserId(traceId, userId)
-                .ifPresent(traceRepository::delete);
-    }
-
-    @Override
-    public boolean cancelTask(Long userId, Long taskId) {
-        log.info("Attempting to cancel task {} for user {}", taskId, userId);
-
-        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
-        if (task == null) {
-            log.warn("Task not found or unauthorized: taskId={}, userId={}", taskId, userId);
-            return false;
-        }
-
-        if (task.getStatus() != VerificationTaskPo.TaskStatus.RUNNING &&
-            task.getStatus() != VerificationTaskPo.TaskStatus.PENDING) {
-            log.warn("Task cannot be cancelled, status: {}", task.getStatus());
-            return false;
-        }
-
-        Thread taskThread = runningTasks.get(taskId);
-        if (taskThread != null && taskThread.isAlive()) {
-            taskThread.interrupt();
-            log.info("Interrupted task thread: {}", taskId);
-        }
-
-        task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
-        task.setCompletedAt(LocalDateTime.now());
-        taskRepository.save(task);
-
-        runningTasks.remove(taskId);
-        taskProgress.remove(taskId);
-
-        log.info("Task {} cancelled successfully", taskId);
-        return true;
-    }
-
-    @Override
-    public void updateTaskProgress(Long taskId, int progress, String message) {
-        taskProgress.put(taskId, Math.min(100, Math.max(0, progress)));
-        log.debug("Task {} progress: {}% - {}", taskId, progress, message);
-    }
-
-    public int getTaskProgress(Long taskId) {
-        return taskProgress.getOrDefault(taskId, 0);
-    }
-
-    /**
-     * 从 counterexample 生成 Trace 列表
-     * 
-     * @param counterexample NuSMV 输出的 counterexample
-     * @param devices 设备节点列表
-     * @param specs 规格列表
-     * @param userId 用户ID
-     * @return Trace 列表
-     */
-    private List<TraceDto> generateTracesFromCounterexample(String counterexample,
-                                                            List<DeviceNodeDto> devices,
-                                                            List<SpecificationDto> specs,
-                                                            Long userId) {
-        List<TraceDto> traces = new ArrayList<>();
-
-        if (counterexample == null || counterexample.isEmpty()) {
-            return traces;
-        }
-
-        // 简化处理：假设所有规格共享同一个 counterexample
-        // 实际项目中可能需要为每个规格分别运行 NuSMV
-
-        // 生成状态序列
-        Map<String, DeviceSmvData> deviceSmvMap = buildDeviceSmvMap(devices);
-
-        for (SpecificationDto spec : specs) {
-            List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(counterexample, deviceSmvMap);
-
-            if (!states.isEmpty()) {
-                try {
-                    TraceDto trace = TraceDto.builder()
-                            .userId(userId)
-                            .violatedSpecId(spec.getId())
-                            .violatedSpecJson(specificationMapper.toJson(spec))
-                            .states(states)
-                            .createdAt(LocalDateTime.now())
-                            .build();
-
-                    traces.add(trace);
-                } catch (Exception e) {
-                    log.error("Failed to create trace for spec {}", spec.getId(), e);
-                }
-            }
-        }
-
-        return traces;
-    }
-
-    /**
-     * 保存 Trace 到数据库
-     */
-    private void saveTraces(List<TraceDto> traces, Long userId) {
-        for (TraceDto trace : traces) {
-            trace.setUserId(userId);
-            TracePo po = traceMapper.toPo(trace);
-            if (po != null) {
-                traceRepository.save(po);
-            }
-        }
-    }
-
-    private void saveTraces(List<TraceDto> traces, Long userId, Long taskId) {
-        for (TraceDto trace : traces) {
-            trace.setUserId(userId);
-            trace.setVerificationTaskId(taskId);
-            TracePo po = traceMapper.toPo(trace);
-            if (po != null) {
-                traceRepository.save(po);
-            }
-        }
-    }
-
-    /**
-     * 构建错误结果
-     */
-    private VerificationResultDto buildErrorResult(String nusmvOutput, List<String> checkLogs) {
-        return VerificationResultDto.builder()
-                .safe(false)
-                .traces(Collections.emptyList())
-                .specResults(Collections.emptyList())
-                .checkLogs(checkLogs)
-                .nusmvOutput(truncateOutput(nusmvOutput))
-                .build();
-    }
-
-    /**
-     * 截断过长的输出
-     */
-    private String truncateOutput(String output) {
-        if (output == null) {
-            return null;
-        }
-        if (output.length() > MAX_OUTPUT_LENGTH) {
-            return output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)";
-        }
-        return output;
-    }
-
-    /**
-     * 构建设备 SMV 数据映射（用于解析 counterexample）
-     */
-    private Map<String, DeviceSmvData> buildDeviceSmvMap(List<DeviceNodeDto> devices) {
-        Map<String, DeviceSmvData> map = new HashMap<>();
-        for (DeviceNodeDto device : devices) {
-            DeviceSmvData smv = new DeviceSmvData();
-            smv.id = device.getId();
-            smv.name = device.getTemplateName();
-            smv.deviceNo = extractDeviceNo(device.getId());
-            smv.currentState = device.getState();
-            map.put(device.getId(), smv);
-        }
-        return map;
-    }
-
-    private int extractDeviceNo(String deviceId) {
-        if (deviceId == null) return 0;
-        int lastUnderscore = deviceId.lastIndexOf('_');
-        if (lastUnderscore >= 0 && lastUnderscore < deviceId.length() - 1) {
-            try {
-                return Integer.parseInt(deviceId.substring(lastUnderscore + 1));
-            } catch (NumberFormatException e) {
-                return 0;
-            }
-        }
-        return 0;
-    }
-
-    /**
-     * 清理临时文件
-     */
     private void cleanupTempFile(File file) {
         if (file != null && file.exists()) {
-            try {
-                // 删除父目录
-                File parentDir = file.getParentFile();
-                if (parentDir != null && parentDir.isDirectory()) {
-                    File[] files = parentDir.listFiles();
-                    if (files != null) {
-                        for (File f : files) {
-                            f.delete();
-                        }
-                    }
-                    parentDir.delete();
-                }
-                file.delete();
-            } catch (Exception e) {
-                log.warn("Failed to cleanup temp file: {}", file.getAbsolutePath(), e);
-            }
+            log.info("Keeping NuSMV model file for review: {}", file.getAbsolutePath());
         }
     }
 }

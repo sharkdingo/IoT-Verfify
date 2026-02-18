@@ -33,9 +33,8 @@ public class TraceDto {
     private Long userId;
     
     /**
-     * 关联的验证任务ID
+     * 关联的验证任务ID（同步验证时可为 null）
      */
-    @NotNull(message = "Verification task ID is required")
     private Long verificationTaskId;
     
     /**

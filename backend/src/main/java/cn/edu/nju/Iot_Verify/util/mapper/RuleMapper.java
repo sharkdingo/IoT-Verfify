@@ -71,8 +71,4 @@ public class RuleMapper {
 
         return po;
     }
-
-    public RulePo toPo(RuleDto dto, Long userId) {
-        return toEntity(dto, userId);
-    }
 }

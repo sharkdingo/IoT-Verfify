@@ -1,6 +1,9 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
+import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -39,7 +42,7 @@ public class DeviceNodeMapper {
         if (po.getVariablesJson() != null && !po.getVariablesJson().isEmpty()) {
             dto.setVariables(JsonUtils.fromJsonOrDefault(
                     po.getVariablesJson(),
-                    new TypeReference<List<DeviceNodeDto.VariableStateDto>>() {},
+                    new TypeReference<List<VariableStateDto>>() {},
                     null
             ));
         }
@@ -47,7 +50,7 @@ public class DeviceNodeMapper {
         if (po.getPrivaciesJson() != null && !po.getPrivaciesJson().isEmpty()) {
             dto.setPrivacies(JsonUtils.fromJsonOrDefault(
                     po.getPrivaciesJson(),
-                    new TypeReference<List<DeviceNodeDto.PrivacyStateDto>>() {},
+                    new TypeReference<List<PrivacyStateDto>>() {},
                     null
             ));
         }
@@ -95,16 +98,19 @@ public class DeviceNodeMapper {
     }
 
     /**
-     * List<DeviceNodePo> -> List<DeviceNodeDto>
+     * DeviceNodeDto -> DeviceVerificationDto
      */
-    public List<DeviceNodeDto> toDtoList(List<DeviceNodePo> poList) {
-        return poList.stream().map(this::toDto).toList();
-    }
-
-    /**
-     * List<DeviceNodeDto> -> List<DeviceNodePo>
-     */
-    public List<DeviceNodePo> toEntityList(List<DeviceNodeDto> dtoList) {
-        return dtoList.stream().map(this::toEntity).toList();
+    public DeviceVerificationDto toVerificationDto(DeviceNodeDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        DeviceVerificationDto vDto = new DeviceVerificationDto();
+        vDto.setVarName(dto.getId());
+        vDto.setTemplateName(dto.getTemplateName());
+        vDto.setState(dto.getState());
+        vDto.setCurrentStateTrust(dto.getCurrentStateTrust());
+        vDto.setVariables(dto.getVariables());
+        vDto.setPrivacies(dto.getPrivacies());
+        return vDto;
     }
 }

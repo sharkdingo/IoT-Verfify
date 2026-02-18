@@ -8,7 +8,10 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -91,7 +94,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     public List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs) {
         specRepo.deleteByUserId(userId);
         List<SpecificationPo> pos = specs.stream()
-                .map(dto -> specificationMapper.toPo(dto, userId))
+                .map(dto -> specificationMapper.toEntity(dto, userId))
                 .toList();
         List<SpecificationPo> saved = specRepo.saveAll(pos);
         return saved.stream().map(specificationMapper::toDto).toList();
@@ -116,21 +119,17 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         // 处理每个规则
         for (RuleDto r : rules) {
-            Long ruleId = r.getId() == null ? null : r.getId();
-            newRuleIds.add(ruleId);
+            Long ruleId = r.getId();
+            if (ruleId != null) {
+                newRuleIds.add(ruleId);
+            }
 
-            RulePo po = ruleMapper.toPo(r, userId);
+            RulePo po = ruleMapper.toEntity(r, userId);
             if (ruleId == null) {
-                // 新增
                 ruleRepo.save(po);
             } else {
-                // 更新
-                if (existingRules.containsKey(ruleId)) {
-                    po.setId(ruleId);
-                    ruleRepo.save(po);
-                } else {
-                    ruleRepo.save(po);
-                }
+                po.setId(ruleId);
+                ruleRepo.save(po);
             }
         }
 
@@ -351,36 +350,20 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public void deleteDeviceTemplate(Long userId, String templateId) {
-        // Log the input parameters for debugging
-        log.debug("Attempting to delete template: userId={}, templateId={}", userId, templateId);
-
-        // Validate templateId format
-        if (templateId == null || templateId.trim().isEmpty()) {
-            throw new RuntimeException("Template ID cannot be null or empty");
-        }
-
         Long id;
         try {
             id = Long.parseLong(templateId.trim());
         } catch (NumberFormatException e) {
-            throw new RuntimeException("Invalid template ID format: " + templateId + ". Expected numeric value.");
+            throw new BadRequestException("Invalid template ID format: " + templateId);
         }
 
-        log.debug("Parsed template ID: {}", id);
-
-        // Find the template
         DeviceTemplatePo po = deviceTemplateRepo.findById(id)
-                .orElseThrow(() -> new RuntimeException("Template not found with ID: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Template", id));
 
-        log.debug("Found template: {}, owner: {}", po.getName(), po.getUserId());
-
-        // Check if the template belongs to the current user
         if (!po.getUserId().equals(userId)) {
-            throw new RuntimeException("Template not found or access denied. Template belongs to different user.");
+            throw new ForbiddenException("Access denied to this template");
         }
 
-        // Perform the deletion
         deviceTemplateRepo.delete(po);
-        log.info("Successfully deleted template: templateId={}, name={}", id, po.getName());
     }
 }

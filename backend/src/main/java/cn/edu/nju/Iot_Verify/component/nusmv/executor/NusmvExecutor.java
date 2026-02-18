@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 
 /**
  * NuSMV 执行器
- * 职责：执行 NuSMV 命令并提取验证结果
+ * 职责：执行 NuSMV 命令并提取 per-spec 验证结果
  */
 @Slf4j
 @Service
@@ -22,53 +22,22 @@ import java.util.regex.Pattern;
 public class NusmvExecutor {
 
     private final NusmvConfig nusmvConfig;
-    
+
     private static final String TIMEOUT_ENV_KEY = "NUSMV_TIMEOUT_MS";
     private static final int PROCESS_DESTROY_TIMEOUT_SECONDS = 5;
     private static final long OUTPUT_THREAD_JOIN_TIMEOUT_MS = 1000;
 
-    private static final Pattern COUNTEREXAMPLE_PATTERN = Pattern.compile(
-            "(--.*?At time.*?--)[\n\r]*(.*?)(?=--.*?At time|-- End of|$)",
-            Pattern.DOTALL | Pattern.CASE_INSENSITIVE
-    );
-
+    // NuSMV spec result patterns
+    private static final Pattern SPEC_TRUE_PATTERN = Pattern.compile(
+            "-- specification (.+?) is true", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SPEC_FALSE_PATTERN = Pattern.compile(
+            "-- specification (.+?) is false", Pattern.CASE_INSENSITIVE);
     public NusmvResult execute(File smvFile) throws IOException, InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
-            return new NusmvResult("NuSMV model file does not exist or is null");
+            return NusmvResult.error("NuSMV model file does not exist or is null");
         }
 
-        String nusmvPath = nusmvConfig.getPath();
-        String commandPrefix = nusmvConfig.getCommandPrefix();
-
-        List<String> command = new ArrayList<>();
-        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("windows");
-
-        if (commandPrefix != null && !commandPrefix.isEmpty()) {
-            if (isWindows) {
-                command.add("cmd.exe");
-                command.add("/c");
-                command.add(commandPrefix);
-                command.add(nusmvPath);
-                command.add(smvFile.getAbsolutePath());
-            } else {
-                command.add("sh");
-                command.add("-c");
-                command.add(commandPrefix);
-                command.add(nusmvPath);
-                command.add(smvFile.getAbsolutePath());
-            }
-        } else {
-            if (isWindows) {
-                command.add("cmd.exe");
-                command.add("/c");
-                command.add(nusmvPath);
-                command.add(smvFile.getAbsolutePath());
-            } else {
-                command.add(nusmvPath);
-                command.add(smvFile.getAbsolutePath());
-            }
-        }
-
+        List<String> command = buildCommand(smvFile);
         log.info("Executing NuSMV command: {}", String.join(" ", command));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -93,47 +62,88 @@ public class NusmvExecutor {
                 }
             });
             outputThread.start();
-            
+
             boolean finished = process.waitFor(timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
-            
+
             if (!finished) {
                 log.warn("NuSMV execution timed out after {}ms, destroying process", timeout);
                 process.destroyForcibly();
                 if (!process.waitFor(PROCESS_DESTROY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                     log.error("Failed to destroy NuSMV process");
                 }
-                return new NusmvResult("NuSMV execution timed out after " + timeout + "ms");
+                return NusmvResult.error("NuSMV execution timed out after " + timeout + "ms");
             }
-            
+
             outputThread.join(OUTPUT_THREAD_JOIN_TIMEOUT_MS);
 
             int exitCode = process.exitValue();
             String output = outputBuilder.toString();
-
             log.debug("NuSMV exit code: {}, output length: {}", exitCode, output.length());
 
+            // 将 NuSMV 输出保存到 smv 文件同目录下的 output.txt
+            saveOutputToFile(smvFile, output);
+
             if (exitCode != 0) {
-                return new NusmvResult("NuSMV exited with code " + exitCode + ": " + output);
+                return NusmvResult.error("NuSMV exited with code " + exitCode + ": " + output);
             }
 
-            String counterexample = extractCounterexample(output);
-            boolean hasCounterexample = counterexample != null && !counterexample.isEmpty();
-
-            return new NusmvResult(output, hasCounterexample, counterexample);
+            // Parse per-spec results from output
+            List<SpecCheckResult> specResults = parseSpecResults(output);
+            return NusmvResult.success(output, specResults);
 
         } catch (IOException e) {
             log.error("Failed to execute NuSMV", e);
-            return new NusmvResult("Failed to execute NuSMV: " + e.getMessage());
+            return NusmvResult.error("Failed to execute NuSMV: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("NuSMV execution interrupted");
             if (process != null) {
                 process.destroyForcibly();
             }
-            return new NusmvResult("NuSMV execution interrupted");
+            return NusmvResult.error("NuSMV execution interrupted");
         }
     }
-    
+
+    // === Private methods ===
+
+    private void saveOutputToFile(File smvFile, String output) {
+        try {
+            File outputFile = new File(smvFile.getParentFile(), "output.txt");
+            try (java.io.PrintWriter writer = new java.io.PrintWriter(
+                    new java.io.OutputStreamWriter(new java.io.FileOutputStream(outputFile), StandardCharsets.UTF_8))) {
+                writer.print(output);
+            }
+            log.info("NuSMV output saved to: {}", outputFile.getAbsolutePath());
+        } catch (IOException e) {
+            log.warn("Failed to save NuSMV output to file: {}", e.getMessage());
+        }
+    }
+
+    private List<String> buildCommand(File smvFile) {
+        String nusmvPath = nusmvConfig.getPath();
+        String commandPrefix = nusmvConfig.getCommandPrefix();
+        List<String> command = new ArrayList<>();
+        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("windows");
+
+        if (commandPrefix != null && !commandPrefix.isEmpty()) {
+            if (isWindows) {
+                command.add("cmd.exe");
+                command.add("/c");
+                command.add(commandPrefix);
+            } else {
+                command.add("sh");
+                command.add("-c");
+                command.add(commandPrefix);
+            }
+        } else if (isWindows) {
+            command.add("cmd.exe");
+            command.add("/c");
+        }
+        command.add(nusmvPath);
+        command.add(smvFile.getAbsolutePath());
+        return command;
+    }
+
     private long getTimeoutFromEnvironment() {
         try {
             String timeoutEnv = System.getenv(TIMEOUT_ENV_KEY);
@@ -146,149 +156,136 @@ public class NusmvExecutor {
         return nusmvConfig.getTimeoutMs();
     }
 
-    private String extractCounterexample(String output) {
+    /**
+     * 解析 NuSMV 输出，提取每个 spec 的独立结果。
+     *
+     * NuSMV 输出格式：
+     *   -- specification CTLSPEC ... is true
+     *   -- specification LTLSPEC ... is false
+     *   -- as demonstrated by the following execution sequence
+     *   Trace Description: ...
+     *   Trace Type: ...
+     *   State 1.1: ...
+     *   ...
+     */
+    private List<SpecCheckResult> parseSpecResults(String output) {
+        List<SpecCheckResult> results = new ArrayList<>();
         if (output == null || output.isEmpty()) {
-            return null;
+            return results;
         }
 
-        boolean hasCounterexample = output.contains("Trace Description") ||
-                output.contains("counterexample") ||
-                output.contains("Trace Type") ||
-                (output.contains("State") && output.contains("="));
-
-        if (!hasCounterexample) {
-            return null;
-        }
-
-        Matcher matcher = COUNTEREXAMPLE_PATTERN.matcher(output);
-        if (matcher.find()) {
-            return matcher.group(2).trim();
-        }
-
-        return extractCounterexampleManually(output);
-    }
-
-    private String extractCounterexampleManually(String output) {
-        StringBuilder counterexample = new StringBuilder();
         String[] lines = output.split("\n");
-        boolean inTrace = false;
+        int i = 0;
+        while (i < lines.length) {
+            String line = lines[i].trim();
 
-        for (String line : lines) {
-            if (line.contains("Trace Description") || line.contains("Trace Type")) {
-                inTrace = true;
-                counterexample.append(line).append("\n");
-            } else if (line.contains("End of")) {
-                inTrace = false;
-            } else if (inTrace) {
-                counterexample.append(line).append("\n");
-            }
-        }
-
-        return counterexample.length() > 0 ? counterexample.toString() : null;
-    }
-
-    public List<String> parseCounterexampleStates(String counterexample) {
-        if (counterexample == null || counterexample.isEmpty()) {
-            return new ArrayList<>();
-        }
-
-        List<String> states = new ArrayList<>();
-        String[] lines = counterexample.split("\n");
-
-        StringBuilder currentState = new StringBuilder();
-        boolean inState = false;
-
-        for (String line : lines) {
-            if (line.startsWith("--") || line.trim().isEmpty()) {
+            // Check for "-- specification ... is true"
+            Matcher trueMatcher = SPEC_TRUE_PATTERN.matcher(line);
+            if (trueMatcher.find()) {
+                results.add(new SpecCheckResult(trueMatcher.group(1).trim(), true, null));
+                i++;
                 continue;
             }
 
-            if (line.startsWith("State")) {
-                if (currentState.length() > 0) {
-                    states.add(currentState.toString().trim());
+            // Check for "-- specification ... is false"
+            Matcher falseMatcher = SPEC_FALSE_PATTERN.matcher(line);
+            if (falseMatcher.find()) {
+                String specExpr = falseMatcher.group(1).trim();
+                // Collect the counterexample trace that follows
+                i++;
+                StringBuilder traceBuilder = new StringBuilder();
+                while (i < lines.length) {
+                    String traceLine = lines[i];
+                    // Stop when we hit the next spec result line
+                    if (traceLine.trim().startsWith("-- specification ")) {
+                        break;
+                    }
+                    traceBuilder.append(traceLine).append("\n");
+                    i++;
                 }
-                currentState = new StringBuilder();
-                currentState.append(line).append("\n");
-                inState = true;
-            } else if (inState) {
-                currentState.append(line).append("\n");
+                String counterexample = extractTraceFromBlock(traceBuilder.toString());
+                results.add(new SpecCheckResult(specExpr, false, counterexample));
+                continue;
+            }
+
+            i++;
+        }
+
+        return results;
+    }
+
+    /**
+     * 从 trace block 中提取 State 行（跳过 Trace Description/Type 等元信息）
+     */
+    private String extractTraceFromBlock(String block) {
+        if (block == null || block.isEmpty()) {
+            return null;
+        }
+        StringBuilder trace = new StringBuilder();
+        boolean inStates = false;
+        for (String line : block.split("\n")) {
+            String trimmed = line.trim();
+            // 兼容 NuSMV 2.7.1 格式 "-> State: 1.1 <-" 和旧格式 "State 1.1:"
+            if (trimmed.startsWith("-> State:") || trimmed.startsWith("State ") || inStates) {
+                inStates = true;
+                trace.append(line).append("\n");
             }
         }
-
-        if (currentState.length() > 0) {
-            states.add(currentState.toString().trim());
-        }
-
-        return states;
+        String result = trace.toString().trim();
+        return result.isEmpty() ? null : result;
     }
 
-    public String extractDeviceState(String counterexample, String deviceName, int deviceNo) {
-        if (counterexample == null || counterexample.isEmpty() || deviceName == null) {
-            return null;
+    /**
+     * 单个 spec 的检查结果
+     */
+    public static class SpecCheckResult {
+        private final String specExpression;
+        private final boolean passed;
+        private final String counterexample;
+
+        public SpecCheckResult(String specExpression, boolean passed, String counterexample) {
+            this.specExpression = specExpression;
+            this.passed = passed;
+            this.counterexample = counterexample;
         }
 
-        String safeDeviceName = deviceName.toLowerCase().replace(" ", "");
-        String moduleName = Pattern.quote(safeDeviceName) + "_" + deviceNo;
-        Pattern pattern = Pattern.compile(
-                Pattern.quote(moduleName) + "\\.state\\s*=\\s*(\\w+)",
-                Pattern.CASE_INSENSITIVE
-        );
-
-        Matcher matcher = pattern.matcher(counterexample);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-
-        return null;
+        public String getSpecExpression() { return specExpression; }
+        public boolean isPassed() { return passed; }
+        public String getCounterexample() { return counterexample; }
     }
 
-    public String extractVariableValue(String counterexample, String deviceName, int deviceNo, String varName) {
-        if (counterexample == null || counterexample.isEmpty() || deviceName == null) {
-            return null;
-        }
-
-        String safeDeviceName = deviceName.toLowerCase().replace(" ", "");
-        String moduleName = Pattern.quote(safeDeviceName) + "_" + deviceNo;
-        Pattern pattern = Pattern.compile(
-                Pattern.quote(moduleName) + "\\." + Pattern.quote(varName) + "\\s*=\\s*(-?\\d+|\\w+)",
-                Pattern.CASE_INSENSITIVE
-        );
-
-        Matcher matcher = pattern.matcher(counterexample);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-
-        return null;
-    }
-
+    /**
+     * NuSMV 执行结果
+     */
     public static class NusmvResult {
         private final String output;
-        private final boolean hasCounterexample;
-        private final String counterexample;
         private final boolean success;
         private final String errorMessage;
-        
-        public NusmvResult(String output, boolean hasCounterexample, String counterexample) {
+        private final List<SpecCheckResult> specResults;
+
+        private NusmvResult(String output, boolean success, String errorMessage,
+                            List<SpecCheckResult> specResults) {
             this.output = output;
-            this.hasCounterexample = hasCounterexample;
-            this.counterexample = counterexample;
-            this.success = true;
-            this.errorMessage = null;
-        }
-        
-        public NusmvResult(String errorMessage) {
-            this.output = null;
-            this.hasCounterexample = false;
-            this.counterexample = null;
-            this.success = false;
+            this.success = success;
             this.errorMessage = errorMessage;
+            this.specResults = specResults != null ? specResults : List.of();
         }
-        
+
+        public static NusmvResult success(String output, List<SpecCheckResult> specResults) {
+            return new NusmvResult(output, true, null, specResults);
+        }
+
+        public static NusmvResult error(String errorMessage) {
+            return new NusmvResult(null, false, errorMessage, null);
+        }
+
         public String getOutput() { return output; }
-        public boolean hasCounterexample() { return hasCounterexample; }
-        public String getCounterexample() { return counterexample; }
         public boolean isSuccess() { return success; }
         public String getErrorMessage() { return errorMessage; }
+        public List<SpecCheckResult> getSpecResults() { return specResults; }
+
+        public boolean hasAnyViolation() {
+            return specResults.stream().anyMatch(r -> !r.isPassed());
+        }
     }
 }

@@ -23,8 +23,6 @@ public class DeviceEdgeMapper {
         dto.setTo(po.getTo());
         dto.setFromLabel(po.getFromLabel());
         dto.setToLabel(po.getToLabel());
-        dto.setFromApi(po.getFromApi());
-        dto.setToApi(po.getToApi());
 
         DeviceEdgeDto.Point fromPos = new DeviceEdgeDto.Point();
         fromPos.setX(po.getFromPosX());
@@ -52,8 +50,6 @@ public class DeviceEdgeMapper {
         po.setTo(dto.getTo());
         po.setFromLabel(dto.getFromLabel());
         po.setToLabel(dto.getToLabel());
-        po.setFromApi(dto.getFromApi());
-        po.setToApi(dto.getToApi());
 
         if (dto.getFromPos() != null) {
             po.setFromPosX(dto.getFromPos().getX());

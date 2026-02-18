@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn compile:*)",
+      "Bash(mvn clean compile:*)",
+      "Bash(ls:*)",
+      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\)[''data''][''token'']\\)\")",
+      "Bash(echo:*)",
+      "Bash(curl:*)",
+      "Bash(# Force kill with /T flag for tree kill tasklist.exe)",
+      "Read(//d/IoT-Verify-my/**)",
+      "Bash(while read PID)",
+      "Bash(do taskkill.exe /PID $PID /F /T done sleep 5 tasklist.exe)",
+      "Bash(# Use netstat to find what''s on port 8080 and kill it netstat.exe -ano)",
+      "Bash(taskkill.exe:*)",
+      "Bash(netstat.exe:*)",
+      "Read(//d//**)",
+      "Bash(./mvnw compile:*)",
+      "Bash(git mv:*)",
+      "Bash(git rm:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:github.com)",
+      "Read(//d/MEDIC-test/MEDIC-test/**)"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
-package cn.edu.nju.Iot_Verify.service;
+package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;

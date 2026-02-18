@@ -12,12 +12,10 @@ import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@Slf4j
 @RestController
 @RequestMapping("/api/board")
 @RequiredArgsConstructor
@@ -97,14 +95,7 @@ public class BoardStorageController {
 
     @DeleteMapping("/templates/{id}")
     public Result<Void> deleteTemplate(@CurrentUser Long userId, @PathVariable String id) {
-        try {
-            log.info("Delete template request: userId={}, templateId={}", userId, id);
-            boardService.deleteDeviceTemplate(userId, id);
-            log.info("Template deleted successfully: templateId={}", id);
-            return Result.success(null);
-        } catch (Exception e) {
-            log.error("Error in deleteTemplate controller: templateId={}", id, e);
-            return Result.error(500, "Failed to delete template: " + e.getMessage());
-        }
+        boardService.deleteDeviceTemplate(userId, id);
+        return Result.success();
     }
 }

@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
+import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import org.springframework.stereotype.Component;
@@ -12,14 +14,11 @@ import java.util.List;
 @Component
 public class ChatMapper {
 
-    /**
-     * ChatMessagePo -> DTO (简化版响应)
-     */
-    public cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto toChatMessageDto(ChatMessagePo chatMessagePo) {
+    public ChatMessageResponseDto toChatMessageDto(ChatMessagePo chatMessagePo) {
         if (chatMessagePo == null) {
             return null;
         }
-        cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto dto = new cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto();
+        ChatMessageResponseDto dto = new ChatMessageResponseDto();
         dto.setId(chatMessagePo.getId());
         dto.setSessionId(chatMessagePo.getSessionId());
         dto.setRole(chatMessagePo.getRole());
@@ -28,21 +27,15 @@ public class ChatMapper {
         return dto;
     }
 
-    /**
-     * List<ChatMessagePo> -> List<ChatMessageResponseDto>
-     */
-    public List<cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto> toChatMessageDtoList(List<ChatMessagePo> list) {
+    public List<ChatMessageResponseDto> toChatMessageDtoList(List<ChatMessagePo> list) {
         return list.stream().map(this::toChatMessageDto).toList();
     }
 
-    /**
-     * ChatSessionPo -> DTO (简化版响应)
-     */
-    public cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto toChatSessionDto(ChatSessionPo chatSessionPo) {
+    public ChatSessionResponseDto toChatSessionDto(ChatSessionPo chatSessionPo) {
         if (chatSessionPo == null) {
             return null;
         }
-        cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto dto = new cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto();
+        ChatSessionResponseDto dto = new ChatSessionResponseDto();
         dto.setId(chatSessionPo.getId());
         dto.setUserId(chatSessionPo.getUserId());
         dto.setTitle(chatSessionPo.getTitle());
@@ -51,10 +44,7 @@ public class ChatMapper {
         return dto;
     }
 
-    /**
-     * List<ChatSessionPo> -> List<ChatSessionResponseDto>
-     */
-    public List<cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto> toChatSessionDtoList(List<ChatSessionPo> list) {
+    public List<ChatSessionResponseDto> toChatSessionDtoList(List<ChatSessionPo> list) {
         return list.stream().map(this::toChatSessionDto).toList();
     }
 }

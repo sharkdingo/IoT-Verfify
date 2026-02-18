@@ -31,12 +31,6 @@ public class DeviceEdgePo {
     @Column(name = "to_label", nullable = false, length = 255)
     private String toLabel;
 
-    @Column(name = "from_api", nullable = false, length = 255)
-    private String fromApi;
-
-    @Column(name = "to_api", nullable = false, length = 255)
-    private String toApi;
-
     @Column(name = "from_pos_x", nullable = false)
     private Double fromPosX;
 
