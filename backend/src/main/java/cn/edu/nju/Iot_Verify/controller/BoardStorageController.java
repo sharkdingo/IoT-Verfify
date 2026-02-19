@@ -98,4 +98,10 @@ public class BoardStorageController {
         boardService.deleteDeviceTemplate(userId, id);
         return Result.success();
     }
+
+    @PostMapping("/templates/reload")
+    public Result<Integer> reloadTemplates(@CurrentUser Long userId) {
+        int count = boardService.reloadDeviceTemplates(userId);
+        return Result.success(count);
+    }
 }

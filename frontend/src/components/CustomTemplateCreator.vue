@@ -32,7 +32,7 @@ const customTemplateForm = reactive({
     signal: boolean,
     startState: string,
     endState: string,
-    trigger: string,
+    trigger: string | { Attribute: string, Relation: string, Value: string },
     assignments: Array<{variableName: string, changeRate: string}>
   }>,
   variables: [] as Array<{
@@ -195,7 +195,9 @@ const createCustomTemplate = async () => {
           Signal: api.signal,
           StartState: api.startState,
           EndState: api.endState,
-          Trigger: api.trigger,
+          Trigger: typeof api.trigger === 'string' 
+            ? { Attribute: api.trigger, Relation: 'EQ', Value: '' } 
+            : api.trigger,
           Assignments: api.assignments.filter(a => a.variableName.trim() !== '').map(a => ({
             VariableName: a.variableName,
             ChangeRate: a.changeRate

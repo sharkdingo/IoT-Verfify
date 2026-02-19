@@ -14,6 +14,7 @@ import type {
   SpecSide,
 } from '@/types/spec'
 import { getCachedManifestForNode } from '@/utils/templateCache'
+import { getDefaultDeviceIcon } from '@/utils/device'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
@@ -40,20 +41,23 @@ const props = withDefaults(defineProps<Props>(), {
 // Device form data
 const deviceForm = reactive({
   name: '',
-  type: 'Sensor',
+  type: '',
   id: 'AUTO'
 })
 
-// Device types - hard-coded options plus dynamically loaded custom templates
+// Device types - dynamically loaded from backend device templates
 const deviceTypes = computed(() => {
-  const hardCodedTypes = ['Sensor', 'Switch', 'Light']
-  const templateNames = props.deviceTemplates.map((tpl: any) => tpl.manifest.Name)
-  // Filter out hard-coded types to avoid duplicates, keep only custom templates
-  const customTemplates = templateNames.filter(name =>
-    !hardCodedTypes.includes(name) && name !== 'Custom'
-  )
-  return [...hardCodedTypes, ...customTemplates]
+  // Only use templates loaded from backend
+  return props.deviceTemplates
+    .map((tpl: any) => tpl.manifest?.Name || tpl.name)
+    .filter((name: string) => name) // Remove empty names
 })
+
+// Get template icon SVG
+const getTemplateIcon = (template: any): string => {
+  const name = template.manifest?.Name || template.name
+  return getDefaultDeviceIcon(name)
+}
 
 // Specification form data
 const specForm = reactive({
@@ -271,9 +275,20 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
 
   const keys: Array<{label: string, value: string}> = []
 
+  // Internal Variables
   if (targetType === 'variable' && template.manifest.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
       keys.push({ label: v.Name, value: v.Name })
+    })
+  }
+
+  // Impacted Variables (外部影响变量)
+  if (targetType === 'variable' && template.manifest.ImpactedVariables) {
+    template.manifest.ImpactedVariables.forEach((v: any) => {
+      const varName = typeof v === 'string' ? v : (v.Name || v.name || '')
+      if (varName && !keys.some(k => k.value === varName)) {
+        keys.push({ label: varName, value: varName })
+      }
     })
   }
 
@@ -615,43 +630,31 @@ const handleCreateDevice = async () => {
     return
   }
 
-  let template
-
-  // If using a predefined type, find existing template
-  if (deviceTypes.value.includes(deviceForm.type)) {
-    template = props.deviceTemplates.find((tpl: any) => tpl.manifest.Name === deviceForm.type)
-    if (!template) {
-      // Try to find by lowercase name
-      template = props.deviceTemplates.find((tpl: any) =>
-        tpl.manifest.Name.toLowerCase() === deviceForm.type.toLowerCase()
-      )
-    }
-    if (!template && props.deviceTemplates.length > 0) {
-      // If still not found, use the first available template as fallback
-      template = props.deviceTemplates[0]
-      console.warn(`Template for type "${deviceForm.type}" not found, using fallback:`, template.manifest.Name)
-    }
-  } else {
-    // If custom type, we should navigate to templates or show error?
-    // The "Custom" option in dropdown was triggering this path.
-    // But we removed the "Custom Template" form from here.
-    // So if user selects "Custom" (which is not in deviceTypes), we should probably warn them to use the Templates tab.
-    
-    // Actually, "Custom" is filtered out in deviceTypes computed.
-    // deviceTypes = hardCoded + customTemplates.filter(!hardCoded)
-    // So if user selects "Custom", it's because it's in the list?
-    // Wait, in the old code:
-    // if (deviceForm.type === 'Custom') -> ...
-    // So if user selects "Custom", we should probably just show a message or do nothing.
-    // Or better, remove "Custom" from the list if we want to force them to use the new Tab.
-    // But for now, let's just warn.
-    
+  if (!deviceForm.type) {
     ElMessage({
-      message: 'Please use the Templates tab to create custom devices',
-      type: 'info',
+      message: 'Please select a device template',
+      type: 'warning',
       center: true
     })
     return
+  }
+
+  // Find the selected template from backend templates
+  let template = props.deviceTemplates.find((tpl: any) => 
+    (tpl.manifest?.Name || tpl.name) === deviceForm.type
+  )
+  
+  if (!template) {
+    // Try lowercase match
+    template = props.deviceTemplates.find((tpl: any) => 
+      (tpl.manifest?.Name || tpl.name)?.toLowerCase() === deviceForm.type.toLowerCase()
+    )
+  }
+  
+  if (!template && props.deviceTemplates.length > 0) {
+    // If still not found, use the first available template as fallback
+    template = props.deviceTemplates[0]
+    console.warn(`Template for type "${deviceForm.type}" not found, using fallback:`, template.manifest?.Name || template.name)
   }
 
   if (!template) {
@@ -705,6 +708,7 @@ const emit = defineEmits<{
   }]
   'refresh-templates': []
   'delete-template': [templateId: string]
+  'verify': []
 }>()
 
 // Component mounted
@@ -984,7 +988,7 @@ const exportTemplate = (template: any) => {
                 <input
                   v-model="deviceForm.name"
                   class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 placeholder:text-slate-400 transition-all shadow-sm"
-                  placeholder="e.g. Kitchen Sensor"
+                  placeholder="e.g. Living Room AC"
                   type="text"
                 />
               </div>
@@ -1060,16 +1064,14 @@ const exportTemplate = (template: any) => {
               <div class="flex-1 h-px bg-slate-200"></div>
             </div>
             
-            <div v-if="props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name)).length > 0" class="grid grid-cols-1 gap-2">
-              <div v-for="template in props.deviceTemplates.filter(t => !['Sensor', 'Switch', 'Light'].includes(t.manifest.Name))" :key="template.id" class="group relative bg-white rounded-lg p-3 border-2 border-slate-200 hover:border-orange-300 hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
+            <div v-if="props.deviceTemplates.length > 0" class="grid grid-cols-1 gap-2">
+              <div v-for="template in props.deviceTemplates" :key="template.id" class="group relative bg-white rounded-lg p-3 border-2 border-slate-200 hover:border-orange-300 hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
                 <!-- 装饰 -->
                 <div class="absolute top-0 right-0 w-16 h-16 bg-orange-100 rounded-full -translate-y-1/2 translate-x-1/2 opacity-50 group-hover:opacity-70 transition-opacity"></div>
                 
                 <div class="relative flex items-start justify-between mb-2">
                   <div class="flex items-center gap-2">
-                    <div class="w-9 h-9 bg-orange-100 rounded-lg flex items-center justify-center text-orange-600 group-hover:bg-orange-500 group-hover:text-white transition-all shadow-sm">
-                      <span class="material-symbols-outlined text-lg">devices</span>
-                    </div>
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-orange-50 group-hover:bg-orange-100 transition-all shadow-sm overflow-hidden" v-html="getTemplateIcon(template)"></div>
                     <div>
                       <h4 class="text-xs font-bold text-slate-800 group-hover:text-orange-600 transition-colors">{{ template.manifest.Name }}</h4>
                       <p v-if="template.manifest.Description" class="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{{ template.manifest.Description }}</p>
@@ -1451,6 +1453,18 @@ const exportTemplate = (template: any) => {
           </div>
         </div>
       </details>
+
+      <!-- Verification Action -->
+      <div class="p-4 border-t border-slate-200 bg-white">
+        <button
+          @click="emit('verify')"
+          class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
+        >
+          <span class="material-symbols-outlined text-lg">verified_user</span>
+          Start Verification
+        </button>
+      </div>
+
     </div>
 
   </aside>

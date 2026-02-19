@@ -32,4 +32,11 @@ public interface BoardStorageService {
     List<DeviceTemplateDto> getDeviceTemplates(Long userId);
     DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);
     void deleteDeviceTemplate(Long userId, String templateId);
+
+    /**
+     * 重新加载设备模板（从资源文件重新初始化默认模板）
+     * @param userId 用户ID
+     * @return 重新加载的模板数量
+     */
+    int reloadDeviceTemplates(Long userId);
 }

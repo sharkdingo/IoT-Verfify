@@ -277,7 +277,8 @@ const handleAddRule = async (payload: RuleForm) => {
   const ruleId = 'rule_' + Date.now()
   const newRule: RuleForm = {
     ...payload,
-    id: ruleId
+    id: ruleId,
+    name: payload.name || `Rule ${ruleId}`
   }
 
   // 计算新规则对应的 Edge
@@ -295,8 +296,6 @@ const handleAddRule = async (payload: RuleForm) => {
       to: toNode.id,
       fromLabel: fromNode.label,
       toLabel: toNode.label,
-      fromApi,
-      toApi,
       fromPos: fromPoint,
       toPos: toPoint
     })
@@ -304,23 +303,22 @@ const handleAddRule = async (payload: RuleForm) => {
 
   if (newEdges.length) {
     try {
+      // 先保存新创建的规则（只保存新规则，不是所有规则）
+      await boardApi.saveRules([newRule])
+      
+      // 保存新创建的边
+      await boardApi.saveEdges(newEdges)
+
       // 更新前端状态
       rules.value = [...rules.value, newRule]
       edges.value = [...edges.value, ...newEdges]
 
-      // 并行保存规则和边
-      await Promise.all([
-        boardApi.saveRules(rules.value),
-        boardApi.saveEdges(edges.value)
-      ])
-
       ElMessage.success(t('app.addRuleSuccess') || '添加规则成功')
-    } catch (e) {
+    } catch (e: any) {
       console.error('saveRules/saveEdges error', e)
-      // 保存失败，回滚状态
-      rules.value = rules.value.filter(r => r.id !== ruleId)
-      edges.value = edges.value.filter(e => !newEdges.some(ne => ne.id === e.id))
-      ElMessage.error(t('app.saveRulesFailed') || '保存规则失败')
+      // 如果后端返回了错误信息，显示它
+      const errorMsg = e?.response?.data?.message || e?.message || '保存规则失败'
+      ElMessage.error(errorMsg)
     }
   }
 }
@@ -547,12 +545,12 @@ const deleteRule = async (ruleId: string) => {
   // 删除规则
   rules.value = rules.value.filter(r => r.id !== ruleId)
 
-  // 删除相关的边（所有 toId 和 toApi 匹配的边）
+  // 删除相关的边（所有 to 匹配的边）
   edges.value = edges.value.filter(e => {
-    // 如果边的 toId 和 toApi 与被删除的规则匹配，则删除
-    if (e.to === ruleToDelete.toId && e.toApi === ruleToDelete.toApi) {
-      // 检查 source 是否在这个规则中
-      return !ruleToDelete.sources.some(s => s.fromId === e.from && s.fromApi === e.fromApi)
+    // 如果边的 to 与被删除的规则的 toId 匹配，则需要进一步检查
+    if (e.to === ruleToDelete.toId) {
+      // 检查 source 是否在这个规则中（通过 from 字段匹配）
+      return !ruleToDelete.sources.some(s => s.fromId === e.from)
     }
     return true
   })
@@ -613,166 +611,20 @@ const saveSpecsToServer = async () => {
 
 const ruleBuilderVisible = ref(false)
 
-// Default device templates for demonstration
-const defaultDeviceTemplates = ref<DeviceTemplate[]>([
-  {
-    id: 'sensor-1',
-    name: 'Sensor',
-    manifest: {
-      Name: 'Sensor',
-      Description: 'Basic sensor device',
-      Modes: ['Working', 'Off'],
-      InternalVariables: [],
-      ImpactedVariables: ['temperature', 'humidity', 'motion'],
-      InitState: 'Working',
-      WorkingStates: [
-        {
-          Name: 'Working',
-          Dynamics: [],
-          Description: 'Sensor is actively monitoring environmental conditions',
-          Trust: 'trusted',
-          Privacy: 'private',
-          Invariant: 'temperature >= -50 && temperature <= 100'
-        }
-      ],
-      APIs: [
-        { Name: 'temperature', StartState: 'Working', EndState: 'Working' },
-        { Name: 'humidity', StartState: 'Working', EndState: 'Working' },
-        { Name: 'motion', StartState: 'Working', EndState: 'Working' },
-        { Name: 'light_level', StartState: 'Working', EndState: 'Working' }
-      ]
-    }
-  },
-  {
-    id: 'switch-1',
-    name: 'Switch',
-    manifest: {
-      Name: 'Switch',
-      Description: 'Basic switch device',
-      Modes: ['On', 'Off'],
-      InternalVariables: [],
-      ImpactedVariables: ['power'],
-      InitState: 'Off',
-      WorkingStates: [
-        {
-          Name: 'On',
-          Dynamics: [],
-          Description: 'Switch is turned on and power is flowing',
-          Trust: 'trusted',
-          Privacy: 'public',
-          Invariant: 'power == true'
-        },
-        {
-          Name: 'Off',
-          Dynamics: [],
-          Description: 'Switch is turned off and no power is flowing',
-          Trust: 'trusted',
-          Privacy: 'public',
-          Invariant: 'power == false'
-        }
-      ],
-      APIs: [
-        { Name: 'turn_on', StartState: 'Off', EndState: 'On' },
-        { Name: 'turn_off', StartState: 'On', EndState: 'Off' },
-        { Name: 'toggle', StartState: 'On', EndState: 'Off' },
-        { Name: 'toggle', StartState: 'Off', EndState: 'On' },
-        { Name: 'status', StartState: 'On', EndState: 'On' },
-        { Name: 'status', StartState: 'Off', EndState: 'Off' }
-      ]
-    }
-  },
-  {
-    id: 'light-1',
-    name: 'Light',
-    manifest: {
-      Name: 'Light',
-      Description: 'Basic light device',
-      Modes: ['On', 'Off'],
-      InternalVariables: [],
-      ImpactedVariables: ['brightness', 'color'],
-      InitState: 'Off',
-      WorkingStates: [
-        {
-          Name: 'On',
-          Dynamics: [],
-          Description: 'Light is turned on and emitting light',
-          Trust: 'trusted',
-          Privacy: 'public',
-          Invariant: 'brightness > 0'
-        },
-        {
-          Name: 'Off',
-          Dynamics: [],
-          Description: 'Light is turned off and not emitting light',
-          Trust: 'trusted',
-          Privacy: 'public',
-          Invariant: 'brightness == 0'
-        }
-      ],
-      APIs: [
-        { Name: 'brightness', StartState: 'On', EndState: 'On' },
-        { Name: 'brightness', StartState: 'Off', EndState: 'Off' },
-        { Name: 'color', StartState: 'On', EndState: 'On' },
-        { Name: 'color', StartState: 'Off', EndState: 'Off' },
-        { Name: 'turn_on', StartState: 'Off', EndState: 'On' },
-        { Name: 'turn_off', StartState: 'On', EndState: 'Off' }
-      ]
-    }
-  }
-])
+// Default device templates - now loaded from backend
+const defaultDeviceTemplates = ref<DeviceTemplate[]>([])
+
 const refreshDeviceTemplates = async () => {
   try {
+    // 先重新加载模板（从后端资源文件）
+    await boardApi.reloadDeviceTemplates()
+    // 然后获取模板列表
     const res = await boardApi.getDeviceTemplates()
-    const backendTemplates = res || []
-
-    // Check if default templates exist in backend, if not, save them
-    const defaultTemplateNames = defaultDeviceTemplates.value.map(t => t.name)
-    const existingDefaultTemplates = backendTemplates.filter((tpl: any) =>
-      defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
-    )
-
-    // Save missing default templates to backend
-    if (existingDefaultTemplates.length < defaultDeviceTemplates.value.length) {
-      console.log('Saving missing default templates to backend...')
-      const missingDefaults = defaultDeviceTemplates.value.filter(defaultTpl =>
-        !existingDefaultTemplates.some(existingTpl =>
-          (existingTpl.name || existingTpl.manifest?.Name) === defaultTpl.name
-        )
-      )
-
-      for (const template of missingDefaults) {
-        try {
-          console.log('Saving default template:', template.name)
-          // Keep id field for default templates
-
-          await boardApi.createDeviceTemplate(template)
-          console.log('Successfully saved default template:', template.name)
-        } catch (saveError) {
-          console.error('Failed to save default template:', template.name, saveError)
-        }
-      }
-
-      // Re-fetch templates after saving defaults
-      const updatedRes = await boardApi.getDeviceTemplates()
-      const updatedBackendTemplates = updatedRes || []
-      deviceTemplates.value = [...defaultDeviceTemplates.value, ...updatedBackendTemplates.filter((tpl: any) =>
-        !defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
-      )]
-    } else {
-      // All default templates exist, merge normally
-      const customTemplates = backendTemplates.filter((tpl: any) =>
-        !defaultTemplateNames.includes(tpl.name || tpl.manifest?.Name)
-      )
-      deviceTemplates.value = [...defaultDeviceTemplates.value, ...customTemplates]
-    }
-
-    console.log('Loaded device templates:', deviceTemplates.value)
+    deviceTemplates.value = res || []
+    console.log('Loaded device templates from backend:', deviceTemplates.value)
   } catch (e) {
-    console.error(e)
-    // Fallback to default templates on error
-    deviceTemplates.value = defaultDeviceTemplates.value
-    console.log('Using default device templates due to API error:', deviceTemplates.value)
-    // ElMessage.error(t('app.loadTemplatesFailed') || '加载设备模板失败')
+    console.error('加载设备模板失败:', e)
+    deviceTemplates.value = []
   }
 }
 
@@ -798,6 +650,7 @@ const refreshRules = async () => {
       boardApi.getRules(),
       boardApi.getEdges()
     ])
+    console.log('🔍 [Board] 刷新规则 - 原始数据:', JSON.parse(JSON.stringify(rulesData)))
     rules.value = rulesData
     edges.value = edgesData
   } catch (e) {
@@ -1136,6 +989,116 @@ defineExpose({
   refreshRules,
   refreshSpecifications,
 })
+
+// ==== Verification Logic ====
+const isVerifying = ref(false)
+const verificationResult = ref<any>(null)
+const verificationError = ref<string | null>(null)
+
+const handleVerify = async () => {
+  if (nodes.value.length === 0) {
+    ElMessage.warning('No devices to verify')
+    return
+  }
+
+  isVerifying.value = true
+  verificationError.value = null
+  verificationResult.value = null
+
+  try {
+    // Prepare devices: Add default variables/privacies if missing
+    const devices = nodes.value.map(node => {
+      // Get template
+      const tpl = deviceTemplates.value.find(t => t.manifest?.Name === node.templateName)
+      const manifest = tpl?.manifest
+
+      // Determine variables
+      let variables = (node as any).variables || []
+      if ((!variables || variables.length === 0) && manifest?.InternalVariables) {
+        variables = manifest.InternalVariables.map((v: any) => ({
+          name: v.Name,
+          value: v.Default || '0', // Or some default
+          trust: 'trusted'
+        }))
+      }
+
+      // Determine privacies
+      let privacies = (node as any).privacies || []
+      if ((!privacies || privacies.length === 0) && manifest?.InternalVariables) {
+        privacies = manifest.InternalVariables.map((v: any) => ({
+          name: v.Name,
+          privacy: v.Privacy || 'public'
+        }))
+      }
+
+      // Map to backend DTO format - varName is required
+      return {
+        varName: node.label,  // Backend expects varName
+        templateName: node.templateName,
+        state: node.state,
+        currentStateTrust: (node as any).currentStateTrust || 'trusted',
+        variables,
+        privacies
+      }
+    })
+
+    // Prepare rules - transform to backend DTO format
+    const rulesData = rules.value.map(r => ({
+      // Backend expects: conditions (not sources)
+      conditions: (r.sources || []).map(s => ({
+        deviceName: s.fromId,
+        attribute: s.fromApi || s.property || '',
+        relation: s.relation || '=',
+        value: s.value || 'true'
+      })),
+      // Backend expects: command with deviceName and action
+      command: {
+        deviceName: r.toId || '',
+        action: r.toApi || '',
+        contentDevice: null,
+        content: null
+      },
+      ruleString: r.name || ''
+    }))
+
+    // Prepare specs
+    const specs = specifications.value
+
+    const req = {
+      devices,
+      rules: rulesData,
+      specs,
+      isAttack: false,
+      intensity: 3
+    }
+
+    console.log('Starting verification with payload:', req)
+
+    const result = await boardApi.verify(req)
+    verificationResult.value = result
+
+    if (result.safe) {
+      ElMessage.success('Verification passed: System is safe!')
+    } else {
+      ElMessage.warning(`Verification failed: Found ${result.traces?.length || 0} violations`)
+    }
+
+  } catch (error: any) {
+    console.error('Verification failed:', error)
+    verificationError.value = error.message || 'Verification failed'
+    ElMessage.error(verificationError.value)
+  } finally {
+    isVerifying.value = false
+  }
+}
+
+// ==== Results Dialog ====
+const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
+
+const closeResultDialog = () => {
+  verificationResult.value = null
+  verificationError.value = null
+}
 </script>
 
 <template>
@@ -1153,12 +1116,14 @@ defineExpose({
       @add-spec="handleAddSpec"
       @refresh-templates="refreshDeviceTemplates"
       @delete-template="handleDeleteTemplate"
+      @verify="handleVerify"
     />
 
     <!-- Right Sidebar - System Inspector -->
     <SystemInspector
       :devices="nodes"
       :rules="rules"
+      :edges="edges"
       :specifications="specifications"
       @delete-device="deleteNodeFromStatus"
       @delete-rule="deleteRule"
@@ -1386,6 +1351,64 @@ defineExpose({
             删除设备
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Verification Result Dialog -->
+  <div v-if="showResultDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="closeResultDialog">
+    <div class="bg-white rounded-xl p-6 w-[600px] max-w-[90vw] shadow-2xl max-h-[80vh] flex flex-col" @click.stop>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold text-slate-800">Verification Result</h3>
+        <button @click="closeResultDialog" class="text-slate-400 hover:text-slate-600">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <div v-if="verificationError" class="text-red-600 mb-4">
+        {{ verificationError }}
+      </div>
+
+      <div v-else-if="verificationResult" class="flex-1 overflow-y-auto">
+        <div class="mb-4 p-4 rounded-lg" :class="verificationResult.safe ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
+              {{ verificationResult.safe ? 'check_circle' : 'error' }}
+            </span>
+            <span class="font-bold" :class="verificationResult.safe ? 'text-green-800' : 'text-red-800'">
+              {{ verificationResult.safe ? 'System is Safe' : 'System is Unsafe' }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="verificationResult.checkLogs && verificationResult.checkLogs.length > 0" class="mb-4">
+          <h4 class="text-sm font-bold text-slate-700 mb-2">Logs</h4>
+          <div class="bg-slate-100 p-2 rounded text-xs font-mono h-32 overflow-y-auto">
+            <div v-for="(log, i) in verificationResult.checkLogs" :key="i">{{ log }}</div>
+          </div>
+        </div>
+
+        <div v-if="!verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
+          <h4 class="text-sm font-bold text-slate-700 mb-2">Violations ({{ verificationResult.traces.length }})</h4>
+          <div class="space-y-2">
+            <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-2">
+              <div class="text-xs font-bold text-slate-600 mb-1">Spec: {{ trace.violatedSpecId }}</div>
+              <div class="text-xs text-slate-500">
+                States: {{ trace.states?.length || 0 }}
+              </div>
+              <!-- Detailed trace display could go here -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 flex justify-end">
+        <button
+          @click="closeResultDialog"
+          class="px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded hover:bg-slate-700"
+        >
+          Close
+        </button>
       </div>
     </div>
   </div>

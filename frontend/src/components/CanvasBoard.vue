@@ -80,7 +80,11 @@ const getNodeColorIndex = (nodeId: string): number => {
 
 // Test function to verify color distribution (removed console logs)
 const testColorDistribution = () => {
-  const testIds = ['Sensor', 'Sensor_1', 'Sensor_2', 'Switch', 'Switch_1', 'Light', 'Light_1', 'Kitchen Sensor', 'Living Room Light']
+  // 使用后端设备模板名称作为测试数据
+  const testIds = [
+    'Temperature Sensor', 'Air Conditioner', 'Light', 
+    'Window', 'Door', 'Camera', 'Thermostat'
+  ]
   const colorCounts = [0, 0, 0, 0]
   testIds.forEach(id => {
     const index = getNodeColorIndex(id)

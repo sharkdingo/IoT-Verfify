@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
@@ -41,6 +42,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardLayoutRepository layoutRepo;
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
+    private final DeviceTemplateService deviceTemplateService;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;
     private final DeviceNodeMapper deviceNodeMapper;
@@ -365,5 +367,18 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
 
         deviceTemplateRepo.delete(po);
+    }
+
+    @Override
+    public int reloadDeviceTemplates(Long userId) {
+        // 删除用户现有的所有模板
+        List<DeviceTemplatePo> existingTemplates = deviceTemplateRepo.findByUserId(userId);
+        if (!existingTemplates.isEmpty()) {
+            deviceTemplateRepo.deleteAll(existingTemplates);
+            log.info("Deleted {} existing templates for user {}", existingTemplates.size(), userId);
+        }
+
+        // 重新初始化默认模板
+        return deviceTemplateService.initDefaultTemplates(userId);
     }
 }

@@ -3,18 +3,21 @@ import { ref, computed } from 'vue'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
 import type { Specification } from '../types/spec'
+import type { DeviceEdge } from '../types/edge'
 
 // Props
 interface Props {
   devices?: DeviceNode[]
   rules?: RuleForm[]
   specifications?: Specification[]
+  edges?: DeviceEdge[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   devices: () => [],
   rules: () => [],
-  specifications: () => []
+  specifications: () => [],
+  edges: () => []
 })
 
 // Panel state
@@ -44,16 +47,73 @@ const displayDevices = computed(() => {
   }))
 })
 
+// 关系代码转可读标签
+const getRelationLabel = (relation: string): string => {
+  const relationMap: Record<string, string> = {
+    'EQ': '=',
+    'NEQ': '≠',
+    'GT': '>',
+    'GTE': '≥',
+    'LT': '<',
+    'LTE': '≤'
+  }
+  return relationMap[relation] || relation
+}
+
 // Convert real rules to display format
 const displayRules = computed(() => {
-  return props.rules.map(rule => {
+  // 优先使用 rules，如果为空则尝试从 edges 转换
+  let sourceRules = props.rules
+
+  if ((!sourceRules || sourceRules.length === 0) && props.edges && props.edges.length > 0) {
+    console.log('⚠️ [SystemInspector] 规则为空，正在从连线恢复规则数据...')
+    // 从连线构建规则对象
+    sourceRules = props.edges.map(edge => ({
+      id: edge.id, // 使用连线 ID 作为规则 ID
+      name: `Rule from ${edge.fromLabel}`,
+      sources: [{ 
+        fromId: edge.from, 
+        fromApi: edge.fromApi || '',
+        itemType: edge.itemType,
+        relation: edge.relation,
+        value: edge.value
+      }],
+      toId: edge.to,
+      toApi: edge.toApi || ''
+    }))
+  }
+
+  return sourceRules.map(rule => {
     const targetNode = props.devices.find(d => d.id === rule.toId)
-    const sourceNodes = rule.sources.map(s => props.devices.find(d => d.id === s.fromId)?.label).filter(Boolean)
+    
+    // 构建更详细的源设备描述
+    const sourceDescriptions = rule.sources.map(s => {
+      const sourceNode = props.devices.find(d => d.id === s.fromId)
+      let desc = `${sourceNode?.label || 'Unknown'}`
+      
+      // 如果有 itemType、relation、value 信息，显示更完整
+      // 兼容 itemType 和 targetType 两种字段名
+      const sourceType = s.itemType || s.targetType
+      if (sourceType === 'variable' && s.relation && s.value) {
+        desc += ` ${s.fromApi} ${getRelationLabel(s.relation)} ${s.value}`
+      } else if (sourceType === 'api') {
+        desc += ` triggers ${s.fromApi}`
+      } else {
+        // 如果有 relation 和 value，也显示
+        if (s.relation && s.value) {
+          desc += ` ${s.fromApi} ${getRelationLabel(s.relation)} ${s.value}`
+        } else {
+          desc += ` ${s.fromApi}`
+        }
+      }
+      return desc
+    })
 
     return {
-      id: rule.id || 'unknown',
-      name: rule.name || `Rule ${(rule.id || '').split('_')[1] || 'unknown'}`,
-      description: `IF ${sourceNodes.join(' AND ')} THEN ${targetNode?.label} ${rule.toApi}`,
+      originalId: rule.id, // 保留原始id用于删除操作
+      id: rule.id ? rule.id.replace('rule_', '') : 'unknown',
+      name: rule.name || `Rule ${(rule.id ? rule.id.replace('rule_', '') : '').split('_')[1] || 'unknown'}`,
+      description: `IF ${sourceDescriptions.join(' AND ')} THEN ${targetNode?.label || 'Unknown'} triggers ${rule.toApi || 'N/A'}`,
       status: 'Active' as const,
       color: 'blue' as const,
       enabled: true // Add enabled status
@@ -300,54 +360,34 @@ const togglePanel = () => {
           <div
             v-for="rule in displayRules"
             :key="rule.id"
-            :class="[
-              'p-3 rounded-lg border relative overflow-hidden transition-all hover:shadow-md',
-              rule.color === 'blue'
-                ? 'bg-white border-blue-100 hover:border-blue-200'
-                : 'bg-white border-purple-100 hover:border-purple-200'
-            ]"
+            class="p-3 rounded-lg border relative overflow-hidden transition-all hover:shadow-md group bg-blue-50 border-blue-200 hover:border-blue-400"
           >
+            <!-- 蓝色背景装饰 -->
+            <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-l-lg"></div>
+            
             <div class="flex items-start justify-between mb-2">
               <div class="flex items-center gap-2">
-                <span :class="[
-                  'material-symbols-outlined text-sm',
-                  rule.color === 'blue' ? 'text-blue-500' : 'text-purple-500'
-                ]">
-                  {{ rule.color === 'blue' ? 'nightlight' : 'thermostat_auto' }}
+                <span class="material-symbols-outlined text-sm text-blue-600">
+                  auto_awesome
                 </span>
-                <h4 :class="[
-                  'text-sm font-bold',
-                  rule.color === 'blue' ? 'text-blue-700' : 'text-purple-700'
-                ]">
+                <h4 class="text-sm font-bold text-blue-800">
                   {{ rule.name }}
                 </h4>
               </div>
               
-              <!-- Rule toggle switch -->
-              <label class="relative inline-flex items-center cursor-pointer scale-75 origin-right">
-                <input
-                  type="checkbox"
-                  :checked="rule.enabled"
-                  @change="rule.id && handleToggleRule(rule.id)"
-                  class="sr-only peer"
-                >
-                <div class="w-8 h-4 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-500"></div>
-              </label>
-            </div>
-
-            <p class="text-[11px] text-slate-500 leading-tight font-medium ml-7">
-              {{ rule.description }}
-            </p>
-
-            <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <!-- 删除规则按钮 -->
               <button
-                @click="rule.id && handleDeleteRule(rule.id)"
-                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50"
+                @click="rule.originalId && handleDeleteRule(rule.originalId)"
+                class="text-blue-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-all"
                 title="Delete rule"
               >
-                <span class="material-symbols-outlined text-xs">delete</span>
+                <span class="material-symbols-outlined text-sm">delete</span>
               </button>
             </div>
+
+            <p class="text-[11px] text-blue-600 leading-tight font-medium ml-6">
+              {{ rule.description }}
+            </p>
           </div>
 
           <!-- Empty state when no rules -->

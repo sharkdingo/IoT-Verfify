@@ -1,6 +1,10 @@
 export interface SourceEntry {
     fromId: string
     fromApi: string
+    itemType?: 'api' | 'variable'  // 区分 API 和变量
+    targetType?: 'api' | 'variable'  // 后端返回的字段名
+    relation?: string
+    value?: string
 }
 
 export interface RuleForm {
@@ -11,4 +15,3 @@ export interface RuleForm {
     toId: string
     toApi: string
 }
-

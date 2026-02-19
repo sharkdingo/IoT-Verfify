@@ -26,6 +26,7 @@ const emit = defineEmits<{
 // Rule data
 const ruleData = reactive<RuleForm>({
   id: '',
+  name: '',
   sources: [],
   toId: '',
   toApi: ''
@@ -34,37 +35,95 @@ const ruleData = reactive<RuleForm>({
 // Current source being added
 const currentSource = reactive({
   fromId: '',
-  fromApi: ''
+  itemType: '',  // 'api' or 'variable'
+  fromApi: '',
+  relation: 'EQ',
+  value: ''
 })
 
-// Get APIs from device template
+// 条件选项
+const relationOptions = [
+  { label: '等于 (=)', value: 'EQ' },
+  { label: '不等于 (≠)', value: 'NEQ' },
+  { label: '大于 (>)', value: 'GT' },
+  { label: '小于 (<)', value: 'GTE' },
+  { label: '大于等于 (≥)', value: 'GTE' },
+  { label: '小于等于 (≤)', value: 'LTE' }
+]
+
+// 获取设备图标
 const getDeviceApis = (templateName: string) => {
   if (!templateName) return []
 
-  // Find the template by name
-  const template = props.deviceTemplates.find((t: any) =>
-    t.manifest?.Name === templateName || t.name === templateName
-  )
+  // 使用更宽松的匹配：支持大小写不敏感和空格变化
+  const normalizedName = templateName.toLowerCase().trim()
+
+  const template = props.deviceTemplates.find((t: any) => {
+    const tplName = t.manifest?.Name || t.name || ''
+    return tplName.toLowerCase().trim() === normalizedName ||
+           normalizedName.includes(tplName.toLowerCase().trim()) ||
+           tplName.toLowerCase().trim().includes(normalizedName)
+  })
 
   if (template && template.manifest?.APIs) {
-    return template.manifest.APIs.map((api: any) => api.Name || api.name || '')
+    return template.manifest.APIs.map((api: any) => ({
+      name: api.Name || api.name || '',
+      type: 'api'
+    }))
   }
 
-  // Fallback to hardcoded APIs for built-in templates
-  const deviceType = templateName.toLowerCase()
-  const fallbackApis: Record<string, string[]> = {
-    sensor: ['temperature', 'humidity', 'motion', 'light_level'],
-    switch: ['turn_on', 'turn_off', 'toggle', 'status'],
-    light: ['brightness', 'color', 'turn_on', 'turn_off']
-  }
-
-  for (const [key, apis] of Object.entries(fallbackApis)) {
-    if (deviceType.includes(key)) {
-      return apis
-    }
-  }
-
+  // 如果没有找到模板，返回空数组
   return []
+}
+
+// 获取设备的变量列表（InternalVariables + ImpactedVariables）
+const getDeviceVariables = (templateName: string) => {
+  if (!templateName) return []
+
+  // 使用更宽松的匹配：支持大小写不敏感和空格变化
+  const normalizedName = templateName.toLowerCase().trim()
+
+  const template = props.deviceTemplates.find((t: any) => {
+    const tplName = t.manifest?.Name || t.name || ''
+    return tplName.toLowerCase().trim() === normalizedName ||
+           normalizedName.includes(tplName.toLowerCase().trim()) ||
+           tplName.toLowerCase().trim().includes(normalizedName)
+  })
+
+  const variables: { name: string; type: string }[] = []
+
+  // 1. InternalVariables（内部变量）
+  if (template && template.manifest?.InternalVariables) {
+    template.manifest.InternalVariables.forEach((v: any) => {
+      if (v.Name || v.name) {
+        variables.push({
+          name: v.Name || v.name || '',
+          type: 'variable'  // 统一使用 'variable' 类型
+        })
+      }
+    })
+  }
+
+  // 2. ImpactedVariables（外部影响变量）
+  if (template && template.manifest?.ImpactedVariables) {
+    template.manifest.ImpactedVariables.forEach((v: any) => {
+      const varName = typeof v === 'string' ? v : (v.Name || v.name || '')
+      if (varName && !variables.some(existing => existing.name === varName)) {
+        variables.push({
+          name: varName,
+          type: 'variable'  // 统一使用 'variable' 类型
+        })
+      }
+    })
+  }
+
+  // 如果没有找到模板，返回空数组
+  return variables
+}
+
+// 合并 API 和变量列表
+const getDeviceApiAndVariables = (templateName: string) => {
+  return [...getDeviceApis(templateName), ...getDeviceVariables(templateName)]
 }
 
 const availableTargetApis = computed(() => {
@@ -72,7 +131,9 @@ const availableTargetApis = computed(() => {
   const targetNode = props.nodes.find(n => n.id === ruleData.toId)
   if (!targetNode) return []
 
-  return getDeviceApis(targetNode.templateName)
+  // 只返回 API 名称（字符串数组）
+  const apis = getDeviceApis(targetNode.templateName)
+  return apis.map((a: any) => a.name)
 })
 
 const availableSourceApis = computed(() => {
@@ -80,7 +141,44 @@ const availableSourceApis = computed(() => {
   const sourceNode = props.nodes.find(n => n.id === currentSource.fromId)
   if (!sourceNode) return []
 
-  return getDeviceApis(sourceNode.templateName)
+  return getDeviceApiAndVariables(sourceNode.templateName)
+})
+
+// 根据选择的类型过滤显示的项
+const filteredSourceItems = computed(() => {
+  if (!currentSource.itemType) return []
+  return availableSourceApis.value.filter((item: any) => item.type === currentSource.itemType)
+})
+
+// 当前选择的来源类型（API 还是变量）- 兼容旧代码
+const currentSourceItemType = computed(() => {
+  if (!currentSource.fromApi) return null
+  const items = availableSourceApis.value
+  const selected = items.find((item: any) => item.name === currentSource.fromApi)
+  return selected?.type || null
+})
+
+// 判断是否为变量类型
+const isVariableType = (item: any) => {
+  return item.type === 'variable'
+}
+
+// 判断是否为 API 类型
+const isApiType = (item: any) => {
+  return item.type === 'api'
+}
+
+// 判断是否可以添加源（根据选择的项目类型决定是否需要条件/值）
+const canAddSource = computed(() => {
+  if (!currentSource.fromId || !currentSource.itemType || !currentSource.fromApi) {
+    return false
+  }
+  // 如果是变量类型，relation 默认是 EQ，所以总是可以添加
+  if (currentSource.itemType === 'variable') {
+    return true  // 变量类型只需要选择设备和变量名，条件/值可选
+  }
+  // API 类型只需要选择设备和 API
+  return true
 })
 
 // Rule preview
@@ -94,6 +192,7 @@ const rulePreview = computed(() => {
 
   return {
     sources: sourceNodes,
+    sourceConditions: ruleData.sources,
     target: targetNode,
     action: ruleData.toApi
   }
@@ -101,9 +200,23 @@ const rulePreview = computed(() => {
 
 // Methods
 const addSource = () => {
-  // Just reset current source for adding another one
-  currentSource.fromId = ''
-  currentSource.fromApi = ''
+  // 添加源设备及其条件
+  if (currentSource.fromId && currentSource.itemType && currentSource.fromApi) {
+    ruleData.sources.push({
+      fromId: currentSource.fromId,
+      fromApi: currentSource.fromApi,
+      itemType: currentSource.itemType as 'api' | 'variable' | undefined,
+      relation: currentSource.relation,
+      value: currentSource.value
+    })
+    
+    // 重置当前源选择
+    currentSource.fromId = ''
+    currentSource.itemType = ''
+    currentSource.fromApi = ''
+    currentSource.relation = 'EQ'
+    currentSource.value = ''
+  }
 }
 
 const removeSource = (index: number) => {
@@ -126,47 +239,94 @@ const handleSave = () => {
 const handleClose = () => {
   // Reset form
   ruleData.id = ''
+  ruleData.name = ''
   ruleData.sources = []
   ruleData.toId = ''
   ruleData.toApi = ''
   currentSource.fromId = ''
+  currentSource.itemType = ''
   currentSource.fromApi = ''
+  currentSource.relation = 'EQ'
+  currentSource.value = ''
 
   emit('update:modelValue', false)
 }
 
-// Watch for auto-add source when both device and API are selected
-watch(
-  () => [currentSource.fromId, currentSource.fromApi],
-  ([newFromId, newFromApi]) => {
-    if (newFromId && newFromApi) {
-      // Auto-add the source when both are selected
-      const exists = ruleData.sources.some(s =>
-        s.fromId === newFromId && s.fromApi === newFromApi
-      )
-
-      if (!exists) {
-        ruleData.sources.push({
-          fromId: newFromId,
-          fromApi: newFromApi
-        })
-
-        // Reset current source for next addition
-        currentSource.fromId = ''
-        currentSource.fromApi = ''
-      }
-    }
-  },
-  { immediate: false }
-)
-
 // Helper functions for UI
 const getDeviceIcon = (node: DeviceNode) => {
-  const deviceType = node.templateName.toLowerCase()
-  if (deviceType.includes('sensor')) return 'sensors'
-  if (deviceType.includes('switch')) return 'toggle'
+  const deviceType = (node.templateName || '').toLowerCase()
+  
+  // 传感器类
+  if (deviceType.includes('sensor') || deviceType.includes('temperature') || deviceType.includes('humidity') || deviceType.includes('gas') || deviceType.includes('smoke') || deviceType.includes('motion') || deviceType.includes('soil') || deviceType.includes('illuminance') || deviceType.includes('door')) return 'sensors'
+  
+  // 温度/恒温器
+  if (deviceType.includes('thermostat') || deviceType.includes('weather')) return 'thermostat'
+  
+  // 灯/照明
   if (deviceType.includes('light')) return 'lightbulb'
-  return 'device_unknown'
+  
+  // 开关
+  if (deviceType.includes('switch')) return 'toggle_on'
+  
+  // 空调
+  if (deviceType.includes('air conditioner') || deviceType.includes('ac')) return 'ac_unit'
+  
+  // 空气净化器/通风
+  if (deviceType.includes('air purifier') || deviceType.includes('ventilator') || deviceType.includes('humidifier')) return 'air'
+  
+  // 窗帘/窗户
+  if (deviceType.includes('window shade') || deviceType.includes('shade')) return 'blinds'
+  if (deviceType.includes('window')) return 'window'
+  
+  // 门/车库门
+  if (deviceType.includes('garage door')) return 'garage'
+  if (deviceType.includes('door')) return 'door_front_door'
+  
+  // 摄像头
+  if (deviceType.includes('camera')) return 'videocam'
+  
+  // 电视
+  if (deviceType.includes('tv') || deviceType.includes('television')) return 'tv'
+  
+  // 手机
+  if (deviceType.includes('phone') || deviceType.includes('mobile')) return 'smartphone'
+  
+  // 洗衣机/烘干机
+  if (deviceType.includes('washer') || deviceType.includes('dryer')) return 'local_laundry_service'
+  
+  // 冰箱
+  if (deviceType.includes('refrigerator') || deviceType.includes('fridge')) return 'kitchen'
+  
+  // 热水器
+  if (deviceType.includes('water heater') || deviceType.includes('water')) return 'hot_tub'
+  
+  // 炊具/烤箱/咖啡机
+  if (deviceType.includes('oven') || deviceType.includes('cooker') || deviceType.includes('cooktop')) return 'microwave'
+  if (deviceType.includes('coffee')) return 'coffee'
+  
+  // 警报器
+  if (deviceType.includes('alarm') || deviceType.includes('security')) return 'security'
+  
+  // 汽车
+  if (deviceType.includes('car') || deviceType.includes('vehicle')) return 'directions_car'
+  
+  // 日历/时钟
+  if (deviceType.includes('calendar')) return 'calendar_month'
+  if (deviceType.includes('clock')) return 'schedule'
+  
+  // 社交媒体
+  if (deviceType.includes('weibo') || deviceType.includes('twitter') || deviceType.includes('facebook') || deviceType.includes('email')) return 'alternate_email'
+  
+  // 泳池相关
+  if (deviceType.includes('pool') || deviceType.includes('sprinkler')) return 'pool'
+  
+  // 油烟机
+  if (deviceType.includes('range hood') || deviceType.includes('hood')) return 'kitchen'
+  
+  // 家庭模式
+  if (deviceType.includes('home mode') || deviceType.includes('home')) return 'home'
+  
+  return 'devices_other'
 }
 
 const getApiIcon = (api: string) => {
@@ -228,7 +388,8 @@ const formatApiLabel = (api: string) => {
           </div>
 
           <!-- Add Source Form -->
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-5 gap-3">
+            <!-- 设备选择 -->
             <div class="space-y-2">
               <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Device</label>
               <div class="relative group select-wrapper">
@@ -237,9 +398,9 @@ const formatApiLabel = (api: string) => {
                 </span>
                 <select
                   v-model="currentSource.fromId"
-                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
-                  <option value="" disabled hidden>Select device</option>
+                  <option value="" disabled hidden>Select</option>
                   <option v-for="node in nodes" :key="node.id" :value="node.id">
                     {{ node.label }}
                   </option>
@@ -248,34 +409,106 @@ const formatApiLabel = (api: string) => {
               </div>
             </div>
 
+            <!-- 类型选择 (API / Variable) -->
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">API / Condition</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Type</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  {{ currentSource.fromApi ? getApiIcon(currentSource.fromApi) : 'api' }}
+                  {{ currentSource.itemType === 'variable' ? 'tune' : (currentSource.itemType === 'api' ? 'bolt' : 'category') }}
+                </span>
+                <select
+                  v-model="currentSource.itemType"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="!currentSource.fromId"
+                >
+                  <option value="" disabled hidden>Select</option>
+                  <option value="api">API</option>
+                  <option value="variable">Variable</option>
+                </select>
+                <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
+            </div>
+
+            <!-- API选择 - 仅选择 API 类型时显示 -->
+            <div class="space-y-2" v-if="currentSource.itemType === 'api'">
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">API</label>
+              <div class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  bolt
                 </span>
                 <select
                   v-model="currentSource.fromApi"
-                  class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
-                  :disabled="!currentSource.fromId"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
-                  <option value="" disabled hidden>Select API</option>
-                  <option v-for="api in availableSourceApis" :key="api" :value="api">
-                    {{ formatApiLabel(api) }}
+                  <option value="" disabled hidden>Select</option>
+                  <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
+                    {{ formatApiLabel(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
               </div>
+            </div>
+
+            <!-- Variable选择 - 仅选择 Variable 类型时显示 -->
+            <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Variable</label>
+              <div class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  tune
+                </span>
+                <select
+                  v-model="currentSource.fromApi"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                >
+                  <option value="" disabled hidden>Select</option>
+                  <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
+                    {{ formatApiLabel(item.name) }}
+                  </option>
+                </select>
+                <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
+            </div>
+
+            <!-- 条件选择 - 仅变量显示 -->
+            <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Condition</label>
+              <div class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  compare_arrows
+                </span>
+                <select
+                  v-model="currentSource.relation"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="!currentSource.fromApi"
+                >
+                  <option v-for="rel in relationOptions" :key="rel.value" :value="rel.value">
+                    {{ rel.label }}
+                  </option>
+                </select>
+                <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
+            </div>
+
+            <!-- 值输入 - 仅变量显示 -->
+            <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Value</label>
+              <input
+                v-model="currentSource.value"
+                type="text"
+                placeholder="Enter value"
+                class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-400"
+                :disabled="!currentSource.relation"
+              />
             </div>
           </div>
 
           <button
             @click="addSource"
             class="flex items-center gap-2 text-blue-500 font-medium text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-all group"
-            :disabled="!currentSource.fromId && !currentSource.fromApi"
+            :disabled="!canAddSource"
           >
             <span class="material-icons-round text-lg group-hover:scale-110 transition-transform">add_circle_outline</span>
-            Add Another Source
+            Add Source
           </button>
 
           <!-- Sources List -->
@@ -293,6 +526,19 @@ const formatApiLabel = (api: string) => {
               <span class="text-sm font-medium text-blue-600 dark:text-blue-400">
                 {{ formatApiLabel(source.fromApi) }}
               </span>
+              <span class="text-xs px-1.5 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'">
+                {{ source.itemType || 'api' }}
+              </span>
+              <!-- 条件和值仅对变量显示 -->
+              <template v-if="source.itemType === 'variable'">
+                <span class="text-xs text-slate-400">→</span>
+                <span class="text-sm font-medium text-orange-600 dark:text-orange-400">
+                  {{ relationOptions.find(r => r.value === source.relation)?.label || source.relation || '=' }}
+                </span>
+                <span class="text-sm text-slate-600 dark:text-slate-300">
+                  {{ source.value || '(any)' }}
+                </span>
+              </template>
               <button
                 @click="removeSource(index)"
                 class="ml-auto text-red-500 hover:text-red-700 text-sm transition-colors"
@@ -361,15 +607,25 @@ const formatApiLabel = (api: string) => {
         <div v-if="rulePreview" class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-600">
           <p class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Rule Preview</p>
           <div class="flex items-center gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
-            <!-- Source devices -->
-            <div class="flex items-center gap-2">
-              <template v-for="(source, index) in rulePreview.sources" :key="source?.id || index">
-                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 min-w-[60px] justify-center">
-                  <span class="material-icons-round text-blue-500 text-base">{{ source ? getDeviceIcon(source) : '' }}</span>
-                  <span>{{ source?.label || 'Unknown device' }}</span>
+            <!-- Source devices with conditions -->
+            <div class="flex flex-wrap items-center gap-2">
+              <template v-for="(source, index) in rulePreview.sourceConditions" :key="source.fromId + index">
+                <div class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs">
+                  <span class="material-icons-round text-blue-500 text-sm">sensors</span>
+                  <span>{{ nodes.find(n => n.id === source.fromId)?.label || 'Unknown' }}</span>
+                  <span class="text-slate-400">→</span>
+                  <span class="text-blue-600 dark:text-blue-400">{{ formatApiLabel(source.fromApi) }}</span>
+                  <span class="text-xs px-1 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600' : 'bg-green-100 text-green-600'">
+                    {{ source.itemType || 'api' }}
+                  </span>
+                  <!-- 条件和值仅对变量显示 -->
+                  <template v-if="source.itemType === 'variable'">
+                    <span class="text-orange-600 dark:text-orange-400">{{ relationOptions.find(r => r.value === source.relation)?.label.split(' ')[0] || '=' }}</span>
+                    <span class="text-slate-700 dark:text-slate-300">{{ source.value || '*' }}</span>
+                  </template>
                 </div>
                 <!-- Add "AND" connector if not the last source -->
-                <span v-if="index < rulePreview.sources.length - 1" class="text-xs font-bold text-slate-400 dark:text-slate-500 px-2 py-1 bg-slate-200 dark:bg-slate-600 rounded">
+                <span v-if="index < rulePreview.sourceConditions.length - 1" class="text-xs font-bold text-slate-400 dark:text-slate-500 px-1">
                   AND
                 </span>
               </template>
