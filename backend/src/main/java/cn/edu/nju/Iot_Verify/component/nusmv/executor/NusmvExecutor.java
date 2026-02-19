@@ -126,22 +126,35 @@ public class NusmvExecutor {
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("windows");
 
         if (commandPrefix != null && !commandPrefix.isEmpty()) {
+            String fullCommand = commandPrefix + " " + quoteForShell(nusmvPath, isWindows)
+                    + " " + quoteForShell(smvFile.getAbsolutePath(), isWindows);
             if (isWindows) {
                 command.add("cmd.exe");
                 command.add("/c");
-                command.add(commandPrefix);
+                command.add(fullCommand);
             } else {
                 command.add("sh");
                 command.add("-c");
-                command.add(commandPrefix);
+                command.add(fullCommand);
             }
+            return command;
         } else if (isWindows) {
             command.add("cmd.exe");
             command.add("/c");
+            command.add(quoteForShell(nusmvPath, true) + " " + quoteForShell(smvFile.getAbsolutePath(), true));
+            return command;
         }
         command.add(nusmvPath);
         command.add(smvFile.getAbsolutePath());
         return command;
+    }
+
+    private String quoteForShell(String value, boolean isWindows) {
+        if (value == null) return "";
+        if (isWindows) {
+            return '"' + value.replace("\"", "\\\"") + '"';
+        }
+        return '\'' + value.replace("'", "'\"'\"'") + '\'';
     }
 
     private long getTimeoutFromEnvironment() {
