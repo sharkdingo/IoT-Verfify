@@ -129,9 +129,9 @@ public class VerificationServiceImpl implements VerificationService {
                 .status(VerificationTaskPo.TaskStatus.PENDING)
                 .createdAt(LocalDateTime.now())
                 .build();
-        task = taskRepository.save(task);
-        log.info("Created verification task: {} for user: {}", task.getId(), userId);
-        return task.getId();
+        VerificationTaskPo saved = taskRepository.save(Objects.requireNonNull(task));
+        log.info("Created verification task: {} for user: {}", saved.getId(), userId);
+        return Objects.requireNonNull(saved.getId());
     }
 
     @Override
@@ -147,7 +147,7 @@ public class VerificationServiceImpl implements VerificationService {
         runningTasks.put(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
 
-        VerificationTaskPo task = taskRepository.findById(taskId).orElse(null);
+        VerificationTaskPo task = taskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
         if (task == null) {
             log.error("Task not found: {}", taskId);
             return;
