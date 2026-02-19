@@ -39,6 +39,9 @@ spring.data.redis:
   password: ${REDIS_PASSWORD:}
   database: ${REDIS_DATABASE:0}
 
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:3001}
+
 nusmv:
   path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}
   command-prefix: ${NUSMV_PREFIX:}
