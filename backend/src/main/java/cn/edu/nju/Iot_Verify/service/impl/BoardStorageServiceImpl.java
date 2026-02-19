@@ -128,9 +128,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
             RulePo po = ruleMapper.toEntity(r, userId);
             if (ruleId == null) {
+                // 新规则，直接插入
+                ruleRepo.save(po);
+            } else if (existingRules.containsKey(ruleId)) {
+                // 已有规则且属于当前用户，更新
+                po.setId(ruleId);
                 ruleRepo.save(po);
             } else {
-                po.setId(ruleId);
+                // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
+                log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
+                po.setId(null);
                 ruleRepo.save(po);
             }
         }
@@ -146,6 +153,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional
     public BoardLayoutDto getLayout(Long userId) {
         BoardLayoutPo po = layoutRepo.findByUserId(userId).orElseGet(() -> {
             BoardLayoutPo created = BoardLayoutPo.builder()

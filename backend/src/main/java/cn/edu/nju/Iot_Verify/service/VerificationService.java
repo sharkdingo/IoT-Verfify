@@ -112,10 +112,11 @@ public interface VerificationService {
     /**
      * 获取任务进度
      *
+     * @param userId 用户ID
      * @param taskId 任务ID
      * @return 进度 (0-100)
      */
-    int getTaskProgress(Long taskId);
+    int getTaskProgress(Long userId, Long taskId);
 
     /**
      * 创建验证任务（异步验证前调用）
@@ -124,4 +125,12 @@ public interface VerificationService {
      * @return 任务ID
      */
     Long createTask(Long userId);
+
+    /**
+     * 按任务ID标记失败（无需userId校验，仅供内部/Controller拒绝时使用）
+     *
+     * @param taskId 任务ID
+     * @param errorMessage 错误信息
+     */
+    void failTaskById(Long taskId, String errorMessage);
 }

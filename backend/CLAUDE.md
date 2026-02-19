@@ -26,6 +26,9 @@ cn.edu.nju.Iot_Verify/
 ├── component/
 │   ├── nusmv/           # NuSMV verification engine
 │   │   ├── generator/   # SMV model generation
+│   │   │   ├── SmvGenerator.java          # Orchestrator
+│   │   │   ├── SmvModelValidator.java     # Pre-generation validation (P1-P5)
+│   │   │   ├── PropertyDimension.java     # TRUST/PRIVACY enum
 │   │   │   ├── data/    # DeviceSmvData, DeviceSmvDataFactory
 │   │   │   └── module/  # SmvDeviceModuleBuilder, SmvMainModuleBuilder, etc.
 │   │   ├── executor/    # NusmvExecutor (process execution + per-spec parsing)
@@ -74,7 +77,8 @@ Key config in `src/main/resources/application.yaml`:
 - JSON serialization: `JsonUtils.toJson()` for objects, `JsonUtils.toJsonOrEmpty()` for lists.
 - Device templates are in `src/main/resources/deviceTemplate/`.
 - `ValidationException` uses HTTP 422 (not 400). Handler and exception code are aligned.
-- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`.
+- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Error categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `TRUST_PRIVACY_CONFLICT`, etc.
+- `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
 

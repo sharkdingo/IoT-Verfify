@@ -1238,6 +1238,7 @@ Import the following collection for complete workflow testing:
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Generate NuSMV Model | ✅ Done | `SmvGenerator` |
+| Pre-generation Validation | ✅ Done | `SmvModelValidator` (P1-P5) |
 | Execute NuSMV | ✅ Done | `NusmvExecutor` |
 | Parse Counterexample | ✅ Done | `SmvTraceParser` |
 | Trace Persistence | ✅ Done | `TraceRepository` |

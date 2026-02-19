@@ -87,6 +87,40 @@ public class SmvGenerationException extends InternalServerException {
         );
     }
 
+    // ==================== 模型校验 (P1-P5) ====================
+
+    public static SmvGenerationException illegalTriggerAttribute(String device, String transitionOrApi, String attr, Object legalAttrs) {
+        return new SmvGenerationException(
+                String.format("Device '%s': '%s' has illegal trigger attribute '%s'. Legal attributes: %s",
+                        device, transitionOrApi, attr, legalAttrs),
+                "ILLEGAL_TRIGGER_ATTRIBUTE"
+        );
+    }
+
+    public static SmvGenerationException invalidStateFormat(String device, String itemType, String itemName,
+                                                            String stateStr, String reason) {
+        return new SmvGenerationException(
+                String.format("Device '%s': %s '%s' has invalid StartState/EndState '%s': %s",
+                        device, itemType, itemName, stateStr, reason),
+                "INVALID_STATE_FORMAT"
+        );
+    }
+
+    public static SmvGenerationException envVarConflict(String varName, String reason) {
+        return new SmvGenerationException(
+                String.format("Env variable '%s' conflict: %s", varName, reason),
+                "ENV_VAR_CONFLICT"
+        );
+    }
+
+    public static SmvGenerationException trustPrivacyConflict(String device, String key, String prev, String current) {
+        return new SmvGenerationException(
+                String.format("Device '%s': trust/privacy conflict for '%s': '%s' vs '%s'",
+                        device, key, prev, current),
+                "TRUST_PRIVACY_CONFLICT"
+        );
+    }
+
     // ==================== Error Categories ====================
 
     public static class ErrorCategories {
@@ -99,5 +133,9 @@ public class SmvGenerationException extends InternalServerException {
         public static final String TRANSITION_ERROR = "TRANSITION_ERROR";
         public static final String SMV_GENERATION_ERROR = "SMV_GENERATION_ERROR";
         public static final String MULTIPLE_DEVICES_FAILED = "MULTIPLE_DEVICES_FAILED";
+        public static final String ILLEGAL_TRIGGER_ATTRIBUTE = "ILLEGAL_TRIGGER_ATTRIBUTE";
+        public static final String INVALID_STATE_FORMAT = "INVALID_STATE_FORMAT";
+        public static final String ENV_VAR_CONFLICT = "ENV_VAR_CONFLICT";
+        public static final String TRUST_PRIVACY_CONFLICT = "TRUST_PRIVACY_CONFLICT";
     }
 }

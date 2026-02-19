@@ -9,6 +9,10 @@ import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -16,6 +20,7 @@ import java.util.List;
 /**
  * 验证控制器
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/verify")
 @RequiredArgsConstructor
@@ -48,24 +53,31 @@ public class VerificationController {
      * 异步验证（后端创建任务，返回任务ID）
      */
     @PostMapping("/async")
-    public Result<Long> verifyAsync(
+    public ResponseEntity<Result<Long>> verifyAsync(
             @CurrentUser Long userId,
             @Valid @RequestBody VerificationRequestDto request) {
 
         Long taskId = verificationService.createTask(userId);
 
-        verificationService.verifyAsync(
-                userId,
-                taskId,
-                request.getDevices(),
-                request.getRules(),
-                request.getSpecs(),
-                request.isAttack(),
-                request.getIntensity(),
-                request.isEnablePrivacy()
-        );
+        try {
+            verificationService.verifyAsync(
+                    userId,
+                    taskId,
+                    request.getDevices(),
+                    request.getRules(),
+                    request.getSpecs(),
+                    request.isAttack(),
+                    request.getIntensity(),
+                    request.isEnablePrivacy()
+            );
+        } catch (TaskRejectedException e) {
+            log.warn("Verification task {} rejected: thread pool full", taskId);
+            verificationService.failTaskById(taskId, "Server busy, please try again later");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Result.error(503, "Server busy, please try again later"));
+        }
 
-        return Result.success(taskId);
+        return ResponseEntity.ok(Result.success(taskId));
     }
 
     /**
@@ -116,7 +128,7 @@ public class VerificationController {
     public Result<Integer> getTaskProgress(
             @CurrentUser Long userId,
             @PathVariable Long id) {
-        int progress = verificationService.getTaskProgress(id);
+        int progress = verificationService.getTaskProgress(userId, id);
         return Result.success(progress);
     }
 }

@@ -160,10 +160,11 @@ public class SmvSpecificationBuilder {
             log.warn("Condition relation or value is null for device: {}", cond.getDeviceId());
             return targets.isEmpty() ? "TRUE" : targets.get(0);
         }
+        String normalizedValue = normalizeStateValueByRelation(relation, value);
 
         List<String> exprs = new ArrayList<>();
         for (String target : targets) {
-            exprs.add(buildRelationExpr(target, relation, value));
+            exprs.add(buildRelationExpr(target, relation, normalizedValue));
         }
         if (exprs.isEmpty()) {
             return "TRUE";
@@ -194,10 +195,11 @@ public class SmvSpecificationBuilder {
         }
 
         String value = cond.getValue();
-        if (value != null) {
+        String cleanValue = (value != null) ? DeviceSmvDataFactory.cleanStateName(value) : null;
+        if (cleanValue != null) {
             for (String mode : smv.getModes()) {
                 List<String> modeStates = smv.getModeStates().get(mode);
-                if (modeStates != null && modeStates.contains(value)) {
+                if (modeStates != null && modeStates.contains(cleanValue)) {
                     targets.add(varName + "." + mode);
                 }
             }
@@ -277,29 +279,30 @@ public class SmvSpecificationBuilder {
     private String resolveStateTrust(String varName, DeviceSmvData smv, SpecConditionDto cond) {
         if (smv == null || smv.getModes() == null || smv.getModes().isEmpty()) {
             String stateVal = cond.getValue() != null ? cond.getValue() : cond.getKey();
-            return varName + ".trust_" + stateVal;
+            return varName + ".trust_" + DeviceSmvDataFactory.cleanStateName(stateVal);
         }
 
         if (smv.getModes().size() == 1) {
             String mode = smv.getModes().get(0);
             String stateVal = cond.getValue() != null ? cond.getValue() : cond.getKey();
-            return varName + ".trust_" + mode + "_" + stateVal;
+            return varName + ".trust_" + mode + "_" + DeviceSmvDataFactory.cleanStateName(stateVal);
         }
 
         String value = cond.getValue();
-        if (value != null) {
+        String cleanValue = (value != null) ? DeviceSmvDataFactory.cleanStateName(value) : null;
+        if (cleanValue != null) {
             for (String mode : smv.getModes()) {
                 List<String> modeStates = smv.getModeStates().get(mode);
-                if (modeStates != null && modeStates.contains(value)) {
-                    return varName + ".trust_" + mode + "_" + value;
+                if (modeStates != null && modeStates.contains(cleanValue)) {
+                    return varName + ".trust_" + mode + "_" + cleanValue;
                 }
             }
         }
 
         String key = cond.getKey();
         if (key != null && smv.getModes().contains(key)) {
-            if (value != null) {
-                return varName + ".trust_" + key + "_" + value;
+            if (cleanValue != null) {
+                return varName + ".trust_" + key + "_" + cleanValue;
             }
             return varName + ".trust_" + key;
         }
@@ -400,6 +403,16 @@ public class SmvSpecificationBuilder {
                 .map(String::trim)
                 .filter(v -> !v.isEmpty())
                 .collect(Collectors.toList());
+    }
+
+    private String normalizeStateValueByRelation(String relation, String value) {
+        if (value == null) return null;
+        if ("in".equals(relation) || "not_in".equals(relation) || "not in".equals(relation)) {
+            return splitValues(value).stream()
+                    .map(DeviceSmvDataFactory::cleanStateName)
+                    .collect(Collectors.joining(","));
+        }
+        return DeviceSmvDataFactory.cleanStateName(value);
     }
 
     private String normalizeRelation(String relation) {

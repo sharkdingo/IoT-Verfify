@@ -25,14 +25,13 @@ public class NusmvExecutor {
 
     private static final String TIMEOUT_ENV_KEY = "NUSMV_TIMEOUT_MS";
     private static final int PROCESS_DESTROY_TIMEOUT_SECONDS = 5;
-    private static final long OUTPUT_THREAD_JOIN_TIMEOUT_MS = 1000;
 
     // NuSMV spec result patterns
     private static final Pattern SPEC_TRUE_PATTERN = Pattern.compile(
             "-- specification (.+?) is true", Pattern.CASE_INSENSITIVE);
     private static final Pattern SPEC_FALSE_PATTERN = Pattern.compile(
             "-- specification (.+?) is false", Pattern.CASE_INSENSITIVE);
-    public NusmvResult execute(File smvFile) throws IOException, InterruptedException {
+    public NusmvResult execute(File smvFile) throws InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
         }
@@ -71,10 +70,13 @@ public class NusmvExecutor {
                 if (!process.waitFor(PROCESS_DESTROY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                     log.error("Failed to destroy NuSMV process");
                 }
+                // 进程销毁后流会关闭，等待输出线程结束
+                outputThread.join();
                 return NusmvResult.error("NuSMV execution timed out after " + timeout + "ms");
             }
 
-            outputThread.join(OUTPUT_THREAD_JOIN_TIMEOUT_MS);
+            // 进程已正常结束，流一定会关闭，无需超时限制
+            outputThread.join();
 
             int exitCode = process.exitValue();
             String output = outputBuilder.toString();
@@ -100,7 +102,7 @@ public class NusmvExecutor {
             if (process != null) {
                 process.destroyForcibly();
             }
-            return NusmvResult.error("NuSMV execution interrupted");
+            throw e;
         }
     }
 
@@ -125,23 +127,39 @@ public class NusmvExecutor {
         List<String> command = new ArrayList<>();
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("windows");
 
+        // SECURITY: commandPrefix is passed to sh -c / cmd.exe /c and can execute arbitrary commands.
+        // It MUST only come from trusted server-side configuration (application.yaml / env vars),
+        // NEVER from user input.
         if (commandPrefix != null && !commandPrefix.isEmpty()) {
+            String fullCommand = commandPrefix + " " + quoteForShell(nusmvPath, isWindows)
+                    + " " + quoteForShell(smvFile.getAbsolutePath(), isWindows);
             if (isWindows) {
                 command.add("cmd.exe");
                 command.add("/c");
-                command.add(commandPrefix);
+                command.add(fullCommand);
             } else {
                 command.add("sh");
                 command.add("-c");
-                command.add(commandPrefix);
+                command.add(fullCommand);
             }
+            return command;
         } else if (isWindows) {
             command.add("cmd.exe");
             command.add("/c");
+            command.add(quoteForShell(nusmvPath, true) + " " + quoteForShell(smvFile.getAbsolutePath(), true));
+            return command;
         }
         command.add(nusmvPath);
         command.add(smvFile.getAbsolutePath());
         return command;
+    }
+
+    private String quoteForShell(String value, boolean isWindows) {
+        if (value == null) return "";
+        if (isWindows) {
+            return '"' + value.replace("\"", "\\\"") + '"';
+        }
+        return '\'' + value.replace("'", "'\"'\"'") + '\'';
     }
 
     private long getTimeoutFromEnvironment() {

@@ -52,6 +52,7 @@
     component/nusmv/
     ├── generator/
     │   ├── SmvGenerator              → 协调器，调用各子Builder生成SMV文件
+    │   ├── SmvModelValidator         → 集中式前置校验器（P1-P5）
     │   ├── PropertyDimension         → 信任/隐私维度枚举
     │   ├── data/
     │   │   ├── DeviceSmvData         → 设备 SMV 数据模型（纯数据）
@@ -493,3 +494,84 @@ verifyAsync() → RUNNING
 - 数值型变量：超出 `[lower, upper]` 范围时 clamp 到边界并记录警告
 - 枚举型变量：值不在枚举列表中时使用第一个值并记录警告
 - 非法数值格式：忽略并记录警告
+
+---
+
+## 15. 模型前置校验与架构整理（2026-02-18）
+
+### 新增组件
+
+**SmvModelValidator**（`generator/SmvModelValidator.java`）— 集中式模型前置校验器
+
+在 `SmvGenerator.buildSmvContent()` 中，`DeviceSmvDataFactory.buildDeviceSmvMap()` 之后、SMV 文本生成之前调用 `modelValidator.validate(deviceSmvMap)`，将所有模板/实例数据的不合法项提前拦截，避免生成无效 SMV 交给 NuSMV 报错。
+
+校验职责分为两类：
+
+| 类型 | 方法 | 调用方 | 行为 |
+|------|------|--------|------|
+| 硬性校验 | `validate()` | `SmvGenerator` | 抛出 `SmvGenerationException` |
+| 软性校验 | `warnUnknownUserVariables()` | `DeviceSmvDataFactory` | 仅 log.warn |
+| 软性校验 | `warnStatelessDeviceWithState()` | `DeviceSmvDataFactory` | 仅 log.warn |
+
+### P1: Trigger.Attribute 合法性校验
+
+- 对每个设备的每个 Transition/API 的 `Trigger.Attribute` 检查是否属于合法集合
+- 合法集合 = `modes` ∪ `internalVariables[*].name`（含 env var）
+- 不合法时抛出 `SmvGenerationException.illegalTriggerAttribute()`，包含设备名、transition/API 名、非法属性、合法列表
+
+### P2: StartState/EndState 格式与语义校验
+
+- 多 mode 设备：`split(";", -1)` 段数必须 == `modes.size()`，每段要么为空要么属于对应 mode 的合法取值
+- 单 mode 设备：不能包含 `;`，值必须属于该 mode 的合法取值
+- 不合法时抛出 `SmvGenerationException.invalidStateFormat()`
+
+### P3: 同名环境变量冲突检测
+
+- 多设备声明同名外部变量（`IsInside=false`）时，要求类型一致：
+  - 都是数值型：`LowerBound`/`UpperBound` 必须相同
+  - 都是枚举型：`Values` 集合必须相同（忽略顺序）
+  - 类型不同（一个数值一个枚举）：直接冲突
+- 不一致时抛出 `SmvGenerationException.envVarConflict()`
+
+### P4: appendEnvTransitions 条件引用优化
+
+- 当 transition 的 `trigger.attribute` 本身是环境变量时，生成的 `next(a_var)` case 条件直接使用 `a_<attr>` 而非 `device.attr`
+- 例：`a_time = 23 : 0;` 而非 `clock_1.time = 23 : 0;`
+- 新增辅助方法 `SmvMainModuleBuilder.isEnvVariable()` 判断属性是否为环境变量
+
+### P5: trust/privacy 一致性校验
+
+- 检查同一 `(mode, stateName)` 在不同 WorkingState 中是否被赋予不同 trust 值
+- 例：`home;idle` trust=trusted 与 `home;active` trust=untrusted → `Mode_home` 冲突
+- 不一致时抛出 `SmvGenerationException.trustPrivacyConflict()`
+- 注：trust/privacy 的 `next()` 自保持（`TRUE: propVar;`）在 `appendPropertyTransitions` 中已正确生成，无需额外修复
+
+### 异常体系整理
+
+- 删除 `generator/SmvValidationException.java`（独立异常类）
+- 在 `exception/SmvGenerationException` 中新增 4 个工厂方法和对应 ErrorCategories：
+  - `illegalTriggerAttribute()` → `ILLEGAL_TRIGGER_ATTRIBUTE`
+  - `invalidStateFormat()` → `INVALID_STATE_FORMAT`
+  - `envVarConflict()` → `ENV_VAR_CONFLICT`
+  - `trustPrivacyConflict()` → `TRUST_PRIVACY_CONFLICT`
+- 所有校验异常统一走 `BaseException → InternalServerException → SmvGenerationException` 继承链，被 `GlobalExceptionHandler.handleSmvGenerationException()` 捕获
+
+### 校验逻辑集中化
+
+- `DeviceSmvDataFactory` 中原有的 `validateUserVariables()` 方法和内联的多模式 API EndState 分号警告已提取到 `SmvModelValidator` 的公共方法中
+- `DeviceSmvDataFactory` 注入 `SmvModelValidator`，调用 `warnUnknownUserVariables()` 和 `warnStatelessDeviceWithState()`
+
+### 单元测试
+
+新增 `SmvGeneratorFixesTest`（8 个测试用例，纯 POJO 构造，不依赖 Spring 上下文）：
+
+| 测试 | 覆盖点 |
+|------|--------|
+| `triggerAttribute_legal_passes` | P1 正向 |
+| `triggerAttribute_illegal_throws` | P1 负向 |
+| `multiModeEndState_wrongSegments_throws` | P2 段数不匹配 |
+| `envVarConflict_differentRange_throws` | P3 范围冲突 |
+| `envVarConflict_sameRange_passes` | P3 正向 |
+| `envTransition_usesAVar` | P4 `a_time` 而非 `clock_1.time` |
+| `trustNextSelfHold_multiMode` | P5 next() 自保持存在 |
+| `trustConflict_throws` | P5 trust 冲突检测 |
