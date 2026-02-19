@@ -6,6 +6,7 @@ import lombok.*;
 
 @Entity
 @Table(name = "device_edge")
+@IdClass(DeviceEdgeId.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -16,6 +17,7 @@ public class DeviceEdgePo {
     @Column(length = 100)
     private String id;
 
+    @Id
     @Column(name = "user_id", nullable = false)
     private Long userId;
 

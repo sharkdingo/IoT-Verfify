@@ -53,15 +53,13 @@ public class RuleDto {
         private String attribute;
 
         /**
-         * 关系（=、>、<）
+         * 关系（=、>、<），API 信号条件时可为 null
          */
-        @NotBlank(message = "Condition relation is required")
         private String relation;
 
         /**
-         * 值
+         * 值，API 信号条件时可为 null
          */
-        @NotBlank(message = "Condition value is required")
         private String value;
     }
 

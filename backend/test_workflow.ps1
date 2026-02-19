@@ -167,22 +167,7 @@ Assert-Equal @($NODES_RESP.data).Count 2 "Saved 2 nodes"
 $GET_NODES = GetJson "$BASE_URL/board/nodes" $AUTH
 Assert-Equal @($GET_NODES.data).Count 2 "Get nodes returns 2"
 
-Write-Host "`n--- Step 6: Save & Get Edges ---"
-# DeviceEdgeDto: id(@NotBlank), from(@NotBlank), to(@NotBlank), fromLabel(@NotBlank), toLabel(@NotBlank), fromPos(@Valid @NotNull {x:Double,y:Double}), toPos(@Valid @NotNull {x:Double,y:Double})
-$EDGES = @(
-  @{
-    id="edge_1"; from="light_1"; to="tempsensor_1"
-    fromLabel="My Light"; toLabel="Temp Sensor"
-    fromPos=@{ x=220.0; y=140.0 }
-    toPos=@{ x=300.0; y=140.0 }
-  }
-)
-$EDGES_RESP = PostJson "$BASE_URL/board/edges" $EDGES $AUTH
-Assert-Equal $EDGES_RESP.code 200 "Save edges returns 200"
-$GET_EDGES = GetJson "$BASE_URL/board/edges" $AUTH
-Assert-Equal @($GET_EDGES.data).Count 1 "Get edges returns 1"
-
-Write-Host "`n--- Step 7: Save & Get Rules ---"
+Write-Host "`n--- Step 6: Save & Get Rules ---"
 # RuleDto: id(Long), conditions(@NotNull List<Condition>), command(@NotNull Command), ruleString
 # Condition: deviceName, attribute, relation, value
 # Command: deviceName, action, contentDevice, content
@@ -198,6 +183,30 @@ $RULES_RESP = PostJson "$BASE_URL/board/rules" $RULES $AUTH
 Assert-Equal $RULES_RESP.code 200 "Save rules returns 200"
 $GET_RULES = GetJson "$BASE_URL/board/rules" $AUTH
 Assert-True (@($GET_RULES.data).Count -ge 1) "Get rules returns >= 1"
+
+Write-Host "`n--- Step 7: Save & Get Edges (derived from rules) ---"
+# Build edges from rules: each condition.deviceName -> command.deviceName = one edge
+$EDGES = @()
+foreach ($rule in @($GET_RULES.data)) {
+  $cmd = $rule.command
+  foreach ($cond in @($rule.conditions)) {
+    # Map deviceName back to node ID (tempsensor uses tempTemplate, light uses lightTemplate)
+    $fromNodeId = if ($cond.deviceName -eq $TEMP_TEMPLATE) { "tempsensor_1" } else { "light_1" }
+    $toNodeId   = if ($cmd.deviceName -eq $LIGHT_TEMPLATE) { "light_1" } else { "tempsensor_1" }
+    $fromLabel  = if ($fromNodeId -eq "tempsensor_1") { "Temp Sensor" } else { "My Light" }
+    $toLabel    = if ($toNodeId -eq "light_1") { "My Light" } else { "Temp Sensor" }
+    $EDGES += @{
+      id="edge_$($fromNodeId)_$($toNodeId)"; from=$fromNodeId; to=$toNodeId
+      fromLabel=$fromLabel; toLabel=$toLabel
+      fromPos=@{ x=420.0; y=140.0 }
+      toPos=@{ x=100.0; y=140.0 }
+    }
+  }
+}
+$EDGES_RESP = PostJson "$BASE_URL/board/edges" $EDGES $AUTH
+Assert-Equal $EDGES_RESP.code 200 "Save edges returns 200"
+$GET_EDGES = GetJson "$BASE_URL/board/edges" $AUTH
+Assert-True (@($GET_EDGES.data).Count -ge 1) "Get edges returns >= 1"
 
 Write-Host "`n--- Step 8: Save & Get Specs ---"
 # SpecificationDto: id(@NotBlank), templateId(@NotBlank), templateLabel(@NotBlank), aConditions(@NotNull List), ifConditions(@NotNull List), thenConditions(@NotNull List)

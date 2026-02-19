@@ -59,6 +59,14 @@
                      {
                          "key":  "traceId",
                          "value":  ""
+                     },
+                     {
+                         "key":  "taskPollCount",
+                         "value":  "0"
+                     },
+                     {
+                         "key":  "generatedEdges",
+                         "value":  "[]"
                      }
                  ],
     "info":  {
@@ -85,7 +93,10 @@
                                                         "key":  "Content-Type",
                                                         "value":  "application/json"
                                                     }
-                                                ]
+                                                ],
+                                     "auth":  {
+                                                  "type":  "noauth"
+                                              }
                                  },
                      "name":  "01 Register",
                      "event":  [
@@ -93,14 +104,13 @@
                                        "script":  {
                                                       "exec":  [
                                                                    "let ok = false;",
-                                                                   "try {",
-                                                                   "  const res = pm.response.json();",
-                                                                   "  ok = res.code === 200 || pm.response.code === 409 || /exists|已存在|duplicate/i.test(String(res.message || \"\"));",
-                                                                   "  if (res.data \u0026\u0026 res.data.userId) pm.collectionVariables.set(\"userId\", String(res.data.userId));",
-                                                                   "} catch (e) {",
-                                                                   "  ok = pm.response.code \u003c 500;",
-                                                                   "}",
-                                                                   "pm.test(\"Register succeeded or user already exists\", function () { pm.expect(ok).to.be.true; });"
+                                                                   "let res = null;",
+                                                                   "try { res = pm.response.json(); } catch (e) {}",
+                                                                   "const status = pm.response.code;",
+                                                                   "if (status === 200 \u0026\u0026 res \u0026\u0026 res.code === 200) ok = true;",
+                                                                   "if (status === 409 || (res \u0026\u0026 res.code === 409)) ok = true;",
+                                                                   "pm.test(\"Register succeeded or already exists\", function () { pm.expect(ok).to.be.true; });",
+                                                                   "if (res \u0026\u0026 res.data \u0026\u0026 res.data.userId) pm.environment.set(\"userId\", String(res.data.userId));"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -126,7 +136,10 @@
                                                         "key":  "Content-Type",
                                                         "value":  "application/json"
                                                     }
-                                                ]
+                                                ],
+                                     "auth":  {
+                                                  "type":  "noauth"
+                                              }
                                  },
                      "name":  "02 Login",
                      "event":  [
@@ -136,7 +149,7 @@
                                                                    "const res = pm.response.json();",
                                                                    "pm.test(\"Login returns business code 200\", function () { pm.expect(res.code).to.eql(200); });",
                                                                    "pm.test(\"Login returns token\", function () { pm.expect(res.data \u0026\u0026 res.data.token).to.be.a(\"string\").and.not.empty; });",
-                                                                   "pm.collectionVariables.set(\"token\", res.data.token);"
+                                                                   "pm.environment.set(\"token\", res.data.token);"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -210,8 +223,8 @@
                                                                    "const temp = findName([\"Temperature Sensor\", \"Temp Sensor\", \"Thermostat\"]);",
                                                                    "pm.test(\"Resolved Light template\", function () { pm.expect(light).to.be.a(\"string\").and.not.empty; });",
                                                                    "pm.test(\"Resolved sensor template\", function () { pm.expect(temp).to.be.a(\"string\").and.not.empty; });",
-                                                                   "pm.collectionVariables.set(\"lightTemplate\", light || \"\");",
-                                                                   "pm.collectionVariables.set(\"tempTemplate\", temp || \"\");"
+                                                                   "pm.environment.set(\"lightTemplate\", light || \"\");",
+                                                                   "pm.environment.set(\"tempTemplate\", temp || \"\");"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -282,67 +295,7 @@
                                                                    "  variables: Array.isArray(n.variables) ? n.variables : [],",
                                                                    "  privacies: Array.isArray(n.privacies) ? n.privacies : []",
                                                                    "}));",
-                                                                   "pm.collectionVariables.set(\"verifyDevices\", JSON.stringify(verifyDevices));"
-                                                               ],
-                                                      "type":  "text/javascript"
-                                                  },
-                                       "listen":  "test"
-                                   }
-                               ]
-                 },
-                 {
-                     "request":  {
-                                     "body":  {
-                                                  "raw":  "[\n  {\n    \"id\": \"edge_1\",\n    \"from\": \"light_1\",\n    \"to\": \"tempsensor_1\",\n    \"fromLabel\": \"My Light\",\n    \"toLabel\": \"Temp Sensor\",\n    \"fromPos\": { \"x\": 220.0, \"y\": 140.0 },\n    \"toPos\": { \"x\": 300.0, \"y\": 140.0 }\n  }\n]",
-                                                  "options":  {
-                                                                  "raw":  {
-                                                                              "language":  "json"
-                                                                          }
-                                                              },
-                                                  "mode":  "raw"
-                                              },
-                                     "method":  "POST",
-                                     "url":  "{{baseUrl}}/board/edges",
-                                     "header":  [
-                                                    {
-                                                        "key":  "Content-Type",
-                                                        "value":  "application/json"
-                                                    }
-                                                ]
-                                 },
-                     "name":  "07 Save edges",
-                     "event":  [
-                                   {
-                                       "script":  {
-                                                      "exec":  [
-                                                                   "const res = pm.response.json();",
-                                                                   "pm.test(\"Save edges business code 200\", function () { pm.expect(res.code).to.eql(200); });"
-                                                               ],
-                                                      "type":  "text/javascript"
-                                                  },
-                                       "listen":  "test"
-                                   }
-                               ]
-                 },
-                 {
-                     "request":  {
-                                     "method":  "GET",
-                                     "url":  "{{baseUrl}}/board/edges",
-                                     "header":  [
-                                                    {
-                                                        "key":  "Content-Type",
-                                                        "value":  "application/json"
-                                                    }
-                                                ]
-                                 },
-                     "name":  "08 Get edges",
-                     "event":  [
-                                   {
-                                       "script":  {
-                                                      "exec":  [
-                                                                   "const res = pm.response.json();",
-                                                                   "pm.test(\"Get edges business code 200\", function () { pm.expect(res.code).to.eql(200); });",
-                                                                   "pm.test(\"Get edges returns 1\", function () { pm.expect((res.data || []).length).to.eql(1); });"
+                                                                   "pm.environment.set(\"verifyDevices\", JSON.stringify(verifyDevices));"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -370,13 +323,31 @@
                                                     }
                                                 ]
                                  },
-                     "name":  "09 Save rules",
+                     "name":  "07 Save rules",
                      "event":  [
                                    {
                                        "script":  {
                                                       "exec":  [
                                                                    "const res = pm.response.json();",
-                                                                   "pm.test(\"Save rules business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                                   "pm.test(\"Save rules business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "// Build edges from rules: each condition -> command = one edge",
+                                                                   "const rules = Array.isArray(res.data) ? res.data : [];",
+                                                                   "const edges = [];",
+                                                                   "rules.forEach(function(rule, ri) {",
+                                                                   "  const conds = rule.conditions || [];",
+                                                                   "  conds.forEach(function(c, ci) {",
+                                                                   "    edges.push({",
+                                                                   "      id: 'edge_r' + ri + '_c' + ci,",
+                                                                   "      from: 'tempsensor_1',",
+                                                                   "      to: 'light_1',",
+                                                                   "      fromLabel: 'Temp Sensor',",
+                                                                   "      toLabel: 'My Light',",
+                                                                   "      fromPos: { x: 420.0, y: 140.0 },",
+                                                                   "      toPos: { x: 100.0, y: 140.0 }",
+                                                                   "    });",
+                                                                   "  });",
+                                                                   "});",
+                                                                   "pm.environment.set('generatedEdges', JSON.stringify(edges));"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -395,7 +366,7 @@
                                                     }
                                                 ]
                                  },
-                     "name":  "10 Get rules",
+                     "name":  "08 Get rules",
                      "event":  [
                                    {
                                        "script":  {
@@ -403,8 +374,69 @@
                                                                    "const res = pm.response.json();",
                                                                    "const rules = Array.isArray(res.data) ? res.data : [];",
                                                                    "pm.test(\"Get rules business code 200\", function () { pm.expect(res.code).to.eql(200); });",
-                                                                   "pm.test(\"Get rules \u003e= 1\", function () { pm.expect(rules.length).to.be.at.least(1); });",
-                                                                   "pm.collectionVariables.set(\"verifyRules\", JSON.stringify(rules));"
+                                                                   "pm.test(\"Get rules >= 1\", function () { pm.expect(rules.length).to.be.at.least(1); });",
+                                                                   "pm.environment.set(\"verifyRules\", JSON.stringify(rules));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{{generatedEdges}}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/edges",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "09 Save edges (from rules)",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save edges business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/edges",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "10 Get edges",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const edges = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get edges business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Get edges >= 1\", function () { pm.expect(edges.length).to.be.at.least(1); });"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -466,7 +498,7 @@
                                                                    "const specs = Array.isArray(res.data) ? res.data : [];",
                                                                    "pm.test(\"Get specs business code 200\", function () { pm.expect(res.code).to.eql(200); });",
                                                                    "pm.test(\"Get specs returns 1\", function () { pm.expect(specs.length).to.eql(1); });",
-                                                                   "pm.collectionVariables.set(\"verifySpecs\", JSON.stringify(specs));"
+                                                                   "pm.environment.set(\"verifySpecs\", JSON.stringify(specs));"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -619,8 +651,8 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "pm.collectionVariables.set(\"customTplName\", \"TestDevice_\" + Date.now());",
-                                                                   "pm.collectionVariables.set(\"customTemplateId\", \"\");"
+                                                                   "pm.environment.set(\"customTplName\", \"TestDevice_\" + Date.now());",
+                                                                   "pm.environment.set(\"customTemplateId\", \"\");"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -632,7 +664,7 @@
                                                                    "const res = pm.response.json();",
                                                                    "pm.test(\"Add custom template business code 200\", function () { pm.expect(res.code).to.eql(200); });",
                                                                    "pm.test(\"Add custom template returns id\", function () { pm.expect(res.data \u0026\u0026 res.data.id).to.exist; });",
-                                                                   "if (res.data \u0026\u0026 res.data.id) pm.collectionVariables.set(\"customTemplateId\", String(res.data.id));"
+                                                                   "if (res.data \u0026\u0026 res.data.id) pm.environment.set(\"customTemplateId\", String(res.data.id));"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -656,7 +688,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "if (!pm.collectionVariables.get(\"customTemplateId\")) {",
+                                                                   "if (!pm.environment.get(\"customTemplateId\")) {",
                                                                    "  postman.setNextRequest(\"19 Sync verify\");",
                                                                    "}"
                                                                ],
@@ -667,7 +699,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "const tplId = pm.collectionVariables.get(\"customTemplateId\");",
+                                                                   "const tplId = pm.environment.get(\"customTemplateId\");",
                                                                    "if (!tplId) {",
                                                                    "  pm.test(\"Skip delete when template id missing\", function () { pm.expect(true).to.be.true; });",
                                                                    "} else {",
@@ -783,7 +815,8 @@
                                                                    "const res = pm.response.json();",
                                                                    "pm.test(\"Async verify business code 200\", function () { pm.expect(res.code).to.eql(200); });",
                                                                    "pm.test(\"Async verify returns task id\", function () { pm.expect(res.data).to.be.a(\"number\"); });",
-                                                                   "pm.collectionVariables.set(\"taskId\", String(res.data));"
+                                                                   "pm.environment.set(\"taskId\", String(res.data));",
+                                                                   "pm.environment.set(\"taskPollCount\", \"0\");"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -834,9 +867,25 @@
                                                       "exec":  [
                                                                    "const res = pm.response.json();",
                                                                    "pm.test(\"Get task business code 200\", function () { pm.expect(res.code).to.eql(200); });",
-                                                                   "pm.test(\"Task status is valid\", function () {",
-                                                                   "  pm.expect([\"PENDING\",\"RUNNING\",\"COMPLETED\",\"FAILED\",\"CANCELLED\"]).to.include(res.data.status);",
-                                                                   "});"
+                                                                   "const data = res \u0026\u0026 res.data ? res.data : {};",
+                                                                   "const status = data.status;",
+                                                                   "pm.test(\"Task status exists\", function () { pm.expect(status).to.be.a(\"string\").and.not.empty; });",
+                                                                   "const terminal = [\"COMPLETED\", \"FAILED\", \"CANCELLED\"];",
+                                                                   "const running = [\"PENDING\", \"RUNNING\"];",
+                                                                   "if (running.includes(status)) {",
+                                                                   "  const current = Number(pm.environment.get(\"taskPollCount\") || \"0\");",
+                                                                   "  if (current \u003c 10) {",
+                                                                   "    pm.environment.set(\"taskPollCount\", String(current + 1));",
+                                                                   "    postman.setNextRequest(\"23 Get task status\");",
+                                                                   "  } else {",
+                                                                   "    pm.test(\"Task reaches terminal status within polling limit\", function () {",
+                                                                   "      pm.expect.fail(`Task still ${status} after ${current} polls`);",
+                                                                   "    });",
+                                                                   "  }",
+                                                                   "} else {",
+                                                                   "  pm.environment.unset(\"taskPollCount\");",
+                                                                   "  pm.test(\"Task reached terminal status\", function () { pm.expect(terminal).to.include(status); });",
+                                                                   "}"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -870,7 +919,8 @@
                                        "script":  {
                                                       "exec":  [
                                                                    "const res = pm.response.json();",
-                                                                   "pm.test(\"Cancel task business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                                   "pm.test(\"Cancel task business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Cancel task returns boolean\", function () { pm.expect(typeof res.data).to.eql(\"boolean\"); });"
                                                                ],
                                                       "type":  "text/javascript"
                                                   },
@@ -898,9 +948,9 @@
                                                                    "const traces = Array.isArray(res.data) ? res.data : [];",
                                                                    "pm.test(\"Get traces business code 200\", function () { pm.expect(res.code).to.eql(200); });",
                                                                    "if (traces.length \u003e 0) {",
-                                                                   "  pm.collectionVariables.set(\"traceId\", String(traces[0].id));",
+                                                                   "  pm.environment.set(\"traceId\", String(traces[0].id));",
                                                                    "} else {",
-                                                                   "  pm.collectionVariables.set(\"traceId\", \"\");",
+                                                                   "  pm.environment.set(\"traceId\", \"\");",
                                                                    "  postman.setNextRequest(\"28 Validation - Missing devices\");",
                                                                    "}"
                                                                ],
@@ -926,7 +976,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "if (!pm.collectionVariables.get(\"traceId\")) {",
+                                                                   "if (!pm.environment.get(\"traceId\")) {",
                                                                    "  postman.setNextRequest(\"28 Validation - Missing devices\");",
                                                                    "}"
                                                                ],
@@ -937,7 +987,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "const traceId = pm.collectionVariables.get(\"traceId\");",
+                                                                   "const traceId = pm.environment.get(\"traceId\");",
                                                                    "if (!traceId) {",
                                                                    "  pm.test(\"Skip single trace when no trace id\", function () { pm.expect(true).to.be.true; });",
                                                                    "} else {",
@@ -968,7 +1018,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "if (!pm.collectionVariables.get(\"traceId\")) {",
+                                                                   "if (!pm.environment.get(\"traceId\")) {",
                                                                    "  postman.setNextRequest(\"28 Validation - Missing devices\");",
                                                                    "}"
                                                                ],
@@ -979,7 +1029,7 @@
                                    {
                                        "script":  {
                                                       "exec":  [
-                                                                   "const traceId = pm.collectionVariables.get(\"traceId\");",
+                                                                   "const traceId = pm.environment.get(\"traceId\");",
                                                                    "if (!traceId) {",
                                                                    "  pm.test(\"Skip delete trace when no trace id\", function () { pm.expect(true).to.be.true; });",
                                                                    "} else {",

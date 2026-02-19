@@ -279,20 +279,20 @@ public class SmvMainModuleBuilder {
         DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvData(deviceId, deviceSmvMap);
 
         if (condSmv == null) {
-            // 使用安全的变量名（移除空格等特殊字符）
-            String safeId = DeviceSmvDataFactory.toVarName(deviceId);
-            if (condition.getRelation() != null) {
-                return safeId + "." + condition.getAttribute()
-                        + condition.getRelation() + condition.getValue();
-            } else {
-                return safeId + "." + condition.getAttribute();
-            }
+            log.warn("Rule condition references unknown device '{}', skipping to avoid undefined SMV variable", deviceId);
+            return null;
         }
 
         String varName = condSmv.getVarName();
         String attr = condition.getAttribute();
 
         if (condition.getRelation() != null) {
+            // relation 非空时 value 也必须非空，否则无法生成有效条件
+            if (condition.getValue() == null) {
+                log.warn("Rule condition has relation '{}' but null value for device '{}', skipping",
+                        condition.getRelation(), deviceId);
+                return null;
+            }
             // M1/M2: 当 attribute="state" 时，解析为实际的 mode 变量名
             if ("state".equals(attr) && condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                 String value = condition.getValue();
@@ -323,6 +323,17 @@ public class SmvMainModuleBuilder {
             String rhsValue = condition.getValue();
             if (rhsValue != null && condSmv.getModes() != null && condSmv.getModes().contains(attr)) {
                 rhsValue = DeviceSmvDataFactory.cleanStateName(rhsValue);
+            }
+            // BUG 1 fix: 枚举型 InternalVariable 的值也需要去空格，
+            // 因为 SmvDeviceModuleBuilder 声明时已做 replace(" ", "")
+            if (rhsValue != null && condSmv.getManifest() != null
+                    && condSmv.getManifest().getInternalVariables() != null) {
+                for (DeviceManifest.InternalVariable iv : condSmv.getManifest().getInternalVariables()) {
+                    if (iv.getName().equals(attr) && iv.getValues() != null && !iv.getValues().isEmpty()) {
+                        rhsValue = rhsValue.replace(" ", "");
+                        break;
+                    }
+                }
             }
             return varName + "." + attr + condition.getRelation() + rhsValue;
         }
@@ -758,7 +769,7 @@ public class SmvMainModuleBuilder {
                 }
             }
 
-            if ("=".equals(condition.getRelation())) {
+            if ("=".equals(condition.getRelation()) && condition.getValue() != null) {
                 String stateValue = condition.getValue().replace(" ", "");
                 if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                     // 先检查 attribute 是否是 mode 名
