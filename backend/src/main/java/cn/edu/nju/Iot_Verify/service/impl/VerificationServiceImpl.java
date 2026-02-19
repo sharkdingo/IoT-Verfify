@@ -58,6 +58,7 @@ public class VerificationServiceImpl implements VerificationService {
     private final ObjectMapper objectMapper;
 
     private static final int MAX_OUTPUT_LENGTH = 10000;
+    private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
 
     private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
@@ -73,6 +74,7 @@ public class VerificationServiceImpl implements VerificationService {
                                         boolean isAttack,
                                         int intensity,
                                         boolean enablePrivacy) {
+        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         if (devices == null || devices.isEmpty()) {
             return buildErrorResult("", List.of("Error: devices list cannot be empty"));
         }
@@ -88,13 +90,14 @@ public class VerificationServiceImpl implements VerificationService {
         long timeoutMs = nusmvConfig.getTimeoutMs() * 2; // generate + execute 总超时
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<VerificationResultDto> future = executor.submit(() ->
-                doVerify(userId, devices, rules, specs, isAttack, intensity, enablePrivacy));
+                doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
         executor.shutdown();
 
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            future.cancel(true); // 中断 doVerify 线程，使 process.waitFor 抛 InterruptedException
+            future.cancel(true);
+            executor.shutdownNow();
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             return buildErrorResult("", List.of("Verification timed out"));
         } catch (ExecutionException e) {
@@ -105,6 +108,15 @@ public class VerificationServiceImpl implements VerificationService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return buildErrorResult("", List.of("Verification interrupted"));
+        } finally {
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    log.warn("Verification executor did not terminate within 5s");
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -169,7 +181,8 @@ public class VerificationServiceImpl implements VerificationService {
     @Override
     @Transactional
     public void failTaskById(Long taskId, String errorMessage) {
-        taskRepository.findById(taskId).ifPresent(task -> failTask(task, errorMessage));
+        taskRepository.findById(Objects.requireNonNull(taskId, "taskId must not be null"))
+                .ifPresent(task -> failTask(task, errorMessage));
     }
 
     @Override
@@ -180,6 +193,7 @@ public class VerificationServiceImpl implements VerificationService {
                             List<SpecificationDto> specs,
                             boolean isAttack, int intensity,
                             boolean enablePrivacy) {
+        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
         runningTasks.put(taskId, Thread.currentThread());
@@ -214,7 +228,7 @@ public class VerificationServiceImpl implements VerificationService {
             }
 
             updateTaskProgress(taskId, 20, "Generating NuSMV model");
-            smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+            smvFile = smvGenerator.generate(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
             if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
@@ -238,7 +252,7 @@ public class VerificationServiceImpl implements VerificationService {
 
             updateTaskProgress(taskId, 80, "Parsing results");
             VerificationResultDto vResult = buildVerificationResult(
-                    result, devices, rules, specs, userId, taskId, new ArrayList<>());
+                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>());
 
             updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(task, vResult.isSafe(),
@@ -370,7 +384,7 @@ public class VerificationServiceImpl implements VerificationService {
                         TraceDto trace = TraceDto.builder()
                                 .userId(userId)
                                 .verificationTaskId(taskId)
-                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : null)
+                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : UNKNOWN_VIOLATED_SPEC_ID)
                                 .violatedSpecJson(violatedSpec != null ? specificationMapper.toJson(violatedSpec) : null)
                                 .states(states)
                                 .createdAt(LocalDateTime.now())

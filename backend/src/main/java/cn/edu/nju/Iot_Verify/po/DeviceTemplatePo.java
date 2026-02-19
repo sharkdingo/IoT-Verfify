@@ -4,7 +4,9 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "device_templates")
+@Table(name = "device_templates", indexes = {
+        @Index(name = "idx_device_templates_user_id", columnList = "user_id")
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -18,7 +20,7 @@ public class DeviceTemplatePo {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 100)
     private String name;
 
     @Lob

@@ -42,12 +42,13 @@ public class SmvGenerator {
      * 生成完整的 NuSMV 模型文件并写入临时目录
      */
     public File generate(Long userId, List<DeviceVerificationDto> devices,
-                        List<RuleDto> rules, List<SpecificationDto> specs,
-                        boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+                         List<RuleDto> rules, List<SpecificationDto> specs,
+                         boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}, privacy={}",
-                userId, devices.size(), rules.size(), specs.size(), isAttack, intensity, enablePrivacy);
+                userId, devices.size(), safeRules.size(), specs.size(), isAttack, intensity, enablePrivacy);
 
-        String smvContent = buildSmvContent(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+        String smvContent = buildSmvContent(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
 
         Path tempDir = Files.createTempDirectory("nusmv_");
         File smvFile = tempDir.resolve("model.smv").toFile();

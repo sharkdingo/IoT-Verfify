@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 import java.util.Optional;
 
 @Service
@@ -36,7 +37,7 @@ public class UserServiceImpl implements UserService {
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        return userRepository.save(user);
+        return userRepository.save(Objects.requireNonNull(user, "user to save must not be null"));
     }
 
     @Override
@@ -51,7 +52,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Optional<UserPo> findById(Long id) {
-        return userRepository.findById(id);
+        return userRepository.findById(Objects.requireNonNull(id, "user id must not be null"));
     }
 
     @Override

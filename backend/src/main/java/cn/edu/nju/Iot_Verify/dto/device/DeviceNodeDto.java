@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.device;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -11,12 +12,15 @@ import java.util.List;
 public class DeviceNodeDto {
 
     @NotBlank(message = "Node ID is required")
+    @Size(max = 100, message = "Node ID must be at most 100 characters")
     private String id;
 
     @NotBlank(message = "Template name is required")
+    @Size(max = 100, message = "Template name must be at most 100 characters")
     private String templateName;
 
     @NotBlank(message = "Label is required")
+    @Size(max = 255, message = "Label must be at most 255 characters")
     private String label;
 
     @Valid
@@ -24,6 +28,7 @@ public class DeviceNodeDto {
     private Position position;
 
     @NotBlank(message = "State is required")
+    @Size(max = 50, message = "State must be at most 50 characters")
     private String state;
 
     @NotNull(message = "Width is required")

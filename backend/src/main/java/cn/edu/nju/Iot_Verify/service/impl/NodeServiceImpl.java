@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,9 +28,6 @@ public class NodeServiceImpl implements NodeService {
     private final DeviceTemplateService deviceTemplateService;
     private final ObjectMapper objectMapper;
 
-    // 默认模板名称
-    private static final String DEFAULT_TEMPLATE = "AC Cooler";
-    
     // 硬编码回退状态
     private static final String HARD_FALLBACK_STATE = "Working";
     
@@ -43,7 +41,6 @@ public class NodeServiceImpl implements NodeService {
     private static final int RANDOM_ID_RANGE = 1000;
     private static final int MAX_RETRY_COUNT = 10;
     private static final int UUID_SUFFIX_LENGTH = 6;
-    private static final int RANDOM_SEED = 36;
 
     @Override
     public String searchNodes(Long userId, String keyword) {
@@ -92,8 +89,12 @@ public class NodeServiceImpl implements NodeService {
                     log.info("Template name auto-corrected: {} -> {}", rawTemplate, finalTemplate);
                 }
             } else {
-                finalTemplate = DEFAULT_TEMPLATE;
-                resultMsg.append(String.format("【系统提示】无法识别模板 '%s'，已使用默认模板 '%s'。", rawTemplate, finalTemplate));
+                String fallbackTemplate = chooseFallbackTemplate(allTemplates);
+                if (fallbackTemplate == null) {
+                    return String.format("创建失败：无法识别模板 '%s'，且当前账户没有可用模板。请先上传设备模板。", rawTemplate);
+                }
+                finalTemplate = fallbackTemplate;
+                resultMsg.append(String.format("【系统提示】无法识别模板 '%s'，已使用兜底模板 '%s'。", rawTemplate, finalTemplate));
             }
         }
 
@@ -143,7 +144,7 @@ public class NodeServiceImpl implements NodeService {
                 .state(finalState)
                 .build();
 
-        nodeRepo.save(po);
+        nodeRepo.save(Objects.requireNonNull(po, "node to save must not be null"));
 
         resultMsg.insert(0, String.format("成功创建设备: %s。", generatedId));
         return resultMsg.toString();
@@ -156,7 +157,7 @@ public class NodeServiceImpl implements NodeService {
 
         if (nodeOpt.isPresent()) {
             DeviceNodePo node = nodeOpt.get();
-            nodeRepo.delete(node);
+            nodeRepo.delete(Objects.requireNonNull(node, "node to delete must not be null"));
             log.info("成功删除设备: {}", label);
             return "成功删除设备: " + label;
         } else {
@@ -195,6 +196,18 @@ public class NodeServiceImpl implements NodeService {
             return null;
         }
         return best;
+    }
+
+    private String chooseFallbackTemplate(List<String> templates) {
+        if (templates == null || templates.isEmpty()) {
+            return null;
+        }
+        for (String template : templates) {
+            if (template != null && template.trim().equalsIgnoreCase("Air Conditioner")) {
+                return template;
+            }
+        }
+        return templates.stream().filter(t -> t != null && !t.isBlank()).findFirst().orElse(null);
     }
 
     private String getInitStateFromTemplate(Long userId, String templateName) {

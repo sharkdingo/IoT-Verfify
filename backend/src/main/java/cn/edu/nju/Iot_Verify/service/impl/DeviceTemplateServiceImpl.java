@@ -1,10 +1,11 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
@@ -24,65 +25,32 @@ import java.util.Optional;
 public class DeviceTemplateServiceImpl implements DeviceTemplateService {
 
     private final DeviceTemplateRepository templateRepo;
-    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional(readOnly = true)
     public List<String> getAllTemplateNames(Long userId) {
-        List<DeviceTemplatePo> allPos = templateRepo.findByUserId(userId);
-        List<String> names = new ArrayList<>();
-
-        for (DeviceTemplatePo po : allPos) {
-            String name = extractNameFromJson(po.getManifestJson());
-
-            if (name == null || name.trim().isEmpty()) {
-                name = po.getName();
-            }
-
-            if (name != null) {
-                names.add(name);
-            }
-        }
-
-        return names;
+        return templateRepo.findByUserId(userId).stream()
+                .map(DeviceTemplatePo::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .toList();
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<DeviceTemplatePo> findTemplateByName(Long userId, String targetName) {
-        if (targetName == null) return Optional.empty();
-        String normalizedTarget = targetName.trim().toLowerCase();
-        List<DeviceTemplatePo> allPos = templateRepo.findByUserId(userId);
-        for (DeviceTemplatePo po : allPos) {
-            String jsonName = extractNameFromJson(po.getManifestJson());
-            if (jsonName != null && jsonName.trim().toLowerCase().equals(normalizedTarget)) {
-                return Optional.of(po);
-            }
+        if (targetName == null) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        String normalizedTarget = targetName.trim().toLowerCase();
+        return templateRepo.findByUserId(userId).stream()
+                .filter(po -> po.getName() != null && po.getName().trim().toLowerCase().equals(normalizedTarget))
+                .findFirst();
     }
 
     @Override
     @Transactional(readOnly = true)
     public boolean checkTemplateExists(Long userId, String targetName) {
         return findTemplateByName(userId, targetName).isPresent();
-    }
-
-    private String extractNameFromJson(String json) {
-        if (json == null || json.trim().isEmpty()) return null;
-        try {
-            JsonNode root = objectMapper.readTree(json);
-
-            if (root.hasNonNull("Name")) {
-                return root.get("Name").asText();
-            }
-            if (root.hasNonNull("name")) {
-                return root.get("name").asText();
-            }
-        } catch (Exception e) {
-            log.warn("解析模板 JSON 异常: {}", json.substring(0, Math.min(json.length(), 20)));
-        }
-        return null;
     }
 
     @Override
@@ -100,7 +68,6 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             log.info("Found {} device template resources on classpath for user {}", resources.length, userId);
 
             if (resources.length == 0) {
-                // Fallback: try classpath* pattern
                 resources = resolver.getResources("classpath*:deviceTemplate/*.json");
                 log.info("Fallback found {} device template resources for user {}", resources.length, userId);
             }
@@ -109,10 +76,13 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             for (Resource resource : resources) {
                 try (InputStream is = resource.getInputStream()) {
                     String json = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-                    String name = extractNameFromJson(json);
+                    String filename = resource.getFilename();
+                    String name = extractManifestName(json);
                     if (name == null || name.isBlank()) {
-                        String filename = resource.getFilename();
                         name = filename != null ? filename.replace(".json", "") : "Unknown";
+                    }
+                    if (name.isBlank()) {
+                        name = "Unknown";
                     }
 
                     templates.add(DeviceTemplatePo.builder()
@@ -136,5 +106,17 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             log.error("Failed to initialize default templates for user {}", userId, e);
         }
         return count;
+    }
+
+    private String extractManifestName(String json) {
+        DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
+                json,
+                new TypeReference<DeviceManifest>() {},
+                null
+        );
+        if (manifest == null || manifest.getName() == null) {
+            return null;
+        }
+        return manifest.getName().trim();
     }
 }

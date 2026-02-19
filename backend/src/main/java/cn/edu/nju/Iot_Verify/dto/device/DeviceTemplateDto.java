@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -18,8 +20,10 @@ public class DeviceTemplateDto {
     private String id;
 
     @NotBlank(message = "Template name is required")
+    @Size(max = 100, message = "Template name must be at most 100 characters")
     private String name;
 
+    @NotNull(message = "Template manifest is required")
     @Valid
     private DeviceManifest manifest;
 
@@ -33,7 +37,6 @@ public class DeviceTemplateDto {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class DeviceManifest {
-
         @JsonProperty("Name")
         private String name;
 

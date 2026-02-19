@@ -23,7 +23,6 @@ public class TraceDto {
     /**
      * 数据库ID
      */
-    @NotNull(message = "ID is required")
     private Long id;
     
     /**

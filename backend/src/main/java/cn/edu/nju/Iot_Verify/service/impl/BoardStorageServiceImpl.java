@@ -24,6 +24,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,7 +63,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<DeviceNodePo> pos = nodes.stream()
                 .map(dto -> deviceNodeMapper.toEntity(dto, userId))
                 .toList();
-        List<DeviceNodePo> saved = nodeRepo.saveAll(pos);
+        List<DeviceNodePo> saved = nodeRepo.saveAll(Objects.requireNonNull(pos, "nodes to save must not be null"));
         return saved.stream().map(deviceNodeMapper::toDto).toList();
     }
 
@@ -80,7 +81,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<DeviceEdgePo> pos = edges.stream()
                 .map(dto -> deviceEdgeMapper.toEntity(dto, userId))
                 .toList();
-        List<DeviceEdgePo> saved = edgeRepo.saveAll(pos);
+        List<DeviceEdgePo> saved = edgeRepo.saveAll(Objects.requireNonNull(pos, "edges to save must not be null"));
         return saved.stream().map(deviceEdgeMapper::toDto).toList();
     }
 
@@ -98,7 +99,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         List<SpecificationPo> pos = specs.stream()
                 .map(dto -> specificationMapper.toEntity(dto, userId))
                 .toList();
-        List<SpecificationPo> saved = specRepo.saveAll(pos);
+        List<SpecificationPo> saved = specRepo.saveAll(Objects.requireNonNull(pos, "specs to save must not be null"));
         return saved.stream().map(specificationMapper::toDto).toList();
     }
 
@@ -129,23 +130,23 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             RulePo po = ruleMapper.toEntity(r, userId);
             if (ruleId == null) {
                 // 新规则，直接插入
-                ruleRepo.save(po);
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
             } else if (existingRules.containsKey(ruleId)) {
                 // 已有规则且属于当前用户，更新
                 po.setId(ruleId);
-                ruleRepo.save(po);
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
             } else {
                 // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
                 log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
                 po.setId(null);
-                ruleRepo.save(po);
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
             }
         }
 
         // 删除不再存在的规则
         for (Long existingId : existingRules.keySet()) {
             if (!newRuleIds.contains(existingId)) {
-                ruleRepo.deleteById(existingId);
+                ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
             }
         }
 
@@ -166,7 +167,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     .statusIsDocked(false).statusDockSide(null)
                     .statusLastPosX(1040.0).statusLastPosY(80.0)
                     .build();
-            return layoutRepo.save(created);
+            return layoutRepo.save(Objects.requireNonNull(created, "layout to save must not be null"));
         });
 
         return mapLayoutPoToDto(po);
@@ -275,7 +276,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .statusLastPosX(stLastX)
                 .statusLastPosY(stLastY)
                 .build();
-        layoutRepo.save(po);
+        layoutRepo.save(Objects.requireNonNull(po, "layout to save must not be null"));
 
         return getLayout(userId);
     }
@@ -307,7 +308,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .inputTabsJson(JsonUtils.toJsonOrEmpty(active.getInput()))
                 .statusTabsJson(JsonUtils.toJsonOrEmpty(active.getStatus()))
                 .build();
-        activeRepo.save(po);
+        activeRepo.save(Objects.requireNonNull(po, "active tabs to save must not be null"));
 
         return getActive(userId);
     }
@@ -321,14 +322,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             dto.setId(po.getId().toString());
             dto.setName(po.getName());
 
-            if (po.getManifestJson() != null && !po.getManifestJson().isEmpty()) {
-                DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
-                        po.getManifestJson(),
-                        new TypeReference<DeviceManifest>() {},
-                        new DeviceManifest()
-                );
-                dto.setManifest(manifest);
-            }
+            DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
+                    po.getManifestJson(),
+                    new TypeReference<DeviceManifest>() {},
+                    new DeviceManifest()
+            );
+            // Keep DTO-level name as the single source used by business logic.
+            manifest.setName(dto.getName());
+            dto.setManifest(manifest);
             return dto;
         }).toList();
     }
@@ -336,24 +337,44 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto dto) {
-        if (deviceTemplateRepo.existsByUserIdAndName(userId, dto.getName())) {
-            throw ConflictException.duplicateTemplate(dto.getName());
+        DeviceTemplateDto safeDto = Objects.requireNonNull(dto, "template dto must not be null");
+        if (safeDto.getManifest() == null) {
+            throw new BadRequestException("Template manifest is required");
         }
 
-        String json = JsonUtils.toJson(dto.getManifest());
+        String rawName = safeDto.getName() != null ? safeDto.getName().trim() : null;
+        if (rawName == null || rawName.isBlank()) {
+            throw new BadRequestException("Template name is required");
+        }
+
+        final String canonicalName = rawName;
+        safeDto.setName(canonicalName);
+        safeDto.getManifest().setName(canonicalName);
+
+        boolean duplicated = deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(userId, canonicalName);
+        if (duplicated) {
+            throw ConflictException.duplicateTemplate(canonicalName);
+        }
+
+        String json = JsonUtils.toJson(safeDto.getManifest());
 
         DeviceTemplatePo po = DeviceTemplatePo.builder()
                 .userId(userId)
-                .name(dto.getName())
+                .name(canonicalName)
                 .manifestJson(json)
                 .build();
 
-        DeviceTemplatePo saved = deviceTemplateRepo.save(po);
+        DeviceTemplatePo saved;
+        try {
+            saved = deviceTemplateRepo.save(Objects.requireNonNull(po, "template to save must not be null"));
+        } catch (DataIntegrityViolationException e) {
+            throw ConflictException.duplicateTemplate(canonicalName);
+        }
 
         DeviceTemplateDto result = new DeviceTemplateDto();
         result.setId(saved.getId().toString());
-        result.setName(saved.getName());
-        result.setManifest(dto.getManifest());
+        result.setName(canonicalName);
+        result.setManifest(safeDto.getManifest());
         return result;
     }
 

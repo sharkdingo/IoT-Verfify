@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -30,7 +31,8 @@ public class VerificationRequestDto {
     /**
      * 规则列表
      */
-    private List<RuleDto> rules;
+    @Valid
+    private List<RuleDto> rules = new ArrayList<>();
 
     /**
      * 

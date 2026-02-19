@@ -1,0 +1,1133 @@
+﻿{
+    "variable":  [
+                     {
+                         "key":  "baseUrl",
+                         "value":  "http://localhost:8080/api"
+                     },
+                     {
+                         "key":  "phone",
+                         "value":  "13800138000"
+                     },
+                     {
+                         "key":  "username",
+                         "value":  "testuser"
+                     },
+                     {
+                         "key":  "password",
+                         "value":  "Test123456"
+                     },
+                     {
+                         "key":  "token",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "userId",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "lightTemplate",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "tempTemplate",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "verifyDevices",
+                         "value":  "[]"
+                     },
+                     {
+                         "key":  "verifyRules",
+                         "value":  "[]"
+                     },
+                     {
+                         "key":  "verifySpecs",
+                         "value":  "[]"
+                     },
+                     {
+                         "key":  "customTplName",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "customTemplateId",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "taskId",
+                         "value":  ""
+                     },
+                     {
+                         "key":  "traceId",
+                         "value":  ""
+                     }
+                 ],
+    "info":  {
+                 "name":  "IoT-Verify Workflow (from test_workflow.ps1)",
+                 "schema":  "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+                 "_postman_id":  "337dca1c-2f63-4afa-9b15-e516a9c2d923"
+             },
+    "item":  [
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"phone\": \"{{phone}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/auth/register",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "01 Register",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "let ok = false;",
+                                                                   "try {",
+                                                                   "  const res = pm.response.json();",
+                                                                   "  ok = res.code === 200 || pm.response.code === 409 || /exists|已存在|duplicate/i.test(String(res.message || \"\"));",
+                                                                   "  if (res.data \u0026\u0026 res.data.userId) pm.collectionVariables.set(\"userId\", String(res.data.userId));",
+                                                                   "} catch (e) {",
+                                                                   "  ok = pm.response.code \u003c 500;",
+                                                                   "}",
+                                                                   "pm.test(\"Register succeeded or user already exists\", function () { pm.expect(ok).to.be.true; });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"phone\": \"{{phone}}\",\n  \"password\": \"{{password}}\"\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/auth/login",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "02 Login",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Login returns business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Login returns token\", function () { pm.expect(res.data \u0026\u0026 res.data.token).to.be.a(\"string\").and.not.empty; });",
+                                                                   "pm.collectionVariables.set(\"token\", res.data.token);"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/templates",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ],
+                                     "auth":  {
+                                                  "type":  "noauth"
+                                              }
+                                 },
+                     "name":  "03 Access templates without token (expect 401/403)",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "pm.test(\"Unauthenticated request rejected\", function () {",
+                                                                   "  pm.expect([401,403]).to.include(pm.response.code);",
+                                                                   "});"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/templates",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "04 Get templates",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const list = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get templates business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Template count \u003e 0\", function () { pm.expect(list.length).to.be.above(0); });",
+                                                                   "const getName = (t) =\u003e (t \u0026\u0026 (t.name || (t.manifest \u0026\u0026 t.manifest.Name))) || null;",
+                                                                   "const names = list.map(getName).filter(Boolean);",
+                                                                   "const findName = (cands) =\u003e {",
+                                                                   "  for (const c of cands) {",
+                                                                   "    const exact = names.find(n =\u003e n.toLowerCase() === c.toLowerCase());",
+                                                                   "    if (exact) return exact;",
+                                                                   "  }",
+                                                                   "  for (const c of cands) {",
+                                                                   "    const fuzzy = names.find(n =\u003e n.toLowerCase().includes(c.toLowerCase()) || c.toLowerCase().includes(n.toLowerCase()));",
+                                                                   "    if (fuzzy) return fuzzy;",
+                                                                   "  }",
+                                                                   "  return null;",
+                                                                   "};",
+                                                                   "const light = findName([\"Light\"]);",
+                                                                   "const temp = findName([\"Temperature Sensor\", \"Temp Sensor\", \"Thermostat\"]);",
+                                                                   "pm.test(\"Resolved Light template\", function () { pm.expect(light).to.be.a(\"string\").and.not.empty; });",
+                                                                   "pm.test(\"Resolved sensor template\", function () { pm.expect(temp).to.be.a(\"string\").and.not.empty; });",
+                                                                   "pm.collectionVariables.set(\"lightTemplate\", light || \"\");",
+                                                                   "pm.collectionVariables.set(\"tempTemplate\", temp || \"\");"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "[\n  {\n    \"id\": \"light_1\",\n    \"templateName\": \"{{lightTemplate}}\",\n    \"label\": \"My Light\",\n    \"position\": { \"x\": 100.0, \"y\": 100.0 },\n    \"state\": \"on\",\n    \"width\": 120,\n    \"height\": 80,\n    \"currentStateTrust\": \"trusted\",\n    \"variables\": [],\n    \"privacies\": []\n  },\n  {\n    \"id\": \"tempsensor_1\",\n    \"templateName\": \"{{tempTemplate}}\",\n    \"label\": \"Temp Sensor\",\n    \"position\": { \"x\": 300.0, \"y\": 100.0 },\n    \"state\": \"monitoring\",\n    \"width\": 120,\n    \"height\": 80,\n    \"currentStateTrust\": \"untrusted\",\n    \"variables\": [ { \"name\": \"temperature\", \"value\": \"25\", \"trust\": \"untrusted\" } ],\n    \"privacies\": [ { \"name\": \"temperature\", \"privacy\": \"public\" } ]\n  }\n]",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/nodes",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "05 Save nodes",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save nodes business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Saved 2 nodes\", function () { pm.expect((res.data || []).length).to.eql(2); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/nodes",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "06 Get nodes",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const nodes = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get nodes business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Get nodes returns 2\", function () { pm.expect(nodes.length).to.eql(2); });",
+                                                                   "const verifyDevices = nodes.map(n =\u003e ({",
+                                                                   "  varName: n.id,",
+                                                                   "  templateName: n.templateName,",
+                                                                   "  state: n.state,",
+                                                                   "  currentStateTrust: n.currentStateTrust,",
+                                                                   "  variables: Array.isArray(n.variables) ? n.variables : [],",
+                                                                   "  privacies: Array.isArray(n.privacies) ? n.privacies : []",
+                                                                   "}));",
+                                                                   "pm.collectionVariables.set(\"verifyDevices\", JSON.stringify(verifyDevices));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "[\n  {\n    \"id\": \"edge_1\",\n    \"from\": \"light_1\",\n    \"to\": \"tempsensor_1\",\n    \"fromLabel\": \"My Light\",\n    \"toLabel\": \"Temp Sensor\",\n    \"fromPos\": { \"x\": 220.0, \"y\": 140.0 },\n    \"toPos\": { \"x\": 300.0, \"y\": 140.0 }\n  }\n]",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/edges",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "07 Save edges",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save edges business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/edges",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "08 Get edges",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Get edges business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Get edges returns 1\", function () { pm.expect((res.data || []).length).to.eql(1); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "[\n  {\n    \"conditions\": [\n      { \"deviceName\": \"{{tempTemplate}}\", \"attribute\": \"temperature\", \"relation\": \"\u003e\", \"value\": \"30\" }\n    ],\n    \"command\": { \"deviceName\": \"{{lightTemplate}}\", \"action\": \"off\" }\n  }\n]",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/rules",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "09 Save rules",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save rules business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/rules",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "10 Get rules",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const rules = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get rules business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Get rules \u003e= 1\", function () { pm.expect(rules.length).to.be.at.least(1); });",
+                                                                   "pm.collectionVariables.set(\"verifyRules\", JSON.stringify(rules));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "[\n  {\n    \"id\": \"spec_1\",\n    \"templateId\": \"1\",\n    \"templateLabel\": \"Safety\",\n    \"aConditions\": [],\n    \"ifConditions\": [\n      { \"id\": \"c1\", \"side\": \"if\", \"deviceId\": \"light_1\", \"deviceLabel\": \"My Light\", \"targetType\": \"state\", \"key\": \"state\", \"relation\": \"=\", \"value\": \"on\" }\n    ],\n    \"thenConditions\": [\n      { \"id\": \"c2\", \"side\": \"then\", \"deviceId\": \"tempsensor_1\", \"deviceLabel\": \"Temp Sensor\", \"targetType\": \"variable\", \"key\": \"temperature\", \"relation\": \"\u003c\", \"value\": \"40\" }\n    ]\n  }\n]",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/specs",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "11 Save specs",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save specs business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/specs",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "12 Get specs",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const specs = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get specs business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Get specs returns 1\", function () { pm.expect(specs.length).to.eql(1); });",
+                                                                   "pm.collectionVariables.set(\"verifySpecs\", JSON.stringify(specs));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"input\": { \"x\": 24.0, \"y\": 24.0 },\n  \"status\": { \"x\": 1040.0, \"y\": 80.0 },\n  \"canvasPan\": { \"x\": 0.0, \"y\": 0.0 },\n  \"canvasZoom\": 1.0,\n  \"dockState\": {\n    \"input\": { \"isDocked\": false, \"side\": null, \"lastPos\": { \"x\": 24.0, \"y\": 24.0 } },\n    \"status\": { \"isDocked\": false, \"side\": null, \"lastPos\": { \"x\": 1040.0, \"y\": 80.0 } }\n  }\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/layout",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "13 Save layout",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save layout business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/layout",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "14 Get layout",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Get layout business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"input\": [\"devices\", \"templates\", \"rules\", \"specs\"],\n  \"status\": [\"devices\", \"edges\", \"specs\"]\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/active",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "15 Save active tabs",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Save active business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/active",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "16 Get active tabs",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Get active business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Active input persisted\", function () { pm.expect((res.data \u0026\u0026 res.data.input || []).length).to.be.above(0); });",
+                                                                   "pm.test(\"Active status persisted\", function () { pm.expect((res.data \u0026\u0026 res.data.status || []).length).to.be.above(0); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"name\": \"{{customTplName}}\",\n  \"manifest\": {\n    \"Name\": \"{{customTplName}}\",\n    \"Description\": \"A test device\",\n    \"Modes\": [\"normal\"],\n    \"InitState\": \"idle\",\n    \"WorkingStates\": [\n      { \"Name\": \"idle\", \"Description\": \"Device is idle\", \"Trust\": \"trusted\", \"Privacy\": \"public\", \"Invariant\": \"true\", \"Dynamics\": [] },\n      { \"Name\": \"running\", \"Description\": \"Device is running\", \"Trust\": \"trusted\", \"Privacy\": \"public\", \"Invariant\": \"true\", \"Dynamics\": [] }\n    ],\n    \"InternalVariables\": [\n      { \"Name\": \"speed\", \"Description\": \"Motor speed\", \"IsInside\": true, \"PublicVisible\": true, \"Trust\": \"trusted\", \"Privacy\": \"public\", \"Values\": [\"0\", \"1\", \"2\", \"3\"] }\n    ],\n    \"ImpactedVariables\": [],\n    \"Transitions\": [\n      { \"Name\": \"start\", \"Description\": \"Start transition\", \"Signal\": true, \"StartState\": \"idle\", \"EndState\": \"running\", \"Trigger\": { \"Attribute\": \"speed\", \"Relation\": \"\u003e\", \"Value\": \"0\" }, \"Assignments\": [] },\n      { \"Name\": \"stop\", \"Description\": \"Stop transition\", \"Signal\": true, \"StartState\": \"running\", \"EndState\": \"idle\", \"Trigger\": { \"Attribute\": \"speed\", \"Relation\": \"=\", \"Value\": \"0\" }, \"Assignments\": [] }\n    ],\n    \"APIs\": [\n      { \"Name\": \"startAPI\", \"Description\": \"Start the device\", \"Signal\": true, \"StartState\": \"idle\", \"EndState\": \"running\", \"Trigger\": null, \"Assignments\": [] },\n      { \"Name\": \"stopAPI\", \"Description\": \"Stop the device\", \"Signal\": true, \"StartState\": \"running\", \"EndState\": \"idle\", \"Trigger\": null, \"Assignments\": [] }\n    ],\n    \"Contents\": [\n      { \"Name\": \"log\", \"Privacy\": \"public\", \"IsChangeable\": true }\n    ]\n  }\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/board/templates",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "17 Add custom template",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "pm.collectionVariables.set(\"customTplName\", \"TestDevice_\" + Date.now());",
+                                                                   "pm.collectionVariables.set(\"customTemplateId\", \"\");"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "prerequest"
+                                   },
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Add custom template business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Add custom template returns id\", function () { pm.expect(res.data \u0026\u0026 res.data.id).to.exist; });",
+                                                                   "if (res.data \u0026\u0026 res.data.id) pm.collectionVariables.set(\"customTemplateId\", String(res.data.id));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "DELETE",
+                                     "url":  "{{baseUrl}}/board/templates/{{customTemplateId}}",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "18 Delete custom template",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "if (!pm.collectionVariables.get(\"customTemplateId\")) {",
+                                                                   "  postman.setNextRequest(\"19 Sync verify\");",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "prerequest"
+                                   },
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const tplId = pm.collectionVariables.get(\"customTemplateId\");",
+                                                                   "if (!tplId) {",
+                                                                   "  pm.test(\"Skip delete when template id missing\", function () { pm.expect(true).to.be.true; });",
+                                                                   "} else {",
+                                                                   "  const res = pm.response.json();",
+                                                                   "  pm.test(\"Delete custom template business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"devices\": {{verifyDevices}},\n  \"rules\": {{verifyRules}},\n  \"specs\": {{verifySpecs}},\n  \"isAttack\": false,\n  \"intensity\": 3,\n  \"enablePrivacy\": false\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "19 Sync verify",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Sync verify business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Result has safe/specResults/checkLogs\", function () {",
+                                                                   "  pm.expect(res.data).to.have.property(\"safe\");",
+                                                                   "  pm.expect(res.data).to.have.property(\"specResults\");",
+                                                                   "  pm.expect(res.data).to.have.property(\"checkLogs\");",
+                                                                   "});"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"devices\": {{verifyDevices}},\n  \"rules\": {{verifyRules}},\n  \"specs\": {{verifySpecs}},\n  \"isAttack\": false,\n  \"intensity\": 3,\n  \"enablePrivacy\": true\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "20 Sync verify (privacy=true)",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Sync verify privacy business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Privacy verify has safe\", function () { pm.expect(res.data).to.have.property(\"safe\"); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"devices\": {{verifyDevices}},\n  \"rules\": {{verifyRules}},\n  \"specs\": {{verifySpecs}},\n  \"isAttack\": false,\n  \"intensity\": 3,\n  \"enablePrivacy\": false\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify/async",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "21 Async verify",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Async verify business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Async verify returns task id\", function () { pm.expect(res.data).to.be.a(\"number\"); });",
+                                                                   "pm.collectionVariables.set(\"taskId\", String(res.data));"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/verify/tasks/{{taskId}}/progress",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "22 Get task progress",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Get progress business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/verify/tasks/{{taskId}}",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "23 Get task status",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Get task business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "pm.test(\"Task status is valid\", function () {",
+                                                                   "  pm.expect([\"PENDING\",\"RUNNING\",\"COMPLETED\",\"FAILED\",\"CANCELLED\"]).to.include(res.data.status);",
+                                                                   "});"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify/tasks/{{taskId}}/cancel",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "24 Cancel task",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Cancel task business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/verify/traces",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "25 Get all traces",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "const traces = Array.isArray(res.data) ? res.data : [];",
+                                                                   "pm.test(\"Get traces business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "if (traces.length \u003e 0) {",
+                                                                   "  pm.collectionVariables.set(\"traceId\", String(traces[0].id));",
+                                                                   "} else {",
+                                                                   "  pm.collectionVariables.set(\"traceId\", \"\");",
+                                                                   "  postman.setNextRequest(\"28 Validation - Missing devices\");",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/verify/traces/{{traceId}}",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "26 Get single trace",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "if (!pm.collectionVariables.get(\"traceId\")) {",
+                                                                   "  postman.setNextRequest(\"28 Validation - Missing devices\");",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "prerequest"
+                                   },
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const traceId = pm.collectionVariables.get(\"traceId\");",
+                                                                   "if (!traceId) {",
+                                                                   "  pm.test(\"Skip single trace when no trace id\", function () { pm.expect(true).to.be.true; });",
+                                                                   "} else {",
+                                                                   "  const res = pm.response.json();",
+                                                                   "  pm.test(\"Get single trace business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "  pm.test(\"Trace has states\", function () { pm.expect(res.data.states).to.exist; });",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "DELETE",
+                                     "url":  "{{baseUrl}}/verify/traces/{{traceId}}",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "27 Delete trace",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "if (!pm.collectionVariables.get(\"traceId\")) {",
+                                                                   "  postman.setNextRequest(\"28 Validation - Missing devices\");",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "prerequest"
+                                   },
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const traceId = pm.collectionVariables.get(\"traceId\");",
+                                                                   "if (!traceId) {",
+                                                                   "  pm.test(\"Skip delete trace when no trace id\", function () { pm.expect(true).to.be.true; });",
+                                                                   "} else {",
+                                                                   "  const res = pm.response.json();",
+                                                                   "  pm.test(\"Delete trace business code 200\", function () { pm.expect(res.code).to.eql(200); });",
+                                                                   "}"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"rules\": [],\n  \"specs\": {{verifySpecs}},\n  \"intensity\": 3\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "28 Validation - Missing devices",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "pm.test(\"Missing devices rejected\", function () { pm.expect(pm.response.code).to.not.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{\n  \"devices\": {{verifyDevices}},\n  \"rules\": [],\n  \"specs\": {{verifySpecs}},\n  \"intensity\": 999\n}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/verify",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "29 Validation - Intensity out of range",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "pm.test(\"Intensity out of range rejected\", function () { pm.expect(pm.response.code).to.not.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "body":  {
+                                                  "raw":  "{}",
+                                                  "options":  {
+                                                                  "raw":  {
+                                                                              "language":  "json"
+                                                                          }
+                                                              },
+                                                  "mode":  "raw"
+                                              },
+                                     "method":  "POST",
+                                     "url":  "{{baseUrl}}/auth/logout",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "30 Logout",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "const res = pm.response.json();",
+                                                                   "pm.test(\"Logout business code 200\", function () { pm.expect(res.code).to.eql(200); });"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 },
+                 {
+                     "request":  {
+                                     "method":  "GET",
+                                     "url":  "{{baseUrl}}/board/templates",
+                                     "header":  [
+                                                    {
+                                                        "key":  "Content-Type",
+                                                        "value":  "application/json"
+                                                    }
+                                                ]
+                                 },
+                     "name":  "31 Token invalidated (expect 401/403)",
+                     "event":  [
+                                   {
+                                       "script":  {
+                                                      "exec":  [
+                                                                   "pm.test(\"Stale token rejected\", function () {",
+                                                                   "  pm.expect([401,403]).to.include(pm.response.code);",
+                                                                   "});"
+                                                               ],
+                                                      "type":  "text/javascript"
+                                                  },
+                                       "listen":  "test"
+                                   }
+                               ]
+                 }
+             ],
+    "auth":  {
+                 "bearer":  [
+                                {
+                                    "key":  "token",
+                                    "type":  "string",
+                                    "value":  "{{token}}"
+                                }
+                            ],
+                 "type":  "bearer"
+             }
+}

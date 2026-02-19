@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,6 +39,7 @@ public class DeviceSmvDataFactory {
                                                         List<DeviceVerificationDto> devices,
                                                         Map<String, DeviceManifest> templateCache) {
         Map<String, DeviceSmvData> deviceSmvMap = new LinkedHashMap<>();
+        List<String> missingTemplateDevices = new ArrayList<>();
 
         for (DeviceVerificationDto device : devices) {
             if (device == null || device.getVarName() == null || device.getVarName().isBlank()
@@ -67,6 +69,7 @@ public class DeviceSmvDataFactory {
             DeviceManifest manifest = loadManifest(templateCache, userId, smv.getTemplateName());
             if (manifest == null) {
                 log.warn("Template not found or invalid for device: {}", smv.getTemplateName());
+                missingTemplateDevices.add(device.getVarName() + "(template=" + smv.getTemplateName() + ")");
                 continue;
             }
             smv.setManifest(manifest);
@@ -88,6 +91,10 @@ public class DeviceSmvDataFactory {
             modelValidator.warnStatelessDeviceWithState(smv, device);
 
             deviceSmvMap.put(device.getVarName(), smv);
+        }
+
+        if (!missingTemplateDevices.isEmpty()) {
+            throw SmvGenerationException.multipleDevicesFailed(String.join(", ", missingTemplateDevices));
         }
 
         // 添加模板名称 → 设备映射

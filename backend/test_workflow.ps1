@@ -41,6 +41,58 @@ function Skip-Step($msg) {
   $script:SKIP++
 }
 
+function Get-TemplateName($template) {
+  if ($null -eq $template) { return $null }
+  if ($template.name -and -not [string]::IsNullOrWhiteSpace($template.name)) {
+    return [string]$template.name
+  }
+  if ($template.manifest -and $template.manifest.Name -and -not [string]::IsNullOrWhiteSpace($template.manifest.Name)) {
+    return [string]$template.manifest.Name
+  }
+  return $null
+}
+
+function Resolve-TemplateName($templates, [string[]]$candidates) {
+  $names = @(
+    @($templates) |
+      ForEach-Object { Get-TemplateName $_ } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+
+  foreach ($candidate in @($candidates)) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    $found = $names | Where-Object { $_.Equals($candidate, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+    if ($found) { return $found }
+  }
+
+  foreach ($candidate in @($candidates)) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    $found = $names | Where-Object {
+      $_.IndexOf($candidate, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+      $candidate.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    } | Select-Object -First 1
+    if ($found) { return $found }
+  }
+
+  return $null
+}
+
+function Convert-NodesToVerifyDevices($nodes) {
+  $result = @()
+  foreach ($node in @($nodes)) {
+    if ($null -eq $node) { continue }
+    $result += @{
+      varName = $node.id
+      templateName = $node.templateName
+      state = $node.state
+      currentStateTrust = $node.currentStateTrust
+      variables = if ($null -ne $node.variables) { @($node.variables) } else { @() }
+      privacies = if ($null -ne $node.privacies) { @($node.privacies) } else { @() }
+    }
+  }
+  return $result
+}
+
 Write-Host "=========================================="
 Write-Host " IoT-Verify End-to-End Workflow Test"
 Write-Host "=========================================="
@@ -80,19 +132,33 @@ $TPL = GetJson "$BASE_URL/board/templates" $AUTH
 Assert-Equal $TPL.code 200 "Get templates returns 200"
 $TPL_COUNT = @($TPL.data).Count
 Assert-True ($TPL_COUNT -gt 0) "Template count > 0 (actual: $TPL_COUNT)"
+$LIGHT_TEMPLATE = Resolve-TemplateName $TPL.data @("Light")
+$TEMP_TEMPLATE = Resolve-TemplateName $TPL.data @("Temperature Sensor", "Temp Sensor", "Thermostat")
+Assert-True (-not [string]::IsNullOrWhiteSpace($LIGHT_TEMPLATE)) "Resolved Light template name ($LIGHT_TEMPLATE)"
+Assert-True (-not [string]::IsNullOrWhiteSpace($TEMP_TEMPLATE)) "Resolved sensor template name ($TEMP_TEMPLATE)"
+if ([string]::IsNullOrWhiteSpace($LIGHT_TEMPLATE) -or [string]::IsNullOrWhiteSpace($TEMP_TEMPLATE)) {
+  throw "Required templates were not found. Need at least 'Light' and 'Temperature Sensor' (or alias)."
+}
 
 Write-Host "`n--- Step 5: Save & Get Nodes ---"
 # DeviceNodeDto: id(@NotBlank), templateName(@NotBlank), label(@NotBlank), position(@Valid @NotNull {x:Double, y:Double}), state(@NotBlank), width(@NotNull Integer), height(@NotNull Integer), currentStateTrust, variables, privacies
 $NODES = @(
   @{
-    id="light_1"; templateName="Light"; label="My Light"
+    id="light_1"; templateName=$LIGHT_TEMPLATE; label="My Light"
     position=@{ x=100.0; y=100.0 }
     state="on"; width=120; height=80
+    currentStateTrust="trusted"
+    variables=@()
+    privacies=@()
   },
   @{
-    id="tempsensor_1"; templateName="Temperature Sensor"; label="Temp Sensor"
+    id="tempsensor_1"; templateName=$TEMP_TEMPLATE; label="Temp Sensor"
     position=@{ x=300.0; y=100.0 }
-    state="active"; width=120; height=80
+    # For sensor-like templates without modes, backend ignores state during SMV generation.
+    state="monitoring"; width=120; height=80
+    currentStateTrust="untrusted"
+    variables=@(@{ name="temperature"; value="25"; trust="untrusted" })
+    privacies=@(@{ name="temperature"; privacy="public" })
   }
 )
 $NODES_RESP = PostJson "$BASE_URL/board/nodes" $NODES $AUTH
@@ -123,9 +189,9 @@ Write-Host "`n--- Step 7: Save & Get Rules ---"
 $RULES = @(
   @{
     conditions = @(
-      @{ deviceName="Temperature Sensor"; attribute="temperature"; relation=">"; value="30" }
+      @{ deviceName=$TEMP_TEMPLATE; attribute="temperature"; relation=">"; value="30" }
     )
-    command = @{ deviceName="Light"; action="off" }
+    command = @{ deviceName=$LIGHT_TEMPLATE; action="off" }
   }
 )
 $RULES_RESP = PostJson "$BASE_URL/board/rules" $RULES $AUTH
@@ -174,13 +240,15 @@ Assert-Equal $GET_LAYOUT.code 200 "Get layout returns 200"
 Write-Host "`n--- Step 10: Save & Get Active ---"
 # BoardActiveDto: input(@NotNull List<String>), status(@NotNull List<String>)
 $ACTIVE = @{
-  input=@("light_1", "tempsensor_1")
-  status=@("spec_1")
+  input=@("devices", "templates", "rules", "specs")
+  status=@("devices", "edges", "specs")
 }
 $ACTIVE_RESP = PostJson "$BASE_URL/board/active" $ACTIVE $AUTH
 Assert-Equal $ACTIVE_RESP.code 200 "Save active returns 200"
 $GET_ACTIVE = GetJson "$BASE_URL/board/active" $AUTH
 Assert-Equal $GET_ACTIVE.code 200 "Get active returns 200"
+Assert-True (@($GET_ACTIVE.data.input).Count -gt 0) "Active.input is persisted"
+Assert-True (@($GET_ACTIVE.data.status).Count -gt 0) "Active.status is persisted"
 
 Write-Host "`n--- Step 11: Add & Delete Custom Template ---"
 # DeviceTemplateDto: id(String), name(@NotBlank), manifest(@Valid DeviceManifest)
@@ -190,42 +258,75 @@ Write-Host "`n--- Step 11: Add & Delete Custom Template ---"
 # Transition: Name, Description, Signal, StartState, EndState, Trigger({Attribute,Relation,Value}), Assignments(List<{Attribute,Value}>)
 # API: Name, Description, Signal, StartState, EndState, Trigger, Assignments
 # Content: Name, Privacy, IsChangeable
+$CUSTOM_TPL_NAME = "TestDevice_" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $CUSTOM_TPL = @{
-  name="TestDevice"
+  name=$CUSTOM_TPL_NAME
   manifest=@{
-    Name="TestDevice"
+    Name=$CUSTOM_TPL_NAME
     Description="A test device"
     Modes=@("normal")
     InitState="idle"
     WorkingStates=@(
-      @{ Name="idle"; Description="Device is idle"; Trust="trusted"; Privacy="public" },
-      @{ Name="running"; Description="Device is running"; Trust="trusted"; Privacy="public" }
+      @{ Name="idle"; Description="Device is idle"; Trust="trusted"; Privacy="public"; Invariant="true"; Dynamics=@() },
+      @{ Name="running"; Description="Device is running"; Trust="trusted"; Privacy="public"; Invariant="true"; Dynamics=@() }
     )
     InternalVariables=@(
-      @{ Name="speed"; Description="Motor speed"; IsInside=$true; Values=@("0","1","2","3") }
+      @{
+        Name="speed"; Description="Motor speed"; IsInside=$true; PublicVisible=$true
+        Trust="trusted"; Privacy="public"; Values=@("0","1","2","3")
+      }
     )
     ImpactedVariables=@()
     Transitions=@(
-      @{ Name="start"; StartState="idle"; EndState="running"; Trigger=@{ Attribute="speed"; Relation=">"; Value="0" }; Assignments=@() },
-      @{ Name="stop"; StartState="running"; EndState="idle"; Trigger=@{ Attribute="speed"; Relation="="; Value="0" }; Assignments=@() }
+      @{
+        Name="start"; Description="Start transition"; Signal=$true
+        StartState="idle"; EndState="running"
+        Trigger=@{ Attribute="speed"; Relation=">"; Value="0" }
+        Assignments=@()
+      },
+      @{
+        Name="stop"; Description="Stop transition"; Signal=$true
+        StartState="running"; EndState="idle"
+        Trigger=@{ Attribute="speed"; Relation="="; Value="0" }
+        Assignments=@()
+      }
     )
     APIs=@(
-      @{ Name="startAPI"; Description="Start the device"; StartState="idle"; EndState="running" },
-      @{ Name="stopAPI"; Description="Stop the device"; StartState="running"; EndState="idle" }
+      @{
+        Name="startAPI"; Description="Start the device"; Signal=$true
+        StartState="idle"; EndState="running"; Trigger=$null; Assignments=@()
+      },
+      @{
+        Name="stopAPI"; Description="Stop the device"; Signal=$true
+        StartState="running"; EndState="idle"; Trigger=$null; Assignments=@()
+      }
     )
     Contents=@(
       @{ Name="log"; Privacy="public"; IsChangeable=$true }
     )
   }
 }
-$ADD_TPL = PostJson "$BASE_URL/board/templates" $CUSTOM_TPL $AUTH
-Assert-Equal $ADD_TPL.code 200 "Add custom template returns 200"
-$TPL_ID = $ADD_TPL.data.id
+$ADD_TPL = $null
+$TPL_ID = $null
+try {
+  $ADD_TPL = PostJson "$BASE_URL/board/templates" $CUSTOM_TPL $AUTH
+  Assert-Equal $ADD_TPL.code 200 "Add custom template returns 200"
+  $TPL_ID = $ADD_TPL.data.id
+} catch {
+  Write-Host "  [FAIL] Add custom template error: $($_.Exception.Message)" -ForegroundColor Red
+  $script:FAIL++
+}
+
 if ($TPL_ID) {
-  $DEL_TPL = DeleteJson "$BASE_URL/board/templates/$TPL_ID" $AUTH
-  Assert-Equal $DEL_TPL.code 200 "Delete custom template returns 200"
+  try {
+    $DEL_TPL = DeleteJson "$BASE_URL/board/templates/$TPL_ID" $AUTH
+    Assert-Equal $DEL_TPL.code 200 "Delete custom template returns 200"
+  } catch {
+    Write-Host "  [FAIL] Delete custom template error: $($_.Exception.Message)" -ForegroundColor Red
+    $script:FAIL++
+  }
 } else {
-  Skip-Step "No template ID returned, skip delete"
+  Skip-Step "No template ID returned (or add failed), skip delete"
 }
 
 # ==================== 3. Verification ====================
@@ -235,20 +336,12 @@ Write-Host "`n--- Step 12: Sync Verify ---"
 # DeviceVerificationDto: varName(@NotBlank), templateName(@NotBlank), state, currentStateTrust, variables(List<VariableStateDto>), privacies(List<PrivacyStateDto>)
 # VariableStateDto: name, value, trust
 # PrivacyStateDto: name, privacy
-$VERIFY_DEVICES = @(
-  @{
-    varName="light_1"; templateName="Light"; state="on"
-    currentStateTrust="trusted"
-    variables=@(@{ name="brightness"; value="80"; trust="trusted" })
-    privacies=@(@{ name="brightness"; privacy="private" })
-  },
-  @{
-    varName="tempsensor_1"; templateName="Temperature Sensor"; state="active"
-    variables=@(@{ name="temperature"; value="25"; trust="trusted" })
-  }
-)
+$VERIFY_DEVICES = Convert-NodesToVerifyDevices $GET_NODES.data
+$VERIFY_RULES = @($GET_RULES.data)
+$VERIFY_SPECS = @($GET_SPECS.data)
+Assert-Equal @($VERIFY_DEVICES).Count 2 "Verification devices count is 2"
 $VERIFY_REQ = @{
-  devices=$VERIFY_DEVICES; rules=$RULES; specs=$SPECS
+  devices=@($VERIFY_DEVICES); rules=@($VERIFY_RULES); specs=@($VERIFY_SPECS)
   isAttack=$false; intensity=3; enablePrivacy=$false
 }
 try {
@@ -265,7 +358,7 @@ try {
 
 Write-Host "`n--- Step 12b: Sync Verify with enablePrivacy=true ---"
 $VERIFY_REQ_PRIV = @{
-  devices=$VERIFY_DEVICES; rules=$RULES; specs=$SPECS
+  devices=@($VERIFY_DEVICES); rules=@($VERIFY_RULES); specs=@($VERIFY_SPECS)
   isAttack=$false; intensity=3; enablePrivacy=$true
 }
 try {
@@ -342,7 +435,7 @@ if ($TRACE_COUNT -gt 0) {
 
 Write-Host "`n--- Step 20: Validation - missing devices (expect error) ---"
 try {
-  $BAD_REQ = PostJson "$BASE_URL/verify" @{ rules=@(); specs=$SPECS; intensity=3 } $AUTH
+  $BAD_REQ = PostJson "$BASE_URL/verify" @{ rules=@(); specs=@($VERIFY_SPECS); intensity=3 } $AUTH
   if ($BAD_REQ.code -ne 200) {
     Assert-True $true "Server rejected null devices (code=$($BAD_REQ.code))"
   } else {
@@ -354,7 +447,7 @@ try {
 
 Write-Host "`n--- Step 21: Validation - intensity out of range (expect error) ---"
 try {
-  $BAD_INT = PostJson "$BASE_URL/verify" @{ devices=$VERIFY_DEVICES; rules=@(); specs=$SPECS; intensity=999 } $AUTH
+  $BAD_INT = PostJson "$BASE_URL/verify" @{ devices=@($VERIFY_DEVICES); rules=@(); specs=@($VERIFY_SPECS); intensity=999 } $AUTH
   if ($BAD_INT.code -ne 200) {
     Assert-True $true "Server rejected intensity=999 (code=$($BAD_INT.code))"
   } else {

@@ -2,7 +2,6 @@ package cn.edu.nju.Iot_Verify.dto.trace;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 import java.util.List;
@@ -16,7 +15,6 @@ public class TraceDeviceDto {
     /**
      * 设备编号
      */
-    @NotBlank(message = "Device ID is required")
     private String deviceId;
     
     /**
@@ -27,13 +25,11 @@ public class TraceDeviceDto {
     /**
      * 模板名称
      */
-    @NotBlank(message = "Template name is required")
     private String templateName;
     
     /**
      * 当前状态
      */
-    @NotBlank(message = "State is required")
     private String newState;
     
     /**

@@ -92,6 +92,9 @@ public class SmvTraceParser {
             DeviceSmvData smv = findDeviceByIdOrName(deviceSmvMap, deviceId);
             if (smv != null) {
                 TraceDeviceDto devTrace = findOrCreateDeviceTrace(state, deviceId);
+                if (devTrace.getTemplateName() == null) {
+                    devTrace.setTemplateName(smv.getTemplateName());
+                }
 
                 String matchedState = matchState(smv, value);
                 if (matchedState != null) {
@@ -104,6 +107,9 @@ public class SmvTraceParser {
             DeviceSmvData smv = findDeviceByIdOrName(deviceSmvMap, deviceId);
             if (smv != null) {
                 TraceDeviceDto devTrace = findOrCreateDeviceTrace(state, deviceId);
+                if (devTrace.getTemplateName() == null) {
+                    devTrace.setTemplateName(smv.getTemplateName());
+                }
                 
                 if (devTrace.getNewState() == null && stateName != null) {
                     String matchedState = matchState(smv, stateName);

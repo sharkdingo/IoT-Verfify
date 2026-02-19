@@ -13,6 +13,7 @@ import java.util.List;
  */
 @Component
 public class TraceMapper {
+    private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
 
     /**
      * TracePo -> TraceDto
@@ -54,7 +55,9 @@ public class TraceMapper {
         po.setId(traceDto.getId());
         po.setUserId(traceDto.getUserId());
         po.setVerificationTaskId(traceDto.getVerificationTaskId());
-        po.setViolatedSpecId(traceDto.getViolatedSpecId());
+        po.setViolatedSpecId(traceDto.getViolatedSpecId() != null
+                ? traceDto.getViolatedSpecId()
+                : UNKNOWN_VIOLATED_SPEC_ID);
         po.setViolatedSpecJson(traceDto.getViolatedSpecJson());
         po.setCreatedAt(traceDto.getCreatedAt());
 

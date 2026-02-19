@@ -86,7 +86,7 @@ public class GlobalExceptionHandler {
         log.error("Internal server error: {}", e.getMessage(), e);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error(e.getMessage()));
+                .body(Result.error("Internal server error"));
     }
 
     @ExceptionHandler(ServiceUnavailableException.class)
@@ -162,7 +162,7 @@ public class GlobalExceptionHandler {
         log.error("Internal server error", e);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error(e.getMessage()));
+                .body(Result.error("Internal server error"));
     }
 
     @ExceptionHandler(Exception.class)

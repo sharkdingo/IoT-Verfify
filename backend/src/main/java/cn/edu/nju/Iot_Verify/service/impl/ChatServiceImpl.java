@@ -68,7 +68,7 @@ public class ChatServiceImpl implements ChatService {
         sessionRepo.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
         messageRepo.deleteBySessionId(sessionId);
-        sessionRepo.deleteById(sessionId);
+        sessionRepo.deleteById(Objects.requireNonNull(sessionId, "sessionId must not be null"));
     }
 
     @Override
@@ -82,7 +82,7 @@ public class ChatServiceImpl implements ChatService {
         try {
             saveSimpleMsg(sessionId, "user", content);
 
-            sessionRepo.findById(sessionId).ifPresent(s -> {
+            sessionRepo.findById(Objects.requireNonNull(sessionId, "sessionId must not be null")).ifPresent(s -> {
                 s.setUpdatedAt(LocalDateTime.now());
                 if (s.getTitle().equals("New Chat") || s.getTitle().startsWith("Chat ")) {
                     String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;

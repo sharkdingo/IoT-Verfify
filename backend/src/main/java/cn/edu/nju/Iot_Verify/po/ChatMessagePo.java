@@ -10,7 +10,9 @@ import java.time.LocalDateTime;
  */
 @Data
 @Entity
-@Table(name = "chat_message")
+@Table(name = "chat_message", indexes = {
+        @Index(name = "idx_chat_message_session_id", columnList = "session_id")
+})
 public class ChatMessagePo {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
