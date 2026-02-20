@@ -38,17 +38,21 @@ public class SmvGenerator {
     private final SmvSpecificationBuilder specBuilder;
     private final SmvModelValidator modelValidator;
 
+    /** generate() 的返回值，包含 SMV 文件和构建过程中使用的 deviceSmvMap */
+    public record GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {}
+
     /**
      * 生成完整的 NuSMV 模型文件并写入临时目录
      */
-    public File generate(Long userId, List<DeviceVerificationDto> devices,
+    public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                          List<RuleDto> rules, List<SpecificationDto> specs,
                          boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}, privacy={}",
                 userId, devices.size(), safeRules.size(), specs.size(), isAttack, intensity, enablePrivacy);
 
-        String smvContent = buildSmvContent(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+        Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+        String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
 
         Path tempDir = Files.createTempDirectory("nusmv_");
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -59,11 +63,11 @@ public class SmvGenerator {
         }
 
         log.info("Generated NuSMV model file: {}", smvFile.getAbsolutePath());
-        return smvFile;
+        return new GenerateResult(smvFile, deviceSmvMap);
     }
 
     /**
-     * 构建设备 SMV 数据映射（供 trace 解析复用）
+     * 构建设备 SMV 数据映射（供外部直接调用，如无 GenerateResult 可用时）
      */
     public Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
                                                          List<DeviceVerificationDto> devices) {
@@ -72,7 +76,8 @@ public class SmvGenerator {
 
     // ==================== 内部方法 ====================
 
-    private String buildSmvContent(Long userId,
+    private String buildSmvContent(Map<String, DeviceSmvData> deviceSmvMap,
+                                   Long userId,
                                    List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules,
                                    List<SpecificationDto> specs,
@@ -82,8 +87,6 @@ public class SmvGenerator {
 
         log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
             devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, intensity, enablePrivacy);
-
-        Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
 
         // 前置校验：P1/P2/P3/P5 — 在生成 SMV 文本前检测模板数据不合法项
         modelValidator.validate(deviceSmvMap);

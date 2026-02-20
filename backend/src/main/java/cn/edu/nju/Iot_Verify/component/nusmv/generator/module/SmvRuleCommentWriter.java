@@ -26,7 +26,8 @@ public class SmvRuleCommentWriter {
 
         for (RuleDto rule : rules) {
             if (rule.getRuleString() != null && !rule.getRuleString().isEmpty()) {
-                content.append("--").append(rule.getRuleString()).append("\n");
+                // 换行符会破坏 NuSMV 注释（-- 只注释到行尾），替换为空格
+                content.append("--").append(rule.getRuleString().replace("\n", " ").replace("\r", "")).append("\n");
             } else {
                 content.append("--IF ");
                 if (rule.getConditions() != null) {

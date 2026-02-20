@@ -20,6 +20,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+
+import java.util.Map;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 
@@ -27,8 +29,6 @@ import java.lang.reflect.Method;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
 
 /**
  * Tests for VerificationServiceImpl.buildVerificationResult fail-closed logic.
@@ -59,7 +59,7 @@ class VerificationServiceImplBuildResultTest {
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
                 NusmvResult.class, List.class, List.class, List.class,
-                Long.class, Long.class, List.class);
+                Long.class, Long.class, List.class, Map.class);
         buildVerificationResult.setAccessible(true);
     }
 
@@ -68,14 +68,14 @@ class VerificationServiceImplBuildResultTest {
                                          List<SpecificationDto> specs,
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
-                service, result, devices, List.of(), specs, 1L, null, checkLogs);
+                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of());
     }
 
-    // --- effectiveSpecs = 0: all specs filtered out â†?safe=true ---
+    // --- effectiveSpecs = 0: all specs filtered out -> safe=true ---
 
     @Test
     void effectiveSpecsEmpty_returnsSafeTrue() throws Exception {
-        // Spec with no A/IF conditions â†?filtered out
+        // Spec with no A/IF conditions -> filtered out
         SpecificationDto emptySpec = new SpecificationDto();
         emptySpec.setId("s1");
         emptySpec.setAConditions(List.of());
@@ -91,7 +91,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(logs.stream().anyMatch(l -> l.contains("No valid specifications")));
     }
 
-    // --- specCheckResults empty but effectiveSpecs > 0 â†?fail-closed ---
+    // --- specCheckResults empty but effectiveSpecs > 0 -> fail-closed ---
 
     @Test
     void emptySpecResults_withEffectiveSpecs_failClosed() throws Exception {
@@ -108,7 +108,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
     }
 
-    // --- mismatch: fewer results than specs â†?fail-closed, missingè¡¥false ---
+    // --- mismatch: fewer results than specs -> fail-closed, missing padded false ---
 
     @Test
     void fewerResultsThanSpecs_failClosedAndPadsFalse() throws Exception {
@@ -119,7 +119,6 @@ class VerificationServiceImplBuildResultTest {
         SpecCheckResult scr = new SpecCheckResult("expr1", true, null);
         NusmvResult result = NusmvResult.success("output", List.of(scr));
 
-        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
         List<String> logs = new ArrayList<>();
 
         VerificationResultDto dto = invoke(result, List.of(), List.of(spec1, spec2), logs);
@@ -127,13 +126,13 @@ class VerificationServiceImplBuildResultTest {
         assertFalse(dto.isSafe());
         assertEquals(2, dto.getSpecResults().size());
         assertTrue(dto.getSpecResults().get(0));   // first result preserved
-        assertFalse(dto.getSpecResults().get(1));  // missing â†?false
+        assertFalse(dto.getSpecResults().get(1));  // missing -> false
         assertTrue(logs.stream().anyMatch(l -> l.contains("mismatch")));
         assertTrue(logs.stream().anyMatch(l -> l.contains("missing")));
         assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
     }
 
-    // --- mismatch: more results than specs â†?fail-closed, extras discarded ---
+    // --- mismatch: more results than specs -> fail-closed, extras discarded ---
 
     @Test
     void moreResultsThanSpecs_failClosedAndTruncates() throws Exception {
@@ -144,7 +143,6 @@ class VerificationServiceImplBuildResultTest {
         SpecCheckResult scr2 = new SpecCheckResult("expr2", false, null);
         NusmvResult result = NusmvResult.success("output", List.of(scr1, scr2));
 
-        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
         List<String> logs = new ArrayList<>();
 
         VerificationResultDto dto = invoke(result, List.of(), List.of(spec1), logs);
@@ -156,7 +154,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
     }
 
-    // --- exact match, all pass â†?safe=true ---
+    // --- exact match, all pass -> safe=true ---
 
     @Test
     void exactMatch_allPass_safeTrue() throws Exception {
@@ -164,7 +162,6 @@ class VerificationServiceImplBuildResultTest {
         SpecCheckResult scr = new SpecCheckResult("expr1", true, null);
         NusmvResult result = NusmvResult.success("output", List.of(scr));
 
-        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
         List<String> logs = new ArrayList<>();
 
         VerificationResultDto dto = invoke(result, List.of(), List.of(spec1), logs);

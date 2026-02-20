@@ -86,23 +86,28 @@ public class DeviceSmvDataFactory {
             extractContents(smv, manifest);
             computeIdentifiers(smv, device.getVarName());
 
+            // P2-2: 检测归一化后变量名冲突
+            for (DeviceSmvData existing : deviceSmvMap.values()) {
+                if (smv.getVarName().equals(existing.getVarName())) {
+                    throw SmvGenerationException.smvGenerationError(
+                            "Variable name collision: '" + device.getVarName()
+                            + "' and another device both normalize to '" + smv.getVarName() + "'");
+                }
+            }
+
             // 软性校验：委托给 SmvModelValidator（集中管理）
             modelValidator.warnUnknownUserVariables(smv, device);
             modelValidator.warnStatelessDeviceWithState(smv, device);
 
             deviceSmvMap.put(device.getVarName(), smv);
+            // 同时注册清洗后的 varName（如果不同），使规则/规约中用清洗后名称也能查到
+            if (!device.getVarName().equals(smv.getVarName())) {
+                deviceSmvMap.putIfAbsent(smv.getVarName(), smv);
+            }
         }
 
         if (!missingTemplateDevices.isEmpty()) {
             throw SmvGenerationException.multipleDevicesFailed(String.join(", ", missingTemplateDevices));
-        }
-
-        // 添加模板名称 → 设备映射
-        for (DeviceVerificationDto device : devices) {
-            DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
-            if (smv != null && smv.getTemplateName() != null && !deviceSmvMap.containsKey(smv.getTemplateName())) {
-                deviceSmvMap.put(smv.getTemplateName(), smv);
-            }
         }
 
         return deviceSmvMap;

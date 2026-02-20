@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -121,6 +122,7 @@ public class SmvMainModuleBuilder {
         appendStateTransitions(content, devices, rules, deviceSmvMap, isAttack);
         appendEnvTransitions(content, devices, deviceSmvMap);
         appendApiSignalTransitions(content, devices, deviceSmvMap);
+        appendTransitionSignalTransitions(content, devices, deviceSmvMap);
         appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.TRUST);
         if (enablePrivacy) {
             appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.PRIVACY);
@@ -236,7 +238,13 @@ public class SmvMainModuleBuilder {
                             if (trigger != null) {
                                 // M4 修复：trigger value 需要去空格
                                 String triggerValue = trigger.getValue() != null ? trigger.getValue().replace(" ", "") : "";
-                                content.append("\t\t").append(varName).append(".")
+                                String startState = getStateForMode(trans.getStartState(), modeIdx);
+
+                                content.append("\t\t");
+                                if (startState != null && !startState.isEmpty()) {
+                                    content.append(varName).append(".").append(mode).append("=").append(startState).append(" & ");
+                                }
+                                content.append(varName).append(".")
                                        .append(trigger.getAttribute())
                                        .append(trigger.getRelation())
                                        .append(triggerValue).append(": ").append(endState).append(";\n");
@@ -304,7 +312,7 @@ public class SmvMainModuleBuilder {
                         for (String ms : modeStateList) {
                             String suffix = ms.startsWith(mode + "_") ? ms.substring(mode.length() + 1) : ms;
                             if (suffix.equals(cleanValue) || ms.equals(cleanValue)) {
-                                matchedExprs.add(varName + "." + mode + condition.getRelation() + ms);
+                                matchedExprs.add(varName + "." + mode + normalizeRuleRelation(condition.getRelation()) + ms);
                                 break; // 每个 mode 最多匹配一个状态
                             }
                         }
@@ -313,7 +321,7 @@ public class SmvMainModuleBuilder {
                 if (matchedExprs.size() == 1) {
                     return matchedExprs.get(0);
                 } else if (matchedExprs.size() > 1) {
-                    return "(" + String.join(" & ", matchedExprs) + ")";
+                    return "(" + String.join(" | ", matchedExprs) + ")";
                 }
                 // 单 mode fallback：直接用 mode 名替代 "state"
                 if (condSmv.getModes().size() == 1) {
@@ -335,7 +343,7 @@ public class SmvMainModuleBuilder {
                     }
                 }
             }
-            return varName + "." + attr + condition.getRelation() + rhsValue;
+            return varName + "." + attr + normalizeRuleRelation(condition.getRelation()) + rhsValue;
         }
 
         // API signal condition
@@ -357,7 +365,8 @@ public class SmvMainModuleBuilder {
                     int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
                     if (modeIdx >= 0 && modeIdx < condSmv.getModes().size()) {
                         String mode = condSmv.getModes().get(modeIdx);
-                        String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
+                        String cleanEndState = getStateForMode(endState, modeIdx);
+                        if (cleanEndState == null || cleanEndState.isEmpty()) break;
                         String stateExpr = varName + "." + mode + "=" + cleanEndState;
                         return apiSignalExpr != null
                                 ? "(" + apiSignalExpr + " | " + stateExpr + ")"
@@ -407,9 +416,21 @@ public class SmvMainModuleBuilder {
                         if (trans.getAssignments() == null) continue;
 
                         for (DeviceManifest.Assignment assignment : trans.getAssignments()) {
+                            if (assignment == null || assignment.getAttribute() == null) {
+                                throw SmvGenerationException.incompleteTrigger(
+                                        transSmv.getVarName(), "Transition '" + trans.getName() + "'",
+                                        "assignment or assignment.attribute is null");
+                            }
                             if (varName.equals(assignment.getAttribute())) {
                                 DeviceManifest.Trigger trigger = trans.getTrigger();
                                 if (trigger != null) {
+                                    if (trigger.getAttribute() == null || trigger.getRelation() == null
+                                            || trigger.getValue() == null || assignment.getValue() == null) {
+                                        throw SmvGenerationException.incompleteTrigger(
+                                                transSmv.getVarName(), "Transition '" + trans.getName() + "'",
+                                                "attribute=" + trigger.getAttribute() + ", relation=" + trigger.getRelation()
+                                                        + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
+                                    }
                                     // P4: 若 trigger.attribute 本身是 env var，直接用 a_<attr>
                                     String triggerRef;
                                     if (isEnvVariable(trigger.getAttribute(), devices, deviceSmvMap)) {
@@ -417,9 +438,20 @@ public class SmvMainModuleBuilder {
                                     } else {
                                         triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
                                     }
-                                    content.append("\t\t").append(triggerRef).append(" ")
+                                    content.append("\t\t");
+                                    // P1-1 修复：增加 startState 约束
+                                    if (trans.getStartState() != null && transSmv.getModes() != null && !transSmv.getModes().isEmpty()) {
+                                        for (int mi = 0; mi < transSmv.getModes().size(); mi++) {
+                                            String ss = getStateForMode(trans.getStartState(), mi);
+                                            if (ss != null && !ss.isEmpty()) {
+                                                content.append(transSmv.getVarName()).append(".").append(transSmv.getModes().get(mi))
+                                                       .append("=").append(ss).append(" & ");
+                                            }
+                                        }
+                                    }
+                                    content.append(triggerRef).append(" ")
                                            .append(trigger.getRelation()).append(" ")
-                                           .append(trigger.getValue()).append(": ").append(assignment.getValue()).append(";\n");
+                                           .append(trigger.getValue().replace(" ", "")).append(": ").append(assignment.getValue().replace(" ", "")).append(";\n");
                                 }
                             }
                         }
@@ -456,24 +488,8 @@ public class SmvMainModuleBuilder {
         int upper = var.getUpperBound();
         int lower = var.getLowerBound();
 
-        // 解析 NaturalChangeRate
-        String ncr = var.getNaturalChangeRate();
-        int lowerRate = 0, upperRate = 0;
-        if (ncr != null && !ncr.isEmpty()) {
-            String[] parts = ncr.replaceAll("[\\[\\]]", "").split(",");
-            try {
-                if (parts.length >= 2) {
-                    lowerRate = Integer.parseInt(parts[0].trim());
-                    upperRate = Integer.parseInt(parts[1].trim());
-                } else if (parts.length == 1) {
-                    int rate = Integer.parseInt(parts[0].trim());
-                    if (rate > 0) upperRate = rate;
-                    else lowerRate = rate;
-                }
-            } catch (NumberFormatException e) {
-                log.warn("Failed to parse NaturalChangeRate: {}", ncr);
-            }
-        }
+        int[] ncr = parseNaturalChangeRate(var.getNaturalChangeRate(), "env:" + varName);
+        int lowerRate = ncr[0], upperRate = ncr[1];
 
         // 查找所有影响此变量的设备的 rate 变量
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
@@ -502,11 +518,11 @@ public class SmvMainModuleBuilder {
             // 正常范围: {a_var+lowerNcr+rate, a_var+rate, a_var+upperNcr+rate}
             StringBuilder rateSet = new StringBuilder("{");
             if (lowerRate != 0) {
-                rateSet.append(smvVarName).append("+").append(lowerRate).append("+").append(rateExpr).append(", ");
+                rateSet.append(formatArithmeticExpr(smvVarName, lowerRate)).append("+").append(rateExpr).append(", ");
             }
             rateSet.append(smvVarName).append("+").append(rateExpr);
             if (upperRate != 0) {
-                rateSet.append(", ").append(smvVarName).append("+").append(upperRate).append("+").append(rateExpr);
+                rateSet.append(", ").append(formatArithmeticExpr(smvVarName, upperRate)).append("+").append(rateExpr);
             }
             rateSet.append("}");
             content.append("\t\tTRUE: ").append(rateSet).append(";\n");
@@ -584,8 +600,10 @@ public class SmvMainModuleBuilder {
                     int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(smv, endState);
                     if (modeIdx >= 0 && modeIdx < smv.getModes().size()) {
                         String mode = smv.getModes().get(modeIdx);
-                        String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
-                        String cleanStartState = startState != null ? DeviceSmvDataFactory.cleanStateName(startState) : "";
+                        String cleanEndState = getStateForMode(endState, modeIdx);
+                        String cleanStartState = startState != null ? getStateForMode(startState, modeIdx) : "";
+                        if (cleanEndState == null || cleanEndState.isEmpty()) continue;
+                        if (cleanStartState == null) cleanStartState = "";
                         
                         if (cleanStartState.isEmpty()) {
                             content.append("\t\t").append(varName).append(".").append(mode).append("!=")
@@ -608,6 +626,54 @@ public class SmvMainModuleBuilder {
                     } else {
                         content.append("\t\t").append(varName).append(".").append(stateVar).append("=").append(cleanStart)
                                .append(" & next(").append(varName).append(".").append(stateVar).append(")=").append(cleanEnd).append(": TRUE;\n");
+                    }
+                }
+
+                content.append("\t\tTRUE: FALSE;\n");
+                content.append("\tesac;\n");
+            }
+        }
+    }
+
+    /**
+     * 为 transition signal（非 API signal）生成 next() 转换。
+     * 当设备从 startState 转换到 endState 时 signal=TRUE，否则 FALSE。
+     */
+    private void appendTransitionSignalTransitions(StringBuilder content,
+                                                    List<DeviceVerificationDto> devices,
+                                                    Map<String, DeviceSmvData> deviceSmvMap) {
+        for (DeviceVerificationDto device : devices) {
+            DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
+            if (smv == null) continue;
+            String varName = smv.getVarName();
+
+            for (DeviceSmvData.SignalInfo sig : smv.getSignalVars()) {
+                if ("api".equals(sig.getType())) continue;
+
+                content.append("\n\tnext(").append(varName).append(".").append(sig.getName()).append(") :=\n");
+                content.append("\tcase\n");
+
+                String endState = sig.getEnd();
+                String startState = sig.getStart();
+                if (endState != null && smv.getModes() != null && !smv.getModes().isEmpty()) {
+                    int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(smv, endState);
+                    if (modeIdx >= 0 && modeIdx < smv.getModes().size()) {
+                        String mode = smv.getModes().get(modeIdx);
+                        String cleanEnd = getStateForMode(endState, modeIdx);
+                        String cleanStart = startState != null ? getStateForMode(startState, modeIdx) : null;
+
+                        if (cleanEnd != null && !cleanEnd.isEmpty()) {
+                            content.append("\t\t");
+                            if (cleanStart != null && !cleanStart.isEmpty()) {
+                                content.append(varName).append(".").append(mode).append("=").append(cleanStart)
+                                       .append(" & next(").append(varName).append(".").append(mode)
+                                       .append(")=").append(cleanEnd).append(": TRUE;\n");
+                            } else {
+                                content.append(varName).append(".").append(mode).append("!=").append(cleanEnd)
+                                       .append(" & next(").append(varName).append(".").append(mode)
+                                       .append(")=").append(cleanEnd).append(": TRUE;\n");
+                            }
+                        }
                     }
                 }
 
@@ -743,16 +809,18 @@ public class SmvMainModuleBuilder {
         if (condition.getRelation() == null) {
             if (deviceManifest.getApis() != null) {
                 for (DeviceManifest.API api : deviceManifest.getApis()) {
-                    if (api.getName().equals(condition.getAttribute()) && api.getSignal()) {
+                    if (api.getName().equals(condition.getAttribute()) && Boolean.TRUE.equals(api.getSignal())) {
                         String endState = api.getEndState();
                         if (endState == null) break;
-                        String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
                         if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                             int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
                             if (modeIdx >= 0 && modeIdx < condSmv.getModes().size()) {
+                                String cleanEndState = getStateForMode(endState, modeIdx);
+                                if (cleanEndState == null || cleanEndState.isEmpty()) break;
                                 return condVarName + "." + dim.prefix + condSmv.getModes().get(modeIdx) + "_" + cleanEndState + "=" + dim.activeValue;
                             }
                         } else {
+                            String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
                             String modePrefix = (condSmv.getModes() != null && condSmv.getModes().size() == 1) ? condSmv.getModes().get(0) + "_" : "";
                             return condVarName + "." + dim.prefix + modePrefix + cleanEndState + "=" + dim.activeValue;
                         }
@@ -769,7 +837,7 @@ public class SmvMainModuleBuilder {
                 }
             }
 
-            if ("=".equals(condition.getRelation()) && condition.getValue() != null) {
+            if ("=".equals(normalizeRuleRelation(condition.getRelation())) && condition.getValue() != null) {
                 String stateValue = condition.getValue().replace(" ", "");
                 if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                     // 先检查 attribute 是否是 mode 名
@@ -942,13 +1010,36 @@ public class SmvMainModuleBuilder {
                         if (trans.getAssignments() == null) continue;
                         
                         for (DeviceManifest.Assignment assignment : trans.getAssignments()) {
+                            if (assignment == null || assignment.getAttribute() == null) {
+                                throw SmvGenerationException.incompleteTrigger(
+                                        smv.getVarName(), "Transition '" + trans.getName() + "'",
+                                        "assignment or assignment.attribute is null");
+                            }
                             if (var.getName().equals(assignment.getAttribute())) {
                                 DeviceManifest.Trigger trigger = trans.getTrigger();
                                 if (trigger != null) {
-                                    content.append("\t\t").append(varName).append(".")
+                                    if (trigger.getAttribute() == null || trigger.getRelation() == null
+                                            || trigger.getValue() == null || assignment.getValue() == null) {
+                                        throw SmvGenerationException.incompleteTrigger(
+                                                smv.getVarName(), "Transition '" + trans.getName() + "'",
+                                                "attribute=" + trigger.getAttribute() + ", relation=" + trigger.getRelation()
+                                                        + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
+                                    }
+                                    content.append("\t\t");
+                                    // P1-1 修复：增加 startState 约束
+                                    if (trans.getStartState() != null && smv.getModes() != null && !smv.getModes().isEmpty()) {
+                                        for (int mi = 0; mi < smv.getModes().size(); mi++) {
+                                            String ss = getStateForMode(trans.getStartState(), mi);
+                                            if (ss != null && !ss.isEmpty()) {
+                                                content.append(varName).append(".").append(smv.getModes().get(mi))
+                                                       .append("=").append(ss).append(" & ");
+                                            }
+                                        }
+                                    }
+                                    content.append(varName).append(".")
                                            .append(trigger.getAttribute()).append(" ")
                                            .append(trigger.getRelation()).append(" ")
-                                           .append(trigger.getValue()).append(": ").append(assignment.getValue()).append(";\n");
+                                           .append(trigger.getValue().replace(" ", "")).append(": ").append(assignment.getValue().replace(" ", "")).append(";\n");
                                 }
                             }
                         }
@@ -961,24 +1052,8 @@ public class SmvMainModuleBuilder {
                         impactedRate = varName + "." + var.getName() + "_rate";
                     }
 
-                    // 解析 NaturalChangeRate
-                    int lowerNcr = 0, upperNcr = 0;
-                    String ncrStr = var.getNaturalChangeRate();
-                    if (ncrStr != null && !ncrStr.isEmpty()) {
-                        String[] parts = ncrStr.replaceAll("[\\[\\]]", "").split(",");
-                        try {
-                            if (parts.length >= 2) {
-                                lowerNcr = Integer.parseInt(parts[0].trim());
-                                upperNcr = Integer.parseInt(parts[1].trim());
-                            } else if (parts.length == 1) {
-                                int rate = Integer.parseInt(parts[0].trim());
-                                if (rate > 0) upperNcr = rate;
-                                else lowerNcr = rate;
-                            }
-                        } catch (NumberFormatException e) {
-                            log.warn("Failed to parse NaturalChangeRate for internal var {}: {}", var.getName(), ncrStr);
-                        }
-                    }
+                    int[] ncrParsed = parseNaturalChangeRate(var.getNaturalChangeRate(), "internal:" + var.getName());
+                    int lowerNcr = ncrParsed[0], upperNcr = ncrParsed[1];
 
                     String varRef = varName + "." + var.getName();
 
@@ -1063,6 +1138,31 @@ public class SmvMainModuleBuilder {
     }
 
     /**
+     * 解析 NaturalChangeRate 字符串为 [lowerRate, upperRate]。
+     * 格式：单值 "3" 或范围 "[-1,2]"。
+     * 返回 int[2]，[0]=lowerRate, [1]=upperRate。
+     */
+    private int[] parseNaturalChangeRate(String ncr, String contextName) {
+        int lowerRate = 0, upperRate = 0;
+        if (ncr != null && !ncr.isEmpty()) {
+            String[] parts = ncr.replaceAll("[\\[\\]]", "").split(",");
+            try {
+                if (parts.length >= 2) {
+                    lowerRate = Integer.parseInt(parts[0].trim());
+                    upperRate = Integer.parseInt(parts[1].trim());
+                } else if (parts.length == 1) {
+                    int rate = Integer.parseInt(parts[0].trim());
+                    if (rate > 0) upperRate = rate;
+                    else lowerRate = rate;
+                }
+            } catch (NumberFormatException e) {
+                log.warn("Failed to parse NaturalChangeRate for {}: {}", contextName, ncr);
+            }
+        }
+        return new int[]{lowerRate, upperRate};
+    }
+
+    /**
      * 校验环境变量初始值是否在声明范围内。
      * 对于数值型变量，超出范围时 clamp 到边界并记录警告。
      * 对于枚举型变量，检查值是否在枚举列表中。
@@ -1119,5 +1219,21 @@ public class SmvMainModuleBuilder {
             }
         }
         return false;
+    }
+
+    /**
+     * 将前端关系符（EQ/NEQ/GT/GTE/LT/LTE）归一化为 NuSMV 运算符。
+     */
+    private static String normalizeRuleRelation(String relation) {
+        if (relation == null) return "=";
+        return switch (relation.toUpperCase()) {
+            case "EQ", "==" -> "=";
+            case "NEQ", "!=" -> "!=";
+            case "GT" -> ">";
+            case "GTE" -> ">=";
+            case "LT" -> "<";
+            case "LTE" -> "<=";
+            default -> relation;
+        };
     }
 }

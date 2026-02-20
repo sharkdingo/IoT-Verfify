@@ -243,7 +243,7 @@ public class SmvDeviceModuleBuilder {
                     if (instanceOverride == null) {
                         instanceOverride = smv.getInstanceVariablePrivacy().get(state);
                     }
-                    value = instanceOverride != null ? instanceOverride : resolveManifestPrivacy(smv, state, defaultVal);
+                    value = instanceOverride != null ? instanceOverride : resolveManifestPrivacy(smv, mode, state, defaultVal);
                 }
 
                 content.append("\n\tinit(").append(dim.prefix).append(mode).append("_").append(state)
@@ -273,12 +273,24 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    /** 从 manifest WorkingState 解析 privacy 默认值 */
-    private String resolveManifestPrivacy(DeviceSmvData smv, String state, String defaultVal) {
+    /** 从 manifest WorkingState 解析 privacy 默认值（支持多模式复合状态名） */
+    private String resolveManifestPrivacy(DeviceSmvData smv, String mode, String state, String defaultVal) {
         if (smv.getManifest() != null && smv.getManifest().getWorkingStates() != null) {
+            int modeIdx = smv.getModes().indexOf(mode);
             for (DeviceManifest.WorkingState ws : smv.getManifest().getWorkingStates()) {
-                if (state.equals(ws.getName().replace(" ", ""))) {
-                    return ws.getPrivacy() != null ? ws.getPrivacy() : defaultVal;
+                if (ws.getName() == null) continue;
+                String wsName = ws.getName().replace(" ", "");
+                // 单模式或非复合名：直接匹配
+                if (!wsName.contains(";")) {
+                    if (state.equals(wsName)) {
+                        return ws.getPrivacy() != null ? ws.getPrivacy() : defaultVal;
+                    }
+                } else {
+                    // 多模式复合名（如 "on;locked"）：按分号拆分，匹配对应 mode 索引的段
+                    String[] parts = wsName.split(";", -1);
+                    if (modeIdx >= 0 && modeIdx < parts.length && state.equals(parts[modeIdx].trim())) {
+                        return ws.getPrivacy() != null ? ws.getPrivacy() : defaultVal;
+                    }
                 }
             }
         }
@@ -323,7 +335,8 @@ public class SmvDeviceModuleBuilder {
                 continue;
             }
             if (var.getValues() != null && !var.getValues().isEmpty()) {
-                String initValue = smv.getVariableValues().getOrDefault(var.getName(), var.getValues().get(0));
+                String rawInit = smv.getVariableValues().getOrDefault(var.getName(), var.getValues().get(0));
+                String initValue = rawInit.replace(" ", "");
                 content.append("\n\tinit(").append(var.getName()).append(") := ").append(initValue).append(";");
             } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
                 String initValue = smv.getVariableValues().getOrDefault(var.getName(), String.valueOf(var.getLowerBound()));

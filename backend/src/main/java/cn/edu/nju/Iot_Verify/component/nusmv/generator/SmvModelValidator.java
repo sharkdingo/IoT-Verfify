@@ -22,12 +22,14 @@ public class SmvModelValidator {
 
     /**
      * 执行全部校验。任何一项失败即抛出 SmvGenerationException。
+     * 使用 IdentityHashMap 去重，确保同一 DeviceSmvData 对象只校验一次
+     * （deviceSmvMap 中可能存在多个 key 指向同一对象的别名条目）。
      */
     public void validate(Map<String, DeviceSmvData> deviceSmvMap) {
-        for (Map.Entry<String, DeviceSmvData> entry : deviceSmvMap.entrySet()) {
-            DeviceSmvData smv = entry.getValue();
+        Set<DeviceSmvData> validated = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (DeviceSmvData smv : deviceSmvMap.values()) {
             if (smv.getManifest() == null) continue;
-            if (!entry.getKey().equals(smv.getVarName())) continue;
+            if (!validated.add(smv)) continue;
 
             validateTriggerAttributes(smv);
             validateStartEndStates(smv);
@@ -74,22 +76,56 @@ public class SmvModelValidator {
 
         if (manifest.getTransitions() != null) {
             for (DeviceManifest.Transition trans : manifest.getTransitions()) {
-                if (trans.getTrigger() == null || trans.getTrigger().getAttribute() == null) continue;
+                String ctx = "Transition '" + trans.getName() + "'";
+                // assignments 校验不依赖 trigger，始终执行
+                validateAssignments(smv.getVarName(), ctx, trans.getAssignments());
+                if (trans.getTrigger() == null) continue;
+                validateTriggerCompleteness(smv.getVarName(), ctx, trans.getTrigger());
                 String attr = trans.getTrigger().getAttribute();
                 if (!legalAttrs.contains(attr)) {
                     throw SmvGenerationException.illegalTriggerAttribute(
-                            smv.getVarName(), "Transition '" + trans.getName() + "'", attr, legalAttrs);
+                            smv.getVarName(), ctx, attr, legalAttrs);
                 }
             }
         }
         if (manifest.getApis() != null) {
             for (DeviceManifest.API api : manifest.getApis()) {
-                if (api.getTrigger() == null || api.getTrigger().getAttribute() == null) continue;
+                String ctx = "API '" + api.getName() + "'";
+                if (api.getTrigger() == null) continue;
+                validateTriggerCompleteness(smv.getVarName(), ctx, api.getTrigger());
                 String attr = api.getTrigger().getAttribute();
                 if (!legalAttrs.contains(attr)) {
                     throw SmvGenerationException.illegalTriggerAttribute(
-                            smv.getVarName(), "API '" + api.getName() + "'", attr, legalAttrs);
+                            smv.getVarName(), ctx, attr, legalAttrs);
                 }
+            }
+        }
+    }
+
+    private void validateTriggerCompleteness(String deviceName, String context, DeviceManifest.Trigger trigger) {
+        if (trigger.getAttribute() == null || trigger.getAttribute().isBlank()) {
+            throw SmvGenerationException.incompleteTrigger(deviceName, context, "attribute is null/blank");
+        }
+        if (trigger.getRelation() == null || trigger.getRelation().isBlank()) {
+            throw SmvGenerationException.incompleteTrigger(deviceName, context, "relation is null/blank");
+        }
+        if (trigger.getValue() == null || trigger.getValue().isBlank()) {
+            throw SmvGenerationException.incompleteTrigger(deviceName, context, "value is null/blank");
+        }
+    }
+
+    private void validateAssignments(String deviceName, String context, List<DeviceManifest.Assignment> assignments) {
+        if (assignments == null) return;
+        for (int i = 0; i < assignments.size(); i++) {
+            DeviceManifest.Assignment a = assignments.get(i);
+            if (a == null) {
+                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "] is null");
+            }
+            if (a.getAttribute() == null || a.getAttribute().isBlank()) {
+                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "].attribute is null/blank");
+            }
+            if (a.getValue() == null || a.getValue().isBlank()) {
+                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "].value is null/blank");
             }
         }
     }
@@ -243,28 +279,32 @@ public class SmvModelValidator {
         if (manifest.getWorkingStates() == null) return;
 
         Map<String, String> seenTrust = new HashMap<>();
+        Map<String, String> seenPrivacy = new HashMap<>();
 
         for (DeviceManifest.WorkingState ws : manifest.getWorkingStates()) {
-            if (ws.getName() == null || ws.getTrust() == null) continue;
+            if (ws.getName() == null) continue;
             if (smv.getModes().size() <= 1) {
                 String key = (smv.getModes().isEmpty() ? "" : smv.getModes().get(0) + "_")
                         + ws.getName().replace(" ", "");
-                String prev = seenTrust.put(key, ws.getTrust());
-                if (prev != null && !prev.equals(ws.getTrust())) {
-                    throw SmvGenerationException.trustPrivacyConflict(
-                            smv.getVarName(), key, prev, ws.getTrust());
-                }
+                checkConflict(seenTrust, key, ws.getTrust(), smv.getVarName(), "trust");
+                checkConflict(seenPrivacy, key, ws.getPrivacy(), smv.getVarName(), "privacy");
             } else {
                 String[] parts = ws.getName().split(";");
                 for (int i = 0; i < parts.length && i < smv.getModes().size(); i++) {
                     String key = smv.getModes().get(i) + "_" + parts[i].trim().replace(" ", "");
-                    String prev = seenTrust.put(key, ws.getTrust());
-                    if (prev != null && !prev.equals(ws.getTrust())) {
-                        throw SmvGenerationException.trustPrivacyConflict(
-                                smv.getVarName(), key, prev, ws.getTrust());
-                    }
+                    checkConflict(seenTrust, key, ws.getTrust(), smv.getVarName(), "trust");
+                    checkConflict(seenPrivacy, key, ws.getPrivacy(), smv.getVarName(), "privacy");
                 }
             }
+        }
+    }
+
+    private void checkConflict(Map<String, String> seen, String key, String value,
+                               String varName, String dimension) {
+        if (value == null) return;
+        String prev = seen.put(key, value);
+        if (prev != null && !prev.equals(value)) {
+            throw SmvGenerationException.trustPrivacyConflict(varName, key, prev, value);
         }
     }
 }

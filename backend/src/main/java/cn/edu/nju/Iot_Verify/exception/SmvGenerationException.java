@@ -26,21 +26,21 @@ public class SmvGenerationException extends InternalServerException {
     public static SmvGenerationException templateNotFound(String deviceId, String templateName) {
         return new SmvGenerationException(
                 "Template not found for device [" + deviceId + "]: " + templateName,
-                "TEMPLATE_NOT_FOUND"
+                ErrorCategories.TEMPLATE_NOT_FOUND
         );
     }
 
     public static SmvGenerationException templateInvalid(String deviceId, String reason) {
         return new SmvGenerationException(
                 "Invalid template for device [" + deviceId + "]: " + reason,
-                "TEMPLATE_INVALID"
+                ErrorCategories.TEMPLATE_INVALID
         );
     }
 
     public static SmvGenerationException manifestParseError(String templateName, Throwable cause) {
         return new SmvGenerationException(
                 "Failed to parse manifest for template [" + templateName + "]: " + cause.getMessage(),
-                "MANIFEST_PARSE_ERROR",
+                ErrorCategories.MANIFEST_PARSE_ERROR,
                 cause
         );
     }
@@ -48,42 +48,42 @@ public class SmvGenerationException extends InternalServerException {
     public static SmvGenerationException deviceNotFound(String deviceId) {
         return new SmvGenerationException(
                 "Device not found in SMV map: " + deviceId,
-                "DEVICE_NOT_FOUND"
+                ErrorCategories.DEVICE_NOT_FOUND
         );
     }
 
     public static SmvGenerationException ruleProcessingError(String ruleId, String reason) {
         return new SmvGenerationException(
                 "Failed to process rule [" + ruleId + "]: " + reason,
-                "RULE_PROCESSING_ERROR"
+                ErrorCategories.RULE_PROCESSING_ERROR
         );
     }
 
     public static SmvGenerationException specificationError(String specId, String reason) {
         return new SmvGenerationException(
                 "Invalid specification [" + specId + "]: " + reason,
-                "SPECIFICATION_ERROR"
+                ErrorCategories.SPECIFICATION_ERROR
         );
     }
 
     public static SmvGenerationException transitionError(String deviceId, String reason) {
         return new SmvGenerationException(
                 "Failed to build transition for device [" + deviceId + "]: " + reason,
-                "TRANSITION_ERROR"
+                ErrorCategories.TRANSITION_ERROR
         );
     }
 
     public static SmvGenerationException smvGenerationError(String reason) {
         return new SmvGenerationException(
                 "SMV generation failed: " + reason,
-                "SMV_GENERATION_ERROR"
+                ErrorCategories.SMV_GENERATION_ERROR
         );
     }
 
     public static SmvGenerationException multipleDevicesFailed(String failedDevices) {
         return new SmvGenerationException(
                 "Cannot generate SMV model: templates not found for " + failedDevices,
-                "MULTIPLE_DEVICES_FAILED"
+                ErrorCategories.MULTIPLE_DEVICES_FAILED
         );
     }
 
@@ -93,7 +93,7 @@ public class SmvGenerationException extends InternalServerException {
         return new SmvGenerationException(
                 String.format("Device '%s': '%s' has illegal trigger attribute '%s'. Legal attributes: %s",
                         device, transitionOrApi, attr, legalAttrs),
-                "ILLEGAL_TRIGGER_ATTRIBUTE"
+                ErrorCategories.ILLEGAL_TRIGGER_ATTRIBUTE
         );
     }
 
@@ -102,14 +102,14 @@ public class SmvGenerationException extends InternalServerException {
         return new SmvGenerationException(
                 String.format("Device '%s': %s '%s' has invalid StartState/EndState '%s': %s",
                         device, itemType, itemName, stateStr, reason),
-                "INVALID_STATE_FORMAT"
+                ErrorCategories.INVALID_STATE_FORMAT
         );
     }
 
     public static SmvGenerationException envVarConflict(String varName, String reason) {
         return new SmvGenerationException(
                 String.format("Env variable '%s' conflict: %s", varName, reason),
-                "ENV_VAR_CONFLICT"
+                ErrorCategories.ENV_VAR_CONFLICT
         );
     }
 
@@ -117,7 +117,15 @@ public class SmvGenerationException extends InternalServerException {
         return new SmvGenerationException(
                 String.format("Device '%s': trust/privacy conflict for '%s': '%s' vs '%s'",
                         device, key, prev, current),
-                "TRUST_PRIVACY_CONFLICT"
+                ErrorCategories.TRUST_PRIVACY_CONFLICT
+        );
+    }
+
+    public static SmvGenerationException incompleteTrigger(String device, String transitionOrApi, String reason) {
+        return new SmvGenerationException(
+                String.format("Device '%s': '%s' has incomplete trigger: %s",
+                        device, transitionOrApi, reason),
+                ErrorCategories.INCOMPLETE_TRIGGER
         );
     }
 
@@ -137,5 +145,6 @@ public class SmvGenerationException extends InternalServerException {
         public static final String INVALID_STATE_FORMAT = "INVALID_STATE_FORMAT";
         public static final String ENV_VAR_CONFLICT = "ENV_VAR_CONFLICT";
         public static final String TRUST_PRIVACY_CONFLICT = "TRUST_PRIVACY_CONFLICT";
+        public static final String INCOMPLETE_TRIGGER = "INCOMPLETE_TRIGGER";
     }
 }

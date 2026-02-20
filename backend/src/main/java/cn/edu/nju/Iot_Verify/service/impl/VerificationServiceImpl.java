@@ -63,6 +63,8 @@ public class VerificationServiceImpl implements VerificationService {
     private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
     private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
+    private final ExecutorService syncVerificationExecutor = Executors.newFixedThreadPool(
+            4, r -> { Thread t = new Thread(r, "sync-verify"); t.setDaemon(true); return t; });
 
     // ==================== 同步验证 ====================
 
@@ -88,16 +90,13 @@ public class VerificationServiceImpl implements VerificationService {
                 userId, devices.size(), specs.size(), isAttack, intensity);
 
         long timeoutMs = nusmvConfig.getTimeoutMs() * 2; // generate + execute 总超时
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        Future<VerificationResultDto> future = executor.submit(() ->
+        Future<VerificationResultDto> future = syncVerificationExecutor.submit(() ->
                 doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
-        executor.shutdown();
 
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
-            executor.shutdownNow();
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             return buildErrorResult("", List.of("Verification timed out"));
         } catch (ExecutionException e) {
@@ -108,15 +107,6 @@ public class VerificationServiceImpl implements VerificationService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return buildErrorResult("", List.of("Verification interrupted"));
-        } finally {
-            executor.shutdownNow();
-            try {
-                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    log.warn("Verification executor did not terminate within 5s");
-                }
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            }
         }
     }
 
@@ -128,10 +118,13 @@ public class VerificationServiceImpl implements VerificationService {
                                            boolean enablePrivacy) {
         List<String> checkLogs = new ArrayList<>();
         File smvFile = null;
+        Map<String, DeviceSmvData> deviceSmvMap = null;
 
         try {
             checkLogs.add("Generating NuSMV model...");
-            smvFile = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+            SmvGenerator.GenerateResult genResult = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+            smvFile = genResult.smvFile();
+            deviceSmvMap = genResult.deviceSmvMap();
             if (smvFile == null || !smvFile.exists()) {
                 checkLogs.add("Failed to generate NuSMV model file");
                 return buildErrorResult("", checkLogs);
@@ -147,8 +140,8 @@ public class VerificationServiceImpl implements VerificationService {
             }
             checkLogs.add("NuSMV execution completed.");
 
-            // Build per-spec results
-            return buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs);
+            // Build per-spec results — 复用 generate 阶段的 deviceSmvMap
+            return buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap);
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -228,7 +221,9 @@ public class VerificationServiceImpl implements VerificationService {
             }
 
             updateTaskProgress(taskId, 20, "Generating NuSMV model");
-            smvFile = smvGenerator.generate(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+            SmvGenerator.GenerateResult genResult = smvGenerator.generate(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+            smvFile = genResult.smvFile();
+            Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
             if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
@@ -252,7 +247,7 @@ public class VerificationServiceImpl implements VerificationService {
 
             updateTaskProgress(taskId, 80, "Parsing results");
             VerificationResultDto vResult = buildVerificationResult(
-                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>());
+                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>(), deviceSmvMap);
 
             updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(task, vResult.isSafe(),
@@ -350,7 +345,8 @@ public class VerificationServiceImpl implements VerificationService {
                                                           List<RuleDto> rules,
                                                           List<SpecificationDto> specs,
                                                           Long userId, Long taskId,
-                                                          List<String> checkLogs) {
+                                                          List<String> checkLogs,
+                                                          Map<String, DeviceSmvData> deviceSmvMap) {
         List<Boolean> specResults = new ArrayList<>();
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> specCheckResults = result.getSpecResults();
@@ -374,7 +370,7 @@ public class VerificationServiceImpl implements VerificationService {
         boolean parseIncomplete = false;
 
         if (specCheckResults.isEmpty()) {
-            checkLogs.add("Warning: could not parse per-spec results from NuSMV output, fail-closed as unsafe");
+            checkLogs.add("Warning: could not parse per-spec results from NuSMV output");
             log.warn("No spec results parsed from NuSMV output, marking all {} specs as failed (fail-closed)", effectiveSpecs.size());
             for (int i = 0; i < effectiveSpecs.size(); i++) specResults.add(false);
             parseIncomplete = true;
@@ -383,10 +379,9 @@ public class VerificationServiceImpl implements VerificationService {
             log.warn("Spec count mismatch: NuSMV returned {} results but {} specs were generated. Marking as unsafe (fail-closed).",
                     specCheckResults.size(), effectiveSpecs.size());
             checkLogs.add("Warning: spec result count mismatch (got " + specCheckResults.size()
-                    + ", expected " + effectiveSpecs.size() + "), fail-closed as unsafe");
+                    + ", expected " + effectiveSpecs.size() + ")");
             // 仍然处理已有结果用于诊断，但缺失项补 false
             parseIncomplete = true;
-            Map<String, DeviceSmvData> deviceSmvMap = smvGenerator.buildDeviceSmvMap(userId, devices);
             // 只处理 min(specCheckResults, effectiveSpecs) 个结果，多余的丢弃
             int bound = Math.min(specCheckResults.size(), effectiveSpecs.size());
             for (int specIdx = 0; specIdx < bound; specIdx++) {
@@ -410,6 +405,8 @@ public class VerificationServiceImpl implements VerificationService {
                     }
                 } else if (scr.isPassed()) {
                     checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
+                } else {
+                    checkLogs.add("Spec " + (specIdx + 1) + " violated (no counterexample): " + scr.getSpecExpression());
                 }
             }
             // 多余的 NuSMV 结果记录日志但不加入 specResults
@@ -423,7 +420,6 @@ public class VerificationServiceImpl implements VerificationService {
                 checkLogs.add("Spec " + (i + 1) + " result missing, treated as violated (fail-closed)");
             }
         } else {
-            Map<String, DeviceSmvData> deviceSmvMap = smvGenerator.buildDeviceSmvMap(userId, devices);
             int specIdx = 0;
             for (SpecCheckResult scr : specCheckResults) {
                 specResults.add(scr.isPassed());
@@ -445,6 +441,8 @@ public class VerificationServiceImpl implements VerificationService {
                     }
                 } else if (scr.isPassed()) {
                     checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
+                } else {
+                    checkLogs.add("Spec " + (specIdx + 1) + " violated (no counterexample): " + scr.getSpecExpression());
                 }
                 specIdx++;
             }
