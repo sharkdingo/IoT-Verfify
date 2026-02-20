@@ -1,6 +1,7 @@
 // src/main/java/cn/edu/nju/Iot_Verify/dto/spec/SpecificationDto.java
 package cn.edu.nju.Iot_Verify.dto.spec;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -16,6 +17,9 @@ import java.util.List;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonAutoDetect(getterVisibility = JsonAutoDetect.Visibility.NONE,
+                isGetterVisibility = JsonAutoDetect.Visibility.NONE,
+                fieldVisibility = JsonAutoDetect.Visibility.ANY)
 public class SpecificationDto {
 
     @NotBlank(message = "Specification ID is required")

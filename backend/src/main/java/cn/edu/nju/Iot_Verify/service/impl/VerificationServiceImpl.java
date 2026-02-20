@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
+import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -119,6 +120,7 @@ public class VerificationServiceImpl implements VerificationService {
         List<String> checkLogs = new ArrayList<>();
         File smvFile = null;
         Map<String, DeviceSmvData> deviceSmvMap = null;
+        VerificationResultDto finalResult = null;
 
         try {
             checkLogs.add("Generating NuSMV model...");
@@ -127,7 +129,8 @@ public class VerificationServiceImpl implements VerificationService {
             deviceSmvMap = genResult.deviceSmvMap();
             if (smvFile == null || !smvFile.exists()) {
                 checkLogs.add("Failed to generate NuSMV model file");
-                return buildErrorResult("", checkLogs);
+                finalResult = buildErrorResult("", checkLogs);
+                return finalResult;
             }
             checkLogs.add("Model generated: " + smvFile.getAbsolutePath());
 
@@ -136,23 +139,42 @@ public class VerificationServiceImpl implements VerificationService {
 
             if (!result.isSuccess()) {
                 checkLogs.add("NuSMV execution failed: " + result.getErrorMessage());
-                return buildErrorResult("", checkLogs);
+                finalResult = buildErrorResult("", checkLogs);
+                return finalResult;
             }
             checkLogs.add("NuSMV execution completed.");
 
             // Build per-spec results — 复用 generate 阶段的 deviceSmvMap
-            return buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap);
+            finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap);
+            return finalResult;
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.error("Verification error", e);
             checkLogs.add("Error: " + e.getMessage());
-            return buildErrorResult("", checkLogs);
+            finalResult = buildErrorResult("", checkLogs);
+            return finalResult;
         } catch (Exception e) {
             log.error("Verification failed", e);
             throw new InternalServerException("Verification failed: " + e.getMessage());
         } finally {
+            // 只要 tempDir 存在就保存 result.json（成功/失败均保存，方便调试）
+            if (finalResult != null) {
+                saveResultJson(smvFile, finalResult);
+            }
             cleanupTempFile(smvFile);
+        }
+    }
+
+    private void saveResultJson(File smvFile, VerificationResultDto verificationResult) {
+        if (smvFile == null || smvFile.getParentFile() == null) return;
+        try {
+            File jsonFile = new File(smvFile.getParentFile(), "result.json");
+            Result<VerificationResultDto> wrapped = Result.success(verificationResult);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(jsonFile, wrapped);
+            log.info("Verification result JSON saved to: {}", jsonFile.getAbsolutePath());
+        } catch (IOException e) {
+            log.warn("Failed to save result JSON: {}", e.getMessage());
         }
     }
 
