@@ -21,7 +21,7 @@ public class SmvDeviceModuleBuilder {
     private static final String DEFAULT_TRUST = "trusted";
 
 
-    public String build(DeviceSmvData smv, boolean isAttack, boolean enablePrivacy) {
+    public String build(DeviceSmvData smv, boolean isAttack, int intensity, boolean enablePrivacy) {
         // 参数验证
         if (smv == null) {
             log.error("SmvDeviceModuleBuilder.build: smv 参数不能为 null");
@@ -48,7 +48,7 @@ public class SmvDeviceModuleBuilder {
         // FROZENVAR for sensors (attack mode + variable trust/privacy)
         appendFrozenVarSection(content, smv, isAttack, isSensor, enablePrivacy);
 
-        appendVariables(content, smv, isSensor, isAttack, enablePrivacy);
+        appendVariables(content, smv, isSensor, isAttack, intensity, enablePrivacy);
         appendAssignments(content, smv, isAttack, isSensor, enablePrivacy);
 
         return content.toString();
@@ -88,11 +88,11 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    private void appendVariables(StringBuilder content, DeviceSmvData smv, boolean isSensor, boolean isAttack, boolean enablePrivacy) {
+    private void appendVariables(StringBuilder content, DeviceSmvData smv, boolean isSensor, boolean isAttack, int intensity, boolean enablePrivacy) {
         content.append("\nVAR");
 
         appendModeVariables(content, smv);
-        appendInternalVariables(content, smv, isAttack);
+        appendInternalVariables(content, smv, isAttack, intensity);
         appendSignalVariables(content, smv);
         appendVariableRates(content, smv);
         if (!isSensor) {
@@ -147,7 +147,7 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    private void appendInternalVariables(StringBuilder content, DeviceSmvData smv, boolean isAttack) {
+    private void appendInternalVariables(StringBuilder content, DeviceSmvData smv, boolean isAttack, int intensity) {
         for (DeviceManifest.InternalVariable var : smv.getVariables()) {
             String varDef;
             if (var.getValues() != null && !var.getValues().isEmpty()) {
@@ -161,10 +161,10 @@ public class SmvDeviceModuleBuilder {
                 int lower = var.getLowerBound();
                 int upper = var.getUpperBound();
                 // 攻击模式下扩大传感器数值范围，模拟数据篡改攻击
-                // 参考 MEDIC-test SMVGeneration.java outModule() 中被注释的 upperBound+40 逻辑
+                // 扩展量与 intensity 成正比：intensity=0 → 无扩展，intensity=50 → range/5
                 if (isAttack && smv.isSensor()) {
                     int range = upper - lower;
-                    int expansion = Math.max(10, range / 5); // 扩大20%，最少扩大10
+                    int expansion = (int)(range / 5.0 * intensity / 50.0);
                     upper = upper + expansion;
                 }
                 varDef = lower + ".." + upper;

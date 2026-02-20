@@ -49,6 +49,8 @@ public class SmvGenerator {
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                          List<RuleDto> rules, List<SpecificationDto> specs,
                          boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+        // 防御性边界：即使绕过 DTO 校验，也确保 intensity 在 NuSMV 合法范围内
+        intensity = Math.max(0, Math.min(50, intensity));
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}, privacy={}",
                 userId, devices.size(), safeRules.size(), specs.size(), isAttack, intensity, enablePrivacy);
@@ -106,7 +108,7 @@ public class SmvGenerator {
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv != null && generatedModules.add(smv.getModuleName())) {
-                content.append(deviceModuleBuilder.build(smv, isAttack, enablePrivacy));
+                content.append(deviceModuleBuilder.build(smv, isAttack, intensity, enablePrivacy));
             }
         }
 

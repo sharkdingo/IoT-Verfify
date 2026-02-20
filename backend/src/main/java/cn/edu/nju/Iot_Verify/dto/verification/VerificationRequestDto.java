@@ -51,11 +51,12 @@ public class VerificationRequestDto {
     /**
      * 攻击强度 (0-50)
      * 参考 MEDIC-test SMVGeneration.java 中的 intensity 参数
-     * 
-     * MEDIC-test 用法：
+     *
+     * 用法：
      * - intensity 控制攻击的强度，范围 0-50
-     * - 在规格中添加 intensity<=N 条件来限制攻击影响
-     * - 示例：SPEC AG !(door.state=open & door.trust_LockState=untrusted & intensity<=3)
+     * - 通过 INVAR intensity<=N 全局约束攻击预算
+     * - intensity=0 时所有 is_attack 被强制为 FALSE（零预算无攻击）
+     * - intensity 同时按比例控制传感器数值范围扩展
      */
     @Min(0) @Max(50)
     private int intensity = 3;

@@ -30,7 +30,7 @@ public class SmvSpecificationBuilder {
             return content.toString();
         }
 
-        content.append("\n-- Specifications\n");
+        content.append("\n-- Specifications");
 
         int generatedSpecs = 0;
         for (SpecificationDto spec : specs) {
@@ -40,14 +40,14 @@ public class SmvSpecificationBuilder {
 
             try {
                 String specString = generateSpecString(spec, isAttack, intensity, deviceSmvMap);
-                content.append("\t").append(specString).append("\n");
+                content.append("\n\t").append(specString);
                 generatedSpecs++;
             } catch (InvalidConditionException e) {
                 // 无效条件导致 spec 无法生成，跳过并记录警告
                 log.warn("Skipping spec '{}': {}", spec.getId(), e.getMessage());
                 // 生成一个必定失败的 spec 占位，保持 spec 数量与 effectiveSpecs 一致
                 String safeMsg = e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown";
-                content.append("\tCTLSPEC FALSE -- invalid spec: ").append(safeMsg).append("\n");
+                content.append("\n\tCTLSPEC FALSE -- invalid spec: ").append(safeMsg);
                 generatedSpecs++;
             }
         }
@@ -258,9 +258,7 @@ public class SmvSpecificationBuilder {
             }
         }
 
-        if (isAttack && intensity > 0) {
-            parts.add("intensity<=" + intensity);
-        }
+        // intensity 约束已由 main module 的 INVAR 全局控制，不再注入到 safety spec
 
         String body = parts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, parts);
         return "CTLSPEC AG !(" + body + ")";
@@ -443,10 +441,9 @@ public class SmvSpecificationBuilder {
     }
 
     private String withAttackConstraint(String condition, boolean isAttack, int intensity) {
-        if (!isAttack || intensity <= 0) {
-            return condition;
-        }
-        return "(" + condition + " & intensity<=" + intensity + ")";
+        // intensity 约束已由 main module 的 INVAR intensity<=N 全局控制，
+        // 不再注入到规格前件中，避免空真（vacuity）问题
+        return condition;
     }
 
     private boolean isTrueLiteral(String s) {

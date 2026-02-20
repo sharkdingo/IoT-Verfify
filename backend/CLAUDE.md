@@ -89,7 +89,7 @@ VerificationRequestDto (devices, rules, specs, isAttack, intensity, enablePrivac
   → SmvGenerator.generate()
     → DeviceSmvDataFactory.buildDeviceSmvMap() — merge user device instances with templates
     → SmvRuleCommentWriter.build(rules) — rule comments
-    → SmvDeviceModuleBuilder.build(smv, isAttack, enablePrivacy) — per-device MODULE definitions
+    → SmvDeviceModuleBuilder.build(smv, isAttack, intensity, enablePrivacy) — per-device MODULE definitions
     → SmvMainModuleBuilder.build(..., enablePrivacy) — main MODULE (instances, ASSIGN, transitions)
     → SmvSpecificationBuilder.build(...) — CTLSPEC / LTLSPEC
     → Write .smv file to temp dir

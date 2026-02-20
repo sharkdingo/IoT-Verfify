@@ -20,14 +20,14 @@ public class SmvRuleCommentWriter {
     
     private void appendRulesAsComments(StringBuilder content, List<RuleDto> rules) {
         if (rules == null || rules.isEmpty()) {
-            content.append("--No rules defined\n\n");
+            content.append("--No rules defined");
             return;
         }
 
         for (RuleDto rule : rules) {
             if (rule.getRuleString() != null && !rule.getRuleString().isEmpty()) {
                 // 换行符会破坏 NuSMV 注释（-- 只注释到行尾），替换为空格
-                content.append("--").append(rule.getRuleString().replace("\n", " ").replace("\r", "")).append("\n");
+                content.append("--").append(rule.getRuleString().replace("\n", " ").replace("\r", ""));
             } else {
                 content.append("--IF ");
                 if (rule.getConditions() != null) {
@@ -47,9 +47,8 @@ public class SmvRuleCommentWriter {
                     content.append(rule.getCommand().getDeviceName())
                            .append(".").append(rule.getCommand().getAction());
                 }
-                content.append("\n");
             }
+            content.append("\n");
         }
-        content.append("\n");
     }
 }

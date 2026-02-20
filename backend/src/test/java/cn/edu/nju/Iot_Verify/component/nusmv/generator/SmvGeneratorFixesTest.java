@@ -1,21 +1,32 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvDeviceModuleBuilder;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuilder;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWriter;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
+import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
 import java.lang.reflect.Method;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * SmvGenerator 五项修复的单元测试。
@@ -26,12 +37,14 @@ class SmvGeneratorFixesTest {
     private SmvModelValidator validator;
     private SmvMainModuleBuilder mainBuilder;
     private SmvDeviceModuleBuilder deviceBuilder;
+    private SmvSpecificationBuilder specBuilder;
 
     @BeforeEach
     void setUp() {
         validator = new SmvModelValidator();
         mainBuilder = new SmvMainModuleBuilder();
         deviceBuilder = new SmvDeviceModuleBuilder();
+        specBuilder = new SmvSpecificationBuilder();
     }
 
     // ======================== helpers ========================
@@ -424,5 +437,210 @@ class SmvGeneratorFixesTest {
     @DisplayName("P6: empty specs list passes validation")
     void emptySpecs_passes() {
         assertDoesNotThrow(() -> invokeValidateNoPrivacySpecs(List.of()));
+    }
+
+    // ======================== P7: intensity=0 时 INVAR 约束 ========================
+
+    /** 构建最小传感器设备用于 intensity 测试 */
+    private DeviceSmvData buildSensorSmvForIntensity(String varName, int lo, int hi) {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(numericVar("temperature", false, lo, hi)))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData(varName, "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(numericVar("temperature", false, lo, hi)),
+                manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.setInstanceStateTrust("trusted");
+        return smv;
+    }
+
+    @Test
+    @DisplayName("P7: isAttack=true, intensity=0 generates FROZENVAR + INVAR intensity<=0")
+    void attackWithZeroIntensity_generatesInvarZero() {
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ts_1");
+        dto.setTemplateName("Sensor");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 0, false);
+
+        assertTrue(result.contains("FROZENVAR"), "Should declare FROZENVAR section");
+        assertTrue(result.contains("intensity: 0..50"), "Should declare intensity variable");
+        assertTrue(result.contains("INVAR intensity <= 0"), "Should constrain intensity to 0");
+        assertTrue(result.contains("init(intensity)"), "Should initialize intensity");
+    }
+
+    @Test
+    @DisplayName("P7: isAttack=true, intensity=3 generates INVAR intensity<=3")
+    void attackWithPositiveIntensity_generatesCorrectInvar() {
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ts_1");
+        dto.setTemplateName("Sensor");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 3, false);
+
+        assertTrue(result.contains("INVAR intensity <= 3"), "Should constrain intensity to 3");
+    }
+
+    // ======================== P8: 规格不再注入 intensity ========================
+
+    @Test
+    @DisplayName("P8: spec does not contain intensity injection in antecedent")
+    void specNoIntensityInjection() {
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("ts_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation("GT");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_1");
+        spec.setTemplateId("1"); // AG(A)
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        String result = specBuilder.build(List.of(spec), true, 3, map);
+
+        assertFalse(result.contains("intensity<="), "Spec should not inject intensity constraint");
+    }
+
+    @Test
+    @DisplayName("P8: templateId=7 safety spec does not contain intensity injection")
+    void safetySpecNoIntensityInjection() {
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("ts_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation("GT");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_7");
+        spec.setTemplateId("7");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", smv);
+
+        String result = specBuilder.build(List.of(spec), true, 3, map);
+
+        assertFalse(result.contains("intensity<="), "Safety spec should not inject intensity constraint");
+        assertTrue(result.contains(".is_attack=FALSE"), "Safety spec should still include is_attack guard");
+    }
+
+    // ======================== P9: 范围扩展按 intensity 缩放 ========================
+
+    @Test
+    @DisplayName("P9: intensity=0 produces no range expansion for sensor")
+    void rangeExpansion_zeroIntensity_noExpansion() {
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        String result = deviceBuilder.build(smv, true, 0, false);
+
+        // temperature: 0..100 — no expansion
+        assertTrue(result.contains("0..100"), "intensity=0 should not expand range");
+        assertFalse(result.contains("0..120"), "intensity=0 should not have old expansion");
+    }
+
+    @Test
+    @DisplayName("P9: intensity=50 produces max range expansion for sensor")
+    void rangeExpansion_maxIntensity_fullExpansion() {
+        DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
+        String result = deviceBuilder.build(smv, true, 50, false);
+
+        // range=100, expansion = (int)(100/5.0 * 50/50.0) = 20, upper = 120
+        assertTrue(result.contains("0..120"), "intensity=50 should expand range to 120");
+    }
+
+    // ======================== P10: SmvGenerator intensity clamp ========================
+
+    private SmvGenerator buildGeneratorForClampTests() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        DeviceTemplateService templateService = mock(DeviceTemplateService.class);
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .initState("on")
+                .internalVariables(List.of(numericVar("temperature", true, 0, 100)))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder()
+                        .name("on").trust("trusted").build()))
+                .build();
+
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("SensorTemplate")
+                .manifestJson(mapper.writeValueAsString(manifest))
+                .build();
+
+        when(templateService.findTemplateByName(anyLong(), eq("SensorTemplate")))
+                .thenReturn(Optional.of(template));
+
+        DeviceSmvDataFactory factory = new DeviceSmvDataFactory(mapper, templateService, new SmvModelValidator());
+        return new SmvGenerator(
+                factory,
+                new SmvDeviceModuleBuilder(),
+                new SmvRuleCommentWriter(),
+                new SmvMainModuleBuilder(),
+                new SmvSpecificationBuilder(),
+                new SmvModelValidator()
+        );
+    }
+
+    private DeviceVerificationDto buildClampTestDevice() {
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ts_1");
+        dto.setTemplateName("SensorTemplate");
+        dto.setState("on");
+        return dto;
+    }
+
+    @Test
+    @DisplayName("P10: SmvGenerator clamps intensity>50 to 50")
+    void generatorClamp_upperBound() throws Exception {
+        SmvGenerator generator = buildGeneratorForClampTests();
+        DeviceVerificationDto dto = buildClampTestDevice();
+
+        SmvGenerator.GenerateResult gen = generator.generate(
+                1L, List.of(dto), List.of(), List.of(), true, 999, false);
+        String smv = Files.readString(gen.smvFile().toPath());
+
+        assertTrue(smv.contains("INVAR intensity <= 50;"), "Upper bound should clamp to 50");
+        assertTrue(smv.contains("temperature: 0..120;"), "Clamp=50 should produce full range expansion");
+    }
+
+    @Test
+    @DisplayName("P10: SmvGenerator clamps intensity<0 to 0")
+    void generatorClamp_lowerBound() throws Exception {
+        SmvGenerator generator = buildGeneratorForClampTests();
+        DeviceVerificationDto dto = buildClampTestDevice();
+
+        SmvGenerator.GenerateResult gen = generator.generate(
+                1L, List.of(dto), List.of(), List.of(), true, -7, false);
+        String smv = Files.readString(gen.smvFile().toPath());
+
+        assertTrue(smv.contains("INVAR intensity <= 0;"), "Lower bound should clamp to 0");
+        assertTrue(smv.contains("temperature: 0..100;"), "Clamp=0 should produce no range expansion");
     }
 }

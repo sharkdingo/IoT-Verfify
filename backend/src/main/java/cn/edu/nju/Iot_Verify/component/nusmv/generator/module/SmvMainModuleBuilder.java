@@ -39,9 +39,12 @@ public class SmvMainModuleBuilder {
         content.append("\nMODULE main");
 
         // intensity 是冻结变量（与 MEDIC 一致）：值由各设备 is_attack 之和决定，验证过程中不变
-        if (isAttack && intensity > 0) {
+        // 只要 isAttack=true 就声明 intensity，并用 INVAR 约束上限
+        // intensity=0 时 INVAR intensity<=0 强制所有 is_attack=FALSE，语义闭合
+        if (isAttack) {
             content.append("\nFROZENVAR");
             content.append("\n\tintensity: 0..50;");
+            content.append("\nINVAR intensity <= ").append(intensity).append(";");
         }
 
         content.append("\nVAR");
@@ -77,9 +80,10 @@ public class SmvMainModuleBuilder {
                         int lower = var.getLowerBound();
                         int upper = var.getUpperBound();
                         // 攻击模式下扩大环境变量范围，模拟传感器数据篡改
+                        // 扩展量与 intensity 成正比
                         if (isAttack) {
                             int range = upper - lower;
-                            int expansion = Math.max(10, range / 5);
+                            int expansion = (int)(range / 5.0 * intensity / 50.0);
                             upper = upper + expansion;
                         }
                         content.append(lower).append("..").append(upper).append(";");
@@ -90,7 +94,7 @@ public class SmvMainModuleBuilder {
                     // 记录用户提供的初始值（校验范围）
                     String userInit = smv.getVariableValues().get(varName);
                     if (userInit != null && !userInit.isBlank()) {
-                        String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack);
+                        String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack, intensity);
                         if (validatedInit != null) {
                             envVarInitValues.put(varName, validatedInit);
                         }
@@ -107,7 +111,7 @@ public class SmvMainModuleBuilder {
                    .append(entry.getValue()).append(";");
         }
 
-        if (isAttack && intensity > 0) {
+        if (isAttack) {
             content.append("\n\tinit(intensity) := 0");
             for (DeviceVerificationDto device : devices) {
                 DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
@@ -1203,7 +1207,7 @@ public class SmvMainModuleBuilder {
      * 对于枚举型变量，检查值是否在枚举列表中。
      */
     private String validateEnvVarInitValue(String varName, String userInit,
-                                           DeviceManifest.InternalVariable var, boolean isAttack) {
+                                           DeviceManifest.InternalVariable var, boolean isAttack, int intensity) {
         if (var.getValues() != null && !var.getValues().isEmpty()) {
             List<String> cleanValues = new ArrayList<>();
             for (String v : var.getValues()) cleanValues.add(v.replace(" ", ""));
@@ -1221,7 +1225,7 @@ public class SmvMainModuleBuilder {
                 int upper = var.getUpperBound();
                 if (isAttack) {
                     int range = upper - lower;
-                    upper = upper + Math.max(10, range / 5);
+                    upper = upper + (int)(range / 5.0 * intensity / 50.0);
                 }
                 if (value < lower) {
                     log.warn("Env variable '{}': init value {} below lower bound {}, clamped", varName, value, lower);

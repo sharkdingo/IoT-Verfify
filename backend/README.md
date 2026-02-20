@@ -1,1254 +1,405 @@
-# IoT-Verify Backend API Documentation
+# IoT-Verify Backend
 
-## Table of Contents
+> IoT 设备形式化验证平台后端，基于 NuSMV 模型检测。
 
-1. [Overview](#1-overview)
-2. [Base URL & Authentication](#2-base-url--authentication)
-3. [Response Format](#3-response-format)
-4. [Data Models](#4-data-models)
-5. [API Endpoints](#5-api-endpoints)
-6. [Complete Workflow Examples](#6-complete-workflow-examples)
-7. [Test Cases](#7-test-cases)
-8. [Configuration](#8-configuration)
-9. [Troubleshooting](#9-troubleshooting)
-10. [Quick Reference](#10-quick-reference)
+## 目录
 
----
-
-## 1. Overview
-
-IoT-Verify is a smart home simulation and formal verification platform based on NuSMV model checking. This document provides comprehensive API documentation for the backend service.
-
-### Core Features
-
-| Feature | Description |
-|---------|-------------|
-| **Device Management** | Create, edit, and manage IoT device nodes and connections |
-| **Rule Engine** | IFTTT-style rules for device interactions |
-| **Specification Verification** | Formal verification using NuSMV |
-| **Trace Analysis** | Counterexample visualization and analysis |
-| **AI Assistant** | Natural language interface for device management |
-
-### Tech Stack
-
-- **Framework**: Spring Boot 3.x
-- **Database**: MySQL + Redis
-- **Authentication**: JWT
-- **AI**: Volcengine Ark
-- **Verification**: NuSMV
+1. [项目概览](#1-项目概览)
+2. [技术栈](#2-技术栈)
+3. [项目结构](#3-项目结构)
+4. [NuSMV 模块代码详解](#4-nusmv-模块代码详解)
+5. [API 端点](#5-api-端点)
+6. [数据模型](#6-数据模型)
+7. [配置与运行](#7-配置与运行)
+8. [实现状态](#8-实现状态)
 
 ---
 
-## 2. Base URL & Authentication
+## 1. 项目概览
 
-### Base URL
+IoT-Verify 是一个智能家居模拟与形式化验证平台，核心功能包括：
 
-```
-http://localhost:8080/api
-```
-
-### Authentication
-
-All endpoints (except `/api/auth/**`) require JWT authentication.
-
-#### Request Header
-
-```
-Authorization: Bearer <token>
-```
-
-#### Example
-
-```bash
-curl -X GET http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-```
-
-### Authentication Flow
-
-1. **Register** → `POST /api/auth/register`
-2. **Login** → `POST /api/auth/login` (get token)
-3. **Use Token** for protected APIs
-4. **Logout** → `POST /api/auth/logout` (blacklist token)
+| 功能 | 说明 |
+|------|------|
+| 设备管理 | 创建、编辑 IoT 设备节点和连接 |
+| 规则引擎 | IFTTT 风格的设备交互规则 |
+| 规格验证 | 基于 NuSMV 的 CTL/LTL 形式化验证 |
+| Trace 分析 | 反例可视化与分析 |
+| AI 助手 | 自然语言设备管理接口（火山引擎） |
 
 ---
 
-## 3. Response Format
+## 2. 技术栈
 
-### Success Response
+- Spring Boot 3.5.7 / Java 21
+- MySQL + Redis
+- JWT 认证
+- NuSMV 模型检测器
+- 火山引擎 Ark（AI 助手）
 
-All successful responses follow the unified `Result<T>` format:
+---
+
+## 3. 项目结构
+
+```
+src/main/java/cn/edu/nju/Iot_Verify/
+├── controller/
+│   └── VerificationController.java      # 验证 API 入口
+├── service/
+│   └── impl/VerificationServiceImpl.java # 验证业务逻辑（同步/异步）
+├── component/nusmv/                      # ★ NuSMV 核心模块
+│   ├── generator/
+│   │   ├── SmvGenerator.java             # 协调器：组装完整 SMV 文件
+│   │   ├── SmvModelValidator.java        # 前置校验器 (P1-P5)
+│   │   ├── PropertyDimension.java        # Trust/Privacy 维度枚举
+│   │   ├── data/
+│   │   │   ├── DeviceSmvData.java        # 设备 SMV 数据模型（纯 POJO）
+│   │   │   └── DeviceSmvDataFactory.java # DTO + 模板 → DeviceSmvData
+│   │   └── module/
+│   │       ├── SmvDeviceModuleBuilder.java  # 设备 MODULE 定义
+│   │       ├── SmvMainModuleBuilder.java    # main MODULE + ASSIGN 规则
+│   │       ├── SmvRuleCommentWriter.java    # 规则 → SMV 注释
+│   │       └── SmvSpecificationBuilder.java # CTLSPEC / LTLSPEC 生成
+│   ├── executor/
+│   │   └── NusmvExecutor.java            # 执行 NuSMV 进程，per-spec 结果解析
+│   └── parser/
+│       └── SmvTraceParser.java           # 反例文本 → TraceStateDto
+├── dto/
+│   ├── device/
+│   │   ├── DeviceVerificationDto.java    # 验证专用设备数据
+│   │   ├── VariableStateDto.java         # 变量状态（name, value, trust）
+│   │   └── PrivacyStateDto.java          # 隐私状态（name, privacy）
+│   ├── rule/RuleDto.java                 # IFTTT 规则
+│   ├── spec/
+│   │   ├── SpecificationDto.java         # 验证规格
+│   │   └── SpecConditionDto.java         # 规格条件
+│   ├── verification/
+│   │   ├── VerificationRequestDto.java   # 验证请求
+│   │   ├── VerificationResultDto.java    # 验证结果
+│   │   └── VerificationTaskDto.java      # 异步任务状态
+│   └── trace/
+│       ├── TraceDto.java                 # Trace 持久化
+│       ├── TraceStateDto.java            # 反例状态
+│       ├── TraceDeviceDto.java           # 反例设备
+│       ├── TraceVariableDto.java         # 反例变量
+│       └── TraceTrustPrivacyDto.java     # 反例信任/隐私
+├── exception/
+│   └── SmvGenerationException.java       # SMV 生成异常（含工厂方法）
+└── configure/
+    └── NusmvConfig.java                  # NuSMV 路径/超时配置
+```
+
+---
+
+## 4. NuSMV 模块代码详解
+
+> 完整的用户视角文档（伪代码、SMV 语法、示例文件等）见 [NuSMV_Module_Documentation.md](NuSMV_Module_Documentation.md)。
+> 本节聚焦代码实现细节。
+
+### 4.1 SmvGenerator — 协调器
+
+`component/nusmv/generator/SmvGenerator.java`
+
+职责：协调数据准备和各模块构建器，生成完整 SMV 模型文件。
+
+```java
+public record GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {}
+
+public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
+                               List<RuleDto> rules, List<SpecificationDto> specs,
+                               boolean isAttack, int intensity, boolean enablePrivacy)
+```
+
+内部流程：
+1. `DeviceSmvDataFactory.buildDeviceSmvMap()` — 构建设备数据映射
+2. `SmvModelValidator.validate()` — P1-P5 前置校验
+3. 按顺序拼接 SMV 文本：RuleComment → DeviceModule → MainModule → Specification
+4. 写入临时文件 `model.smv`
+5. 返回 `GenerateResult`（文件 + deviceSmvMap，后者供 trace 解析复用）
+
+额外校验：当 `enablePrivacy=false` 时，检查 specs 中是否包含 `targetType="privacy"` 条件，有则抛异常。
+
+### 4.2 DeviceSmvDataFactory — 数据工厂
+
+`component/nusmv/generator/data/DeviceSmvDataFactory.java`
+
+职责：从 `DeviceVerificationDto` + 数据库模板 (`DeviceManifest`) 构建 `DeviceSmvData`。
+
+关键步骤：
+1. 从 DB 加载 `DeviceManifest` JSON（含 Modes, WorkingStates, Transitions, APIs, InternalVariables, Contents）
+2. `extractModes()` — 解析模式列表
+3. `extractStatesAndTrust()` — 解析 WorkingStates，构建 `modeStates` 映射和 trust 默认值
+4. `parseCurrentModeStates()` — 将用户传入的 `state` 映射到各模式的初始状态
+5. `extractVariables()` — 分离内部变量 (`IsInside=true`) 和环境变量 (`IsInside=false`)
+6. `extractSignalVars()` — 从 Transitions 和 APIs 中提取信号变量
+7. `extractContents()` — 解析内容（如手机照片）及其隐私属性
+8. 合并用户运行时输入（variableValues, instanceVariableTrust, instanceVariablePrivacy）
+
+静态工具方法：
+- `cleanStateName(raw)` — 移除分号和空格
+- `findDeviceSmvData(name, map)` — 按 varName 或 templateName 查找
+- `toVarName(deviceId)` — 转为安全变量名
+- `findApi(manifest, actionName)` — 按名称查找 API 定义
+
+### 4.3 DeviceSmvData — 数据模型
+
+`component/nusmv/generator/data/DeviceSmvData.java`
+
+纯数据 POJO，承载从用户输入 + 设备模板解析出的所有信息：
+
+| 字段组 | 字段 | 说明 |
+|--------|------|------|
+| 标识 | `templateName`, `moduleName`, `varName`, `sensor` | 设备身份和 NuSMV 标识符 |
+| 模式与状态 | `modes`, `modeStates`, `states` | 从模板 Modes + WorkingStates 解析 |
+| 变量 | `variables`, `envVariables`, `impactedVariables` | 内部变量、环境变量、受影响变量 |
+| 信号 | `signalVars` (List&lt;SignalInfo&gt;) | 从 Transitions/APIs 中 signal=true 的项 |
+| 内容 | `contents` (List&lt;ContentInfo&gt;) | 设备内容（如 photo），含隐私和可变性 |
+| 用户输入 | `currentState`, `currentModeStates`, `variableValues` | 运行时状态和变量值 |
+| 信任/隐私 | `modeStateTrust`, `instanceStateTrust`, `instanceVariableTrust`, `instanceVariablePrivacy` | 模板默认 + 用户覆盖 |
+
+### 4.4 SmvDeviceModuleBuilder — 设备 MODULE
+
+`component/nusmv/generator/module/SmvDeviceModuleBuilder.java`
+
+为每种设备模板生成一个 `MODULE` 定义，包含：
+
+1. `FROZENVAR` — 冻结变量（验证期间不变）
+   - `is_attack: boolean` — 仅 `isAttack=true`
+   - `trust_varName` / `privacy_varName` — 传感器变量的信任/隐私
+   - `privacy_contentName` — `IsChangeable=false` 的内容隐私
+2. `VAR` — 状态变量
+   - 模式状态枚举（如 `ThermostatMode: {cool, heat, off}`）
+   - 内部变量（枚举或整数范围）
+   - 信号变量（`apiName_a: boolean`）
+   - 状态信任/隐私变量
+   - `IsChangeable=true` 的内容隐私
+   - `varName_rate: integer` — 受影响变量的变化率
+3. `ASSIGN` — 初始值
+   - `init(modeVar)` — 从用户 state 或模板 InitState 确定
+   - `init(variable)` — 从用户 variableValues 或模板默认值
+   - `init(trust_*)` / `init(privacy_*)` — 从模板默认 + 用户覆盖
+
+### 4.5 SmvMainModuleBuilder — main MODULE
+
+`component/nusmv/generator/module/SmvMainModuleBuilder.java`
+
+生成 `MODULE main`，是最复杂的构建器（~1270 行），包含：
+
+1. `FROZENVAR intensity: 0..50` — 仅攻击模式
+2. `VAR` — 设备实例化 + 环境变量声明
+   - 设备实例：`thermostat_1: Thermostat_thermostat1;`
+   - 环境变量：`a_temperature: 11..39;`（攻击模式下范围扩大 20%）
+3. `ASSIGN` — 状态转换逻辑
+   - `appendTransitionAssignments()` — 模板 Transitions → `next(device.modeVar)`
+   - `appendRuleAssignments()` — IFTTT 规则 → API 信号 + 状态转换
+   - `appendPropertyTransitions()` — 信任/隐私传播（使用 `PropertyDimension` 枚举统一逻辑）
+   - `appendSensorEnvAssignments()` — 传感器环境变量赋值
+   - `appendImpactedVariableAssignments()` — 受影响变量的 rate 计算
+   - `appendContentPrivacyAssignments()` — 内容隐私传播
+
+关键设计：
+- 环境变量使用 `a_` 前缀在 main 模块声明，避免跨设备引用问题
+- `PropertyDimension` 枚举合并了 trust 和 privacy 的重复生成逻辑
+- 规则条件中的关系符通过 `normalizeRuleRelation()` 归一化
+
+### 4.6 SmvSpecificationBuilder — 规格生成
+
+`component/nusmv/generator/module/SmvSpecificationBuilder.java`
+
+根据 `SpecificationDto.templateId` 生成 CTL 或 LTL 公式：
+- `templateId="6"` → `LTLSPEC G((IF) -> F G(THEN))`
+- 其余 → `CTLSPEC` 各模板（AG, AG!, AG→, AG→AG, AG→EF）
+
+条件构建通过 `buildSingleCondition()` 将 `SpecConditionDto` 映射为 SMV 表达式，支持 `IN`/`NOT_IN` 集合运算。
+
+攻击模式下通过 `withAttackConstraint()` 在前件中注入 `intensity<=N`。
+
+无效条件（如找不到设备）抛出 `InvalidConditionException`，生成 `CTLSPEC FALSE` 占位。
+
+### 4.7 NusmvExecutor — 执行器
+
+`component/nusmv/executor/NusmvExecutor.java`
+
+职责：调用 NuSMV 进程并解析输出。
+
+核心逻辑：
+- 构建命令：`NuSMV [options] model.smv`
+- 超时控制：从环境变量 `NUSMV_TIMEOUT_MS` 读取，默认由 `NusmvConfig` 配置
+- 输出解析：逐行匹配 `-- specification ... is true/false`
+- 反例提取：false spec 后的文本直到下一个 spec 结果为 counterexample
+- 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed + counterexample）
+
+### 4.8 SmvTraceParser — 反例解析
+
+`component/nusmv/parser/SmvTraceParser.java`
+
+将 NuSMV 反例文本解析为 `List<TraceStateDto>`：
+
+- 按 `State X.Y:` 正则分割状态
+- `device.var = value` → 匹配到对应 `DeviceSmvData` 的变量/状态/信任/隐私
+- `a_varName = value` → 环境变量
+- 增量解析：NuSMV 只输出变化项，解析器通过 `previousModeValuesByDevice` 追踪上一状态
+- `finalizeModeStates()` — 补全未变化的模式状态
+
+### 4.9 SmvModelValidator — 前置校验
+
+`component/nusmv/generator/SmvModelValidator.java`
+
+在 SMV 生成前执行的集中式校验器：
+
+| 校验 | 方法 | 说明 |
+|------|------|------|
+| P1 | `validateTriggerAttributes()` | Transition.Trigger.Attribute 必须是合法属性名 |
+| P2 | `validateStartEndStates()` | 多模式 EndState 分号段数 = 模式数 |
+| P3 | `validateEnvVarConflicts()` | 同名环境变量跨设备范围一致 |
+| P5 | `validateTrustPrivacyConsistency()` | 同 (mode, state) 的 trust/privacy 值一致 |
+
+软性校验（由 Factory 调用）：
+- `warnUnknownUserVariables()` — 用户变量名不在模板中
+- `warnStatelessDeviceWithState()` — 无模式设备传入 state
+
+### 4.10 PropertyDimension — 维度枚举
+
+`component/nusmv/generator/PropertyDimension.java`
+
+```java
+public enum PropertyDimension {
+    TRUST("trust_", "trusted", "untrusted"),
+    PRIVACY("privacy_", "private", "public");
+
+    public final String prefix;       // SMV 变量名前缀
+    public final String activeValue;  // 规则触发时的值
+    public final String defaultValue; // 默认值
+}
+```
+
+用于 `SmvMainModuleBuilder.appendPropertyTransitions()` 中合并 trust 和 privacy 的重复生成逻辑。
+
+---
+
+## 5. API 端点
+
+### 认证
+
+所有端点（除 `/api/auth/**`）需要 JWT 认证：`Authorization: Bearer <token>`
+
+### 验证相关
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `POST` | `/api/verify` | 同步验证 |
+| `POST` | `/api/verify/async` | 异步验证，返回 taskId |
+| `GET` | `/api/verify/tasks/{id}` | 任务状态 |
+| `GET` | `/api/verify/tasks/{id}/progress` | 任务进度 (0-100) |
+| `POST` | `/api/verify/tasks/{id}/cancel` | 取消任务 |
+| `GET` | `/api/verify/traces` | 用户所有 Trace |
+| `GET` | `/api/verify/traces/{id}` | 单个 Trace |
+| `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
+
+### 其他端点
+
+| 模块 | 前缀 | 说明 |
+|------|------|------|
+| 认证 | `/api/auth` | 注册、登录、登出 |
+| 画布 | `/api/board` | 设备节点和边的 CRUD |
+| 设备模板 | `/api/device-templates` | 模板管理 |
+| 规则 | `/api/rules` | IFTTT 规则 CRUD |
+| 规格 | `/api/specifications` | 验证规格 CRUD |
+| AI 助手 | `/api/ai` | SSE 流式对话 |
+
+---
+
+## 6. 数据模型
+
+### 验证请求 (VerificationRequestDto)
 
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": <T>
-}
-```
-
-### Error Response
-
-```json
-{
-  "code": <status-code>,
-  "message": "Error message",
-  "data": null
-}
-```
-
-### HTTP Status Codes
-
-| Code | Meaning | Description |
-|------|---------|-------------|
-| 200 | Success | Request completed successfully |
-| 400 | Bad Request | Invalid request data or parameters |
-| 401 | Unauthorized | Missing or invalid authentication token |
-| 403 | Forbidden | Authenticated but lacks permission |
-| 404 | Not Found | Resource does not exist |
-| 409 | Conflict | Resource already exists or state conflict |
-| 500 | Internal Server Error | Unexpected server error |
-| 503 | Service Unavailable | External service temporarily unavailable |
-
-### Exception Types
-
-| Exception | Code | Usage |
-|-----------|------|-------|
-| `BadRequestException` | 400 | Invalid request data |
-| `UnauthorizedException` | 401 | Authentication failure |
-| `ForbiddenException` | 403 | Insufficient permissions |
-| `ResourceNotFoundException` | 404 | Resource not found |
-| `ConflictException` | 409 | Resource conflict |
-| `InternalServerException` | 500 | Server error |
-| `ServiceUnavailableException` | 503 | External service down |
-
----
-
-## 4. Data Models
-
-### 4.1 Device Models
-
-#### DeviceNodeDto
-
-```typescript
-interface DeviceNodeDto {
-  id: string;                    // Required, unique node ID
-  templateName: string;          // Required, device template name
-  label: string;                 // Display label
-  position: {                    // Required
-    x: number;                   // X coordinate
-    y: number;                   // Y coordinate
-  };
-  state: string;                 // Current state
-  width: number;                 // Node width in pixels
-  height: number;                // Node height in pixels
-  currentStateTrust?: string;    // "trusted" | "untrusted" (for verification)
-  variables?: VariableStateDto[]; // Variable states (for verification)
-  privacies?: PrivacyStateDto[];  // Privacy states (for verification)
-}
-
-interface VariableStateDto {
-  name: string;      // Variable name (e.g., "temperature")
-  value: string;     // Current value
-  trust: string;     // "trusted" | "untrusted"
-}
-
-interface PrivacyStateDto {
-  name: string;      // Privacy item name
-  privacy: string;   // "private" | "public"
-}
-```
-
-#### DeviceEdgeDto
-
-```typescript
-interface DeviceEdgeDto {
-  id: string;        // Required, unique edge ID
-  from: string;      // Required, source node ID
-  to: string;        // Required, target node ID
-  fromLabel: string; // Required, source node label
-  toLabel: string;   // Required, target node label
-  fromPos: { x: number; y: number }; // Required, source position
-  toPos: { x: number; y: number };   // Required, target position
-}
-```
-
-#### DeviceTemplateDto
-
-```typescript
-interface DeviceTemplateDto {
-  id: string;        // Template ID
-  name: string;      // Required, template name
-  manifest: DeviceManifest;
-}
-
-interface DeviceManifest {
-  Name: string;                    // Template name
-  Description: string;              // Template description
-  Modes?: string[];                 // Device modes
-  InternalVariables: InternalVariable[];
-  ImpactedVariables: string[];      // Variables affected by state changes
-  InitState: string;                // Initial state
-  WorkingStates: WorkingState[];    // Available states
-  Transitions?: any[];              // State transitions
-  APIs: API[];                      // Available APIs
-}
-
-interface InternalVariable {
-  Name: string;
-  Description?: string;
-  IsInside?: boolean;
-  PublicVisible?: boolean;
-  Trust?: string;       // "trusted" | "untrusted"
-  Privacy?: string;     // "private" | "public"
-  LowerBound?: number;
-  UpperBound?: number;
-  InitialValue?: string;
-  NaturalChangeRate?: string;
-  Values?: string[];    // For enum variables
-}
-
-interface WorkingState {
-  Name: string;
-  Description?: string;
-  Dynamics?: Dynamic[];
-  Invariant?: string;
-  Trust: string;        // "trusted" | "untrusted"
-  Privacy?: string;     // "private" | "public"
-}
-
-interface Dynamic {
-  VariableName: string;
-  ChangeRate: string;   // e.g., "[-1, 1]" for random change
-}
-
-interface API {
-  Name: string;
-  Description?: string;
-  Signal?: boolean;     // Whether this is a signal API
-  StartState: string;   // State before API call
-  EndState: string;     // State after API call
-  Trigger?: string;
-  Assignments?: any[];
-}
-```
-
-### 4.2 Rule Models
-
-#### RuleDto
-
-```typescript
-interface RuleDto {
-  id?: string;                   // Optional, auto-generated
-  sources: SourceEntryDto[];     // Required, IF conditions (triggers)
-  toId: string;                  // Required, target device ID
-  toApi: string;                 // Required, target API name
-  templateLabel?: string;        // Target device template label
-  privacyDeviceId?: string;      // Privacy operation: target device ID
-  privacyContent?: string;       // Privacy operation: content
-}
-
-interface SourceEntryDto {
-  fromId: string;           // Source device ID
-  fromLabel?: string;       // Source device label (for display)
-  targetType: 'api' | 'variable';  // Trigger type
-  fromApi?: string;         // API name (when targetType='api')
-  property?: string;        // Variable name (when targetType='variable')
-  relation?: string;        // Comparison: "=", ">", "<", ">=", "<=", "!="
-  value?: string;           // Comparison value
-}
-```
-
-### 4.3 Specification Models
-
-#### SpecificationDto
-
-```typescript
-interface SpecificationDto {
-  id: string;                    // Specification ID
-  templateId: string;            // Required, "1"-"7" (see below)
-  templateLabel?: string;        // Template label
-  aConditions: SpecConditionDto[];   // A-type conditions
-  ifConditions: SpecConditionDto[];  // IF conditions (for B-type)
-  thenConditions: SpecConditionDto[]; // THEN conditions (for B-type)
-}
-
-interface SpecConditionDto {
-  id: string;
-  side: 'a' | 'if' | 'then';    // Condition side
-  deviceId: string;              // Device node ID
-  deviceLabel?: string;          // Device label
-  targetType: 'state' | 'variable' | 'api'; // What to check
-  key: string;                   // Property key (state/variable/API name)
-  relation: string;              // Comparison operator
-  value: string;                 // Expected value
-}
-```
-
-#### Seven Specification Types
-
-| templateId | Type | NuSMV Syntax | Required Sides | Description |
-|------------|------|--------------|----------------|-------------|
-| "1" | always | `CTLSPEC AG(A)` | aConditions | A holds forever |
-| "2" | eventually | `CTLSPEC AF(A)` | aConditions | A will happen later |
-| "3" | never | `CTLSPEC AG !(A)` | aConditions | A never happens |
-| "4" | immediate | `CTLSPEC AG(A → AX(B))` | ifConditions + thenConditions | A → B (at same time) |
-| "5" | response | `CTLSPEC AG(A → AF(B))` | ifConditions + thenConditions | A → ◇B (eventually) |
-| "6" | persistence | `LTLSPEC G(A → F G(B))` | ifConditions + thenConditions | A → □B (forever after) |
-| "7" | safety | `CTLSPEC AG(untrusted → !(A))` | ifConditions + thenConditions | untrusted → ¬A |
-
-### 4.4 Trace Models
-
-#### TraceDto
-
-```typescript
-interface TraceDto {
-  id: Long;                   // Database ID
-  userId: Long;               // Owner user ID
-  violatedSpecId: string;     // Violated specification ID
-  violatedSpecJson: string;   // Full specification as JSON
-  states: TraceStateDto[];    // State sequence (counterexample)
-  createdAt: DateTime;        // Creation timestamp
-}
-
-interface TraceStateDto {
-  stateIndex: number;         // 0, 1, 2, ...
-  devices: TraceDeviceDto[];
-}
-
-interface TraceDeviceDto {
-  deviceId: string;           // Device ID
-  deviceLabel: string;        // Device display label
-  templateName: string;       // Device template name
-  newState: string;           // Current state
-  variables: TraceVariableDto[];
-  trustPrivacy: TraceTrustPrivacyDto[];  // State trust/privacy info
-  privacies: TraceTrustPrivacyDto[];
-}
-
-interface TraceVariableDto {
-  name: string;
-  value: string;
-  trust: string;         // "trusted" | "untrusted"
-}
-
-interface TraceTrustPrivacyDto {
-  name: string;
-  trust: boolean;        // true=trusted, false=untrusted
-  privacy: string;       // "private" | "public"
-}
-```
-
-### 4.5 Verification Models
-
-#### VerificationRequestDto
-
-```typescript
-interface VerificationRequestDto {
-  devices: DeviceNodeDto[];      // Device nodes with runtime state
-  rules: RuleDto[];              // IFTTT rules
-  specs: SpecificationDto[];     // Specifications to verify
-  isAttack: boolean;             // Enable attack mode
-  intensity: number;             // Attack intensity (0-50)
-}
-```
-
-#### VerificationResultDto
-
-```typescript
-interface VerificationResultDto {
-  safe: boolean;                 // true if all specs satisfied
-  traces: TraceDto[];            // Violation traces (if any)
-  specResults: boolean[];        // Result for each spec
-  checkLogs: string[];           // Execution logs
-  nusmvOutput: string;           // Raw NuSMV output (truncated)
-}
-```
-
-### Database Migration Note
-
-If your database already has the `verification_task` table, add the column below:
-
-```
-ALTER TABLE verification_task ADD COLUMN nusmv_output TEXT;
-```
-
-### 4.6 Authentication Models
-
-```typescript
-interface RegisterRequestDto {
-  phone: string;     // Format: 1[3-9]xxxxxxxxx
-  username: string;  // 3-20 characters
-  password: string;  // 6-20 characters
-}
-
-interface LoginRequestDto {
-  phone: string;
-  password: string;
-}
-
-interface AuthResponseDto {
-  userId: Long;
-  phone: string;
-  username: string;
-  token: string;     // Only on login
-}
-
-interface RegisterResponseDto {
-  userId: Long;
-  phone: string;
-  username: string;
-}
-```
-
-### 4.7 Chat Models
-
-```typescript
-interface ChatRequestDto {
-  sessionId: string;  // Required
-  content: string;    // Required
-}
-
-interface StreamResponseDto {
-  content: string;         // AI response chunk
-  command?: CommandDto;    // Optional command for frontend
-}
-
-interface CommandDto {
-  type: string;                    // e.g., "REFRESH_DATA"
-  payload: Record<string, any>;    // Command parameters
-}
-
-interface ChatSessionPo {
-  id: string;              // UUID
-  userId: Long;
-  title: string;
-  createdAt: DateTime;
-  updatedAt: DateTime;
-}
-
-interface ChatMessagePo {
-  id: Long;                // Auto-increment
-  sessionId: string;       // FK to ChatSessionPo
-  role: string;            // "user" | "assistant" | "tool"
-  content: string;
-  createdAt: DateTime;
-}
-```
-
----
-
-## 5. API Endpoints
-
-### 5.1 Authentication API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login, get token |
-| POST | `/api/auth/logout` | Logout, blacklist token |
-
-#### Register
-
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138000","username":"testuser","password":"123456"}'
-```
-
-**Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "userId": 1,
-    "phone": "13800138000",
-    "username": "testuser"
-  }
-}
-```
-
-**Errors:**
-| Code | Message | Cause |
-|------|---------|-------|
-| 409 | Phone number already registered: {phone} | Phone exists |
-| 409 | Username already exists: {username} | Username exists |
-
-#### Login
-
-```bash
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138000","password":"123456"}'
-```
-
-**Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "userId": 1,
-    "phone": "13800138000",
-    "username": "testuser",
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }
-}
-```
-
-**Errors:**
-| Code | Message | Cause |
-|------|---------|-------|
-| 401 | Phone number or password is incorrect | Invalid credentials |
-
-#### Logout
-
-```bash
-curl -X POST http://localhost:8080/api/auth/logout \
-  -H "Authorization: Bearer <token>"
-```
-
-**Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": null
-}
-```
-
----
-
-### 5.2 Board Storage API
-
-All endpoints require authentication.
-
-#### Device Nodes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/nodes` | Get all nodes |
-| POST | `/api/board/nodes` | Save nodes (replace all) |
-
-**Get Nodes:**
-```bash
-curl -X GET http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer <token>"
-```
-
-**Save Nodes:**
-```bash
-curl -X POST http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '[{"id":"node-1","templateName":"AC Cooler","label":"AC-Living-Room","position":{"x":100,"y":200},"state":"Off","width":150,"height":100}]'
-```
-
-#### Device Edges
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/edges` | Get all edges |
-| POST | `/api/board/edges` | Save edges (replace all) |
-
-#### Rules
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/rules` | Get all rules |
-| POST | `/api/board/rules` | Save rules (incremental update) |
-
-**Rule Request Body:**
-```json
-[
-  {
-    "id": "rule-001",
-    "sources": [
-      {
-        "fromId": "AC Living Room",
-        "fromLabel": "AC Living Room",
-        "targetType": "variable",
-        "property": "temperature",
-        "relation": ">",
-        "value": "28"
-      }
-    ],
-    "toId": "device-001",
-    "toApi": "turnOn",
-    "templateLabel": "AC Cooler"
-  }
-]
-```
-
-#### Specifications
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/specs` | Get all specifications |
-| POST | `/api/board/specs` | Save specifications |
-
-**Spec Request Body:**
-```json
-[
-  {
-    "id": "spec-001",
-    "templateId": "1",
-    "aConditions": [
-      {
-        "id": "cond-001",
-        "side": "a",
-        "deviceId": "device-001",
-        "deviceLabel": "AC Living Room",
-        "targetType": "state",
-        "key": "state",
-        "relation": "=",
-        "value": "Cooling"
-      }
-    ]
-  }
-]
-```
-
-#### Device Templates
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/templates` | Get all templates |
-| POST | `/api/board/templates` | Create template |
-| DELETE | `/api/board/templates/{id}` | Delete template |
-
-#### Layout & UI State
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/board/layout` | Get layout |
-| POST | `/api/board/layout` | Save layout |
-| GET | `/api/board/active` | Get active tabs |
-| POST | `/api/board/active` | Save active tabs |
-
----
-
-### 5.3 Chat API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/chat/sessions` | Get all sessions |
-| POST | `/api/chat/sessions` | Create session |
-| GET | `/api/chat/sessions/{id}/messages` | Get messages |
-| POST | `/api/chat/completions` | Send message (SSE) |
-| DELETE | `/api/chat/sessions/{id}` | Delete session |
-
-#### SSE Stream Example
-
-```bash
-curl -X POST http://localhost:8080/api/chat/completions \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{"sessionId":"550e8400-e29b-41d4-a716-446655440000","content":"Add a new AC device"}' \
-  --stream
-```
-
-**SSE Format:**
-```
-data: {"content":"AI response chunk 1"}
-data: {"content":"AI response chunk 2"}
-data: {"command":{"type":"REFRESH_DATA","payload":{"target":"device_list"}}}
-data: [DONE]
-```
-
----
-
-### 5.4 Verification API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/verify` | Execute verification (synchronous) |
-| POST | `/api/verify/async` | Execute verification (asynchronous) |
-| GET | `/api/verify/tasks/{id}` | Get task status |
-| POST | `/api/verify/tasks/{id}/cancel` | Cancel running task |
-| GET | `/api/verify/tasks/{id}/progress` | Get task progress (0-100) |
-| GET | `/api/verify/traces` | Get all traces |
-| GET | `/api/verify/traces/{id}` | Get single trace |
-| DELETE | `/api/verify/traces/{id}` | Delete trace |
-
-#### Asynchronous Verification
-
-For long-running verifications, use the async endpoint:
-
-```bash
-# 1. Start async verification
-curl -X POST http://localhost:8080/api/verify/async?taskId=123 \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"devices": [...], "rules": [...], "specs": [...]}'
-
-# 2. Check progress
-curl http://localhost:8080/api/verify/tasks/123/progress \
-  -H "Authorization: Bearer <token>"
-# Response: 50 (percentage)
-
-# 3. Cancel if needed
-curl -X POST http://localhost:8080/api/verify/tasks/123/cancel \
-  -H "Authorization: Bearer <token>"
-# Response: true
-
-# 4. Get final result
-curl http://localhost:8080/api/verify/tasks/123 \
-  -H "Authorization: Bearer <token>"
-```
-
-**Task Status Values:**
-- `PENDING` - Task created but not started
-- `RUNNING` - Verification in progress
-- `COMPLETED` - Verification succeeded (safe or unsafe)
-- `FAILED` - Verification failed with error
-- `CANCELLED` - Task was cancelled by user
-
-#### Execute Verification
-
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [
-      {
-        "id": "device-001",
-        "templateName": "AC Cooler",
-        "label": "AC Living Room",
-        "position": {"x": 100, "y": 200},
-        "state": "Off",
-        "currentStateTrust": "trusted",
-        "variables": [{"name": "temperature", "value": "24", "trust": "untrusted"}],
-        "privacies": [{"name": "temperature", "privacy": "private"}]
-      }
-    ],
-    "rules": [
-      {
-        "id": "rule-001",
-        "sources": [
-          {"fromId": "AC Living Room", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}
-        ],
-        "toId": "device-001",
-        "toApi": "turnOn"
-      }
-    ],
-    "specs": [
-      {
-        "id": "spec-001",
-        "templateId": "1",
-        "aConditions": [
-          {"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "!=", "value": "Cooling"}
-        ]
-      }
-    ],
-    "isAttack": false,
-    "intensity": 3
-  }'
-```
-
-**Response (200):**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "safe": false,
-    "traces": [
-      {
-        "id": 1,
-        "violatedSpecId": "spec-001",
-        "states": [...]
-      }
-    ],
-    "specResults": [false],
-    "checkLogs": [
-      "Generating NuSMV model...",
-      "Executing NuSMV verification...",
-      "Specification violation detected!"
-    ],
-    "nusmvOutput": "..."
-  }
-}
-```
-
----
-
-## 6. Complete Workflow Examples
-
-### Workflow: Register → Create Template → Create Device → Verify
-
-#### Step 1: Register
-
-```bash
-curl -X POST http://localhost:8080/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138001","username":"testuser1","password":"123456"}'
-```
-
-#### Step 2: Login
-
-```bash
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"phone":"13800138001","password":"123456"}'
-
-# Save token
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-```
-
-#### Step 3: Create Device Template
-
-```bash
-curl -X POST http://localhost:8080/api/board/templates \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "AC Cooler",
-    "manifest": {
-      "Name": "AC Cooler",
-      "Description": "Air conditioner for cooling",
-      "Modes": ["Cooling", "Off"],
-      "InternalVariables": [
-        {
-          "Name": "temperature",
-          "Description": "Current temperature",
-          "IsInside": false,
-          "PublicVisible": true,
-          "Trust": "untrusted",
-          "Privacy": "private",
-          "LowerBound": 16,
-          "UpperBound": 30,
-          "InitialValue": 24
-        }
-      ],
-      "ImpactedVariables": ["temperature"],
-      "InitState": "Off",
-      "WorkingStates": [
-        {
-          "Name": "Off",
-          "Description": "Device is off",
-          "Trust": "trusted",
-          "Privacy": "public",
-          "Dynamics": [{"VariableName": "temperature", "ChangeRate": "0"}]
-        },
-        {
-          "Name": "Cooling",
-          "Description": "Device is cooling",
-          "Trust": "trusted",
-          "Privacy": "public",
-          "Dynamics": [{"VariableName": "temperature", "ChangeRate": "-1"}]
-        }
-      ],
-      "APIs": [
-        {"Name": "turnOn", "StartState": "Off", "EndState": "Cooling"},
-        {"Name": "turnOff", "StartState": "Cooling", "EndState": "Off"}
-      ]
-    }
-  }'
-```
-
-#### Step 4: Create Device Instance
-
-```bash
-curl -X POST http://localhost:8080/api/board/nodes \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '[
+  "devices": [
     {
-      "id": "device-001",
-      "templateName": "AC Cooler",
-      "label": "AC Living Room",
-      "position": {"x": 100, "y": 200},
-      "state": "Off",
-      "width": 150,
-      "height": 100
+      "varName": "thermostat_1",
+      "templateName": "Thermostat",
+      "state": "cool",
+      "currentStateTrust": "trusted",
+      "variables": [{ "name": "temperature", "value": "22", "trust": "trusted" }],
+      "privacies": [{ "name": "temperature", "privacy": "public" }]
     }
-  ]'
-```
-
-#### Step 5: Create Rule
-
-```bash
-curl -X POST http://localhost:8080/api/board/rules \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '[
+  ],
+  "rules": [
     {
-      "id": "rule-001",
-      "sources": [
-        {"fromId": "AC Living Room", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}
-      ],
-      "toId": "device-001",
-      "toApi": "turnOn"
+      "conditions": [{ "deviceName": "thermostat_1", "attribute": "temperature", "relation": ">", "value": "30" }],
+      "command": { "deviceName": "fan_1", "action": "fanAuto" }
     }
-  ]'
-```
-
-#### Step 6: Create Specification
-
-```bash
-curl -X POST http://localhost:8080/api/board/specs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '[
+  ],
+  "specs": [
     {
-      "id": "spec-001",
-      "templateId": "1",
-      "aConditions": [
-        {"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "!=", "value": "Cooling"}
-      ]
+      "id": "spec_1", "templateId": "1", "templateLabel": "AG(A)",
+      "aConditions": [{ "deviceId": "fan_1", "targetType": "trust", "key": "FanMode_auto", "relation": "NEQ", "value": "untrusted" }],
+      "ifConditions": [], "thenConditions": []
     }
-  ]'
+  ],
+  "isAttack": true,
+  "intensity": 3,
+  "enablePrivacy": false
+}
 ```
 
-#### Step 7: Execute Verification
+### 验证结果 (VerificationResultDto)
 
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [
-      {"id": "device-001", "templateName": "AC Cooler", "label": "AC Living Room", "position": {"x": 100, "y": 200}, "state": "Off", "variables": [{"name": "temperature", "value": "24", "trust": "untrusted"}], "privacies": []}
-    ],
-    "rules": [
-      {"id": "rule-001", "sources": [{"fromId": "AC Living Room", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}], "toId": "device-001", "toApi": "turnOn"}
-    ],
-    "specs": [
-      {"id": "spec-001", "aConditions": [{"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "!=", "value": "Cooling"}]}
-    ],
-    "isAttack": false,
-    "intensity": 3
-  }'
+```json
+{
+  "safe": false,
+  "specResults": [true, false],
+  "traces": [{ "id": 1, "specId": "spec_2", "states": [...] }],
+  "checkLogs": ["validation warning..."],
+  "nusmvOutput": "-- specification AG(...) is false\n..."
+}
 ```
 
 ---
 
-## 7. Test Cases
+## 7. 配置与运行
 
-### Test Case 1: Safe Configuration (No Violation)
+### 环境要求
 
-**Scenario:** AC is in Off state, temperature is 24, rule triggers when temperature > 28, spec checks that state != Cooling.
+- JDK 21+
+- MySQL 8.0+
+- Redis 7.0+
+- NuSMV 2.6+ (需配置路径)
 
-**Expected Result:** `safe: true`, `traces: []`
-
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [{"id":"device-001","templateName":"AC Cooler","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
-    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
-    "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
-    "isAttack": false,
-    "intensity": 3
-  }'
-```
-
----
-
-### Test Case 2: Unsafe Configuration (Violation Detected)
-
-**Scenario:** Temperature can rise to 30, rule triggers when temperature > 28, spec requires state != Cooling.
-
-**Expected Result:** `safe: false`, `traces` contains counterexample
-
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [{"id":"device-001","templateName":"AC Cooler","label":"AC Cooler","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"untrusted"}],"privacies":[{"name":"temperature","privacy":"private"}]}],
-    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Cooler","targetType":"variable","property":"temperature","relation":">","value":"28"}],"toId":"device-001","toApi":"turnOn"}],
-    "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-001","targetType":"state","key":"state","relation":"!=","value":"Cooling"}]}],
-    "isAttack": false,
-    "intensity": 3
-  }'
-```
-
-**Expected Trace Flow:**
-1. State: Off, Temperature: 24
-2. State: Off, Temperature: 30 (temperature rises)
-3. Rule triggers: temperature > 28
-4. State: Cooling (API called)
-5. Violation: state = Cooling (spec requires != Cooling)
-
----
-
-### Test Case 3: Multiple Devices
-
-**Scenario:** Two AC units, one triggers the other.
-
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [
-      {"id":"device-001","templateName":"AC Cooler","label":"AC Living Room","position":{"x":100,"y":200},"state":"Off","variables":[{"name":"temperature","value":"24","trust":"trusted"}],"privacies":[]},
-      {"id":"device-002","templateName":"AC Cooler","label":"AC Bedroom","position":{"x":300,"y":200},"state":"Off","variables":[{"name":"temperature","value":"22","trust":"trusted"}],"privacies":[]}
-    ],
-    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn"}],"toId":"device-002","toApi":"turnOn"}],
-    "specs": [{"id":"spec-001","templateId":"1","aConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"!=","value":"Heating"}]}],
-    "isAttack": false,
-    "intensity": 3
-  }'
-```
-
----
-
-### Test Case 4: IF-THEN Specification (Response Type)
-
-**Scenario:** When living room AC turns on, bedroom AC should also turn on.
-
-```bash
-curl -X POST http://localhost:8080/api/verify \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [
-      {"id":"device-001","templateName":"AC Cooler","label":"AC Living Room","position":{"x":100,"y":200},"state":"Off","variables":[],"privacies":[]},
-      {"id":"device-002","templateName":"AC Cooler","label":"AC Bedroom","position":{"x":300,"y":200},"state":"Off","variables":[],"privacies":[]}
-    ],
-    "rules": [{"id":"rule-001","sources":[{"fromId":"AC Living Room","targetType":"api","property":"turnOn_a","relation":"=","value":"TRUE"}],"toId":"device-002","toApi":"turnOn"}],
-    "specs": [{"id":"spec-001","templateId":"5","templateLabel":"response","ifConditions":[{"deviceId":"device-001","targetType":"api","key":"turnOn_a","relation":"=","value":"TRUE"}],"thenConditions":[{"deviceId":"device-002","targetType":"state","key":"state","relation":"=","value":"Cooling"}]}],
-    "isAttack": false,
-    "intensity": 3
-  }'
-```
-
----
-
-## 8. Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DB_URL` | Database connection URL | jdbc:mysql://localhost:3306/iot_verify |
-| `DB_USERNAME` | Database username | root |
-| `DB_PASSWORD` | Database password | - |
-| `SERVER_PORT` | Server port | 8080 |
-| `JWT_SECRET` | JWT signing secret (min 256 bits) | - |
-| `JWT_EXPIRATION` | Token expiration in ms | 86400000 (24h) |
-| `VOLCENGINE_API_KEY` | Volcengine AI API key | - |
-| `VOLCENGINE_MODEL_ID` | AI model endpoint ID | - |
-| `VOLCENGINE_BASE_URL` | Volcengine API base URL | - |
-| `REDIS_HOST` | Redis server host | localhost |
-| `REDIS_PORT` | Redis server port | 6379 |
-| `NUSMV_PATH` | NuSMV executable path | - |
-
-### application.yaml Example
+### 关键配置 (application.yml)
 
 ```yaml
-spring:
-  datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/iot_verify}
-    username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:your_password}
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-
-server:
-  port: ${SERVER_PORT:8080}
-
-jwt:
-  secret: ${JWT_SECRET:your-secret-key-min-256-bits}
-  expiration: ${JWT_EXPIRATION:86400000}
-
-volcengine:
-  ark:
-    api-key: ${VOLCENGINE_API_KEY}
-    model-id: ${VOLCENGINE_MODEL_ID}
-    base-url: ${VOLCENGINE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-
 nusmv:
-  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/bin/NuSMV.exe}
-  command-prefix: ${NUSMV_PREFIX:}
-  timeout-ms: ${NUSMV_TIMEOUT_MS:120000}
+  path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
+  timeout: 60000                 # 执行超时（毫秒）
+  options: ""                    # 额外命令行参数
+```
 
-spring.data.redis:
-  host: ${REDIS_HOST:localhost}
-  port: ${REDIS_PORT:6379}
+### 构建与运行
+
+```bash
+cd backend
+mvn clean package -DskipTests
+java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
 ```
 
 ---
 
-## 9. Troubleshooting
+## 8. 实现状态
 
-### NuSMV Not Found
-
-**Error:** `NuSMV executable not found`
-
-**Solution:**
-1. Verify `nusmv.path` in `application.yaml`
-2. Ensure NuSMV executable exists at specified path
-3. On Windows, use forward slashes: `D:/NuSMV/bin/NuSMV.exe`
-
-### Database Connection Issues
-
-**Error:** Cannot connect to MySQL
-
-**Solution:**
-1. Ensure MySQL is running
-2. Verify connection URL, username, password
-3. Check firewall settings
-
-### Token Issues
-
-**Error:** `401 Unauthorized`
-
-**Solution:**
-1. Ensure token is not expired
-2. Token is not blacklisted (after logout)
-3. Token is properly formatted: `Bearer <token>`
-
-### Verification Not Working
-
-**Error:** All specs show `true` when expecting violations
-
-**Solution:**
-1. Check rule triggers are correctly defined
-2. Verify device template has required states/APIs
-3. Check NuSMV output in response for errors
-4. Ensure `targetType`, `property`, `relation`, `value` are correct
-
-### Trace Empty
-
-**Error:** `safe: false` but traces array is empty
-
-**Solution:**
-1. Verify the specification was actually violated
-2. Check `violatedSpecId` matches your spec ID
-3. Look at `nusmvOutput` for debugging info
-
-### Async Verification Not Working
-
-**Error:** Asynchronous verification runs synchronously
-
-**Solution:**
-1. Ensure `@EnableAsync` annotation is present on main application class
-2. Check thread pool configuration in `ThreadConfig.java`
-3. Verify task status is being updated in database
-
-### Task Cancellation Failed
-
-**Error:** Cannot cancel running verification task
-
-**Solution:**
-1. Only `PENDING` or `RUNNING` tasks can be cancelled
-2. Task must belong to the requesting user
-3. Cancellation may take a few seconds to take effect
-
-### MEDIC Format Not Parsed
-
-**Error:** Cannot parse MEDIC-test output files
-
-**Solution:**
-1. Use `EnhancedSmvTraceParser` instead of legacy `SmvTraceParser`
-2. Ensure output file contains MEDIC markers (`-- At time`)
-3. Check file encoding (UTF-8 recommended)
-
----
-
-## 10. Quick Reference
-
-### Target Types
-
-| targetType | Description | Example |
-|------------|-------------|---------|
-| `state` | Check device state | `state = "Cooling"` |
-| `variable` | Check variable value | `temperature > 28` |
-| `api` | Check API signal | `turnOn_a = "TRUE"` |
-
-### Relation Operators
-
-| relation | Description |
-|----------|-------------|
-| `=` | Equals |
-| `!=` | Not equals |
-| `>` | Greater than |
-| `>=` | Greater than or equal |
-| `<` | Less than |
-| `<=` | Less than or equal |
-
-### Specification Types Quick Reference
-
-| templateId | Type | Syntax | Required |
-|------------|------|--------|----------|
-| "1" | always | AG(A) | aConditions |
-| "2" | eventually | AF(A) | aConditions |
-| "3" | never | AG !(A) | aConditions |
-| "4" | immediate | AG(A → AX(B)) | if + then |
-| "5" | response | AG(A → AF(B)) | if + then |
-| "6" | persistence | G(A → F G(B)) | if + then |
-| "7" | safety | AG(untrusted → !(A)) | if + then |
-
-### Postman Collection
-
-Import the following collection for complete workflow testing:
-
-**File:** `IoT-Verify-Workflow.postman_collection.json`
-
-**Workflow:**
-1. Register → Login
-2. Create Device Template
-3. Create Device Node
-4. Create Rules
-5. Create Specifications
-6. Execute Verification
-7. View/Delete Traces
-8. Logout
-
----
-
-## Postman Collection
-
-### Collection Variables
-
-| Variable | Description |
-|----------|-------------|
-| `baseUrl` | Base URL (`http://localhost:8080/api`) |
-| `token` | JWT token (auto-set after login) |
-| `userId` | User ID (auto-set after register/login) |
-| `phone` | Test phone number |
-| `username` | Test username |
-| `password` | Test password |
-| `templateId` | Created template ID |
-| `deviceId1`, `deviceId2` | Created device IDs |
-| `ruleId` | Created rule ID |
-| `specId` | Created specification ID |
-
-### Import Instructions
-
-1. Open Postman
-2. Click Import → Select `IoT-Verify-Workflow.postman_collection.json`
-3. Set collection variables (phone, username, password)
-4. Run the collection in order
-
----
-
-## Implementation Status
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Generate NuSMV Model | ✅ Done | `SmvGenerator` |
-| Pre-generation Validation | ✅ Done | `SmvModelValidator` (P1-P5) |
-| Execute NuSMV | ✅ Done | `NusmvExecutor` |
-| Parse Counterexample | ✅ Done | `SmvTraceParser` |
-| Trace Persistence | ✅ Done | `TraceRepository` |
-| API Verification | ✅ Done | `VerificationServiceImpl` |
-| Async Verification | ✅ Done | `@Async` with thread pool |
-| Task Cancellation | ✅ Done | `cancelTask()` API |
-| Progress Tracking | ✅ Done | Progress API (0-100%) |
-| MEDIC Format Support | ✅ Done | `SmvTraceParser` |
-| Random Simulation | ❌ Not Implemented | Future enhancement |
-| Auto Rule Fix | ❌ Not Implemented | Future enhancement |
+| 功能 | 状态 | 实现类 |
+|------|------|--------|
+| SMV 模型生成 | Done | `SmvGenerator` |
+| 前置校验 (P1-P5) | Done | `SmvModelValidator` |
+| NuSMV 执行 | Done | `NusmvExecutor` |
+| 反例解析 | Done | `SmvTraceParser` |
+| Trace 持久化 | Done | `TraceRepository` |
+| 同步/异步验证 | Done | `VerificationServiceImpl` |
+| 任务取消 | Done | `cancelTask()` API |
+| 进度追踪 | Done | Progress API (0-100%) |
+| 攻击模式 | Done | `isAttack` + `intensity` |
+| 隐私维度 | Done | `enablePrivacy` + `PropertyDimension` |
 
 ---
 

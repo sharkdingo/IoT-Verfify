@@ -1,577 +1,754 @@
-# NuSMV 模块完整架构与实现文档
+# NuSMV 模块用户指南
 
-> **最后更新**: 2026年2月18日
-> **基于实现版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + 代码整理
-> **文档状态**: ✅ 已验证与代码同步
+> **最后更新**: 2026年2月20日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension
+
+本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
 ---
 
 ## 目录
 
-1. [架构概览](#1-架构概览)
-2. [核心组件](#2-核心组件)
-3. [数据流](#3-数据流)
-4. [SMV生成详解](#4-smv生成详解)
-5. [规格类型](#5-规格类型)
-6. [验证结果](#7-验证结果)
-7. [异步验证架构](#10-异步验证架构)
-8. [API 端点](#8-api-端点)
-9. [重构记录（2026-02-14）](#9-重构记录2026-02-14)
-10. [重构记录（2026-02-15）](#10-重构记录2026-02-15)
-11. [Bug 修复记录（2026-02-15）](#11-bug-修复记录2026-02-15)
-12. [代码整理记录（2026-02-18）](#12-代码整理记录2026-02-18)
+1. [快速入门：从 API 到 NuSMV](#1-快速入门从-api-到-nusmv)
+2. [请求数据结构](#2-请求数据结构)
+3. [NuSMV 管线概览](#3-nusmv-管线概览)
+4. [SMV 文件结构与语法](#4-smv-文件结构与语法)
+5. [用户输入对 SMV 建模的影响](#5-用户输入对-smv-建模的影响)
+6. [完整 SMV 文件示例](#6-完整-smv-文件示例)
+7. [规格模板与 CTL/LTL 语法](#7-规格模板与-ctlltl-语法)
+8. [Trace 解析与反例结构](#8-trace-解析与反例结构)
+9. [校验规则 (P1-P5)](#9-校验规则-p1-p5)
+10. [API 端点速查](#10-api-端点速查)
 
 ---
 
-## 1. 架构概览
+## 1. 快速入门：从 API 到 NuSMV
 
-### 1.1 整体架构
+### 伪代码流程
 
 ```
-[Controller层]
-    VerificationController
-    ├── POST /api/verify          → 同步验证
-    ├── POST /api/verify/async    → 异步验证（后端创建任务）
-    ├── GET  /api/verify/tasks/{id}          → 任务状态
-    ├── GET  /api/verify/tasks/{id}/progress → 任务进度
-    ├── POST /api/verify/tasks/{id}/cancel   → 取消任务
-    ├── GET  /api/verify/traces              → 用户所有 Trace
-    ├── GET  /api/verify/traces/{id}         → 单个 Trace
-    └── DELETE /api/verify/traces/{id}       → 删除 Trace
+用户 → POST /api/verify (VerificationRequestDto)
+  │
+  ├─ VerificationController.verify()
+  │     └─ verificationService.verify(userId, devices, rules, specs, isAttack, intensity, enablePrivacy)
+  │
+  ├─ VerificationServiceImpl.doVerify()
+  │     │
+  │     ├─ [1] smvGenerator.generate(...)
+  │     │     ├─ DeviceSmvDataFactory.buildDeviceSmvMap()   // 用户输入 + 模板 → DeviceSmvData
+  │     │     ├─ SmvModelValidator.validate()               // P1-P5 前置校验
+  │     │     ├─ SmvRuleCommentWriter.build()               // 规则 → SMV 注释
+  │     │     ├─ SmvDeviceModuleBuilder.build()             // 每设备 → MODULE 定义
+  │     │     ├─ SmvMainModuleBuilder.build()               // main MODULE + ASSIGN
+  │     │     └─ SmvSpecificationBuilder.build()            // specs → CTLSPEC / LTLSPEC
+  │     │     → 输出: model.smv 文件
+  │     │
+  │     ├─ [2] nusmvExecutor.execute(smvFile)
+  │     │     → 调用 NuSMV 进程，逐 spec 解析 true/false + counterexample
+  │     │
+  │     └─ [3] smvTraceParser.parseCounterexampleStates(...)
+  │           → 将 NuSMV 反例文本 → List<TraceStateDto>
+  │
+  └─ 返回 VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput }
+```
 
-[Service层]
-    VerificationService (接口)
-    └── VerificationServiceImpl (唯一实现)
-        ├── verify()         → 同步验证
-        ├── verifyAsync()    → 异步验证 (@Async)
-        ├── createTask()     → 创建异步任务
-        ├── getTaskProgress() → 获取进度
-        └── CRUD: getTask/getUserTraces/getTrace/deleteTrace/cancelTask
+### 同步 vs 异步
 
-[Component层 - NuSMV模块]
-    component/nusmv/
-    ├── generator/
-    │   ├── SmvGenerator              → 协调器，调用各子Builder生成SMV文件
-    │   ├── SmvModelValidator         → 集中式前置校验器（P1-P5）
-    │   ├── PropertyDimension         → 信任/隐私维度枚举
-    │   ├── data/
-    │   │   ├── DeviceSmvData         → 设备 SMV 数据模型（纯数据）
-    │   │   └── DeviceSmvDataFactory  → 从 DeviceVerificationDto + 模板构建 DeviceSmvData
-    │   └── module/
-    │       ├── SmvDeviceModuleBuilder  → 设备 MODULE 定义
-    │       ├── SmvMainModuleBuilder    → main MODULE（设备实例化 + 状态转换）
-    │       ├── SmvRuleCommentWriter    → 规则注释
-    │       └── SmvSpecificationBuilder → CTLSPEC / LTLSPEC 生成
-    ├── executor/
-    │   └── NusmvExecutor             → 执行 NuSMV 进程，返回 per-spec 结果
-    └── parser/
-        └── SmvTraceParser            → 解析 counterexample 为 TraceStateDto
+| 方式 | 端点 | 返回值 | 适用场景 |
+|------|------|--------|----------|
+| 同步 | `POST /api/verify` | `VerificationResultDto` | 小规模模型，快速验证 |
+| 异步 | `POST /api/verify/async` | `taskId (Long)` | 大规模模型，后台执行 |
 
-[DTO层]
-    dto/device/
-    ├── DeviceNodeDto              → 画布设备节点（UI 布局 + 持久化，含全部字段）
-    ├── DeviceVerificationDto      → 验证专用设备数据（仅 id, templateName, state + 运行时状态）
-    ├── VariableStateDto           → 变量状态（name, value, trust）
-    ├── PrivacyStateDto            → 隐私状态（name, privacy）
-    └── DeviceTemplateDto          → 设备模板定义
-    dto/verification/
-    ├── VerificationRequestDto    → 验证请求（devices: List<DeviceVerificationDto>, rules, specs, isAttack, intensity）
-    ├── VerificationResultDto     → 验证结果（safe, traces, specResults, checkLogs）
-    └── VerificationTaskDto       → 异步任务状态
-    dto/trace/
-    ├── TraceDto                  → 违规轨迹（含 states, violatedSpecId）
-    ├── TraceStateDto             → 状态步骤
-    ├── TraceDeviceDto            → 设备在某步骤的状态
-    ├── TraceVariableDto          → 变量值
-    └── TraceTrustPrivacyDto      → 信任/隐私变化
+异步模式下通过 `GET /api/verify/tasks/{id}` 轮询状态，`GET /api/verify/tasks/{id}/progress` 获取进度百分比 (0-100)。
 
-[Mapper层]
-    util/mapper/
-    ├── DeviceNodeMapper           → DeviceNodePo <-> DeviceNodeDto, DeviceNodeDto -> DeviceVerificationDto
-    ├── TraceMapper               → TracePo <-> TraceDto
-    ├── VerificationTaskMapper    → VerificationTaskPo <-> VerificationTaskDto
-    └── SpecificationMapper       → SpecificationPo <-> SpecificationDto
+---
 
-[PO层]
-    po/
-    ├── VerificationTaskPo        → 验证任务实体（status, isSafe, checkLogsJson）
-    └── TracePo                   → 轨迹实体（statesJson, violatedSpecId）
+## 2. 请求数据结构
+
+### 2.1 VerificationRequestDto（顶层请求）
+
+```json
+{
+  "devices": [ DeviceVerificationDto... ],
+  "rules":   [ RuleDto... ],
+  "specs":   [ SpecificationDto... ],
+  "isAttack":      false,       // 是否启用攻击模式
+  "intensity":     3,           // 攻击强度 0-50
+  "enablePrivacy": false        // 是否启用隐私维度建模
+}
+```
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `devices` | `List<DeviceVerificationDto>` | 必填 | 参与验证的设备实例列表 |
+| `rules` | `List<RuleDto>` | `[]` | IFTTT 规则列表 |
+| `specs` | `List<SpecificationDto>` | 必填 | 待验证的安全/隐私规格列表 |
+| `isAttack` | `boolean` | `false` | 启用后生成 `is_attack` 冻结变量，扩大传感器范围 |
+| `intensity` | `int` | `3` | 攻击预算(0-50)，用于全局 `INVAR intensity<=N` 约束，并按比例影响范围扩展 |
+| `enablePrivacy` | `boolean` | `false` | 启用后为状态/变量/内容生成 `privacy_*` 变量 |
+
+### 2.2 DeviceVerificationDto（设备实例）
+
+```json
+{
+  "varName": "thermostat_1",
+  "templateName": "Thermostat",
+  "state": "cool",
+  "currentStateTrust": "trusted",
+  "variables": [
+    { "name": "temperature", "value": "22", "trust": "trusted" }
+  ],
+  "privacies": [
+    { "name": "temperature", "privacy": "public" }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `varName` | `String` | 设备实例变量名，作为 SMV 中的标识符（如 `thermostat_1`） |
+| `templateName` | `String` | 设备模板名称，用于从数据库加载 `DeviceManifest` |
+| `state` | `String` | 当前状态（如 `cool`），映射到模板的 WorkingStates |
+| `currentStateTrust` | `String` | 设备级信任覆盖（`trusted`/`untrusted`） |
+| `variables` | `List<VariableStateDto>` | 每个变量的当前值和信任度 |
+| `privacies` | `List<PrivacyStateDto>` | 每个状态/变量的隐私覆盖 |
+
+### 2.3 RuleDto（IFTTT 规则）
+
+```json
+{
+  "conditions": [
+    { "deviceName": "thermostat_1", "attribute": "temperature", "relation": ">", "value": "30" }
+  ],
+  "command": {
+    "deviceName": "fan_1",
+    "action": "fanAuto",
+    "contentDevice": null,
+    "content": null
+  },
+  "ruleString": "IF thermostat_1.temperature>30 THEN fan_1.fanAuto"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `conditions[].deviceName` | 触发条件的设备变量名 |
+| `conditions[].attribute` | 属性名（`state`、变量名、或信号名） |
+| `conditions[].relation` | 关系运算符：`EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`，归一化为 `=`/`!=`/`>`/`>=`/`<`/`<=` |
+| `conditions[].value` | 比较值 |
+| `command.deviceName` | 目标设备变量名 |
+| `command.action` | 触发的 API 名称 |
+| `command.contentDevice` | 隐私规则：内容来源设备 |
+| `command.content` | 隐私规则：内容名称 |
+
+### 2.4 SpecificationDto（验证规格）
+
+```json
+{
+  "id": "spec_1",
+  "templateId": "1",
+  "templateLabel": "AG(A)",
+  "aConditions": [
+    { "deviceId": "thermostat_1", "targetType": "state", "key": "ThermostatMode", "relation": "NEQ", "value": "cool" }
+  ],
+  "ifConditions": [],
+  "thenConditions": []
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `templateId` | 规格模板编号，决定 CTL/LTL 公式结构（`"6"` → LTLSPEC，其余 → CTLSPEC） |
+| `aConditions` | "A" 部分条件列表 |
+| `ifConditions` | "IF" 部分条件列表（前件） |
+| `thenConditions` | "THEN" 部分条件列表（后件） |
+
+**SpecConditionDto.targetType 支持的类型：**
+
+| targetType | SMV 变量映射 | 示例 |
+|------------|-------------|------|
+| `state` | `device.{mode}_{stateName}` | `thermostat_1.ThermostatMode = cool` |
+| `variable` | `device.varName` 或 `a_varName`（环境变量） | `thermostat_1.temperature > 30` |
+| `api` | `device.{apiName}_a` | `fan_1.fanAuto_a = TRUE` |
+| `trust` | `device.trust_{mode}_{state}` | `thermostat_1.trust_ThermostatMode_cool = untrusted` |
+| `privacy` | `device.privacy_{mode}_{state}` | `thermostat_1.privacy_ThermostatMode_cool = private` |
+
+---
+
+## 3. NuSMV 管线概览
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ SmvGenerator.generate()                                     │
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ DeviceSmvDataFactory.buildDeviceSmvMap()              │   │
+│  │  对每个 DeviceVerificationDto:                        │   │
+│  │  1. 从 DB 加载 DeviceManifest (模板 JSON)             │   │
+│  │  2. 解析 Modes / WorkingStates / Variables / APIs     │   │
+│  │  3. 合并用户运行时输入 (state, variables, privacies)   │   │
+│  │  → Map<varName, DeviceSmvData>                        │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                          ↓                                  │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ SmvModelValidator.validate()                         │   │
+│  │  P1: Trigger.Attribute 合法性                         │   │
+│  │  P2: 多模式 EndState 分号段数匹配                      │   │
+│  │  P3: 环境变量跨设备范围冲突                             │   │
+│  │  P5: trust/privacy 一致性                             │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                          ↓                                  │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ 生成 SMV 文本 (按顺序拼接)                             │   │
+│  │  1. SmvRuleCommentWriter  → -- 规则注释                │   │
+│  │  2. SmvDeviceModuleBuilder → MODULE Device_xxx        │   │
+│  │  3. SmvMainModuleBuilder   → MODULE main              │   │
+│  │  4. SmvSpecificationBuilder → CTLSPEC / LTLSPEC       │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                          ↓                                  │
+│  写入临时文件 model.smv                                      │
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ NusmvExecutor.execute(smvFile)                              │
+│  1. 构建命令: NuSMV [options] model.smv                     │
+│  2. 启动进程，读取 stdout                                    │
+│  3. 逐行匹配 "-- specification ... is true/false"           │
+│  4. 提取每个 false spec 的 counterexample 文本               │
+│  → NusmvResult { specResults[], output }                    │
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│ SmvTraceParser.parseCounterexampleStates()                  │
+│  1. 按 "State X.Y:" 分割反例文本                             │
+│  2. 解析每行 "device.var = value"                            │
+│  3. 映射回 DeviceSmvData 的状态/变量/信任/隐私                │
+│  → List<TraceStateDto>                                      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. 核心组件
+## 4. SMV 文件结构与语法
 
-### 2.1 VerificationServiceImpl
-
-统一的验证服务，管理同步/异步两条路径：
-
-- **同步 `verify()`**: 直接执行验证，返回 `VerificationResultDto`
-- **异步 `verifyAsync()`**: `@Async("verificationTaskExecutor")` 异步执行，通过 `VerificationTaskPo` 跟踪状态
-- **任务创建 `createTask()`**: 异步验证前由 Controller 调用，返回 taskId
-- **Per-spec 结果**: `buildVerificationResult()` 根据 NusmvExecutor 返回的每个 spec 独立结果生成对应的 traces
-
-### 2.2 NusmvExecutor
-
-执行 NuSMV 进程并解析 per-spec 结果：
-
-- 跨平台命令构建（Windows/Linux）
-- 超时控制（配置 `nusmv.timeout-ms`，环境变量 `NUSMV_TIMEOUT_MS` 覆盖）
-- 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed/counterexample）
-
-### 2.3 SmvGenerator + DeviceSmvDataFactory
-
-SMV 文件生成的两层结构：
-
-- `SmvGenerator`: 协调层，调用 DeviceSmvDataFactory 构建设备数据，协调各子 Builder 生成内容，写入临时文件
-- `DeviceSmvDataFactory`: 从 `DeviceVerificationDto` + 设备模板构建 `DeviceSmvData`
-  - 解析模板 manifest 中的 modes、states、variables、transitions
-  - 合并用户运行时输入（currentState、variableValues、trust/privacy 覆盖）
-
-### 2.4 SmvTraceParser
-
-解析 NuSMV counterexample 输出为 `List<TraceStateDto>`：
-
-- 匹配 `State 1.N:` 格式的状态行
-- 提取 `device.attr = value` 格式的变量赋值
-- 通过 `DeviceSmvData` 映射还原设备名称和状态
-
----
-
-## 3. 数据流
-
-### 3.1 同步验证流程
-
-```
-VerificationRequestDto
-    → VerificationServiceImpl.verify()
-        → SmvGenerator.generate()           → File (model.smv)
-        → NusmvExecutor.execute()           → NusmvResult (per-spec results)
-        → buildVerificationResult()
-            → SmvTraceParser (for each violated spec)
-            → saveTraces() (auto-persist violations)
-        → VerificationResultDto
-```
-
-### 3.2 异步验证流程
-
-```
-VerificationRequestDto
-    → Controller: createTask()              → taskId
-    → VerificationServiceImpl.verifyAsync() → (异步线程)
-        → task.status = RUNNING
-        → SmvGenerator.generate()
-        → NusmvExecutor.execute()
-        → buildVerificationResult()
-        → completeTask() / failTask()
-        → task.status = COMPLETED / FAILED
-```
-
----
-
-## 4. SMV生成详解
-
-### 4.1 生成结构
+一个完整的 SMV 文件由以下部分组成：
 
 ```smv
--- Rules (注释)
---IF sensor.temperature>30 THEN ac.turnOn
+-- 规则注释 (SmvRuleCommentWriter)
+--IF thermostat_1.temperature>30 THEN fan_1.fanAuto
 
-MODULE DeviceName          -- 设备模块（SmvDeviceModuleBuilder）
-  FROZENVAR                -- 攻击模式: is_attack; 传感器: trust_*/privacy_*
-  VAR                      -- state, mode, variables, signals
-  ASSIGN                   -- init/next 状态转换
-
-MODULE main                -- 主模块（SmvMainModuleBuilder）
-  VAR
-    intensity: 0..50;      -- 攻击强度（VAR，非 FROZENVAR）
-    device1: DeviceName;   -- 设备实例
+-- 设备模块定义 (SmvDeviceModuleBuilder) — 每种设备模板一个
+MODULE Thermostat_thermostat1
+  FROZENVAR                          -- 冻结变量（验证期间不变）
+    is_attack: boolean;              -- 仅 isAttack=true 时生成
+    trust_temperature: {trusted, untrusted};   -- 传感器变量信任
+    privacy_temperature: {public, private};    -- 仅 enablePrivacy=true
+  VAR                                -- 状态变量
+    ThermostatMode: {cool, heat, off};         -- 模式状态
+    temperature: 15..35;                        -- 内部变量
+    trust_ThermostatMode_cool: {trusted, untrusted};  -- 状态信任
+    privacy_ThermostatMode_cool: {public, private};   -- 仅 enablePrivacy
   ASSIGN
-    init(intensity) := <count>;
-    next(intensity) := intensity;  -- 保持常量
-    -- 状态转换、信号、信任、隐私、变量率
+    init(ThermostatMode) := cool;    -- 初始状态
+    init(temperature) := 22;
+    init(trust_ThermostatMode_cool) := trusted;
 
--- Specifications            -- 注释行（非 NuSMV 关键字）
-  CTLSPEC AG(...)           -- CTL 规格
-  LTLSPEC G(... -> F G(...)) -- LTL 规格
+-- 主模块 (SmvMainModuleBuilder)
+MODULE main
+  FROZENVAR
+    intensity: 0..50;                -- 仅 isAttack=true 时生成
+  INVAR intensity <= 3;              -- 全局攻击预算约束
+  VAR
+    thermostat_1: Thermostat_thermostat1;      -- 设备实例化
+    fan_1: Fan_fan1;
+    a_time: 0..23;                   -- 环境变量（a_ 前缀）
+  ASSIGN
+    -- 状态转换 (来自模板 Transitions)
+    next(thermostat_1.ThermostatMode) := case
+      thermostat_1.ThermostatMode = cool & thermostat_1.temperature > 30 : heat;
+      TRUE : thermostat_1.ThermostatMode;      -- 默认自保持
+    esac;
+    -- 规则驱动的 API 信号
+    next(fan_1.fanAuto_a) := case
+      thermostat_1.temperature > 30 : TRUE;
+      TRUE : FALSE;
+    esac;
+    -- 信任传播 (PropertyDimension.TRUST)
+    next(fan_1.trust_FanMode_auto) := case
+      fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
+      TRUE : fan_1.trust_FanMode_auto;         -- 自保持
+    esac;
+
+-- 规格 (SmvSpecificationBuilder)
+  CTLSPEC AG(thermostat_1.ThermostatMode != off)
+  CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
+  LTLSPEC G((thermostat_1.temperature > 25) -> F G(fan_1.FanMode = auto))
 ```
 
-### 4.2 攻击模式
+### NuSMV 关键语法速查
 
-- `is_attack`: 设备级 FROZENVAR，非确定性选择
-- `intensity`: main 模块 VAR，init 为攻击设备数量，next 保持不变
-- 规格中通过 `intensity<=N` 约束攻击影响范围
-
----
-
-## 5. 规格类型
-
-| 模板ID | 类型 | NuSMV 语法 | 含义 |
-|--------|------|-----------|------|
-| 1 | Safety | `CTLSPEC AG(A -> B)` | 全局安全性 |
-| 2 | Reachability | `CTLSPEC EF(A & B)` | 可达性 |
-| 3 | Response | `CTLSPEC AG(A -> AF(B))` | 响应性 |
-| 4 | Liveness | `CTLSPEC AG(AF(A))` | 活性 |
-| 5 | Fairness | `CTLSPEC AG(A -> EF(B))` | 公平性 |
-| 6 | Persistence | `LTLSPEC G(A -> F G(B))` | 持久性 |
-
-条件目标类型（`SpecConditionDto.targetType`）：
-- `state`: 设备状态 `device.state = value`
-- `variable`: 变量值 `device.var > value`
-- `api`: API 信号 `device.apiName_a = TRUE/FALSE`
-- `trust`: 信任度 `device.trust_StateName = trusted/untrusted`
-- `privacy`: 隐私级别 `device.privacy_StateName = public/private`
+| 语法 | 含义 | 示例 |
+|------|------|------|
+| `MODULE name` | 模块定义 | `MODULE Thermostat_t1` |
+| `FROZENVAR` | 冻结变量（初始化后不变） | `is_attack: boolean;` |
+| `VAR` | 状态变量 | `mode: {on, off};` |
+| `ASSIGN` | 赋值块 | `init(x) := 0; next(x) := ...` |
+| `init(v) := expr` | 初始值 | `init(mode) := off;` |
+| `next(v) := case ... esac` | 状态转移 | 见上方示例 |
+| `CTLSPEC` | CTL 时序逻辑规格 | `CTLSPEC AG(p)` |
+| `LTLSPEC` | LTL 时序逻辑规格 | `LTLSPEC G(p -> F q)` |
+| `AG(p)` | 所有路径全局成立 | 安全性属性 |
+| `EF(p)` | 存在路径最终成立 | 可达性属性 |
+| `G(p -> F q)` | 全局：p 则最终 q | 活性属性 |
 
 ---
 
-## 6. 验证结果
+## 5. 用户输入对 SMV 建模的影响
 
-### 6.1 VerificationResultDto
+### 5.1 isAttack（攻击模式）
 
-```java
-VerificationResultDto {
-    boolean safe;              // 所有 spec 是否都通过
-    List<TraceDto> traces;     // 违规轨迹（仅违反的 spec 有对应 trace）
-    List<Boolean> specResults; // per-spec 结果（与 specs 列表一一对应）
-    List<String> checkLogs;    // 检查日志
-    String nusmvOutput;        // 原始 NuSMV 输出（截断至 10000 字符）
-}
+当 `isAttack=true` 时，SMV 模型发生以下变化：
+
+**设备模块 (SmvDeviceModuleBuilder)：**
+```smv
+FROZENVAR
+    is_attack: boolean;    -- 每个设备增加冻结攻击标记
 ```
 
-### 6.2 Per-Spec 结果映射
+**主模块 (SmvMainModuleBuilder)：**
+```smv
+FROZENVAR
+    intensity: 0..50;      -- 全局攻击预算变量
+INVAR intensity <= 3;      -- 全局预算约束（示例 N=3）
 
-NuSMV 对每个 SPEC 独立输出 `is true` 或 `is false`：
-- `specResults[i] = true`: 第 i 个 spec 通过
-- `specResults[i] = false`: 第 i 个 spec 违反，对应的 counterexample 生成 TraceDto
-
-### 6.3 任务状态语义
-
-```java
-enum TaskStatus {
-    PENDING,    // 任务已创建，等待执行
-    RUNNING,    // 验证进行中
-    COMPLETED,  // 验证完成（无论安全与否）
-    FAILED,     // 执行异常（NuSMV 错误、超时等）
-    CANCELLED   // 用户取消
-}
+-- 环境变量范围按 intensity 比例扩展（仅上界扩展）
+-- expansion = (upper-lower)/5 * intensity/50
+-- 例：temperature 原始 15..35，intensity=50 时变为 15..39
+VAR
+    a_temperature: 15..39;
 ```
 
-注意：`COMPLETED` 表示验证正常完成，通过 `isSafe` 字段区分是否安全。`FAILED` 仅用于执行异常。
-
----
-
-## 7. 异步验证架构
-
-### 7.1 线程池配置
-
-```java
-@Bean("verificationTaskExecutor")
-public Executor verificationTaskExecutor() { ... }
+**规格 (SmvSpecificationBuilder)：**
+```smv
+-- 修复后：规格不再自动注入 intensity<=N
+-- 预算约束统一放在 main 的 INVAR 中
+CTLSPEC AG(!(fan.state = auto & fan.trust_FanMode_auto = untrusted))
 ```
 
-### 7.2 任务生命周期
+### 5.2 intensity（攻击强度）
 
-```
-createTask() → PENDING
-    ↓
-verifyAsync() → RUNNING
-    ↓
-成功 → COMPLETED (isSafe=true/false)
-异常 → FAILED (errorMessage)
-取消 → CANCELLED
-```
+`intensity`（0-50）在当前实现中有两项作用：
 
-### 7.3 进度跟踪
+1. **全局预算约束**：在 `main` 模块生成 `INVAR intensity <= N`。
+2. **范围扩展比例**：攻击模式下按 `intensity/50` 缩放扩展幅度。
 
-- 0% → 任务启动
-- 20% → 生成 SMV 模型
-- 50% → 执行 NuSMV
-- 80% → 解析结果
-- 100% → 验证完成
-
-通过 `ConcurrentHashMap<Long, Integer>` 内存存储，`GET /tasks/{id}/progress` 查询。
-
-### 7.4 取消机制
-
-- `cancelTask()` 通过 `Thread.interrupt()` 中断运行中的任务
-- 异步方法中检查 `Thread.currentThread().isInterrupted()` 响应取消
-
----
-
-## 8. API 端点
-
-| 端点 | 方法 | 说明 | 请求体 | 返回 |
-|------|------|------|--------|------|
-| `/api/verify` | POST | 同步验证 | `VerificationRequestDto` | `VerificationResultDto` |
-| `/api/verify/async` | POST | 异步验证 | `VerificationRequestDto` | `Long` (taskId) |
-| `/api/verify/tasks/{id}` | GET | 任务状态 | - | `VerificationTaskDto` |
-| `/api/verify/tasks/{id}/progress` | GET | 任务进度 | - | `Integer` (0-100) |
-| `/api/verify/tasks/{id}/cancel` | POST | 取消任务 | - | `Boolean` |
-| `/api/verify/traces` | GET | 用户所有 Trace | - | `List<TraceDto>` |
-| `/api/verify/traces/{id}` | GET | 单个 Trace | - | `TraceDto` |
-| `/api/verify/traces/{id}` | DELETE | 删除 Trace | - | `Void` |
-
----
-
-## 9. 重构记录（2026-02-14）
-
-### 删除的文件
-- `NusmvExecutorService.java` + `NusmvExecutorServiceImpl.java`: 与 component 层 NusmvExecutor 完全重复
-- `EnhancedSmvTraceParser.java`: 未被任何代码引用
-
-### 主要修复
-1. **Service 合并**: 所有 NuSMV 相关逻辑统一到 `VerificationServiceImpl`
-2. **Per-spec 结果**: NusmvExecutor 返回每个 spec 的独立结果，不再 all-or-nothing
-3. **任务状态语义**: `COMPLETED` = 验证完成（安全或不安全），`FAILED` = 执行异常
-4. **SMV 语法修复**: 移除无效 `SPECIFICATION` 关键字；`intensity` 从 FROZENVAR 改为 VAR
-5. **Controller 修复**: 移除 impl 强转；异步任务由后端创建
-6. **DTO 修复**: `TraceDto.verificationTaskId` 改为可选（同步验证无 task）
-7. **异步事务**: 移除 `verifyAsync()` 上的 `@Transactional`，避免 `@Async` + `@Transactional` 冲突
-
----
-
-## 10. 重构记录（2026-02-15）
-
-### DeviceNodeDto 拆分
-
-将 `DeviceNodeDto` 按关注点拆分为独立 DTO：
-
-#### 新增文件
-- `dto/device/DeviceVerificationDto.java` — 验证专用 DTO，仅含验证所需字段
-- `dto/device/VariableStateDto.java` — 变量状态（从 DeviceNodeDto 内部类提取）
-- `dto/device/PrivacyStateDto.java` — 隐私状态（从 DeviceNodeDto 内部类提取）
-
-#### DTO 职责划分
-
-| DTO | 用途 | 字段 |
-|-----|------|------|
-| `DeviceNodeDto` | 画布 CRUD / 持久化 | id, templateName, label, position, state, width, height, currentStateTrust, variables, privacies |
-| `DeviceVerificationDto` | SMV 验证请求 | id, templateName, state, currentStateTrust, variables, privacies |
-| `VariableStateDto` | 变量运行时状态 | name, value, trust |
-| `PrivacyStateDto` | 隐私运行时状态 | name, privacy |
-
-#### 运行时字段语义
-
-- `currentStateTrust`: 设备级信任覆盖 → `smv.currentStateTrust` + `smv.instanceStateTrust`
-- `variables[].value`: 变量初始值 → `smv.variableValues`
-- `variables[].trust`: 变量信任覆盖 → `smv.instanceVariableTrust`
-- `privacies[].privacy`: 状态/变量/内容隐私覆盖 → `smv.instanceVariablePrivacy`
-
-#### 数据流变更
-
-```
-画布 CRUD:  Frontend ←→ BoardStorageController ←→ DeviceNodeDto ←→ DeviceNodePo
-验证请求:  Frontend → VerificationController → DeviceVerificationDto → DeviceSmvDataFactory → DeviceSmvData
-转换桥接:  DeviceNodeMapper.toVerificationDto(DeviceNodeDto) → DeviceVerificationDto
+```smv
+-- 示例：range = upper - lower = 20
+-- intensity = 0   => expansion = 0
+-- intensity = 25  => expansion = 2
+-- intensity = 50  => expansion = 4
 ```
 
-#### 修改的文件
-- `VerificationRequestDto.devices` 类型: `List<DeviceNodeDto>` → `List<DeviceVerificationDto>`
-- `VerificationService` / `VerificationServiceImpl`: 参数类型同步更新
-- `SmvGenerator` / `DeviceSmvDataFactory` / `SmvMainModuleBuilder`: 参数类型同步更新
-- `DeviceNodeMapper`: 新增 `toVerificationDto()` 方法
+### 5.3 enablePrivacy（隐私维度）
+
+当 `enablePrivacy=true` 时：
+
+**设备模块 — 传感器变量隐私：**
+```smv
+FROZENVAR
+    privacy_temperature: {public, private};   -- 传感器的每个变量
+```
+
+**设备模块 — 状态隐私：**
+```smv
+VAR
+    privacy_ThermostatMode_cool: {public, private};   -- 每个 (mode, state) 组合
+```
+
+**设备模块 — 内容隐私：**
+```smv
+-- IsChangeable=false 的内容 → FROZENVAR（隐私不可变）
+FROZENVAR
+    privacy_photo: {public, private};
+
+-- IsChangeable=true 的内容 → VAR（隐私可变）
+VAR
+    privacy_photo: {public, private};
+```
+
+**主模块 — 隐私传播规则：**
+```smv
+-- 规则触发时，隐私从源设备传播到目标设备
+next(camera_1.privacy_photo) := case
+    camera_1.takePhoto_a = TRUE : private;   -- API 触发时设为 private
+    TRUE : camera_1.privacy_photo;           -- 自保持
+esac;
+```
+
+**注意：** 当 `enablePrivacy=false` 时，如果 specs 中包含 `targetType="privacy"` 的条件，会抛出 `SmvGenerationException`，因为 `privacy_*` 变量未被声明。
+
+### 5.4 devices（设备实例）
+
+| 用户输入字段 | SMV 影响 |
+|-------------|---------|
+| `varName` | 决定 SMV 实例变量名（如 `thermostat_1`）和模块名后缀 |
+| `templateName` | 从 DB 加载 DeviceManifest，决定模式/状态/变量/转换的完整定义 |
+| `state` | 决定 `init(ModeVar)` 的初始值 |
+| `currentStateTrust` | 覆盖模板默认的状态信任初始值 |
+| `variables[].value` | 决定 `init(varName)` 的初始值 |
+| `variables[].trust` | 覆盖变量信任初始值 |
+| `privacies[].privacy` | 覆盖隐私初始值（仅 enablePrivacy=true 时有效） |
+
+### 5.5 rules（IFTTT 规则）
+
+规则在 SMV 中体现为 `next()` 赋值：
+
+```
+用户规则: IF thermostat_1.temperature > 30 THEN fan_1.fanAuto
+```
+
+生成的 SMV：
+```smv
+-- 1. API 信号触发
+next(fan_1.fanAuto_a) := case
+    thermostat_1.temperature > 30 : TRUE;
+    TRUE : FALSE;
+esac;
+
+-- 2. 状态转换（由 API 的 EndState 决定）
+next(fan_1.FanMode) := case
+    fan_1.fanAuto_a = TRUE : auto;
+    TRUE : fan_1.FanMode;
+esac;
+
+-- 3. 信任传播（TRUST 维度）
+next(fan_1.trust_FanMode_auto) := case
+    fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
+    TRUE : fan_1.trust_FanMode_auto;
+esac;
+
+-- 4. 隐私传播（仅 enablePrivacy=true，PRIVACY 维度）
+next(fan_1.privacy_FanMode_auto) := case
+    fan_1.fanAuto_a = TRUE : thermostat_1.privacy_temperature;
+    TRUE : fan_1.privacy_FanMode_auto;
+esac;
+```
 
 ---
 
-## 11. Bug 修复记录（2026-02-15）
+## 6. 完整 SMV 文件示例
 
-### 🔴 Critical: VerificationServiceImpl.buildDeviceSmvMap() 数据不完整
+以下是一个包含恒温器 + 风扇的场景，启用攻击模式和隐私维度后生成的完整 SMV 文件：
 
-**问题**: `VerificationServiceImpl` 中有一个本地 `buildDeviceSmvMap()` 方法，仅设置了 `id`、`name`、`deviceNo`、`currentState` 四个字段，缺少 `states`、`modes`、`variables`、`manifest` 等关键数据。导致 `SmvTraceParser.matchState()` 无法匹配状态名，反例轨迹解析失败。
+**场景：** 恒温器温度 > 30 时自动开启风扇，验证风扇不会在不可信状态下运行。
 
-**修复**: 删除本地方法，改为复用 `DeviceSmvDataFactory.buildDeviceSmvMap()`。同时更新 `buildVerificationResult()` 签名，传入 `rules` 参数。
+**请求参数：** `isAttack=true, intensity=50, enablePrivacy=true`
 
-**涉及文件**:
-- `DeviceSmvDataFactory.java`: 提供 `buildDeviceSmvMap()` 方法
-- `VerificationServiceImpl.java`: 删除本地 `buildDeviceSmvMap()` 和 `extractDeviceNo()`，注入 `DeviceSmvDataFactory`
+```smv
+--IF thermostat_1.temperature>30 THEN fan_1.fanAuto
 
-### 🔴 Bug: BoardStorageServiceImpl.saveRules() null 进入 Set
+MODULE Thermostat_thermostat1
+FROZENVAR
+	is_attack: boolean;
+	trust_temperature: {trusted, untrusted};
+	privacy_temperature: {public, private};
+VAR
+	ThermostatMode: {cool, heat, off};
+	temperature: 15..35;
+	trust_ThermostatMode_cool: {trusted, untrusted};
+	trust_ThermostatMode_heat: {trusted, untrusted};
+	trust_ThermostatMode_off: {trusted, untrusted};
+	privacy_ThermostatMode_cool: {public, private};
+	privacy_ThermostatMode_heat: {public, private};
+	privacy_ThermostatMode_off: {public, private};
+ASSIGN
+	init(ThermostatMode) := cool;
+	init(temperature) := 22;
+	init(trust_ThermostatMode_cool) := trusted;
+	init(trust_ThermostatMode_heat) := trusted;
+	init(trust_ThermostatMode_off) := trusted;
+	init(privacy_ThermostatMode_cool) := public;
+	init(privacy_ThermostatMode_heat) := public;
+	init(privacy_ThermostatMode_off) := public;
 
-**问题**: `saveRules()` 中 `newRuleIds.add(ruleId)` 在 `ruleId` 为 null 时将 null 加入 Set，导致后续删除逻辑 `!newRuleIds.contains(existingId)` 判断异常。
+MODULE Fan_fan1
+FROZENVAR
+	is_attack: boolean;
+VAR
+	FanMode: {auto, manual, off};
+	fanAuto_a: boolean;
+	trust_FanMode_auto: {trusted, untrusted};
+	trust_FanMode_manual: {trusted, untrusted};
+	trust_FanMode_off: {trusted, untrusted};
+	privacy_FanMode_auto: {public, private};
+	privacy_FanMode_manual: {public, private};
+	privacy_FanMode_off: {public, private};
+ASSIGN
+	init(FanMode) := off;
+	init(fanAuto_a) := FALSE;
+	init(trust_FanMode_auto) := trusted;
+	init(trust_FanMode_off) := trusted;
+	init(privacy_FanMode_auto) := public;
+	init(privacy_FanMode_off) := public;
 
-**修复**: 添加 null 守卫：`if (ruleId != null) newRuleIds.add(ruleId)`
+MODULE main
+FROZENVAR
+	intensity: 0..50;
+INVAR intensity <= 50;
+VAR
+	thermostat_1: Thermostat_thermostat1;
+	fan_1: Fan_fan1;
+	a_temperature: 15..39;
+ASSIGN
+	-- 规则: IF thermostat_1.temperature>30 THEN fan_1.fanAuto
+	next(fan_1.fanAuto_a) := case
+		thermostat_1.temperature > 30 : TRUE;
+		TRUE : FALSE;
+	esac;
+	next(fan_1.FanMode) := case
+		fan_1.fanAuto_a = TRUE : auto;
+		TRUE : fan_1.FanMode;
+	esac;
+	-- 信任传播
+	next(fan_1.trust_FanMode_auto) := case
+		fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
+		TRUE : fan_1.trust_FanMode_auto;
+	esac;
+	-- 隐私传播
+	next(fan_1.privacy_FanMode_auto) := case
+		fan_1.fanAuto_a = TRUE : thermostat_1.privacy_temperature;
+		TRUE : fan_1.privacy_FanMode_auto;
+	esac;
+	-- 传感器环境变量赋值
+	next(thermostat_1.temperature) := a_temperature;
+-- Specifications
+	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
+	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.privacy_FanMode_auto = private))
+	LTLSPEC G((thermostat_1.temperature > 30) -> F G(fan_1.FanMode = auto))
+```
 
-### ⚠️ VerificationRequestDto 缺少校验注解
+### 6.1 参数组合示例（修复后）
 
-**问题**: `devices` 和 `specs` 字段无 `@NotNull`，`intensity` 无范围约束，Controller 的 `@Valid` 形同虚设。
+#### 示例 A：`isAttack=true, intensity=0, enablePrivacy=false`
 
-**修复**: 添加 `@Valid @NotNull` 到 `devices` 和 `specs`，添加 `@Min(0) @Max(50)` 到 `intensity`。
+```smv
+MODULE main
+FROZENVAR
+    intensity: 0..50;
+INVAR intensity <= 0;
+VAR
+    ts_1: Sensor_ts1;
+ASSIGN
+    init(intensity) := 0 + toint(ts_1.is_attack);
+```
 
-### ⚠️ SmvMainModuleBuilder 重复 null 检查
+含义：预算为 0，强制所有设备 `is_attack=FALSE`。
 
-**问题**: 多模式和单模式分支中，`rule.getCommand() == null` 检查连续出现两次（代码冗余）。
+#### 示例 B：`isAttack=true, intensity=25, enablePrivacy=false`
 
-**修复**: 移除重复的 if 块，保留一份。
+```smv
+MODULE Sensor_ts1
+FROZENVAR
+    is_attack: boolean;
+VAR
+    temperature: 0..110;   -- 原始 0..100，range=100，expansion=100/5*25/50=10
+ASSIGN
+    init(is_attack) := {TRUE, FALSE};
 
-### ⚠️ UserPo 缺少 @PrePersist
+MODULE main
+FROZENVAR
+    intensity: 0..50;
+INVAR intensity <= 25;
+```
 
-**问题**: `UserPo.createdAt` 标记为 `nullable = false`，但没有 `@PrePersist` 自动填充，依赖调用方手动设置。
+#### 示例 C：`isAttack=true, intensity=50, enablePrivacy=true`
 
-**修复**: 添加 `@PrePersist onCreate()` 方法，自动填充 `createdAt`。
+```smv
+MODULE Camera_c1
+FROZENVAR
+    is_attack: boolean;
+    privacy_photo: {public, private};
+VAR
+    trust_Mode_on: {trusted, untrusted};
+    privacy_Mode_on: {public, private};
+ASSIGN
+    init(is_attack) := {TRUE, FALSE};
+
+MODULE main
+FROZENVAR
+    intensity: 0..50;
+INVAR intensity <= 50;
+```
+
+#### 示例 D：规格不再注入 `intensity<=N`
+
+```smv
+-- 当前行为（修复后）
+CTLSPEC AG(!(door_1.LockState = unlocked & door_1.trust_LockState_unlocked = untrusted))
+
+-- 预算约束在 main
+INVAR intensity <= 3;
+```
+---
+
+## 7. 规格模板与 CTL/LTL 语法
+
+`SmvSpecificationBuilder` 根据 `templateId` 选择 CTL 或 LTL 公式结构：
+
+### CTL 规格（templateId != "6"）
+
+| templateId | 模板标签 | 生成公式 | 语义 |
+|-----------|---------|---------|------|
+| `1` | `AG(A)` | `CTLSPEC AG(A)` | A 在所有路径全局成立 |
+| `2` | `AG(!(A))` | `CTLSPEC AG(!(A))` | A 在所有路径全局不成立 |
+| `3` | `AG(IF -> THEN)` | `CTLSPEC AG((IF) -> (THEN))` | 全局：IF 蕴含 THEN |
+| `4` | `AG(IF -> AG(THEN))` | `CTLSPEC AG((IF) -> AG(THEN))` | IF 之后 THEN 永远成立 |
+| `5` | `AG(IF -> EF(THEN))` | `CTLSPEC AG((IF) -> EF(THEN))` | IF 之后 THEN 最终可达 |
+
+### LTL 规格（templateId == "6"）
+
+| templateId | 模板标签 | 生成公式 | 语义 |
+|-----------|---------|---------|------|
+| `6` | `G(IF -> FG(THEN))` | `LTLSPEC G((IF) -> F G(THEN))` | 持久性：IF 之后 THEN 最终持久成立 |
+
+### 攻击模式下的规格处理
+
+修复后，`SmvSpecificationBuilder` 不再在规格前件注入 `& intensity<=N`，以避免 vacuity（空真）。
+
+```smv
+-- 修复前（旧）
+CTLSPEC AG((condition & intensity<=3))
+
+-- 修复后（新）
+CTLSPEC AG(condition)
+```
+
+攻击预算统一放在 `main` 模块中：
+
+```smv
+MODULE main
+FROZENVAR
+    intensity: 0..50;
+INVAR intensity <= 3;
+```
+
+### 条件构建规则
+
+每个 `SpecConditionDto` 根据 `targetType` 映射为 SMV 表达式：
+
+```
+targetType=state    → deviceVarName.ModeName = stateName
+targetType=variable → deviceVarName.varName OP value  (内部变量)
+                    → a_varName OP value               (环境变量)
+targetType=api      → deviceVarName.apiName_a = TRUE/FALSE
+targetType=trust    → deviceVarName.trust_ModeName_stateName = trusted/untrusted
+targetType=privacy  → deviceVarName.privacy_ModeName_stateName = public/private
+```
+
+多个条件用 `&` 连接。relation 支持 `IN` (值在集合中) 和 `NOT_IN` (值不在集合中)，集合值用逗号分隔。
 
 ---
 
-## 12. 代码整理记录（2026-02-18）
+## 8. Trace 解析与反例结构
 
-### 架构重构
+当 NuSMV 报告某个 spec 为 false 时，会输出一个 counterexample（反例路径）。`SmvTraceParser` 将其解析为结构化数据。
 
-1. **Generator 模块重组**: `SmvContentBuilder` 拆分为 `DeviceSmvDataFactory`（数据构建）+ `SmvGenerator`（协调），子 Builder 移入 `generator/module/` 子包
-2. **SmvRulesModuleBuilder → SmvRuleCommentWriter**: 重命名以准确反映职责（仅写注释），移除未使用的 `deviceSmvMap` 参数
-3. **PropertyDimension 枚举**: 新增，统一信任/隐私维度逻辑
-4. **设备模板资源迁移**: JSON 模板从 `src/main/java/.../resource/` 移至 `src/main/resources/deviceTemplate/`
+### NuSMV 原始反例格式
 
-### 分层规范修复
+```
+-- specification AG (...) is false
+-- as demonstrated by the following execution sequence
+Trace Description: CTL Counterexample
+Trace Type: Counterexample
+  -> State: 1.1 <-
+    thermostat_1.ThermostatMode = cool
+    thermostat_1.temperature = 22
+    fan_1.FanMode = off
+    fan_1.trust_FanMode_auto = trusted
+    a_temperature = 35
+  -> State: 1.2 <-
+    thermostat_1.temperature = 35
+    fan_1.fanAuto_a = TRUE
+  -> State: 1.3 <-
+    fan_1.FanMode = auto
+    fan_1.trust_FanMode_auto = untrusted
+```
 
-5. **ChatService 返回 DTO**: 接口和实现从返回 `ChatSessionPo`/`ChatMessagePo` 改为返回 `ChatSessionResponseDto`/`ChatMessageResponseDto`，Controller 不再暴露 PO
-6. **RedisTokenBlacklistService 移至 impl 包**: 从 `service/` 移到 `service/impl/`，符合接口-实现分层约定
-7. **ChatMapper 清理**: 全限定类名替换为 import 语句
+### 解析后的 TraceStateDto 结构
 
-### 冗余代码清理
+```json
+[
+  {
+    "stateIndex": 1,
+    "devices": [
+      {
+        "deviceId": "thermostat_1",
+        "state": "cool",
+        "mode": "ThermostatMode",
+        "variables": [
+          { "name": "temperature", "value": "22" }
+        ],
+        "trustPrivacy": [
+          { "name": "trust_ThermostatMode_cool", "value": "trusted" }
+        ]
+      },
+      {
+        "deviceId": "fan_1",
+        "state": "off",
+        "mode": "FanMode",
+        "variables": [],
+        "trustPrivacy": [
+          { "name": "trust_FanMode_auto", "value": "trusted" }
+        ]
+      }
+    ]
+  },
+  {
+    "stateIndex": 2,
+    "devices": [ ... ]
+  }
+]
+```
 
-8. **NusmvExecutor.TRACE_HEADER_PATTERN**: 未使用的正则常量，已删除
-9. **SmvTraceParser.currentStateIndex**: 未使用的局部变量，已删除
-10. **WebConfig 重复 CORS**: 与 SecurityConfig 重复的 CORS 配置，已删除（保留 SecurityConfig 中的配置）
+### 解析逻辑要点
 
-### 命名一致性
-
-11. **AuthController**: `@CurrentUser Long currentUser` → `@CurrentUser Long userId`，与其他 Controller 统一
-12. **Result.success(null)** → **Result.success()**: ChatController、BoardStorageController 中的 void 响应统一使用无参版本
-
-### 防御性编程
-
-13. **SmvTraceParser.matchState()**: 添加 `getStates()`/`getModes()` null 安全检查
-14. **DeviceTemplateMapper**: manifest 序列化从 `toJsonOrEmpty`（返回 `"[]"`）改为 `toJson`（返回 `null`），语义正确
-
----
-
-## 13. 代码审查修复记录（2026-02-18）
-
-### Bug 修复
-
-1. **SmvSpecificationBuilder.resolveStateTrust()**: 当 `value` 为 null 时，trust 变量名拼接产生尾部下划线（如 `trust_key_`），导致无效 SMV 语法。修复为 null 时省略 `_value` 后缀
-2. **BoardStorageServiceImpl.saveRules()**: 当 `ruleId != null` 但不在 `existingRules` 中时，else 分支未设置 ID，导致 JPA 创建新实体而非更新。简化为统一 `po.setId(ruleId)` 逻辑
-
-### 异常处理完善
-
-3. **GlobalExceptionHandler**: 新增 `SmvGenerationException` 专用 handler，返回包含 `errorCategory` 的错误信息，不再被通用 `InternalServerException` handler 吞掉
-4. **ValidationException HTTP 状态码对齐**: handler 从 `400 Bad Request` 修正为 `422 Unprocessable Entity`，与 `ValidationException` 自身的 code=422 和 `Result.validationError()` 一致
-
-### 命名改进
-
-5. **SmvMainModuleBuilder.getEndStateForMode() → getStateForMode()**: 该方法同时用于解析 `startState` 和 `endState` 的多模式字符串，旧名称具有误导性
-
-### 配置修复
-
-6. **application.yaml Redis 配置缩进错误**: `spring.data.redis` 配置错误地嵌套在 `jwt:` 下，导致 Redis 连接失败。修正为顶层 `spring.data.redis:` 键
-7. **API-DOCUMENTATION.md 合并**: 内容已合并到 README.md，删除冗余文件
-8. **CLAUDE.md 完善**: 新增 SMV 生成详细文档、MEDIC-test 对照表、完整 API 端点列表、数据库表清单
-
-## 14. MEDIC 对照审查与增强（2026-02-18）
-
-### 建议1: 攻击模式传感器数值范围扩大
-- `SmvDeviceModuleBuilder.appendInternalVariables()`: 攻击模式下传感器设备的数值型变量上界扩大 20%（最少 +10），模拟数据篡改攻击
-- `SmvMainModuleBuilder`: 环境变量声明同样在攻击模式下扩大范围
-- 参考 MEDIC-test `outModule()` 中被注释的 `upperBound+40` 逻辑
-
-### 建议3: enablePrivacy 开关
-- `VerificationRequestDto` 新增 `enablePrivacy` 字段（默认 false）
-- 参数从 Controller → Service → SmvGenerator → SmvDeviceModuleBuilder / SmvMainModuleBuilder 全链路传递
-- `enablePrivacy=false` 时跳过所有 privacy 相关的 FROZENVAR/VAR 声明、ASSIGN init、next() 转换
-- 对应 MEDIC 的 `now == 3` 全局标志
-
-### 建议4: trust 传播逻辑验证
-- 对照 MEDIC lines 862-948 验证 trust 传播逻辑
-- 差异：本项目使用 AND（所有条件源都可信才传播）而非 MEDIC 的 OR（任一可信即传播），AND 更保守安全
-- 攻击模式 `is_attack=TRUE: untrusted` 逻辑一致
-- 默认 case 自保持逻辑一致
-
-### 建议5: getModeIndexOfState() 行为验证
-- MEDIC 实现：简单计数前导分号
-- 本项目实现：多策略（mode 名匹配 → 分号分割 → 状态列表查找），严格兼容 MEDIC 行为且更健壮
-
-### 建议6: 环境变量初始值范围校验
-- `SmvMainModuleBuilder.validateEnvVarInitValue()`: 新增校验方法
-- 数值型变量：超出 `[lower, upper]` 范围时 clamp 到边界并记录警告
-- 枚举型变量：值不在枚举列表中时使用第一个值并记录警告
-- 非法数值格式：忽略并记录警告
+- 按 `State X.Y:` 模式分割状态
+- `device.var = value` 格式匹配设备内部变量
+- `a_varName = value` 格式匹配环境变量
+- 状态名通过 `DeviceSmvData.states` 反向匹配
+- 信任/隐私变量通过 `trust_`/`privacy_` 前缀识别
+- 增量解析：只输出变化的变量（NuSMV 只打印变化项）
 
 ---
 
-## 15. 模型前置校验与架构整理（2026-02-18）
+## 9. 校验规则 (P1-P5)
 
-### 新增组件
+`SmvModelValidator` 在生成 SMV 文本前执行以下校验：
 
-**SmvModelValidator**（`generator/SmvModelValidator.java`）— 集中式模型前置校验器
+| 编号 | 校验内容 | 失败行为 |
+|------|---------|---------|
+| P1 | Transition.Trigger.Attribute 必须是合法属性名（模式名/状态名/变量名/信号名/API名） | 抛出 `illegalTriggerAttribute` |
+| P2 | 多模式设备的 Transition.EndState 分号段数必须等于模式数 | 抛出 `invalidStateFormat` |
+| P3 | 同名环境变量（IsInside=false）在不同设备模板中的范围/枚举值必须一致 | 抛出 `envVarConflict` |
+| P5 | 同一 (mode, stateName) 在不同 WorkingState 中的 trust/privacy 值必须一致 | 抛出 `trustPrivacyConflict` |
 
-在 `SmvGenerator.buildSmvContent()` 中，`DeviceSmvDataFactory.buildDeviceSmvMap()` 之后、SMV 文本生成之前调用 `modelValidator.validate(deviceSmvMap)`，将所有模板/实例数据的不合法项提前拦截，避免生成无效 SMV 交给 NuSMV 报错。
+软性校验（仅 warn，不阻断）：
+- 用户传入的变量名不存在于模板中
+- 无模式传感器设备传入了 state 参数
 
-校验职责分为两类：
+---
 
-| 类型 | 方法 | 调用方 | 行为 |
-|------|------|--------|------|
-| 硬性校验 | `validate()` | `SmvGenerator` | 抛出 `SmvGenerationException` |
-| 软性校验 | `warnUnknownUserVariables()` | `DeviceSmvDataFactory` | 仅 log.warn |
-| 软性校验 | `warnStatelessDeviceWithState()` | `DeviceSmvDataFactory` | 仅 log.warn |
+## 10. API 端点速查
 
-### P1: Trigger.Attribute 合法性校验
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `POST` | `/api/verify` | 同步验证，返回 `VerificationResultDto` |
+| `POST` | `/api/verify/async` | 异步验证，返回 `taskId` |
+| `GET` | `/api/verify/tasks/{id}` | 获取异步任务状态 |
+| `GET` | `/api/verify/tasks/{id}/progress` | 获取任务进度 (0-100) |
+| `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步任务 |
+| `GET` | `/api/verify/traces` | 获取用户所有 Trace |
+| `GET` | `/api/verify/traces/{id}` | 获取单个 Trace |
+| `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
 
-- 对每个设备的每个 Transition/API 的 `Trigger.Attribute` 检查是否属于合法集合
-- 合法集合 = `modes` ∪ `internalVariables[*].name`（含 env var）
-- 不合法时抛出 `SmvGenerationException.illegalTriggerAttribute()`，包含设备名、transition/API 名、非法属性、合法列表
-
-### P2: StartState/EndState 格式与语义校验
-
-- 多 mode 设备：`split(";", -1)` 段数必须 == `modes.size()`，每段要么为空要么属于对应 mode 的合法取值
-- 单 mode 设备：不能包含 `;`，值必须属于该 mode 的合法取值
-- 不合法时抛出 `SmvGenerationException.invalidStateFormat()`
-
-### P3: 同名环境变量冲突检测
-
-- 多设备声明同名外部变量（`IsInside=false`）时，要求类型一致：
-  - 都是数值型：`LowerBound`/`UpperBound` 必须相同
-  - 都是枚举型：`Values` 集合必须相同（忽略顺序）
-  - 类型不同（一个数值一个枚举）：直接冲突
-- 不一致时抛出 `SmvGenerationException.envVarConflict()`
-
-### P4: appendEnvTransitions 条件引用优化
-
-- 当 transition 的 `trigger.attribute` 本身是环境变量时，生成的 `next(a_var)` case 条件直接使用 `a_<attr>` 而非 `device.attr`
-- 例：`a_time = 23 : 0;` 而非 `clock_1.time = 23 : 0;`
-- 新增辅助方法 `SmvMainModuleBuilder.isEnvVariable()` 判断属性是否为环境变量
-
-### P5: trust/privacy 一致性校验
-
-- 检查同一 `(mode, stateName)` 在不同 WorkingState 中是否被赋予不同 trust 值
-- 例：`home;idle` trust=trusted 与 `home;active` trust=untrusted → `Mode_home` 冲突
-- 不一致时抛出 `SmvGenerationException.trustPrivacyConflict()`
-- 注：trust/privacy 的 `next()` 自保持（`TRUE: propVar;`）在 `appendPropertyTransitions` 中已正确生成，无需额外修复
-
-### 异常体系整理
-
-- 删除 `generator/SmvValidationException.java`（独立异常类）
-- 在 `exception/SmvGenerationException` 中新增 4 个工厂方法和对应 ErrorCategories：
-  - `illegalTriggerAttribute()` → `ILLEGAL_TRIGGER_ATTRIBUTE`
-  - `invalidStateFormat()` → `INVALID_STATE_FORMAT`
-  - `envVarConflict()` → `ENV_VAR_CONFLICT`
-  - `trustPrivacyConflict()` → `TRUST_PRIVACY_CONFLICT`
-- 所有校验异常统一走 `BaseException → InternalServerException → SmvGenerationException` 继承链，被 `GlobalExceptionHandler.handleSmvGenerationException()` 捕获
-
-### 校验逻辑集中化
-
-- `DeviceSmvDataFactory` 中原有的 `validateUserVariables()` 方法和内联的多模式 API EndState 分号警告已提取到 `SmvModelValidator` 的公共方法中
-- `DeviceSmvDataFactory` 注入 `SmvModelValidator`，调用 `warnUnknownUserVariables()` 和 `warnStatelessDeviceWithState()`
-
-### 单元测试
-
-新增 `SmvGeneratorFixesTest`（8 个测试用例，纯 POJO 构造，不依赖 Spring 上下文）：
-
-| 测试 | 覆盖点 |
-|------|--------|
-| `triggerAttribute_legal_passes` | P1 正向 |
-| `triggerAttribute_illegal_throws` | P1 负向 |
-| `multiModeEndState_wrongSegments_throws` | P2 段数不匹配 |
-| `envVarConflict_differentRange_throws` | P3 范围冲突 |
-| `envVarConflict_sameRange_passes` | P3 正向 |
-| `envTransition_usesAVar` | P4 `a_time` 而非 `clock_1.time` |
-| `trustNextSelfHold_multiMode` | P5 next() 自保持存在 |
-| `trustConflict_throws` | P5 trust 冲突检测 |
+所有端点需要 JWT 认证（`Authorization: Bearer <token>`），用户 ID 通过 `@CurrentUser` 注解自动注入。

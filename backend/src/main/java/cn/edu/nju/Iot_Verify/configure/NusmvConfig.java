@@ -27,9 +27,4 @@ public class NusmvConfig {
      * 默认 120000ms (2分钟)
      */
     private long timeoutMs = 120000;
-    
-    /**
-     * 是否启用攻击模式
-     */
-    private boolean attackEnabled = false;
 }
