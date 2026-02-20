@@ -121,6 +121,61 @@ class SmvTraceParserTest {
         assertEquals("heat;on", states.get(1).getDevices().get(0).getNewState());
     }
 
+    @Test
+    void parseCounterexample_handlesTraceNumberGreaterThanOne() {
+        // NuSMV may output "State 2.1" for the second trace; parser should handle \d+\.\d+
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("air_conditioner_1");
+        smv.setTemplateName("Air Conditioner");
+        smv.getModes().add("HvacMode");
+        smv.getModeStates().put("HvacMode", List.of("cool", "heat"));
+        smv.getStates().addAll(List.of("cool", "heat"));
+
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("air_conditioner_1", smv);
+
+        String counterexample = """
+                -> State: 2.1 <-
+                  air_conditioner_1.HvacMode = cool
+                  air_conditioner_1.temperature = 30
+                -> State: 2.2 <-
+                  air_conditioner_1.HvacMode = heat
+                  air_conditioner_1.temperature = 28
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
+        assertEquals(2, states.size());
+        assertEquals(1, states.get(0).getStateIndex());
+        assertEquals(2, states.get(1).getStateIndex());
+        assertEquals("cool", states.get(0).getDevices().get(0).getNewState());
+        assertEquals("heat", states.get(1).getDevices().get(0).getNewState());
+    }
+
+    @Test
+    void parseCounterexample_doesNotMatchStateMidLine() {
+        // Ensure anchored regex doesn't match "State" appearing mid-line
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("dev1");
+        smv.setTemplateName("Device");
+
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("dev1", smv);
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  dev1.status = on
+                some text mentioning State: 1.99 in the middle
+                -> State: 1.2 <-
+                  dev1.status = off
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
+        // Should only parse 2 states (1.1 and 1.2), not the mid-line "State: 1.99"
+        assertEquals(2, states.size());
+        assertEquals(1, states.get(0).getStateIndex());
+        assertEquals(2, states.get(1).getStateIndex());
+    }
+
     private TraceVariableDto findVariable(TraceDeviceDto dev, String name) {
         if (dev.getVariables() == null) {
             return null;

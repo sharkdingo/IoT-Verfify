@@ -1,0 +1,191 @@
+package cn.edu.nju.Iot_Verify.service.impl;
+
+import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+
+import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
+import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.repository.TraceRepository;
+import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+
+import java.lang.reflect.Method;
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.when;
+
+/**
+ * Tests for VerificationServiceImpl.buildVerificationResult fail-closed logic.
+ * Uses reflection to invoke the private method directly.
+ */
+@ExtendWith(MockitoExtension.class)
+class VerificationServiceImplBuildResultTest {
+
+    @Mock private SmvGenerator smvGenerator;
+    @Mock private SmvTraceParser smvTraceParser;
+    @Mock private NusmvConfig nusmvConfig;
+    @Mock private VerificationTaskRepository taskRepository;
+    @Mock private TraceRepository traceRepository;
+    @Mock private TraceMapper traceMapper;
+    @Mock private SpecificationMapper specificationMapper;
+    @Mock private VerificationTaskMapper verificationTaskMapper;
+
+    private VerificationServiceImpl service;
+    private Method buildVerificationResult;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        service = new VerificationServiceImpl(
+                smvGenerator, smvTraceParser, null, nusmvConfig,
+                taskRepository, traceRepository, traceMapper,
+                specificationMapper, verificationTaskMapper, new ObjectMapper());
+
+        buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
+                "buildVerificationResult",
+                NusmvResult.class, List.class, List.class, List.class,
+                Long.class, Long.class, List.class);
+        buildVerificationResult.setAccessible(true);
+    }
+
+    private VerificationResultDto invoke(NusmvResult result,
+                                         List<DeviceVerificationDto> devices,
+                                         List<SpecificationDto> specs,
+                                         List<String> checkLogs) throws Exception {
+        return (VerificationResultDto) buildVerificationResult.invoke(
+                service, result, devices, List.of(), specs, 1L, null, checkLogs);
+    }
+
+    // --- effectiveSpecs = 0: all specs filtered out â†?safe=true ---
+
+    @Test
+    void effectiveSpecsEmpty_returnsSafeTrue() throws Exception {
+        // Spec with no A/IF conditions â†?filtered out
+        SpecificationDto emptySpec = new SpecificationDto();
+        emptySpec.setId("s1");
+        emptySpec.setAConditions(List.of());
+        emptySpec.setIfConditions(List.of());
+
+        NusmvResult result = NusmvResult.success("", List.of());
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(emptySpec), logs);
+
+        assertTrue(dto.isSafe());
+        assertTrue(dto.getSpecResults().isEmpty());
+        assertTrue(logs.stream().anyMatch(l -> l.contains("No valid specifications")));
+    }
+
+    // --- specCheckResults empty but effectiveSpecs > 0 â†?fail-closed ---
+
+    @Test
+    void emptySpecResults_withEffectiveSpecs_failClosed() throws Exception {
+        SpecificationDto spec = makeEffectiveSpec("s1");
+        NusmvResult result = NusmvResult.success("some output", List.of());
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(spec), logs);
+
+        assertFalse(dto.isSafe());
+        assertEquals(1, dto.getSpecResults().size());
+        assertFalse(dto.getSpecResults().get(0));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("fail-closed")));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
+    }
+
+    // --- mismatch: fewer results than specs â†?fail-closed, missingè¡¥false ---
+
+    @Test
+    void fewerResultsThanSpecs_failClosedAndPadsFalse() throws Exception {
+        SpecificationDto spec1 = makeEffectiveSpec("s1");
+        SpecificationDto spec2 = makeEffectiveSpec("s2");
+
+        // NuSMV only returned 1 result for 2 specs
+        SpecCheckResult scr = new SpecCheckResult("expr1", true, null);
+        NusmvResult result = NusmvResult.success("output", List.of(scr));
+
+        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(spec1, spec2), logs);
+
+        assertFalse(dto.isSafe());
+        assertEquals(2, dto.getSpecResults().size());
+        assertTrue(dto.getSpecResults().get(0));   // first result preserved
+        assertFalse(dto.getSpecResults().get(1));  // missing â†?false
+        assertTrue(logs.stream().anyMatch(l -> l.contains("mismatch")));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("missing")));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
+    }
+
+    // --- mismatch: more results than specs â†?fail-closed, extras discarded ---
+
+    @Test
+    void moreResultsThanSpecs_failClosedAndTruncates() throws Exception {
+        SpecificationDto spec1 = makeEffectiveSpec("s1");
+
+        // NuSMV returned 2 results for 1 spec
+        SpecCheckResult scr1 = new SpecCheckResult("expr1", true, null);
+        SpecCheckResult scr2 = new SpecCheckResult("expr2", false, null);
+        NusmvResult result = NusmvResult.success("output", List.of(scr1, scr2));
+
+        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(spec1), logs);
+
+        assertFalse(dto.isSafe());
+        // specResults should be exactly effectiveSpecs.size() = 1, not 2
+        assertEquals(1, dto.getSpecResults().size());
+        assertTrue(logs.stream().anyMatch(l -> l.contains("extra")));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
+    }
+
+    // --- exact match, all pass â†?safe=true ---
+
+    @Test
+    void exactMatch_allPass_safeTrue() throws Exception {
+        SpecificationDto spec1 = makeEffectiveSpec("s1");
+        SpecCheckResult scr = new SpecCheckResult("expr1", true, null);
+        NusmvResult result = NusmvResult.success("output", List.of(scr));
+
+        when(smvGenerator.buildDeviceSmvMap(anyLong(), anyList())).thenReturn(Map.of());
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(spec1), logs);
+
+        assertTrue(dto.isSafe());
+        assertEquals(1, dto.getSpecResults().size());
+        assertTrue(dto.getSpecResults().get(0));
+    }
+
+    private SpecificationDto makeEffectiveSpec(String id) {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId(id);
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("dev1");
+        cond.setTargetType("state");
+        cond.setKey("status");
+        cond.setRelation("=");
+        cond.setValue("on");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+        return spec;
+    }
+}

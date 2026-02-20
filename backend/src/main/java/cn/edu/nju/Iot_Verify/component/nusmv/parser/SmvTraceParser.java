@@ -23,10 +23,11 @@ import java.util.regex.Pattern;
 public class SmvTraceParser {
 
     // Compatible with "State 1.1:" and "-> State: 1.1 <-"
+    // Anchored to line start (^\s*) to prevent mid-line false matches
     private static final Pattern STATE_PATTERN =
-            Pattern.compile("(?:->\\s*)?State[:\\s]\\s*1\\.(\\d+)(?:\\s*<-|:)?\\s*(\\w+)?");
+            Pattern.compile("^\\s*(?:->\\s*)?State[:\\s]\\s*\\d+\\.(\\d+)(?:\\s*<-|:)?\\s*(\\w+)?");
     private static final Pattern STATE_LINE_PATTERN =
-            Pattern.compile("(?:->\\s*)?State[:\\s]\\s*1\\.(\\d+)");
+            Pattern.compile("^\\s*(?:->\\s*)?State[:\\s]\\s*\\d+\\.(\\d+)");
     private static final Pattern VAR_PATTERN =
             Pattern.compile("(\\w+)\\.(\\w+)\\s*=\\s*(\\S+)");
     private static final Pattern ENV_VAR_PATTERN =

@@ -362,15 +362,67 @@ public class VerificationServiceImpl implements VerificationService {
                              (s.getIfConditions() != null && !s.getIfConditions().isEmpty()))
                 .toList();
 
+        // effectiveSpecs=0：所有 spec 都被过滤掉（无 A/IF 条件），无可验证规格
+        if (effectiveSpecs.isEmpty()) {
+            checkLogs.add("No valid specifications to verify (all filtered out)");
+            return VerificationResultDto.builder()
+                    .safe(true).traces(List.of()).specResults(List.of())
+                    .checkLogs(checkLogs).nusmvOutput(truncateOutput(result.getOutput())).build();
+        }
+
+        // fail-closed: 无法解析 spec 结果时标记为不安全
+        boolean parseIncomplete = false;
+
         if (specCheckResults.isEmpty()) {
-            // Fallback: NuSMV output didn't match per-spec pattern
-            checkLogs.add("Warning: could not parse per-spec results, treating as all passed");
-            for (int i = 0; i < effectiveSpecs.size(); i++) specResults.add(true);
-        } else {
-            if (specCheckResults.size() != effectiveSpecs.size()) {
-                log.warn("Spec count mismatch: NuSMV returned {} results but {} specs were generated",
-                        specCheckResults.size(), effectiveSpecs.size());
+            checkLogs.add("Warning: could not parse per-spec results from NuSMV output, fail-closed as unsafe");
+            log.warn("No spec results parsed from NuSMV output, marking all {} specs as failed (fail-closed)", effectiveSpecs.size());
+            for (int i = 0; i < effectiveSpecs.size(); i++) specResults.add(false);
+            parseIncomplete = true;
+        } else if (specCheckResults.size() != effectiveSpecs.size()) {
+            // 数量不一致：结果不可信，fail-closed
+            log.warn("Spec count mismatch: NuSMV returned {} results but {} specs were generated. Marking as unsafe (fail-closed).",
+                    specCheckResults.size(), effectiveSpecs.size());
+            checkLogs.add("Warning: spec result count mismatch (got " + specCheckResults.size()
+                    + ", expected " + effectiveSpecs.size() + "), fail-closed as unsafe");
+            // 仍然处理已有结果用于诊断，但缺失项补 false
+            parseIncomplete = true;
+            Map<String, DeviceSmvData> deviceSmvMap = smvGenerator.buildDeviceSmvMap(userId, devices);
+            // 只处理 min(specCheckResults, effectiveSpecs) 个结果，多余的丢弃
+            int bound = Math.min(specCheckResults.size(), effectiveSpecs.size());
+            for (int specIdx = 0; specIdx < bound; specIdx++) {
+                SpecCheckResult scr = specCheckResults.get(specIdx);
+                specResults.add(scr.isPassed());
+                SpecificationDto violatedSpec = effectiveSpecs.get(specIdx);
+                if (!scr.isPassed() && scr.getCounterexample() != null) {
+                    checkLogs.add("Spec " + (specIdx + 1) + " violated: " + scr.getSpecExpression());
+                    List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
+                            scr.getCounterexample(), deviceSmvMap);
+                    if (!states.isEmpty()) {
+                        TraceDto trace = TraceDto.builder()
+                                .userId(userId)
+                                .verificationTaskId(taskId)
+                                .violatedSpecId(violatedSpec.getId() != null ? violatedSpec.getId() : UNKNOWN_VIOLATED_SPEC_ID)
+                                .violatedSpecJson(specificationMapper.toJson(violatedSpec))
+                                .states(states)
+                                .createdAt(LocalDateTime.now())
+                                .build();
+                        traces.add(trace);
+                    }
+                } else if (scr.isPassed()) {
+                    checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
+                }
             }
+            // 多余的 NuSMV 结果记录日志但不加入 specResults
+            if (specCheckResults.size() > effectiveSpecs.size()) {
+                checkLogs.add("Warning: " + (specCheckResults.size() - effectiveSpecs.size())
+                        + " extra NuSMV result(s) discarded");
+            }
+            // 缺失的 spec 补 false
+            for (int i = specCheckResults.size(); i < effectiveSpecs.size(); i++) {
+                specResults.add(false);
+                checkLogs.add("Spec " + (i + 1) + " result missing, treated as violated (fail-closed)");
+            }
+        } else {
             Map<String, DeviceSmvData> deviceSmvMap = smvGenerator.buildDeviceSmvMap(userId, devices);
             int specIdx = 0;
             for (SpecCheckResult scr : specCheckResults) {
@@ -398,13 +450,15 @@ public class VerificationServiceImpl implements VerificationService {
             }
         }
 
-        // safe 基于 specResults 判定，而非 traces 是否为空（trace 解析可能失败）
-        boolean safe = specResults.stream().allMatch(r -> r);
+        // safe 基于 specResults 判定；解析不完整时强制 unsafe
+        boolean safe = !parseIncomplete && specResults.stream().allMatch(r -> r);
         if (!traces.isEmpty()) {
             saveTraces(traces, userId, taskId);
             checkLogs.add("Auto-saved " + traces.size() + " violation trace(s).");
         }
-        if (!safe) {
+        if (parseIncomplete) {
+            checkLogs.add("Verification marked unsafe because per-spec results are incomplete/unreliable (fail-closed).");
+        } else if (!safe) {
             checkLogs.add("Some specifications violated.");
         } else {
             checkLogs.add("All specifications satisfied.");
