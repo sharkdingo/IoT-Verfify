@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
+import { GLOBAL_VARIABLES } from '../types/rule'
 
 // Props
 interface Props {
@@ -34,21 +35,23 @@ const ruleData = reactive<RuleForm>({
 
 // Current source being added
 const currentSource = reactive({
-  fromId: '',
-  itemType: '',  // 'api' or 'variable'
-  fromApi: '',
-  relation: 'EQ',
-  value: ''
+  // 来源类型：device=设备API，globalVariable=全局变量
+  sourceType: '' as '' | 'device' | 'globalVariable',
+  fromId: '',  // 设备ID（仅 sourceType=device 时需要）
+  itemType: '',  // 'api' or 'variable'（仅 sourceType=device 时需要）
+  fromApi: '',  // API名称或全局变量名称
+  relation: '=',  // 条件关系（仅全局变量需要）
+  value: ''  // 值（仅全局变量需要）
 })
 
-// 条件选项
+// 条件选项 - 使用 NuSMV 兼容的关系运算符
 const relationOptions = [
-  { label: '等于 (=)', value: 'EQ' },
-  { label: '不等于 (≠)', value: 'NEQ' },
-  { label: '大于 (>)', value: 'GT' },
-  { label: '小于 (<)', value: 'GTE' },
-  { label: '大于等于 (≥)', value: 'GTE' },
-  { label: '小于等于 (≤)', value: 'LTE' }
+  { label: '等于 (=)', value: '=' },
+  { label: '不等于 (≠)', value: '!=' },
+  { label: '大于 (>)', value: '>' },
+  { label: '小于 (<)', value: '<' },
+  { label: '大于等于 (≥)', value: '>=' },
+  { label: '小于等于 (≤)', value: '<=' }
 ]
 
 // 获取设备图标
@@ -214,7 +217,7 @@ const addSource = () => {
     currentSource.fromId = ''
     currentSource.itemType = ''
     currentSource.fromApi = ''
-    currentSource.relation = 'EQ'
+    currentSource.relation = '='
     currentSource.value = ''
   }
 }
@@ -246,7 +249,7 @@ const handleClose = () => {
   currentSource.fromId = ''
   currentSource.itemType = ''
   currentSource.fromApi = ''
-  currentSource.relation = 'EQ'
+  currentSource.relation = '='
   currentSource.value = ''
 
   emit('update:modelValue', false)

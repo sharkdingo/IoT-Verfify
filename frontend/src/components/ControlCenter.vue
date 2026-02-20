@@ -172,11 +172,11 @@ const saveCondition = () => {
     return
   }
   
-  const device = props.nodes.find(n => n.id === editingConditionData.deviceId)
+  const device = props.nodes.find(n => n.label === editingConditionData.deviceId)
   const condition: SpecCondition = {
     id: editingConditionData.id || generateConditionId(),
     side: editingConditionSide.value,
-    deviceId: editingConditionData.deviceId,
+    deviceId: editingConditionData.deviceId,  // Now stores node.label (for backend compatibility)
     deviceLabel: device?.label || editingConditionData.deviceId,
     targetType: editingConditionData.targetType || 'state',
     key: editingConditionData.key,
@@ -229,14 +229,16 @@ const removeCondition = (side: SpecSide, index: number) => {
 }
 
 // Get device display name
-const getDeviceLabel = (deviceId: string) => {
-  const device = props.nodes.find(n => n.id === deviceId)
-  return device?.label || deviceId
+const getDeviceLabel = (deviceIdOrLabel: string) => {
+  // deviceIdOrLabel can be either node.id or node.label (for backward compatibility)
+  const device = props.nodes.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
+  return device?.label || deviceIdOrLabel
 }
 
 // Get device template
-const getDeviceTemplate = (deviceId: string) => {
-  const device = props.nodes.find(n => n.id === deviceId)
+const getDeviceTemplate = (deviceIdOrLabel: string) => {
+  // deviceIdOrLabel can be either node.id or node.label (for backward compatibility)
+  const device = props.nodes.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
   if (!device) return null
 
   // Try different ways to match the template
@@ -349,7 +351,9 @@ const currentRelation = computed(() => editingConditionData.relation || '=')
 // Computed available states for the selected device (for 'in'/'not_in' selection)
 const availableStates = computed(() => {
   if (!editingConditionData.deviceId) return []
-  const manifest = getCachedManifestForNode(editingConditionData.deviceId)
+  // Find the node by label (deviceId now stores label)
+  const node = props.nodes.find(n => n.label === editingConditionData.deviceId)
+  const manifest = node ? getCachedManifestForNode(node.id) : null
   if (!manifest || !manifest.WorkingStates) return []
   return manifest.WorkingStates.map((s: any) => s.Name)
 })
@@ -1519,7 +1523,7 @@ const exportTemplate = (template: any) => {
               <option
                 v-for="device in props.nodes"
                 :key="device.id"
-                :value="device.id"
+                :value="device.label"
               >
                 {{ device.label }}
               </option>

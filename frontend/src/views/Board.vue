@@ -260,7 +260,7 @@ const onCanvasDrop = async (e: DragEvent) => {
 
 const handleNodeMovedOrResized = async () => {
   await saveNodesToServer()
-  await saveEdgesToServer()
+  // edges 由 rules 动态生成，不需要单独保存
 }
 
 const handleAddRule = async (payload: RuleForm) => {
@@ -281,41 +281,20 @@ const handleAddRule = async (payload: RuleForm) => {
     name: payload.name || `Rule ${ruleId}`
   }
 
-  // 计算新规则对应的 Edge
-  const newEdges: DeviceEdge[] = []
-  for (const s of sources) {
-    const fid = s.fromId
-    const fromApi = s.fromApi
-    if (!fid || !fromApi) continue
-    const fromNode = nodes.value.find(n => n.id === fid)
-    if (!fromNode) continue
-    const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
-    newEdges.push({
-      id: 'edge_' + Date.now() + '_' + fid,
-      from: fromNode.id,
-      to: toNode.id,
-      fromLabel: fromNode.label,
-      toLabel: toNode.label,
-      fromPos: fromPoint,
-      toPos: toPoint
-    })
-  }
-
-  if (newEdges.length) {
+  if (sources.length > 0) {
     try {
-      // 先保存新创建的规则（只保存新规则，不是所有规则）
-      await boardApi.saveRules([newRule])
-      
-      // 保存新创建的边
-      await boardApi.saveEdges(newEdges)
+      // 只保存 rules（edges 由 rules 动态生成）
+      const allRules = [...rules.value, newRule]
+      await boardApi.saveRules(allRules)
 
       // 更新前端状态
-      rules.value = [...rules.value, newRule]
-      edges.value = [...edges.value, ...newEdges]
+      rules.value = allRules
+      // 动态生成 edges
+      edges.value = generateEdgesFromRules()
 
       ElMessage.success(t('app.addRuleSuccess') || '添加规则成功')
     } catch (e: any) {
-      console.error('saveRules/saveEdges error', e)
+      console.error('saveRules error', e)
       // 如果后端返回了错误信息，显示它
       const errorMsg = e?.response?.data?.message || e?.message || '保存规则失败'
       ElMessage.error(errorMsg)
@@ -428,7 +407,6 @@ const viewDeviceDetails = () => {
 const forceDeleteNode = async (nodeId: string) => {
   // 先更新本地状态，确保UI立即响应
   nodes.value = nodes.value.filter(n => n.id !== nodeId)
-  edges.value = edges.value.filter(e => e.from !== nodeId && e.to !== nodeId)
 
   // 删除与该设备相关的规则
   const rulesToDelete = rules.value.filter(rule =>
@@ -437,6 +415,9 @@ const forceDeleteNode = async (nodeId: string) => {
   const ruleIdsToDelete = rulesToDelete.map(rule => rule.id)
   rules.value = rules.value.filter(rule => !ruleIdsToDelete.includes(rule.id))
 
+  // 动态生成 edges（自动删除与该设备相关的边）
+  edges.value = generateEdgesFromRules()
+
   const { nextSpecs, removed } = removeSpecsForNode(specifications.value, nodeId)
   specifications.value = nextSpecs
 
@@ -444,7 +425,6 @@ const forceDeleteNode = async (nodeId: string) => {
   try {
     await Promise.all([
       saveNodesToServer(),
-      saveEdgesToServer(),
       boardApi.saveRules(rules.value),
       saveSpecsToServer()
     ])
@@ -536,7 +516,7 @@ const cancelDelete = () => {
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
 /**
- * 删除规则及其相关的边
+ * 删除规则（edges 由 rules 动态生成）
  */
 const deleteRule = async (ruleId: string) => {
   const ruleToDelete = rules.value.find(r => r.id === ruleId)
@@ -545,23 +525,13 @@ const deleteRule = async (ruleId: string) => {
   // 删除规则
   rules.value = rules.value.filter(r => r.id !== ruleId)
 
-  // 删除相关的边（所有 to 匹配的边）
-  edges.value = edges.value.filter(e => {
-    // 如果边的 to 与被删除的规则的 toId 匹配，则需要进一步检查
-    if (e.to === ruleToDelete.toId) {
-      // 检查 source 是否在这个规则中（通过 from 字段匹配）
-      return !ruleToDelete.sources.some(s => s.fromId === e.from)
-    }
-    return true
-  })
+  // 动态生成 edges（自动删除与该规则相关的边）
+  edges.value = generateEdgesFromRules()
 
-  // 并行保存
+  // 只保存 rules
   try {
-    await Promise.all([
-      boardApi.saveRules(rules.value),
-      boardApi.saveEdges(edges.value)
-    ])
-    ElMessage.success( '删除规则成功')
+    await boardApi.saveRules(rules.value)
+    ElMessage.success('删除规则成功')
   } catch (e) {
     console.error('删除规则失败', e)
     // 保存失败，回滚（重新获取）
@@ -599,9 +569,43 @@ const saveNodesToServer = async () => {
   catch (e) { ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败') }
 }
 
-const saveEdgesToServer = async () => {
-  try { await boardApi.saveEdges(edges.value) }
-  catch (e) { ElMessage.error(t('app.saveEdgesFailed') || '保存规则连线失败') }
+// 从 rules 动态生成 edges（不单独存储到服务器）
+const generateEdgesFromRules = (): DeviceEdge[] => {
+  const result: DeviceEdge[] = []
+  
+  for (const rule of rules.value) {
+    if (!rule.sources || !rule.toId) continue
+    
+    const toNode = nodes.value.find(n => n.id === rule.toId)
+    if (!toNode) continue
+    
+    for (const source of rule.sources) {
+      const fromId = source.fromId
+      if (!fromId) continue
+      
+      const fromNode = nodes.value.find(n => n.id === fromId)
+      if (!fromNode) continue
+      
+      const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
+      
+      result.push({
+        id: `edge_${rule.id}_${fromId}`,
+        from: fromId,
+        to: rule.toId,
+        fromLabel: fromNode.label,
+        toLabel: toNode.label,
+        fromPos: fromPoint,
+        toPos: toPoint,
+        fromApi: source.fromApi || '',
+        toApi: rule.toApi || '',
+        itemType: source.itemType as 'api' | 'variable' | undefined,
+        relation: source.relation || '',
+        value: source.value || ''
+      })
+    }
+  }
+  
+  return result
 }
 
 const saveSpecsToServer = async () => {
@@ -622,6 +626,8 @@ const refreshDeviceTemplates = async () => {
     const res = await boardApi.getDeviceTemplates()
     deviceTemplates.value = res || []
     console.log('Loaded device templates from backend:', deviceTemplates.value)
+    const humidifierTpl = deviceTemplates.value.find(t => t.manifest?.Name === 'Humidifier')
+    console.log('Humidifier template:', humidifierTpl)
   } catch (e) {
     console.error('加载设备模板失败:', e)
     deviceTemplates.value = []
@@ -642,17 +648,15 @@ const refreshDevices = async () => {
     nodes.value = [] }
 }
 
-// 2.定义刷新规则的函数
+// 2.定义刷新规则的函数（edges 由 rules 动态生成）
 const refreshRules = async () => {
   try {
-    // 并行获取规则列表和边列表
-    const [rulesData, edgesData] = await Promise.all([
-      boardApi.getRules(),
-      boardApi.getEdges()
-    ])
+    // 只获取规则列表
+    const rulesData = await boardApi.getRules()
     console.log('🔍 [Board] 刷新规则 - 原始数据:', JSON.parse(JSON.stringify(rulesData)))
     rules.value = rulesData
-    edges.value = edgesData
+    // 动态生成 edges
+    edges.value = generateEdgesFromRules()
   } catch (e) {
     console.error('加载规则失败', e)
     rules.value = []
@@ -1006,6 +1010,33 @@ const handleVerify = async () => {
   verificationResult.value = null
 
   try {
+    // ==== Helper function to normalize device names for NuSMV ====
+    // NuSMV identifiers cannot start with a number, so we add a prefix
+    const normalizeDeviceName = (name: string): string => {
+      if (!name) return name
+      // If starts with a digit, add prefix
+      if (/^\d/.test(name)) {
+        return 'd_' + name
+      }
+      return name
+    }
+
+    // Helper to convert value: remove quotes for numeric values
+    const normalizeValue = (val: string): string => {
+      if (!val) return val
+      // If value is a quoted number, remove quotes
+      if (/^"\d+"$/.test(val) || /^'\d+'$/.test(val)) {
+        return val.replace(/^["']|["']$/g, '')
+      }
+      return val
+    }
+
+    // Create a mapping from original label to normalized name
+    const deviceNameMap = new Map<string, string>()
+    nodes.value.forEach(node => {
+      deviceNameMap.set(node.label, normalizeDeviceName(node.label))
+    })
+
     // Prepare devices: Add default variables/privacies if missing
     const devices = nodes.value.map(node => {
       // Get template
@@ -1032,8 +1063,10 @@ const handleVerify = async () => {
       }
 
       // Map to backend DTO format - varName is required
+      // Use normalized name to ensure NuSMV compatibility
+      const normalizedVarName = normalizeDeviceName(node.label)
       return {
-        varName: node.label,  // Backend expects varName
+        varName: normalizedVarName,  // Backend expects varName
         templateName: node.templateName,
         state: node.state,
         currentStateTrust: (node as any).currentStateTrust || 'trusted',
@@ -1061,18 +1094,50 @@ const handleVerify = async () => {
       ruleString: r.name || ''
     }))
 
-    // Prepare specs
-    const specs = specifications.value
+    // Prepare specs - normalize device names and values
+    const specs = specifications.value.map(spec => ({
+      ...spec,
+      aConditions: (spec.aConditions || []).map((cond: any) => ({
+        ...cond,
+        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
+        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
+        value: normalizeValue(cond.value || '')
+      })),
+      ifConditions: (spec.ifConditions || []).map((cond: any) => ({
+        ...cond,
+        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
+        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
+        value: normalizeValue(cond.value || '')
+      })),
+      thenConditions: (spec.thenConditions || []).map((cond: any) => ({
+        ...cond,
+        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
+        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
+        value: normalizeValue(cond.value || '')
+      }))
+    }))
+
+    // Also normalize device names in rules
+    const normalizedRulesData = rulesData.map((r: any) => ({
+      ...r,
+      conditions: (r.conditions || []).map((c: any) => ({
+        ...c,
+        deviceName: c.deviceName ? normalizeDeviceName(c.deviceName) : c.deviceName,
+        value: normalizeValue(c.value || '')
+      }))
+    }))
 
     const req = {
       devices,
-      rules: rulesData,
+      rules: normalizedRulesData,
       specs,
       isAttack: false,
       intensity: 3
     }
 
     console.log('Starting verification with payload:', req)
+    console.log('Specs detail:', JSON.stringify(specs, null, 2))
+    console.log('Devices detail:', JSON.stringify(devices, null, 2))
 
     const result = await boardApi.verify(req)
     verificationResult.value = result

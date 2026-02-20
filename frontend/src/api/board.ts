@@ -122,7 +122,7 @@ export default {
                     fromApi: c.attribute || '',
                     // 如果有 relation 和 value，设置类型为 variable，否则为 api
                     targetType: (c.relation && c.value) ? 'variable' : 'api',
-                    relation: c.relation || 'EQ',
+                    relation: c.relation || '=',
                     value: c.value || 'true'
                 }))
                 : [],
@@ -152,10 +152,10 @@ export default {
                 ? rule.sources.map(source => ({
                     deviceName: String(source.fromId || ''),
                     attribute: String(source.fromApi || ''),
-                    relation: String(source.relation || 'EQ'),
+                    relation: String(source.relation || '='),
                     value: String(source.value || 'true')
                 }))
-                : [{ deviceName: 'dummy', attribute: 'dummy', relation: 'EQ', value: 'true' }];
+                : [{ deviceName: 'dummy', attribute: 'dummy', relation: '=', value: 'true' }];
 
             // 确保 command 是有效对象，不为 null
             const command = {
