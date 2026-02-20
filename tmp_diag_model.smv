@@ -1,0 +1,99 @@
+--test
+
+
+MODULE TemperatureSensor_d1
+FROZENVAR
+	trust_temperature: {trusted, untrusted};
+VAR
+
+	temperature: 0..100;
+ASSIGN
+
+	init(trust_temperature) := trusted;
+MODULE Humidifier_h1
+VAR
+	MachineState: {on, off};
+	on_a: boolean;
+	off_a: boolean;
+	humidity_rate: -10..10;
+	trust_MachineState_on: {untrusted, trusted};
+	trust_MachineState_off: {untrusted, trusted};
+ASSIGN
+
+	init(MachineState) := on;
+	init(on_a) := FALSE;
+	init(off_a) := FALSE;
+	init(humidity_rate) := 0;
+	init(trust_MachineState_on) := trusted;
+	init(trust_MachineState_off) := trusted;
+MODULE TemperatureSensor_TS
+FROZENVAR
+	trust_temperature: {trusted, untrusted};
+VAR
+
+	temperature: 0..100;
+ASSIGN
+
+	init(trust_temperature) := trusted;
+MODULE main
+VAR
+	d_1: TemperatureSensor_d1;
+	h1: Humidifier_h1;
+	ts: TemperatureSensor_TS;
+	a_temperature: 0..100;
+
+ASSIGN
+	init(a_temperature) := 0;
+	next(h1.MachineState) :=
+	case
+		ts.temperature>32: on;
+		TRUE: h1.MachineState;
+	esac;
+
+	next(a_temperature) :=
+	case
+		a_temperature>=100: {100};
+		a_temperature<=0: {0};
+		TRUE: {a_temperature - 1, a_temperature, a_temperature + 1};
+	esac;
+
+	next(h1.on_a) :=
+	case
+		h1.MachineState!=on & next(h1.MachineState)=on: TRUE;
+		TRUE: FALSE;
+	esac;
+
+	next(h1.off_a) :=
+	case
+		h1.MachineState!=off & next(h1.MachineState)=off: TRUE;
+		TRUE: FALSE;
+	esac;
+
+	next(h1.trust_MachineState_on) :=
+	case
+		ts.temperature>32 & (ts.trust_temperature=trusted): trusted;
+		ts.temperature>32: untrusted;
+		TRUE: h1.trust_MachineState_on;
+	esac;
+
+	next(h1.trust_MachineState_off) :=
+	case
+		TRUE: h1.trust_MachineState_off;
+	esac;
+
+	next(h1.humidity_rate) :=
+	case
+		h1.MachineState=on: 1;
+		TRUE: 0;
+	esac;
+
+	d_1.temperature := a_temperature;
+
+	ts.temperature := a_temperature;
+
+-- Specifications
+	CTLSPEC AG(ts.temperature<=30)
+
+CTLSPEC EF(ts.temperature>30)
+CTLSPEC AG(a_temperature=0)
+CTLSPEC AG(ts.temperature=a_temperature)

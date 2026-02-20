@@ -1001,7 +1001,7 @@ const verificationError = ref<string | null>(null)
 
 const handleVerify = async () => {
   if (nodes.value.length === 0) {
-    ElMessage.warning('No devices to verify')
+    ElMessage.warning({ message: 'No devices to verify', type: 'warning' })
     return
   }
 
@@ -1080,7 +1080,7 @@ const handleVerify = async () => {
       // Backend expects: conditions (not sources)
       conditions: (r.sources || []).map(s => ({
         deviceName: s.fromId,
-        attribute: s.fromApi || s.property || '',
+        attribute: s.fromApi || '',
         relation: s.relation || '=',
         value: s.value || 'true'
       })),
@@ -1124,7 +1124,11 @@ const handleVerify = async () => {
         ...c,
         deviceName: c.deviceName ? normalizeDeviceName(c.deviceName) : c.deviceName,
         value: normalizeValue(c.value || '')
-      }))
+      })),
+      command: {
+        ...r.command,
+        deviceName: r.command.deviceName ? normalizeDeviceName(r.command.deviceName) : r.command.deviceName
+      }
     }))
 
     const req = {
@@ -1135,23 +1139,22 @@ const handleVerify = async () => {
       intensity: 3
     }
 
-    console.log('Starting verification with payload:', req)
-    console.log('Specs detail:', JSON.stringify(specs, null, 2))
-    console.log('Devices detail:', JSON.stringify(devices, null, 2))
+    console.log('[Verify] Full request payload:', JSON.stringify(req, null, 2))
 
     const result = await boardApi.verify(req)
+    console.log('[Verify] Response result:', JSON.stringify(result, null, 2))
     verificationResult.value = result
 
     if (result.safe) {
-      ElMessage.success('Verification passed: System is safe!')
+      ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
     } else {
-      ElMessage.warning(`Verification failed: Found ${result.traces?.length || 0} violations`)
+      ElMessage.warning({ message: `Verification failed: Found ${result.traces?.length || 0} violations`, type: 'warning' })
     }
 
   } catch (error: any) {
     console.error('Verification failed:', error)
     verificationError.value = error.message || 'Verification failed'
-    ElMessage.error(verificationError.value)
+    ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
   } finally {
     isVerifying.value = false
   }

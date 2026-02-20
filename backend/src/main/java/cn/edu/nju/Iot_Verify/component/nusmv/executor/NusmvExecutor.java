@@ -143,12 +143,10 @@ public class NusmvExecutor {
                 command.add(fullCommand);
             }
             return command;
-        } else if (isWindows) {
-            command.add("cmd.exe");
-            command.add("/c");
-            command.add(quoteForShell(nusmvPath, true) + " " + quoteForShell(smvFile.getAbsolutePath(), true));
-            return command;
         }
+        // No commandPrefix: invoke the executable directly via ProcessBuilder.
+        // Do NOT wrap with cmd.exe /c — its quoting rules are fragile and can
+        // cause the command to be misinterpreted (e.g. opening an interactive shell).
         command.add(nusmvPath);
         command.add(smvFile.getAbsolutePath());
         return command;

@@ -8,7 +8,9 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWrit
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -91,6 +93,11 @@ public class SmvGenerator {
         // 前置校验：P1/P2/P3/P5 — 在生成 SMV 文本前检测模板数据不合法项
         modelValidator.validate(deviceSmvMap);
 
+        // 前置校验：隐私规约需要 enablePrivacy=true
+        if (!enablePrivacy && specs != null) {
+            validateNoPrivacySpecs(specs);
+        }
+
         StringBuilder content = new StringBuilder();
 
         content.append(ruleCommentWriter.build(rules));
@@ -107,5 +114,26 @@ public class SmvGenerator {
         content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap));
 
         return content.toString();
+    }
+
+    /**
+     * 校验：当 enablePrivacy=false 时，规约中不得包含 targetType="privacy" 的条件。
+     * 否则 SmvSpecificationBuilder 会生成 privacy_* 变量引用，但这些变量未被声明，
+     * 导致 NuSMV 运行时报 undefined variable 错误。
+     */
+    private void validateNoPrivacySpecs(List<SpecificationDto> specs) {
+        for (SpecificationDto spec : specs) {
+            if (spec == null) continue;
+            if (hasPrivacyCondition(spec.getAConditions())
+                    || hasPrivacyCondition(spec.getIfConditions())
+                    || hasPrivacyCondition(spec.getThenConditions())) {
+                throw SmvGenerationException.privacySpecWithoutPrivacyEnabled(spec.getId());
+            }
+        }
+    }
+
+    private boolean hasPrivacyCondition(List<SpecConditionDto> conditions) {
+        if (conditions == null) return false;
+        return conditions.stream().anyMatch(c -> "privacy".equals(c.getTargetType()));
     }
 }

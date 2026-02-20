@@ -129,6 +129,17 @@ public class SmvGenerationException extends InternalServerException {
         );
     }
 
+    // ==================== 规约校验 ====================
+
+    public static SmvGenerationException privacySpecWithoutPrivacyEnabled(String specId) {
+        return new SmvGenerationException(
+                "Specification [" + specId + "] references privacy properties, "
+                + "but privacy mode is not enabled. "
+                + "Enable privacy mode or remove privacy conditions from the specification.",
+                ErrorCategories.PRIVACY_SPEC_WITHOUT_PRIVACY
+        );
+    }
+
     // ==================== Error Categories ====================
 
     public static class ErrorCategories {
@@ -146,5 +157,6 @@ public class SmvGenerationException extends InternalServerException {
         public static final String ENV_VAR_CONFLICT = "ENV_VAR_CONFLICT";
         public static final String TRUST_PRIVACY_CONFLICT = "TRUST_PRIVACY_CONFLICT";
         public static final String INCOMPLETE_TRIGGER = "INCOMPLETE_TRIGGER";
+        public static final String PRIVACY_SPEC_WITHOUT_PRIVACY = "PRIVACY_SPEC_WITHOUT_PRIVACY";
     }
 }

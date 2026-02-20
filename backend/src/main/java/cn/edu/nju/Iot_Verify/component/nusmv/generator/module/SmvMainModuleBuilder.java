@@ -528,25 +528,38 @@ public class SmvMainModuleBuilder {
             content.append("\t\tTRUE: ").append(rateSet).append(";\n");
         } else {
             // 无设备影响率：简单的 NaturalChangeRate 变化
+            // 边界条件：允许变量朝远离边界的方向变化，但阻止越界
             if (upperRate > 0) {
+                // 上边界：禁止继续上升，但允许下降和保持
+                StringBuilder upperSet = new StringBuilder("{");
+                if (lowerRate < 0) {
+                    upperSet.append(formatArithmeticExpr(smvVarName, lowerRate)).append(", ");
+                }
+                upperSet.append(smvVarName).append("}");
                 content.append("\t\t").append(smvVarName).append(">=").append(upper)
-                       .append(": {").append(upper).append("};\n");
+                       .append(": ").append(upperSet).append(";\n");
             }
             if (lowerRate < 0) {
+                // 下边界：禁止继续下降，但允许上升和保持
+                StringBuilder lowerSet = new StringBuilder("{").append(smvVarName);
+                if (upperRate > 0) {
+                    lowerSet.append(", ").append(formatArithmeticExpr(smvVarName, upperRate));
+                }
+                lowerSet.append("}");
                 content.append("\t\t").append(smvVarName).append("<=").append(lower)
-                       .append(": {").append(lower).append("};\n");
+                       .append(": ").append(lowerSet).append(";\n");
             }
 
             StringBuilder rateSet = new StringBuilder("{");
             boolean first = true;
             if (lowerRate < 0) {
-                rateSet.append(smvVarName).append(" - ").append(Math.abs(lowerRate));
+                rateSet.append(formatArithmeticExpr(smvVarName, lowerRate));
                 first = false;
             }
             if (!first) rateSet.append(", ");
             rateSet.append(smvVarName);
             if (upperRate > 0) {
-                rateSet.append(", ").append(smvVarName).append(" + ").append(upperRate);
+                rateSet.append(", ").append(formatArithmeticExpr(smvVarName, upperRate));
             }
             rateSet.append("}");
             content.append("\t\tTRUE: ").append(rateSet).append(";\n");
@@ -1059,12 +1072,34 @@ public class SmvMainModuleBuilder {
 
                     // 边界检查：防止溢出 NuSMV 范围
                     if (var.getUpperBound() != null && (upperNcr > 0 || !impactedRate.isEmpty())) {
-                        content.append("\t\t").append(varRef).append(">=").append(var.getUpperBound())
-                               .append(": ").append(var.getUpperBound()).append(";\n");
+                        if (impactedRate.isEmpty()) {
+                            // 无设备影响率：允许下降和保持，禁止上升
+                            StringBuilder upperSet = new StringBuilder("{");
+                            if (lowerNcr < 0) {
+                                upperSet.append(formatArithmeticExpr(varRef, lowerNcr)).append(", ");
+                            }
+                            upperSet.append(varRef).append("}");
+                            content.append("\t\t").append(varRef).append(">=").append(var.getUpperBound())
+                                   .append(": ").append(upperSet).append(";\n");
+                        } else {
+                            content.append("\t\t").append(varRef).append(">=").append(var.getUpperBound())
+                                   .append(": ").append(var.getUpperBound()).append(";\n");
+                        }
                     }
                     if (var.getLowerBound() != null && (lowerNcr < 0 || !impactedRate.isEmpty())) {
-                        content.append("\t\t").append(varRef).append("<=").append(var.getLowerBound())
-                               .append(": ").append(var.getLowerBound()).append(";\n");
+                        if (impactedRate.isEmpty()) {
+                            // 无设备影响率：允许上升和保持，禁止下降
+                            StringBuilder lowerSet = new StringBuilder("{").append(varRef);
+                            if (upperNcr > 0) {
+                                lowerSet.append(", ").append(formatArithmeticExpr(varRef, upperNcr));
+                            }
+                            lowerSet.append("}");
+                            content.append("\t\t").append(varRef).append("<=").append(var.getLowerBound())
+                                   .append(": ").append(lowerSet).append(";\n");
+                        } else {
+                            content.append("\t\t").append(varRef).append("<=").append(var.getLowerBound())
+                                   .append(": ").append(var.getLowerBound()).append(";\n");
+                        }
                     }
 
                     // 生成变化集合

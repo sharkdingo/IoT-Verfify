@@ -5,11 +5,14 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvDeviceModuleBui
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuilder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -331,5 +334,95 @@ class SmvGeneratorFixesTest {
                 () -> validator.validate(map));
         assertTrue(ex.getMessage().contains("trust/privacy conflict"));
         assertTrue(ex.getMessage().contains("Mode_home"));
+    }
+
+    // ======================== P6: privacy spec + enablePrivacy=false ========================
+
+    /** 通过反射调用 SmvGenerator.validateNoPrivacySpecs */
+    private void invokeValidateNoPrivacySpecs(List<SpecificationDto> specs) throws Exception {
+        // SmvGenerator 的构造函数需要所有依赖，但 validateNoPrivacySpecs 不使用它们
+        SmvGenerator generator = new SmvGenerator(null, null, null, null, null, null);
+        Method method = SmvGenerator.class.getDeclaredMethod("validateNoPrivacySpecs", List.class);
+        method.setAccessible(true);
+        try {
+            method.invoke(generator, specs);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof SmvGenerationException) {
+                throw (SmvGenerationException) e.getCause();
+            }
+            throw e;
+        }
+    }
+
+    private SpecConditionDto makeCondition(String targetType) {
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("dev1");
+        cond.setTargetType(targetType);
+        cond.setKey("temperature");
+        cond.setRelation("=");
+        cond.setValue("trusted");
+        return cond;
+    }
+
+    @Test
+    @DisplayName("P6: privacy condition in aConditions throws when privacy disabled")
+    void privacyInAConditions_throws() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_privacy_1");
+        spec.setAConditions(List.of(makeCondition("privacy")));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> invokeValidateNoPrivacySpecs(List.of(spec)));
+        assertTrue(ex.getMessage().contains("spec_privacy_1"));
+        assertTrue(ex.getMessage().contains("privacy"));
+        assertEquals("PRIVACY_SPEC_WITHOUT_PRIVACY", ex.getErrorCategory());
+    }
+
+    @Test
+    @DisplayName("P6: privacy condition in ifConditions throws when privacy disabled")
+    void privacyInIfConditions_throws() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_privacy_2");
+        spec.setAConditions(List.of());
+        spec.setIfConditions(List.of(makeCondition("privacy")));
+        spec.setThenConditions(List.of());
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> invokeValidateNoPrivacySpecs(List.of(spec)));
+        assertTrue(ex.getMessage().contains("spec_privacy_2"));
+    }
+
+    @Test
+    @DisplayName("P6: privacy condition in thenConditions throws when privacy disabled")
+    void privacyInThenConditions_throws() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_privacy_3");
+        spec.setAConditions(List.of());
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of(makeCondition("privacy")));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> invokeValidateNoPrivacySpecs(List.of(spec)));
+        assertTrue(ex.getMessage().contains("spec_privacy_3"));
+    }
+
+    @Test
+    @DisplayName("P6: non-privacy specs pass validation")
+    void nonPrivacySpecs_passes() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_trust_1");
+        spec.setAConditions(List.of(makeCondition("trust")));
+        spec.setIfConditions(List.of(makeCondition("state")));
+        spec.setThenConditions(List.of(makeCondition("variable")));
+
+        assertDoesNotThrow(() -> invokeValidateNoPrivacySpecs(List.of(spec)));
+    }
+
+    @Test
+    @DisplayName("P6: empty specs list passes validation")
+    void emptySpecs_passes() {
+        assertDoesNotThrow(() -> invokeValidateNoPrivacySpecs(List.of()));
     }
 }
