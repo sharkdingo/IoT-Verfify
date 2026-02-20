@@ -26,6 +26,8 @@ import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -65,7 +67,38 @@ public class VerificationServiceImpl implements VerificationService {
     private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
     private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
     private final ExecutorService syncVerificationExecutor = Executors.newFixedThreadPool(
-            4, r -> { Thread t = new Thread(r, "sync-verify"); t.setDaemon(true); return t; });
+            4, r -> { Thread t = new Thread(r, "sync-verify"); return t; });
+
+    @PostConstruct
+    void cleanupStaleTasks() {
+        List<VerificationTaskPo> staleTasks = taskRepository.findByStatusIn(
+                List.of(VerificationTaskPo.TaskStatus.RUNNING, VerificationTaskPo.TaskStatus.PENDING));
+        if (!staleTasks.isEmpty()) {
+            log.warn("Found {} stale tasks on startup, marking as FAILED", staleTasks.size());
+            String msg = "Server restarted while task was in progress";
+            for (VerificationTaskPo task : staleTasks) {
+                task.setStatus(VerificationTaskPo.TaskStatus.FAILED);
+                task.setCompletedAt(LocalDateTime.now());
+                task.setIsSafe(false);
+                task.setErrorMessage(msg);
+                writeCheckLogs(task, List.of(msg));
+                taskRepository.save(task);
+            }
+        }
+    }
+
+    @PreDestroy
+    void shutdownSyncExecutor() {
+        syncVerificationExecutor.shutdown();
+        try {
+            if (!syncVerificationExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                syncVerificationExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            syncVerificationExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
 
     // ==================== 同步验证 ====================
 

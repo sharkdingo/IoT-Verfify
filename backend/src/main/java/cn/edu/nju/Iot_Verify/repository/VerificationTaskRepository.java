@@ -29,6 +29,11 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     List<VerificationTaskPo> findByUserIdAndStatus(Long userId, VerificationTaskPo.TaskStatus status);
 
     /**
+     * 根据状态列表查询任务（用于启动时清理僵尸任务）
+     */
+    List<VerificationTaskPo> findByStatusIn(List<VerificationTaskPo.TaskStatus> statuses);
+
+    /**
      * 删除用户的所有任务
      */
     void deleteByUserId(Long userId);

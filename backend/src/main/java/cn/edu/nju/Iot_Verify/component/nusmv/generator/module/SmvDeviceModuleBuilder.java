@@ -89,7 +89,7 @@ public class SmvDeviceModuleBuilder {
     }
 
     private void appendVariables(StringBuilder content, DeviceSmvData smv, boolean isSensor, boolean isAttack, boolean enablePrivacy) {
-        content.append("\nVAR\n");
+        content.append("\nVAR");
 
         appendModeVariables(content, smv);
         appendInternalVariables(content, smv, isAttack);
@@ -112,7 +112,7 @@ public class SmvDeviceModuleBuilder {
     }
 
     private void appendAssignments(StringBuilder content, DeviceSmvData smv, boolean isAttack, boolean isSensor, boolean enablePrivacy) {
-        content.append("\nASSIGN\n");
+        content.append("\nASSIGN");
 
         appendInitialValues(content, smv, isSensor);
 
@@ -141,7 +141,7 @@ public class SmvDeviceModuleBuilder {
             for (String mode : smv.getModes()) {
                 List<String> modeStateList = smv.getModeStates().get(mode);
                 if (modeStateList != null && !modeStateList.isEmpty()) {
-                    content.append("\t").append(mode).append(": {").append(String.join(", ", modeStateList)).append("};");
+                    content.append("\n\t").append(mode).append(": {").append(String.join(", ", modeStateList)).append("};");
                 }
             }
         }

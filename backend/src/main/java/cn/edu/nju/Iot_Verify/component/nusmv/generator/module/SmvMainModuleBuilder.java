@@ -44,7 +44,7 @@ public class SmvMainModuleBuilder {
             content.append("\n\tintensity: 0..50;");
         }
 
-        content.append("\nVAR\n");
+        content.append("\nVAR");
 
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
@@ -52,7 +52,7 @@ public class SmvMainModuleBuilder {
 
             String moduleName = smv.getModuleName();
             String varName = smv.getVarName();
-            content.append("\t").append(varName).append(": ").append(moduleName).append(";\n");
+            content.append("\n\t").append(varName).append(": ").append(moduleName).append(";");
         }
 
         Set<String> declaredEnvVars = new HashSet<>();
@@ -66,13 +66,13 @@ public class SmvMainModuleBuilder {
                 if (!declaredEnvVars.contains(varName)) {
                     declaredEnvVars.add(varName);
                     DeviceManifest.InternalVariable var = smv.getEnvVariables().get(varName);
-                    content.append("\ta_").append(varName).append(": ");
+                    content.append("\n\ta_").append(varName).append(": ");
                     if (var.getValues() != null && !var.getValues().isEmpty()) {
                         List<String> cleanValues = new ArrayList<>();
                         for (String v : var.getValues()) {
                             cleanValues.add(v.replace(" ", ""));
                         }
-                        content.append("{").append(String.join(", ", cleanValues)).append("};\n");
+                        content.append("{").append(String.join(", ", cleanValues)).append("};");
                     } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
                         int lower = var.getLowerBound();
                         int upper = var.getUpperBound();
@@ -82,10 +82,10 @@ public class SmvMainModuleBuilder {
                             int expansion = Math.max(10, range / 5);
                             upper = upper + expansion;
                         }
-                        content.append(lower).append("..").append(upper).append(";\n");
+                        content.append(lower).append("..").append(upper).append(";");
                     } else {
                         // NuSMV has no "integer" type; use a safe default range
-                        content.append("0..100;\n");
+                        content.append("0..100;");
                     }
                     // 记录用户提供的初始值（校验范围）
                     String userInit = smv.getVariableValues().get(varName);
@@ -116,7 +116,7 @@ public class SmvMainModuleBuilder {
                     content.append(" + toint(").append(varName).append(".is_attack)");
                 }
             }
-            content.append(";\n");
+            content.append(";");
         }
 
         appendStateTransitions(content, devices, rules, deviceSmvMap, isAttack);
@@ -157,7 +157,7 @@ public class SmvMainModuleBuilder {
                 for (DeviceManifest.InternalVariable var : smv.getManifest().getInternalVariables()) {
                     if (var.getIsInside() != null && !var.getIsInside()) {
                         content.append("\n\t").append(varName).append(".").append(var.getName())
-                               .append(" := a_").append(var.getName()).append(";\n");
+                               .append(" := a_").append(var.getName()).append(";");
                     }
                 }
             }
@@ -253,7 +253,7 @@ public class SmvMainModuleBuilder {
                     }
 
                     content.append("\t\tTRUE: ").append(varName).append(".").append(mode).append(";\n");
-                    content.append("\tesac;\n");
+                    content.append("\tesac;");
                 }
             }
         }
@@ -472,7 +472,7 @@ public class SmvMainModuleBuilder {
                     content.append("\t\tTRUE: ").append(smvVarName).append(";\n");
                 }
 
-                content.append("\tesac;\n");
+                content.append("\tesac;");
             }
         }
     }
@@ -643,7 +643,7 @@ public class SmvMainModuleBuilder {
                 }
 
                 content.append("\t\tTRUE: FALSE;\n");
-                content.append("\tesac;\n");
+                content.append("\tesac;");
             }
         }
     }
@@ -691,7 +691,7 @@ public class SmvMainModuleBuilder {
                 }
 
                 content.append("\t\tTRUE: FALSE;\n");
-                content.append("\tesac;\n");
+                content.append("\tesac;");
             }
         }
     }
@@ -768,7 +768,7 @@ public class SmvMainModuleBuilder {
                     }
 
                     content.append("\t\tTRUE: ").append(propVar).append(";\n");
-                    content.append("\tesac;\n");
+                    content.append("\tesac;");
                 }
             }
         }
@@ -789,7 +789,7 @@ public class SmvMainModuleBuilder {
             String varName = smv.getVarName();
             for (DeviceManifest.InternalVariable var : smv.getVariables()) {
                 String propVar = varName + "." + dim.prefix + var.getName();
-                content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";\n");
+                content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";");
             }
         }
     }
@@ -926,7 +926,7 @@ public class SmvMainModuleBuilder {
                 if (!ci.isChangeable()) continue;
                 // IsChangeable=true 的 content 是 VAR，需要 next()
                 String propVar = varName + ".privacy_" + ci.getName();
-                content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";\n");
+                content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";");
             }
         }
     }
@@ -979,7 +979,7 @@ public class SmvMainModuleBuilder {
                 }
 
                 content.append("\t\tTRUE: 0;\n");
-                content.append("\tesac;\n");
+                content.append("\tesac;");
             }
         }
     }
@@ -1148,7 +1148,7 @@ public class SmvMainModuleBuilder {
                     content.append("\t\tTRUE: {").append(String.join(", ", cleanVals)).append("};\n");
                 }
 
-                content.append("\tesac;\n");
+                content.append("\tesac;");
             }
         }
     }
