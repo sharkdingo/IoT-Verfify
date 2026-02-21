@@ -68,16 +68,15 @@ public class SmvSpecificationBuilder {
         return generateCtlSpec(spec, isAttack, intensity, deviceSmvMap);
     }
 
-    private String generateLtlSpec(SpecificationDto spec, boolean isAttack, int intensity, 
+    private String generateLtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
                                   Map<String, DeviceSmvData> deviceSmvMap) {
         String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
         String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
-        String antecedent = withAttackConstraint(ifPart, isAttack, intensity);
 
-        return "LTLSPEC G((" + antecedent + ") -> F G(" + thenPart + "))";
+        return "LTLSPEC G((" + ifPart + ") -> F G(" + thenPart + "))";
     }
 
-    private String generateCtlSpec(SpecificationDto spec, boolean isAttack, int intensity, 
+    private String generateCtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
                                   Map<String, DeviceSmvData> deviceSmvMap) {
         String templateId = spec.getTemplateId();
         String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
@@ -88,21 +87,21 @@ public class SmvSpecificationBuilder {
             case "1": // always
                 if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
                     // aConditions 为空但有 if/then 条件时，生成 AG(if -> then)
-                    return "CTLSPEC AG((" + withAttackConstraint(ifPart, isAttack, intensity) + ") -> (" + thenPart + "))";
+                    return "CTLSPEC AG((" + ifPart + ") -> (" + thenPart + "))";
                 }
-                return "CTLSPEC AG(" + withAttackConstraint(aPart, isAttack, intensity) + ")";
+                return "CTLSPEC AG(" + aPart + ")";
             case "2": // eventually
-                return "CTLSPEC AF(" + withAttackConstraint(aPart, isAttack, intensity) + ")";
+                return "CTLSPEC AF(" + aPart + ")";
             case "3": // never
-                return "CTLSPEC AG !(" + withAttackConstraint(aPart, isAttack, intensity) + ")";
+                return "CTLSPEC AG !(" + aPart + ")";
             case "4": // immediate
-                return "CTLSPEC AG((" + withAttackConstraint(ifPart, isAttack, intensity) + ") -> AX(" + thenPart + "))";
+                return "CTLSPEC AG((" + ifPart + ") -> AX(" + thenPart + "))";
             case "5": // response
-                return "CTLSPEC AG((" + withAttackConstraint(ifPart, isAttack, intensity) + ") -> AF(" + thenPart + "))";
+                return "CTLSPEC AG((" + ifPart + ") -> AF(" + thenPart + "))";
             case "7": // safety: untrusted -> !A
                 return buildSafetySpec(spec, deviceSmvMap, isAttack, intensity);
             default:
-                return "CTLSPEC AG(" + withAttackConstraint(aPart, isAttack, intensity) + ")";
+                return "CTLSPEC AG(" + aPart + ")";
         }
     }
 
@@ -438,12 +437,6 @@ public class SmvSpecificationBuilder {
             case "NOT_IN" -> "not in";
             default -> relation;
         };
-    }
-
-    private String withAttackConstraint(String condition, boolean isAttack, int intensity) {
-        // intensity 约束已由 main module 的 INVAR intensity<=N 全局控制，
-        // 不再注入到规格前件中，避免空真（vacuity）问题
-        return condition;
     }
 
     private boolean isTrueLiteral(String s) {
