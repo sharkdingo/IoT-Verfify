@@ -285,20 +285,25 @@ public class DeviceSmvDataFactory {
     }
 
     private void computeIdentifiers(DeviceSmvData smv, String rawVarName) {
-        // moduleName
-        String tplName = smv.getTemplateName() != null ? smv.getTemplateName() : "Device";
-        String base = tplName.replaceAll("[^a-zA-Z0-9]", "");
-        if (base.isEmpty()) base = "Device";
-        String suffix = rawVarName != null ? rawVarName.replaceAll("[^a-zA-Z0-9]", "") : "0";
-        smv.setModuleName(base + "_" + suffix);
-
-        // varName
+        // Use one normalization pipeline for both varName and module suffix
+        // so module identity cannot diverge from instance identity.
         String safeId = rawVarName != null ? rawVarName.replaceAll("[^a-zA-Z0-9_]", "_") : "_";
         String result = safeId.toLowerCase();
         if (result.isEmpty() || result.matches("^_+$")) {
             result = "device_0";
         }
         smv.setVarName(result);
+
+        // moduleName
+        String tplName = smv.getTemplateName() != null ? smv.getTemplateName() : "Device";
+        String base = tplName.replaceAll("[^a-zA-Z0-9]", "");
+        if (base.isEmpty()) base = "Device";
+        String suffix = result;
+        // NuSMV identifiers should not start with a digit.
+        if (!suffix.isEmpty() && Character.isDigit(suffix.charAt(0))) {
+            suffix = "_" + suffix;
+        }
+        smv.setModuleName(base + "_" + suffix);
 
         // sensor
         smv.setSensor(smv.getManifest() != null
@@ -346,7 +351,7 @@ public class DeviceSmvDataFactory {
                 return i;
             }
         }
-        return 0;
+        return -1;
     }
 
     /** 按 varName 或模板名查找设备 SMV 数据 */

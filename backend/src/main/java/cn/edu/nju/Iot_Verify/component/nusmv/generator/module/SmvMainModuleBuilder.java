@@ -271,16 +271,29 @@ public class SmvMainModuleBuilder {
 
         List<String> parts = new ArrayList<>();
         for (RuleDto.Condition condition : rule.getConditions()) {
-            if (condition == null) continue;
+            if (condition == null) {
+                // fail-closed: malformed condition entry disables this rule
+                log.warn("Rule contains a null condition entry - rule will never fire");
+                content.append("FALSE");
+                return;
+            }
 
             String part = buildSingleCondition(condition, deviceSmvMap);
             if (part != null && !part.isEmpty()) {
                 parts.add(part);
+            } else {
+                // fail-closed: unresolved condition disables this rule
+                log.warn("Rule condition on device '{}' attribute '{}' could not be resolved - rule will never fire",
+                        condition.getDeviceName(), condition.getAttribute());
+                content.append("FALSE");
+                return;
             }
         }
 
         if (parts.isEmpty()) {
-            content.append("TRUE");
+            // fail-closed: non-empty input but no resolvable condition
+            log.warn("Rule has non-empty condition list but no resolvable condition - rule will never fire");
+            content.append("FALSE");
         } else {
             content.append(String.join(" & ", parts));
         }
@@ -291,7 +304,7 @@ public class SmvMainModuleBuilder {
         DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvData(deviceId, deviceSmvMap);
 
         if (condSmv == null) {
-            log.warn("Rule condition references unknown device '{}', skipping to avoid undefined SMV variable", deviceId);
+            log.warn("Rule condition references unknown device '{}' and cannot be resolved", deviceId);
             return null;
         }
 
@@ -301,7 +314,7 @@ public class SmvMainModuleBuilder {
         if (condition.getRelation() != null) {
             // relation 非空时 value 也必须非空，否则无法生成有效条件
             if (condition.getValue() == null) {
-                log.warn("Rule condition has relation '{}' but null value for device '{}', skipping",
+                log.warn("Rule condition has relation '{}' but null value for device '{}' and cannot be resolved",
                         condition.getRelation(), deviceId);
                 return null;
             }
@@ -388,6 +401,8 @@ public class SmvMainModuleBuilder {
                 break;
             }
         }
+        log.warn("Rule condition: attribute '{}' on device '{}' did not match any mode, variable, or API signal",
+                condition.getAttribute(), deviceId);
         return null;
     }
 
@@ -437,7 +452,7 @@ public class SmvMainModuleBuilder {
                                     }
                                     // P4: 若 trigger.attribute 本身是 env var，直接用 a_<attr>
                                     String triggerRef;
-                                    if (isEnvVariable(trigger.getAttribute(), devices, deviceSmvMap)) {
+                                    if (transSmv.getEnvVariables().containsKey(trigger.getAttribute())) {
                                         triggerRef = "a_" + trigger.getAttribute();
                                     } else {
                                         triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
@@ -973,9 +988,8 @@ public class SmvMainModuleBuilder {
                                     }
                                     content.append(": ").append(dynamic.getChangeRate()).append(";\n");
                                 } else {
-                                    String stateVarFallback = (smv.getModes() != null && smv.getModes().size() == 1) ? smv.getModes().get(0) : "state";
-                                    content.append("\t\t").append(varName).append(".").append(stateVarFallback).append("=")
-                                           .append(state.getName().replace(" ", "")).append(": ").append(dynamic.getChangeRate()).append(";\n");
+                                    log.warn("Device '{}': has ImpactedVariable '{}' with Dynamics but no modes, skipping rate condition for state '{}'",
+                                            varName, varName2, state.getName());
                                 }
                             }
                         }
@@ -1053,8 +1067,14 @@ public class SmvMainModuleBuilder {
                                             }
                                         }
                                     }
-                                    content.append(varName).append(".")
-                                           .append(trigger.getAttribute()).append(" ")
+                                    // Keep trigger reference resolution consistent with appendEnvTransitions.
+                                    String triggerRef;
+                                    if (smv.getEnvVariables().containsKey(trigger.getAttribute())) {
+                                        triggerRef = "a_" + trigger.getAttribute();
+                                    } else {
+                                        triggerRef = varName + "." + trigger.getAttribute();
+                                    }
+                                    content.append(triggerRef).append(" ")
                                            .append(trigger.getRelation()).append(" ")
                                            .append(trigger.getValue().replace(" ", "")).append(": ").append(assignment.getValue().replace(" ", "")).append(";\n");
                                 }
@@ -1242,22 +1262,6 @@ public class SmvMainModuleBuilder {
             }
         }
         return userInit;
-    }
-
-    /**
-     * 判断某个属性名是否是任意设备声明的环境变量（IsInside=false）。
-     */
-    private boolean isEnvVariable(String attrName,
-                                  List<DeviceVerificationDto> devices,
-                                  Map<String, DeviceSmvData> deviceSmvMap) {
-        if (attrName == null) return false;
-        for (DeviceVerificationDto dev : devices) {
-            DeviceSmvData smv = deviceSmvMap.get(dev.getVarName());
-            if (smv != null && smv.getEnvVariables().containsKey(attrName)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

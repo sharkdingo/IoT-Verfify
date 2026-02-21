@@ -401,38 +401,86 @@ esac;
 
 ### 5.5 rules（IFTTT 规则）
 
-规则在 SMV 中体现为 `next()` 赋值：
+规则在 SMV 中体现为多组 `next()` 赋值：
 
 ```
 用户规则: IF thermostat_1.temperature > 30 THEN fan_1.fanAuto
 ```
 
-生成的 SMV：
+生成的 SMV（假设 fanAuto API: startState=off, endState=auto, signal=true）：
 ```smv
--- 1. API 信号触发
-next(fan_1.fanAuto_a) := case
-    thermostat_1.temperature > 30 : TRUE;
-    TRUE : FALSE;
-esac;
-
--- 2. 状态转换（由 API 的 EndState 决定）
+-- 1. 状态转换（由规则条件直接驱动，API 的 EndState 决定目标状态）
+--    guard = 规则条件 + API startState 约束
 next(fan_1.FanMode) := case
-    fan_1.fanAuto_a = TRUE : auto;
+    thermostat_1.temperature > 30 & fan_1.FanMode=off : auto;
     TRUE : fan_1.FanMode;
 esac;
 
+-- 2. API 信号（基于状态变化检测，非规则条件直接驱动）
+--    guard = 当前状态!=endState & next(状态)=endState
+next(fan_1.fanAuto_a) := case
+    fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
+    TRUE: FALSE;
+esac;
+
 -- 3. 信任传播（TRUST 维度）
+--    guard = 规则条件 & 所有源变量的 trust 都为 trusted（AND 语义）
+--    攻击模式下额外增加 is_attack=TRUE → untrusted 优先分支
 next(fan_1.trust_FanMode_auto) := case
-    fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
-    TRUE : fan_1.trust_FanMode_auto;
+    fan_1.is_attack=TRUE: untrusted;                          -- 仅 isAttack=true
+    thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
+    thermostat_1.temperature > 30: untrusted;                 -- 条件满足但源不可信
+    TRUE: fan_1.trust_FanMode_auto;                           -- 自保持
 esac;
 
 -- 4. 隐私传播（仅 enablePrivacy=true，PRIVACY 维度）
+--    guard = 规则条件 & 所有源变量的 privacy 都为 private
 next(fan_1.privacy_FanMode_auto) := case
-    fan_1.fanAuto_a = TRUE : thermostat_1.privacy_temperature;
-    TRUE : fan_1.privacy_FanMode_auto;
+    thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
+    TRUE: fan_1.privacy_FanMode_auto;                         -- 自保持
 esac;
 ```
+
+注意：信任传播生成两行——条件满足且源可信时设为 trusted，条件满足但源不可信时设为 untrusted。隐私传播只生成一行（条件满足且源为 private 时设为 private）。
+
+**规则条件解析失败处理（fail-closed）：** 当规则的某个 IF 条件无法解析（设备不存在、属性无法匹配任何 mode/变量/API）时，`appendRuleConditions` 会将整条规则的 guard 设为 `FALSE`，使该规则永远不触发。这是 fail-closed 策略——宁可规则不生效，也不让无效条件被静默忽略导致规则变成无条件触发。日志会输出 warn 级别信息指明哪个设备的哪个属性无法解析。
+
+### 5.6 SmvMainModuleBuilder 完整转换类型
+
+`MODULE main` 的 `ASSIGN` 块按以下顺序生成各类 `next()` 转换：
+
+| 序号 | 方法名 | 生成内容 | 说明 |
+|------|--------|---------|------|
+| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | 规则驱动的状态转换 + 模板 Transition 驱动的状态转换 |
+| 2 | `appendEnvTransitions()` | `next(a_varName)` | 环境变量的 next() 转换，含 NaturalChangeRate、设备影响率、边界检查。Transition trigger 引用环境变量时使用 `a_<attr>`（仅检查当前设备的 env var，避免跨设备同名冲突） |
+| 3 | `appendApiSignalTransitions()` | `next(device.apiName_a)` | API 信号变量，基于状态变化检测（`current!=end & next(mode)=end`） |
+| 4 | `appendTransitionSignalTransitions()` | `next(device.transName_t)` | 模板 Transition 信号变量，基于状态变化检测 |
+| 5 | `appendPropertyTransitions()` (TRUST) | `next(device.trust_Mode_State)` | 状态级信任传播（含 is_attack 优先分支） |
+| 6 | `appendPropertyTransitions()` (PRIVACY) | `next(device.privacy_Mode_State)` | 状态级隐私传播（仅 enablePrivacy=true） |
+| 7 | `appendVariablePropertyTransitions()` (TRUST) | `next(device.trust_varName)` | 变量级信任自保持（actuator 的 VAR 变量必须有 next） |
+| 8 | `appendVariablePropertyTransitions()` (PRIVACY) | `next(device.privacy_varName)` | 变量级隐私自保持（仅 enablePrivacy=true） |
+| 9 | `appendContentPrivacyTransitions()` | `next(device.privacy_contentName)` | IsChangeable=true 的 content 隐私自保持 |
+| 10 | `appendVariableRateTransitions()` | `next(device.varName_rate)` | 受影响变量的变化率，由设备 WorkingState.Dynamics 决定。`_rate` 范围根据模板中实际 ChangeRate 值动态计算（无 Dynamics 时 fallback 为 -10..10） |
+| 11 | `appendExternalVariableAssignments()` | `device.varName := a_varName` | 外部变量（IsInside=false）镜像环境变量（简单赋值，非 next） |
+| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换，攻击模式下范围扩展。Transition trigger 引用同样使用当前设备 env var 检查 |
+
+环境变量 `next()` 转换示例（数值型，有设备影响率）：
+```smv
+next(a_temperature) :=
+case
+    -- 有设备影响率时（如 airconditioner.temperature_rate）
+    a_temperature=35-(airconditioner.temperature_rate): {toint(a_temperature)-1+airconditioner.temperature_rate, a_temperature+airconditioner.temperature_rate};
+    a_temperature>35-(airconditioner.temperature_rate): {35};
+    a_temperature=15-(airconditioner.temperature_rate): {a_temperature+airconditioner.temperature_rate, a_temperature+1+airconditioner.temperature_rate};
+    a_temperature<15-(airconditioner.temperature_rate): {15};
+    TRUE: {a_temperature-1+airconditioner.temperature_rate, a_temperature+airconditioner.temperature_rate, a_temperature+1+airconditioner.temperature_rate};
+esac;
+```
+
+内部变量攻击扩展：分两处生效——
+
+1. **VAR 声明范围扩展**（`SmvDeviceModuleBuilder.appendInternalVariables`）：仅对传感器设备的数值型内部变量，公式与环境变量相同 `expansion = range/5 * intensity/50`，仅扩展上界。
+2. **next() 攻击分支**（`SmvMainModuleBuilder.appendInternalVariableTransitions`）：当 `isAttack=true` 且设备为传感器时，生成 `device.is_attack=TRUE: lower..upper` 分支，使用模板原始范围（不含扩展），允许攻击者将变量设为任意合法值。
 
 ---
 
@@ -462,6 +510,7 @@ VAR
 	privacy_ThermostatMode_heat: {public, private};
 	privacy_ThermostatMode_off: {public, private};
 ASSIGN
+	init(is_attack) := {TRUE, FALSE};
 	init(ThermostatMode) := cool;
 	init(temperature) := 22;
 	init(trust_ThermostatMode_cool) := trusted;
@@ -484,6 +533,7 @@ VAR
 	privacy_FanMode_manual: {public, private};
 	privacy_FanMode_off: {public, private};
 ASSIGN
+	init(is_attack) := {TRUE, FALSE};
 	init(FanMode) := off;
 	init(fanAuto_a) := FALSE;
 	init(trust_FanMode_auto) := trusted;
@@ -500,27 +550,38 @@ VAR
 	fan_1: Fan_fan1;
 	a_temperature: 15..39;
 ASSIGN
-	-- 规则: IF thermostat_1.temperature>30 THEN fan_1.fanAuto
-	next(fan_1.fanAuto_a) := case
-		thermostat_1.temperature > 30 : TRUE;
-		TRUE : FALSE;
-	esac;
+	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
+	-- 状态转换（规则条件直接驱动 + API startState 约束）
 	next(fan_1.FanMode) := case
-		fan_1.fanAuto_a = TRUE : auto;
+		thermostat_1.temperature > 30 & fan_1.FanMode=off : auto;
 		TRUE : fan_1.FanMode;
+	esac;
+	-- API 信号（基于状态变化检测）
+	next(fan_1.fanAuto_a) := case
+		fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
+		TRUE: FALSE;
+	esac;
+	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查）
+	next(a_temperature) :=
+	case
+		a_temperature>=35: a_temperature;
+		a_temperature<=15: a_temperature;
+		TRUE: {a_temperature-1, a_temperature, a_temperature+1};
 	esac;
 	-- 信任传播
 	next(fan_1.trust_FanMode_auto) := case
-		fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
-		TRUE : fan_1.trust_FanMode_auto;
+		fan_1.is_attack=TRUE: untrusted;
+		thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
+		thermostat_1.temperature > 30: untrusted;
+		TRUE: fan_1.trust_FanMode_auto;
 	esac;
 	-- 隐私传播
 	next(fan_1.privacy_FanMode_auto) := case
-		fan_1.fanAuto_a = TRUE : thermostat_1.privacy_temperature;
-		TRUE : fan_1.privacy_FanMode_auto;
+		thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
+		TRUE: fan_1.privacy_FanMode_auto;
 	esac;
-	-- 传感器环境变量赋值
-	next(thermostat_1.temperature) := a_temperature;
+	-- 外部变量赋值（简单赋值，非 next）
+	thermostat_1.temperature := a_temperature;
 -- Specifications
 	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
 	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.privacy_FanMode_auto = private))
@@ -597,19 +658,20 @@ INVAR intensity <= 3;
 
 ### CTL 规格（templateId != "6"）
 
-| templateId | 模板标签 | 生成公式 | 语义 |
-|-----------|---------|---------|------|
-| `1` | `AG(A)` | `CTLSPEC AG(A)` | A 在所有路径全局成立 |
-| `2` | `AG(!(A))` | `CTLSPEC AG(!(A))` | A 在所有路径全局不成立 |
-| `3` | `AG(IF -> THEN)` | `CTLSPEC AG((IF) -> (THEN))` | 全局：IF 蕴含 THEN |
-| `4` | `AG(IF -> AG(THEN))` | `CTLSPEC AG((IF) -> AG(THEN))` | IF 之后 THEN 永远成立 |
-| `5` | `AG(IF -> EF(THEN))` | `CTLSPEC AG((IF) -> EF(THEN))` | IF 之后 THEN 最终可达 |
+| templateId | 名称 | 生成公式 | 语义 |
+|-----------|------|---------|------|
+| `1` | Always | `CTLSPEC AG(A)` 或 `CTLSPEC AG((IF) -> (THEN))` | A 全局成立；当 aConditions 为空但有 if/then 时生成蕴含形式 |
+| `2` | Eventually | `CTLSPEC AF(A)` | A 在所有路径上最终成立 |
+| `3` | Never | `CTLSPEC AG !(A)` | A 在所有路径上全局不成立 |
+| `4` | Immediate | `CTLSPEC AG((IF) -> AX(THEN))` | IF 成立后下一状态 THEN 立即成立 |
+| `5` | Response | `CTLSPEC AG((IF) -> AF(THEN))` | IF 成立后所有路径上 THEN 最终成立 |
+| `7` | Safety | `CTLSPEC AG !(A & trust=untrusted & ...)` | 安全性：不可信状态下 A 不应成立（自动注入 trust 和 is_attack 条件） |
 
 ### LTL 规格（templateId == "6"）
 
-| templateId | 模板标签 | 生成公式 | 语义 |
-|-----------|---------|---------|------|
-| `6` | `G(IF -> FG(THEN))` | `LTLSPEC G((IF) -> F G(THEN))` | 持久性：IF 之后 THEN 最终持久成立 |
+| templateId | 名称 | 生成公式 | 语义 |
+|-----------|------|---------|------|
+| `6` | Persistence | `LTLSPEC G((IF) -> F G(THEN))` | 持久性：IF 之后 THEN 最终持久成立 |
 
 ### 攻击模式下的规格处理
 
@@ -631,6 +693,21 @@ FROZENVAR
     intensity: 0..50;
 INVAR intensity <= 3;
 ```
+
+### templateId 7（Safety）详解
+
+Safety 规格由 `buildSafetySpec()` 生成，自动为 `aConditions` 中的每个条件注入对应的 trust 和 is_attack 约束：
+
+```smv
+-- 输入：aConditions = [{ deviceId: "fan_1", targetType: "state", key: "FanMode", value: "auto" }]
+-- isAttack=true 时生成：
+CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted & fan_1.is_attack=FALSE)
+
+-- isAttack=false 时生成（不含 is_attack 条件，因为 is_attack 变量未声明）：
+CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted)
+```
+
+语义：在所有可达状态中，不应出现"条件 A 成立且对应 trust 为 untrusted"的情况。`is_attack=FALSE` 约束确保只检查非攻击设备的不可信状态。
 
 ### 条件构建规则
 

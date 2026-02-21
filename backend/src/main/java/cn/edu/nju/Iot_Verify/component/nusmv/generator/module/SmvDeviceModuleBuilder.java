@@ -185,8 +185,47 @@ public class SmvDeviceModuleBuilder {
         for (String varName : smv.getImpactedVariables()) {
             // 枚举型变量不需要 _rate（用 Dynamics.Value 直接赋值）
             if (isEnumVariable(smv, varName)) continue;
-            content.append("\n\t").append(varName).append("_rate: -10..10;");
+            int[] range = computeRateRange(smv, varName);
+            content.append("\n\t").append(varName).append("_rate: ")
+                   .append(range[0]).append("..").append(range[1]).append(";");
         }
+    }
+
+    /**
+     * 扫描所有 WorkingState.Dynamics 中该变量的 ChangeRate，计算 _rate 的合法范围。
+     * 默认 fallback 为 -10..10（与旧行为一致）。
+     */
+    private int[] computeRateRange(DeviceSmvData smv, String varName) {
+        int minRate = 0, maxRate = 0;
+        boolean found = false;
+        if (smv.getManifest() != null && smv.getManifest().getWorkingStates() != null) {
+            for (DeviceManifest.WorkingState ws : smv.getManifest().getWorkingStates()) {
+                if (ws.getDynamics() == null) continue;
+                for (DeviceManifest.Dynamic dyn : ws.getDynamics()) {
+                    if (varName.equals(dyn.getVariableName()) && dyn.getChangeRate() != null) {
+                        try {
+                            int rate = Integer.parseInt(dyn.getChangeRate().trim());
+                            if (!found) {
+                                minRate = rate;
+                                maxRate = rate;
+                                found = true;
+                            } else {
+                                minRate = Math.min(minRate, rate);
+                                maxRate = Math.max(maxRate, rate);
+                            }
+                        } catch (NumberFormatException e) {
+                            log.warn("Device '{}': non-integer ChangeRate '{}' for variable '{}', this entry ignored",
+                                    smv.getVarName(), dyn.getChangeRate(), varName);
+                        }
+                    }
+                }
+            }
+        }
+        if (!found) return new int[]{-10, 10};
+        // 确保 0 在范围内（rate=0 是 TRUE 分支的默认值）
+        minRate = Math.min(minRate, 0);
+        maxRate = Math.max(maxRate, 0);
+        return new int[]{minRate, maxRate};
     }
 
     private void appendPropertyVariables(StringBuilder content, DeviceSmvData smv, PropertyDimension dim) {

@@ -173,7 +173,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - 信号变量（`apiName_a: boolean`）
    - 状态信任/隐私变量
    - `IsChangeable=true` 的内容隐私
-   - `varName_rate: integer` — 受影响变量的变化率
+   - `varName_rate: min..max` — 受影响变量的变化率（范围根据模板 Dynamics.ChangeRate 动态计算，无 Dynamics 时 fallback 为 -10..10）
 3. `ASSIGN` — 初始值
    - `init(modeVar)` — 从用户 state 或模板 InitState 确定
    - `init(variable)` — 从用户 variableValues 或模板默认值
@@ -188,14 +188,18 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 1. `FROZENVAR intensity: 0..50` — 仅攻击模式
 2. `VAR` — 设备实例化 + 环境变量声明
    - 设备实例：`thermostat_1: Thermostat_thermostat1;`
-   - 环境变量：`a_temperature: 11..39;`（攻击模式下范围扩大 20%）
-3. `ASSIGN` — 状态转换逻辑
-   - `appendTransitionAssignments()` — 模板 Transitions → `next(device.modeVar)`
-   - `appendRuleAssignments()` — IFTTT 规则 → API 信号 + 状态转换
-   - `appendPropertyTransitions()` — 信任/隐私传播（使用 `PropertyDimension` 枚举统一逻辑）
-   - `appendSensorEnvAssignments()` — 传感器环境变量赋值
-   - `appendImpactedVariableAssignments()` — 受影响变量的 rate 计算
-   - `appendContentPrivacyAssignments()` — 内容隐私传播
+   - 环境变量：`a_temperature: 15..39;`（攻击模式下仅上界扩展，公式 `expansion = range/5 * intensity/50`）
+3. `ASSIGN` — 状态转换逻辑（按顺序）
+   - `appendStateTransitions()` — 规则驱动 + 模板 Transition 驱动的状态转换
+   - `appendEnvTransitions()` — 环境变量 `next()` 转换（含 NaturalChangeRate、设备影响率、边界检查）
+   - `appendApiSignalTransitions()` — API 信号变量（基于状态变化检测）
+   - `appendTransitionSignalTransitions()` — 模板 Transition 信号变量
+   - `appendPropertyTransitions()` — 状态级信任/隐私传播（使用 `PropertyDimension` 枚举统一逻辑）
+   - `appendVariablePropertyTransitions()` — 变量级信任/隐私自保持
+   - `appendContentPrivacyTransitions()` — IsChangeable=true 的 content 隐私自保持
+   - `appendVariableRateTransitions()` — 受影响变量的变化率
+   - `appendExternalVariableAssignments()` — 外部变量镜像环境变量（简单赋值，非 next）
+   - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下范围扩展）
 
 关键设计：
 - 环境变量使用 `a_` 前缀在 main 模块声明，避免跨设备引用问题
@@ -208,11 +212,12 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 根据 `SpecificationDto.templateId` 生成 CTL 或 LTL 公式：
 - `templateId="6"` → `LTLSPEC G((IF) -> F G(THEN))`
-- 其余 → `CTLSPEC` 各模板（AG, AG!, AG→, AG→AG, AG→EF）
+- `templateId="7"` → Safety 规格（自动注入 trust 和 is_attack 条件）
+- 其余 → `CTLSPEC` 各模板（1=AG, 2=AF, 3=AG!, 4=AG→AX, 5=AG→AF）
 
-条件构建通过 `buildSingleCondition()` 将 `SpecConditionDto` 映射为 SMV 表达式，支持 `IN`/`NOT_IN` 集合运算。
+条件构建通过 `genConditionSpec()` 将 `SpecConditionDto` 映射为 SMV 表达式，支持 `IN`/`NOT_IN` 集合运算。
 
-攻击模式下通过 `withAttackConstraint()` 在前件中注入 `intensity<=N`。
+攻击预算约束统一放在 `main` 模块的 `INVAR intensity <= N` 中，规格本身不注入 intensity 条件。
 
 无效条件（如找不到设备）抛出 `InvalidConditionException`，生成 `CTLSPEC FALSE` 占位。
 
