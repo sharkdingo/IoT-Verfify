@@ -129,15 +129,21 @@ public class SmvTraceParser {
         if (devTrace.getDeviceLabel() == null) {
             devTrace.setDeviceLabel(smv.getVarName() != null ? smv.getVarName() : deviceId);
         }
-        if (devTrace.getNewState() == null && stateName != null) {
+        if (devTrace.getState() == null && stateName != null) {
             String matchedState = matchState(smv, stateName);
-            devTrace.setNewState(matchedState != null ? matchedState : stateName);
+            devTrace.setState(matchedState != null ? matchedState : stateName);
+            if (devTrace.getMode() == null && smv.getModes() != null && smv.getModes().size() == 1) {
+                devTrace.setMode(smv.getModes().get(0));
+            }
         }
 
         // Legacy parser compatibility.
         if ("state".equals(attr)) {
             String matchedState = matchState(smv, cleanValue);
-            devTrace.setNewState(matchedState != null ? matchedState : cleanValue);
+            devTrace.setState(matchedState != null ? matchedState : cleanValue);
+            if (devTrace.getMode() == null && smv.getModes() != null && smv.getModes().size() == 1) {
+                devTrace.setMode(smv.getModes().get(0));
+            }
             return;
         }
 
@@ -299,6 +305,7 @@ public class SmvTraceParser {
             Map<String, String> previousModeValues =
                     previousModeValuesByDevice.computeIfAbsent(dev.getDeviceId(), k -> new HashMap<>());
             List<String> modeValues = new ArrayList<>();
+            List<String> modeNames = new ArrayList<>();
             boolean hasAnyModeValue = false;
             boolean hasAllModeValues = true;
             for (String mode : smv.getModes()) {
@@ -314,6 +321,7 @@ public class SmvTraceParser {
                 if (modeValue != null && !modeValue.isBlank()) {
                     hasAnyModeValue = true;
                     modeValues.add(modeValue);
+                    modeNames.add(mode);
                 } else {
                     hasAllModeValues = false;
                 }
@@ -321,11 +329,24 @@ public class SmvTraceParser {
 
             if (hasAnyModeValue) {
                 if (smv.getModes().size() > 1 && hasAllModeValues) {
-                    dev.setNewState(String.join(";", modeValues));
+                    dev.setState(String.join(";", modeValues));
+                    dev.setMode(String.join(";", smv.getModes()));
                 } else if (smv.getModes().size() == 1) {
-                    dev.setNewState(modeValues.get(0));
-                } else if (dev.getNewState() == null || dev.getNewState().isBlank()) {
-                    dev.setNewState(modeValues.get(0));
+                    dev.setState(modeValues.get(0));
+                    dev.setMode(modeNames.get(0));
+                } else if (dev.getState() == null || dev.getState().isBlank()) {
+                    // 部分 mode 有值：用实际可用的 mode/value 对
+                    dev.setState(modeValues.get(0));
+                    dev.setMode(modeNames.get(0));
+                }
+            }
+
+            // state 已由早期路径设置但 mode 仍为空时，尝试回填
+            if (dev.getMode() == null && smv.getModes() != null) {
+                if (smv.getModes().size() == 1) {
+                    dev.setMode(smv.getModes().get(0));
+                } else if (!modeNames.isEmpty()) {
+                    dev.setMode(modeNames.get(0));
                 }
             }
 

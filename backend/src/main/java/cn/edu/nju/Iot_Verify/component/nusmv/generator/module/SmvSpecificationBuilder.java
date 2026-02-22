@@ -115,14 +115,21 @@ public class SmvSpecificationBuilder {
             throw new InvalidConditionException("device '" + cond.getDeviceId() + "' not found in deviceSmvMap");
         }
         String varName = smv.getVarName();
-        String targetType = cond.getTargetType();
+        String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
 
         if ("api".equals(targetType)) {
             if (cond.getKey() == null) {
                 throw new InvalidConditionException("api condition key is null for device " + cond.getDeviceId());
             }
             String apiSignal = DeviceSmvDataFactory.formatApiSignalName(cond.getKey());
-            return varName + "." + apiSignal + "=TRUE";
+            if (apiSignal == null) {
+                throw new InvalidConditionException("api signal name resolved to null for key '" + cond.getKey() + "' on device " + cond.getDeviceId());
+            }
+            // 校验 API 存在且为 signal 类型
+            validateApiSignalExists(smv, cond.getKey(), cond.getDeviceId());
+            // API 信号为布尔变量，仅允许 =, !=, IN, NOT_IN
+            validateApiBooleanRelation(cond);
+            return buildSimpleCondition(varName + "." + apiSignal, cond);
         }
 
         if ("state".equals(targetType)) {
@@ -130,24 +137,22 @@ public class SmvSpecificationBuilder {
         }
 
         if ("variable".equals(targetType)) {
-            return buildSimpleCondition(varName + "." + cond.getKey(), cond);
+            return buildVariableCondition(varName, smv, cond);
         }
 
         if ("trust".equals(targetType)) {
-            String resolved = resolvePropertyKey(smv, cond.getKey(), "trust_");
+            String resolved = resolvePropertyKey(smv, cond.getKey(), "trust_", cond.getDeviceId());
             return buildSimpleCondition(varName + "." + resolved, cond);
         }
 
         if ("privacy".equals(targetType)) {
-            String resolved = resolvePropertyKey(smv, cond.getKey(), "privacy_");
+            String resolved = resolvePropertyKey(smv, cond.getKey(), "privacy_", cond.getDeviceId());
             return buildSimpleCondition(varName + "." + resolved, cond);
         }
 
-        if (targetType == null) {
-            // 默认当作 state 处理
-            return buildStateCondition(varName, smv, cond);
-        }
-        return buildSimpleCondition(varName + "." + targetType, cond);
+        // 未知 targetType → fail-closed，不再猜测拼接
+        throw new InvalidConditionException("unsupported targetType '" + targetType
+                + "' for device " + cond.getDeviceId() + "; allowed: state, variable, api, trust, privacy");
     }
     
     private String buildConditionGroup(List<SpecConditionDto> conditions, Map<String, DeviceSmvData> deviceSmvMap) {
@@ -165,10 +170,20 @@ public class SmvSpecificationBuilder {
         List<String> targets = resolveStateTargets(varName, smv, cond);
         String relation = normalizeRelation(cond.getRelation());
         String value = cond.getValue();
-        if (relation == null || value == null) {
-            throw new InvalidConditionException("state condition relation or value is null for device " + cond.getDeviceId());
+        if (relation == null) {
+            throw new InvalidConditionException("state condition relation is null for device " + cond.getDeviceId());
+        }
+        if (!isSupportedRelation(relation)) {
+            throw new InvalidConditionException("unsupported relation '" + cond.getRelation()
+                    + "' for state condition on device " + cond.getDeviceId());
+        }
+        if (value == null || value.isBlank()) {
+            throw new InvalidConditionException("state condition value is null/blank for device " + cond.getDeviceId());
         }
         String normalizedValue = normalizeStateValueByRelation(relation, value);
+        if (normalizedValue == null || normalizedValue.isBlank()) {
+            throw new InvalidConditionException("state condition value is blank after normalization for device " + cond.getDeviceId());
+        }
 
         List<String> exprs = new ArrayList<>();
         for (String target : targets) {
@@ -203,12 +218,19 @@ public class SmvSpecificationBuilder {
         }
 
         String value = cond.getValue();
-        String cleanValue = (value != null) ? DeviceSmvDataFactory.cleanStateName(value) : null;
-        if (cleanValue != null) {
+        // IN/NOT_IN: 拆分值列表，逐个检查属于哪个 mode
+        String relation = normalizeRelation(cond.getRelation());
+        List<String> valueParts = ("in".equals(relation) || "not in".equals(relation))
+                ? splitValues(value) : (value != null ? List.of(value) : List.of());
+        for (String singleVal : valueParts) {
+            String cleanValue = DeviceSmvDataFactory.cleanStateName(singleVal);
             for (String mode : smv.getModes()) {
                 List<String> modeStates = smv.getModeStates().get(mode);
                 if (modeStates != null && modeStates.contains(cleanValue)) {
-                    targets.add(varName + "." + mode);
+                    String target = varName + "." + mode;
+                    if (!targets.contains(target)) {
+                        targets.add(target);
+                    }
                 }
             }
         }
@@ -219,7 +241,7 @@ public class SmvSpecificationBuilder {
 
         // 无法确定值属于哪个 mode，fail-closed 而非猜测所有 mode
         throw new InvalidConditionException("multi-mode device '" + varName
-                + "': value '" + cleanValue + "' not found in any mode's state list");
+                + "': value '" + value + "' not found in any mode's state list");
     }
 
     private String buildSimpleCondition(String left, SpecConditionDto cond) {
@@ -228,10 +250,54 @@ public class SmvSpecificationBuilder {
         }
         String relation = normalizeRelation(cond.getRelation());
         String value = cond.getValue();
-        if (relation == null || value == null) {
-            throw new InvalidConditionException("simple condition relation or value is null for device " + cond.getDeviceId());
+        if (relation == null) {
+            throw new InvalidConditionException("simple condition relation is null for device " + cond.getDeviceId());
+        }
+        if (!isSupportedRelation(relation)) {
+            throw new InvalidConditionException("unsupported relation '" + cond.getRelation()
+                    + "' for device " + cond.getDeviceId());
+        }
+        if (value == null || value.isBlank()) {
+            throw new InvalidConditionException("simple condition value is null/blank for device " + cond.getDeviceId());
         }
         return buildRelationExpr(left, relation, value);
+    }
+
+    private String buildVariableCondition(String varName, DeviceSmvData smv, SpecConditionDto cond) {
+        String key = cond.getKey();
+        if (key == null || key.isBlank()) {
+            throw new InvalidConditionException("variable condition key is null/blank for device " + cond.getDeviceId());
+        }
+        String normalizedKey = key.trim();
+
+        if (normalizedKey.startsWith("a_")) {
+            String envName = normalizedKey.substring(2);
+            if (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(envName)) {
+                return buildSimpleCondition("a_" + envName, cond);
+            }
+            throw new InvalidConditionException("env variable '" + normalizedKey + "' not found on device " + cond.getDeviceId());
+        }
+
+        if (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(normalizedKey)) {
+            return buildSimpleCondition("a_" + normalizedKey, cond);
+        }
+
+        if (hasInternalVariable(smv, normalizedKey)) {
+            return buildSimpleCondition(varName + "." + normalizedKey, cond);
+        }
+
+        throw new InvalidConditionException("variable key '" + normalizedKey + "' not found as internal/env variable on device "
+                + cond.getDeviceId());
+    }
+
+    private boolean hasInternalVariable(DeviceSmvData smv, String name) {
+        if (smv == null || smv.getVariables() == null || name == null) return false;
+        for (DeviceManifest.InternalVariable var : smv.getVariables()) {
+            if (var != null && name.equals(var.getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String buildSafetySpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
@@ -267,16 +333,31 @@ public class SmvSpecificationBuilder {
         if (cond == null || cond.getDeviceId() == null) return null;
         DeviceSmvData smv = deviceSmvMap != null ? DeviceSmvDataFactory.findDeviceSmvData(cond.getDeviceId(), deviceSmvMap) : null;
         String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(cond.getDeviceId());
+        String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
 
-        if ("variable".equals(cond.getTargetType())) {
-            return varName + ".trust_" + cond.getKey();
+        if ("variable".equals(targetType)) {
+            if (cond.getKey() == null || cond.getKey().isBlank()) {
+                return null;
+            }
+            String normalizedKey = cond.getKey().trim();
+            if (normalizedKey.startsWith("a_")) {
+                normalizedKey = normalizedKey.substring(2);
+            }
+            if (smv != null) {
+                boolean exists = (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(normalizedKey))
+                        || hasInternalVariable(smv, normalizedKey);
+                if (!exists) {
+                    return null;
+                }
+            }
+            return varName + ".trust_" + normalizedKey;
         }
 
-        if ("state".equals(cond.getTargetType())) {
+        if ("state".equals(targetType)) {
             return resolveStateTrust(varName, smv, cond);
         }
 
-        if ("api".equals(cond.getTargetType())) {
+        if ("api".equals(targetType)) {
             return resolveApiTrust(varName, smv, cond);
         }
 
@@ -350,39 +431,67 @@ public class SmvSpecificationBuilder {
      * 2. 变量名（如 "temperature"）→ 直接使用
      * 3. 裸状态值（如 "unlocked"）→ 需要解析为 "Mode_value"
      */
-    private String resolvePropertyKey(DeviceSmvData smv, String key, String prefix) {
-        if (key == null) return prefix + "unknown";
-        // 如果 key 已经包含下划线且匹配 mode 前缀，认为已经是完整名
-        if (smv != null && smv.getModes() != null) {
+    private String resolvePropertyKey(DeviceSmvData smv, String key, String prefix, String deviceId) {
+        if (smv == null) {
+            throw new InvalidConditionException("device '" + deviceId + "' not found when resolving property key");
+        }
+        if (key == null || key.isBlank()) {
+            throw new InvalidConditionException("property key is null/blank for device " + deviceId);
+        }
+
+        String normalizedKey = key.trim();
+        if (normalizedKey.startsWith(prefix)) {
+            normalizedKey = normalizedKey.substring(prefix.length());
+        }
+        String cleanKey = normalizedKey.replace(" ", "");
+
+        // 1) 完整 mode_state
+        if (smv.getModes() != null && smv.getModeStates() != null) {
             for (String mode : smv.getModes()) {
-                if (key.startsWith(mode + "_")) {
-                    return prefix + key;
+                String modePrefix = mode + "_";
+                if (cleanKey.startsWith(modePrefix)) {
+                    String stateName = cleanKey.substring(modePrefix.length());
+                    List<String> states = smv.getModeStates().get(mode);
+                    if (states != null && states.contains(stateName)) {
+                        return prefix + mode + "_" + stateName;
+                    }
+                    throw new InvalidConditionException("property key '" + key + "' references unknown state '" + stateName
+                            + "' in mode '" + mode + "' for device " + deviceId);
                 }
             }
         }
-        // 检查是否是变量名
-        if (smv != null && smv.getVariables() != null) {
-            for (DeviceManifest.InternalVariable var : smv.getVariables()) {
-                if (key.equals(var.getName())) {
-                    return prefix + key;
-                }
-            }
+
+        // 2) 变量名
+        if (hasInternalVariable(smv, cleanKey)) {
+            return prefix + cleanKey;
         }
-        // 尝试按状态值解析到 mode_state
-        if (smv != null && smv.getModes() != null && smv.getModeStates() != null) {
+
+        // 3) 裸状态值 -> 解析为 mode_state
+        if (smv.getModes() != null && smv.getModeStates() != null) {
+            List<String> matchedModes = new ArrayList<>();
             for (String mode : smv.getModes()) {
                 List<String> states = smv.getModeStates().get(mode);
-                if (states != null && states.contains(key.replace(" ", ""))) {
-                    return prefix + mode + "_" + key.replace(" ", "");
+                if (states != null && states.contains(cleanKey)) {
+                    matchedModes.add(mode);
                 }
             }
-            // 单模式设备 fallback
+            if (matchedModes.size() == 1) {
+                return prefix + matchedModes.get(0) + "_" + cleanKey;
+            }
+            if (matchedModes.size() > 1) {
+                throw new InvalidConditionException("property key '" + key + "' is ambiguous across modes "
+                        + matchedModes + " on device " + deviceId);
+            }
             if (smv.getModes().size() == 1) {
-                return prefix + smv.getModes().get(0) + "_" + key.replace(" ", "");
+                String onlyMode = smv.getModes().get(0);
+                List<String> states = smv.getModeStates().get(onlyMode);
+                if (states != null && states.contains(cleanKey)) {
+                    return prefix + onlyMode + "_" + cleanKey;
+                }
             }
         }
-        // 无法解析，原样返回
-        return prefix + key;
+
+        throw new InvalidConditionException("cannot resolve property key '" + key + "' for device " + deviceId);
     }
 
     private String buildAttackFalseForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
@@ -392,8 +501,47 @@ public class SmvSpecificationBuilder {
         return varName + ".is_attack=FALSE";
     }
 
+    private void validateApiSignalExists(DeviceSmvData smv, String apiKey, String deviceId) {
+        if (smv.getManifest() == null || smv.getManifest().getApis() == null) {
+            throw new InvalidConditionException("device '" + deviceId + "' has no APIs defined");
+        }
+        for (DeviceManifest.API api : smv.getManifest().getApis()) {
+            if (api.getName() != null && api.getName().equals(apiKey)
+                    && api.getSignal() != null && api.getSignal()) {
+                return;
+            }
+        }
+        throw new InvalidConditionException("api '" + apiKey + "' not found or not a signal on device '" + deviceId + "'");
+    }
+
+    private static final List<String> API_ALLOWED_NORMALIZED_RELATIONS = List.of("=", "!=", "in", "not in");
+
+    private void validateApiBooleanRelation(SpecConditionDto cond) {
+        String rel = cond.getRelation();
+        String normalized = normalizeRelation(rel);
+        if (normalized == null || !API_ALLOWED_NORMALIZED_RELATIONS.contains(normalized)) {
+            throw new InvalidConditionException("api condition only supports =, !=, IN, NOT_IN relations, got '"
+                    + rel + "' for device " + cond.getDeviceId());
+        }
+        // 值必须为布尔字面量（TRUE/FALSE），或 IN/NOT_IN 的逗号分隔布尔列表
+        String value = cond.getValue();
+        if (value != null) {
+            if ("in".equals(normalized) || "not in".equals(normalized)) {
+                for (String v : splitValues(value)) {
+                    if (!"TRUE".equalsIgnoreCase(v) && !"FALSE".equalsIgnoreCase(v)) {
+                        throw new InvalidConditionException("api condition value must be TRUE or FALSE, got '" + v
+                                + "' for device " + cond.getDeviceId());
+                    }
+                }
+            } else if (!"TRUE".equalsIgnoreCase(value.trim()) && !"FALSE".equalsIgnoreCase(value.trim())) {
+                throw new InvalidConditionException("api condition value must be TRUE or FALSE, got '" + value
+                        + "' for device " + cond.getDeviceId());
+            }
+        }
+    }
+
     private String buildRelationExpr(String left, String relation, String value) {
-        if ("in".equals(relation) || "not_in".equals(relation) || "not in".equals(relation)) {
+        if ("in".equals(relation) || "not in".equals(relation)) {
             List<String> values = splitValues(value);
             if (values.isEmpty()) {
                 throw new InvalidConditionException("empty value list for '" + relation + "' relation on " + left);
@@ -417,7 +565,7 @@ public class SmvSpecificationBuilder {
 
     private String normalizeStateValueByRelation(String relation, String value) {
         if (value == null) return null;
-        if ("in".equals(relation) || "not_in".equals(relation) || "not in".equals(relation)) {
+        if ("in".equals(relation) || "not in".equals(relation)) {
             return splitValues(value).stream()
                     .map(DeviceSmvDataFactory::cleanStateName)
                     .collect(Collectors.joining(","));
@@ -427,16 +575,29 @@ public class SmvSpecificationBuilder {
 
     private String normalizeRelation(String relation) {
         if (relation == null) return null;
-        return switch (relation.toUpperCase()) {
+        String normalized = relation.trim();
+        return switch (normalized.toUpperCase()) {
             case "EQ", "==" -> "=";
             case "NEQ", "!=" -> "!=";
             case "GT" -> ">";
             case "GTE" -> ">=";
             case "LT" -> "<";
             case "LTE" -> "<=";
-            case "NOT_IN" -> "not in";
-            default -> relation;
+            case "IN" -> "in";
+            case "NOT_IN", "NOT IN" -> "not in";
+            default -> normalized;
         };
+    }
+
+    private boolean isSupportedRelation(String relation) {
+        return "=".equals(relation)
+                || "!=".equals(relation)
+                || ">".equals(relation)
+                || ">=".equals(relation)
+                || "<".equals(relation)
+                || "<=".equals(relation)
+                || "in".equals(relation)
+                || "not in".equals(relation);
     }
 
     private boolean isTrueLiteral(String s) {

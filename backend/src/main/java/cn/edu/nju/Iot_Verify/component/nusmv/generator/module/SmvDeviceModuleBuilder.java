@@ -373,12 +373,8 @@ public class SmvDeviceModuleBuilder {
                 // 不能同时有 init() 和简单赋值
                 continue;
             }
-            if (var.getValues() != null && !var.getValues().isEmpty()) {
-                String rawInit = smv.getVariableValues().getOrDefault(var.getName(), var.getValues().get(0));
-                String initValue = rawInit.replace(" ", "");
-                content.append("\n\tinit(").append(var.getName()).append(") := ").append(initValue).append(";");
-            } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
-                String initValue = smv.getVariableValues().getOrDefault(var.getName(), String.valueOf(var.getLowerBound()));
+            String initValue = validateInternalInitValue(smv, var);
+            if (initValue != null) {
                 content.append("\n\tinit(").append(var.getName()).append(") := ").append(initValue).append(";");
             }
         }
@@ -400,6 +396,62 @@ public class SmvDeviceModuleBuilder {
             }
         }
         return false;
+    }
+
+    /**
+     * 校验内部变量的初始值合法性，返回 null 表示跳过 init（保持非确定初始化）。
+     * 枚举变量：值不在枚举内时回退首值并 warn。
+     * 数值变量：超范围 clamp；非数字忽略用户值并回退默认值。
+     * 其他变量（无枚举/无范围）：不生成 init()，保持原有非确定行为。
+     */
+    private String validateInternalInitValue(DeviceSmvData smv, DeviceManifest.InternalVariable var) {
+        String userValue = smv.getVariableValues().get(var.getName());
+
+        if (var.getValues() != null && !var.getValues().isEmpty()) {
+            // 枚举变量
+            List<String> cleanValues = new ArrayList<>();
+            for (String v : var.getValues()) {
+                cleanValues.add(v.replace(" ", ""));
+            }
+            String defaultValue = cleanValues.get(0);
+            if (userValue == null) {
+                return defaultValue;
+            }
+            String cleanUser = userValue.replace(" ", "");
+            if (cleanValues.contains(cleanUser)) {
+                return cleanUser;
+            }
+            log.warn("Device '{}': init value '{}' for enum variable '{}' not in {}; falling back to '{}'",
+                    smv.getVarName(), userValue, var.getName(), cleanValues, defaultValue);
+            return defaultValue;
+        }
+
+        if (var.getLowerBound() != null && var.getUpperBound() != null) {
+            // 数值变量
+            int lower = var.getLowerBound();
+            int upper = var.getUpperBound();
+            String defaultValue = String.valueOf(lower);
+            if (userValue == null) {
+                return defaultValue;
+            }
+            try {
+                int parsed = Integer.parseInt(userValue.trim());
+                if (parsed < lower || parsed > upper) {
+                    int clamped = Math.max(lower, Math.min(upper, parsed));
+                    log.warn("Device '{}': init value {} for variable '{}' out of range [{}..{}]; clamped to {}",
+                            smv.getVarName(), parsed, var.getName(), lower, upper, clamped);
+                    return String.valueOf(clamped);
+                }
+                return String.valueOf(parsed);
+            } catch (NumberFormatException e) {
+                log.warn("Device '{}': non-numeric init value '{}' for variable '{}' [{}..{}]; falling back to {}",
+                        smv.getVarName(), userValue, var.getName(), lower, upper, defaultValue);
+                return defaultValue;
+            }
+        }
+
+        // 无枚举/无范围的变量：不生成 init()，保持 NuSMV 非确定初始化
+        return null;
     }
 
 }

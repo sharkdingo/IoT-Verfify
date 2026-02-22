@@ -51,7 +51,8 @@ class SmvTraceParserTest {
 
         TraceStateDto s1 = states.get(0);
         TraceDeviceDto d1 = s1.getDevices().get(0);
-        assertEquals("cool", d1.getNewState());
+        assertEquals("cool", d1.getState());
+        assertEquals("HvacMode", d1.getMode());
         assertEquals("Air Conditioner", d1.getTemplateName());
         assertEquals("air_conditioner_1", d1.getDeviceLabel());
 
@@ -73,7 +74,7 @@ class SmvTraceParserTest {
 
         assertEquals("25", findEnvValue(s1, "a_temperature"));
         assertEquals("24", findEnvValue(states.get(1), "a_temperature"));
-        assertEquals("heat", states.get(1).getDevices().get(0).getNewState());
+        assertEquals("heat", states.get(1).getDevices().get(0).getState());
     }
 
     @Test
@@ -94,7 +95,8 @@ class SmvTraceParserTest {
 
         List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
         assertEquals(1, states.size());
-        assertEquals("auto;on", states.get(0).getDevices().get(0).getNewState());
+        assertEquals("auto;on", states.get(0).getDevices().get(0).getState());
+        assertEquals("Mode;ThermostatFanMode", states.get(0).getDevices().get(0).getMode());
     }
 
     @Test
@@ -117,8 +119,8 @@ class SmvTraceParserTest {
 
         List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
         assertEquals(2, states.size());
-        assertEquals("auto;on", states.get(0).getDevices().get(0).getNewState());
-        assertEquals("heat;on", states.get(1).getDevices().get(0).getNewState());
+        assertEquals("auto;on", states.get(0).getDevices().get(0).getState());
+        assertEquals("heat;on", states.get(1).getDevices().get(0).getState());
     }
 
     @Test
@@ -147,8 +149,8 @@ class SmvTraceParserTest {
         assertEquals(2, states.size());
         assertEquals(1, states.get(0).getStateIndex());
         assertEquals(2, states.get(1).getStateIndex());
-        assertEquals("cool", states.get(0).getDevices().get(0).getNewState());
-        assertEquals("heat", states.get(1).getDevices().get(0).getNewState());
+        assertEquals("cool", states.get(0).getDevices().get(0).getState());
+        assertEquals("heat", states.get(1).getDevices().get(0).getState());
     }
 
     @Test

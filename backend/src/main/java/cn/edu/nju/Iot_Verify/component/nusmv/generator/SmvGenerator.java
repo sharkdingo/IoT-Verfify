@@ -136,6 +136,8 @@ public class SmvGenerator {
 
     private boolean hasPrivacyCondition(List<SpecConditionDto> conditions) {
         if (conditions == null) return false;
-        return conditions.stream().anyMatch(c -> "privacy".equals(c.getTargetType()));
+        return conditions.stream().anyMatch(c ->
+                c != null && c.getTargetType() != null
+                        && "privacy".equalsIgnoreCase(c.getTargetType().trim()));
     }
 }

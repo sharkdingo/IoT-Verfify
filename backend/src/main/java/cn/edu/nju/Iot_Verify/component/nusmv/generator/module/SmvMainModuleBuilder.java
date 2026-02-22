@@ -59,16 +59,19 @@ public class SmvMainModuleBuilder {
         }
 
         Set<String> declaredEnvVars = new HashSet<>();
-        // 收集环境变量的用户初始值，用于生成 init()
-        Map<String, String> envVarInitValues = new LinkedHashMap<>();
+        // 收集环境变量的用户初始值来源（varName -> deviceVarName -> validatedInit）
+        Map<String, Map<String, String>> envVarInitSources = new LinkedHashMap<>();
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv == null || smv.getEnvVariables() == null) continue;
 
             for (String varName : smv.getEnvVariables().keySet()) {
+                DeviceManifest.InternalVariable var = smv.getEnvVariables().get(varName);
+                if (var == null) {
+                    continue;
+                }
                 if (!declaredEnvVars.contains(varName)) {
                     declaredEnvVars.add(varName);
-                    DeviceManifest.InternalVariable var = smv.getEnvVariables().get(varName);
                     content.append("\n\ta_").append(varName).append(": ");
                     if (var.getValues() != null && !var.getValues().isEmpty()) {
                         List<String> cleanValues = new ArrayList<>();
@@ -91,17 +94,21 @@ public class SmvMainModuleBuilder {
                         // NuSMV has no "integer" type; use a safe default range
                         content.append("0..100;");
                     }
-                    // 记录用户提供的初始值（校验范围）
-                    String userInit = smv.getVariableValues().get(varName);
-                    if (userInit != null && !userInit.isBlank()) {
-                        String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack, intensity);
-                        if (validatedInit != null) {
-                            envVarInitValues.put(varName, validatedInit);
-                        }
+                }
+                // 记录每个设备提供的初始值（校验范围），用于检测同名 env var 的冲突输入
+                String userInit = smv.getVariableValues().get(varName);
+                if (userInit != null && !userInit.isBlank()) {
+                    String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack, intensity);
+                    if (validatedInit != null) {
+                        envVarInitSources
+                                .computeIfAbsent(varName, k -> new LinkedHashMap<>())
+                                .put(smv.getVarName(), validatedInit);
                     }
                 }
             }
         }
+
+        Map<String, String> envVarInitValues = resolveEnvVarInitValues(envVarInitSources);
 
         content.append("\nASSIGN");
 
@@ -310,57 +317,139 @@ public class SmvMainModuleBuilder {
 
         String varName = condSmv.getVarName();
         String attr = condition.getAttribute();
+        if (attr == null || attr.isBlank()) {
+            log.warn("Rule condition has null/blank attribute for device '{}' and cannot be resolved", deviceId);
+            return null;
+        }
 
         if (condition.getRelation() != null) {
             // relation 非空时 value 也必须非空，否则无法生成有效条件
-            if (condition.getValue() == null) {
-                log.warn("Rule condition has relation '{}' but null value for device '{}' and cannot be resolved",
+            if (condition.getValue() == null || condition.getValue().isBlank()) {
+                log.warn("Rule condition has relation '{}' but null/blank value for device '{}' and cannot be resolved",
                         condition.getRelation(), deviceId);
                 return null;
             }
             // M1/M2: 当 attribute="state" 时，解析为实际的 mode 变量名
+            String normalizedRel = normalizeRuleRelation(condition.getRelation());
+            if (!isSupportedRuleRelation(normalizedRel)) {
+                log.warn("Rule condition has unsupported relation '{}' (normalized '{}') for device '{}'",
+                        condition.getRelation(), normalizedRel, deviceId);
+                return null;
+            }
+            if (("in".equals(normalizedRel) || "not in".equals(normalizedRel))
+                    && splitRuleValues(condition.getValue()).isEmpty()) {
+                log.warn("Rule condition has empty value list for '{}' relation on device '{}'",
+                        normalizedRel, deviceId);
+                return null;
+            }
             if ("state".equals(attr) && condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                 String value = condition.getValue();
-                String cleanValue = DeviceSmvDataFactory.cleanStateName(value);
+                // IN/NOT_IN: 拆分值列表，逐个匹配 mode state
+                List<String> valueParts = splitRuleValues(value);
                 List<String> matchedExprs = new ArrayList<>();
-                for (String mode : condSmv.getModes()) {
-                    List<String> modeStateList = condSmv.getModeStates().get(mode);
-                    if (modeStateList != null) {
-                        for (String ms : modeStateList) {
-                            String suffix = ms.startsWith(mode + "_") ? ms.substring(mode.length() + 1) : ms;
-                            if (suffix.equals(cleanValue) || ms.equals(cleanValue)) {
-                                matchedExprs.add(varName + "." + mode + normalizeRuleRelation(condition.getRelation()) + ms);
-                                break; // 每个 mode 最多匹配一个状态
+                boolean hasUnresolvedValue = false;
+                for (String singleVal : valueParts) {
+                    String cleanValue = DeviceSmvDataFactory.cleanStateName(singleVal);
+                    boolean matchedCurrentValue = false;
+                    for (String mode : condSmv.getModes()) {
+                        List<String> modeStateList = condSmv.getModeStates().get(mode);
+                        if (modeStateList != null) {
+                            for (String ms : modeStateList) {
+                                String suffix = ms.startsWith(mode + "_") ? ms.substring(mode.length() + 1) : ms;
+                                if (suffix.equals(cleanValue) || ms.equals(cleanValue)) {
+                                    matchedCurrentValue = true;
+                                    // 对于 IN/NOT_IN，每个值单独用 = 或 != 匹配
+                                    if ("in".equals(normalizedRel)) {
+                                        matchedExprs.add(varName + "." + mode + "=" + ms);
+                                    } else if ("not in".equals(normalizedRel)) {
+                                        matchedExprs.add(varName + "." + mode + "!=" + ms);
+                                    } else {
+                                        matchedExprs.add(varName + "." + mode + normalizedRel + ms);
+                                    }
+                                    break;
+                                }
                             }
                         }
                     }
+                    if (!matchedCurrentValue) {
+                        hasUnresolvedValue = true;
+                    }
                 }
-                if (matchedExprs.size() == 1) {
-                    return matchedExprs.get(0);
-                } else if (matchedExprs.size() > 1) {
-                    return "(" + String.join(" | ", matchedExprs) + ")";
+                if (hasUnresolvedValue) {
+                    log.warn("Rule state condition value '{}' on device '{}' cannot be resolved to any legal state",
+                            condition.getValue(), deviceId);
+                    return null;
                 }
-                // 单 mode fallback：直接用 mode 名替代 "state"
-                if (condSmv.getModes().size() == 1) {
-                    attr = condSmv.getModes().get(0);
+                if (!matchedExprs.isEmpty()) {
+                    // IN: 任一匹配即可 (|)；NOT_IN: 全部不匹配 (&)；其他: 单值用原表达式
+                    if ("in".equals(normalizedRel)) {
+                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" | ", matchedExprs) + ")";
+                    } else if ("not in".equals(normalizedRel)) {
+                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" & ", matchedExprs) + ")";
+                    } else {
+                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" | ", matchedExprs) + ")";
+                    }
+                }
+                log.warn("Rule state condition on device '{}' produced no resolvable expression", deviceId);
+                return null;
+            }
+
+            boolean isModeAttr = condSmv.getModes() != null && condSmv.getModes().contains(attr);
+            DeviceManifest.InternalVariable internalVar = findInternalVariableByName(condSmv, attr);
+            DeviceManifest.API signalApi = null;
+            if (!isModeAttr && internalVar == null) {
+                signalApi = findSignalApiByName(condSmv, attr);
+            }
+            if (!isModeAttr && internalVar == null && signalApi == null) {
+                log.warn("Rule condition attribute '{}' on device '{}' is not a mode/internal variable/API signal",
+                        attr, deviceId);
+                return null;
+            }
+
+            String lhsAttr = attr;
+            if (signalApi != null) {
+                if (!isSupportedApiSignalRuleRelation(normalizedRel)) {
+                    log.warn("Rule API signal condition on device '{}' attribute '{}' does not support relation '{}'",
+                            deviceId, attr, normalizedRel);
+                    return null;
+                }
+                lhsAttr = DeviceSmvDataFactory.formatApiSignalName(signalApi.getName());
+                if (lhsAttr == null || lhsAttr.isBlank()) {
+                    log.warn("Rule API signal condition on device '{}' attribute '{}' cannot resolve signal variable name",
+                            deviceId, attr);
+                    return null;
                 }
             }
+
             String rhsValue = condition.getValue();
-            if (rhsValue != null && condSmv.getModes() != null && condSmv.getModes().contains(attr)) {
-                rhsValue = DeviceSmvDataFactory.cleanStateName(rhsValue);
+            if (rhsValue != null && isModeAttr) {
+                rhsValue = cleanRuleValueByRelation(normalizedRel, rhsValue);
             }
             // BUG 1 fix: 枚举型 InternalVariable 的值也需要去空格，
             // 因为 SmvDeviceModuleBuilder 声明时已做 replace(" ", "")
-            if (rhsValue != null && condSmv.getManifest() != null
-                    && condSmv.getManifest().getInternalVariables() != null) {
-                for (DeviceManifest.InternalVariable iv : condSmv.getManifest().getInternalVariables()) {
-                    if (iv.getName().equals(attr) && iv.getValues() != null && !iv.getValues().isEmpty()) {
-                        rhsValue = rhsValue.replace(" ", "");
-                        break;
-                    }
+            if (rhsValue != null && internalVar != null
+                    && internalVar.getValues() != null && !internalVar.getValues().isEmpty()) {
+                rhsValue = rhsValue.replace(" ", "");
+            }
+            if (rhsValue != null && signalApi != null) {
+                rhsValue = normalizeApiSignalRuleValue(normalizedRel, rhsValue);
+                if (rhsValue == null) {
+                    log.warn("Rule API signal condition has non-boolean value '{}' for device '{}' attribute '{}'",
+                            condition.getValue(), deviceId, attr);
+                    return null;
                 }
             }
-            return varName + "." + attr + normalizeRuleRelation(condition.getRelation()) + rhsValue;
+            if (rhsValue == null || rhsValue.isBlank()) {
+                log.warn("Rule condition value became null/blank after normalization for device '{}' attribute '{}'",
+                        deviceId, attr);
+                return null;
+            }
+            String expr = buildRuleRelationExpr(varName + "." + lhsAttr, normalizedRel, rhsValue);
+            if (expr == null || expr.isBlank()) {
+                log.warn("Rule condition failed to build relation expression for device '{}' attribute '{}'", deviceId, attr);
+                return null;
+            }
+            return expr;
         }
 
         // API signal condition
@@ -930,7 +1019,8 @@ public class SmvMainModuleBuilder {
 
     /**
      * 为 IsChangeable=true 的 content 生成 next() 转换。
-     * 当前保持不变（无规则修改 content 隐私本身），预留扩展点。
+     * 当规则命令引用了该 content（如 THEN Facebook.post(MobilePhone.photo)）时，
+     * 规则触发会将 content 隐私设为 private；否则自保持。
      */
     private void appendContentPrivacyTransitions(StringBuilder content,
                                                   List<DeviceVerificationDto> devices,
@@ -943,11 +1033,49 @@ public class SmvMainModuleBuilder {
             String varName = smv.getVarName();
             for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
                 if (!ci.isChangeable()) continue;
-                // IsChangeable=true 的 content 是 VAR，需要 next()
+
                 String propVar = varName + ".privacy_" + ci.getName();
-                content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";");
+
+                // 收集所有引用此 content 的规则
+                List<RuleDto> matchingRules = findRulesReferencingContent(
+                        rules, device.getVarName(), smv.getTemplateName(), ci.getName());
+
+                if (matchingRules.isEmpty()) {
+                    // 无规则引用此 content，纯自保持
+                    content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";");
+                } else {
+                    content.append("\n\tnext(").append(propVar).append(") :=\n");
+                    content.append("\tcase\n");
+                    for (RuleDto rule : matchingRules) {
+                        content.append("\t\t");
+                        appendRuleConditions(content, rule, deviceSmvMap);
+                        content.append(": private;\n");
+                    }
+                    content.append("\t\tTRUE: ").append(propVar).append(";\n");
+                    content.append("\tesac;");
+                }
             }
         }
+    }
+
+    /**
+     * 查找所有 command.contentDevice 匹配指定设备且 command.content 匹配指定 content 名称的规则。
+     */
+    private List<RuleDto> findRulesReferencingContent(List<RuleDto> rules,
+                                                       String deviceVarName, String templateName,
+                                                       String contentName) {
+        List<RuleDto> result = new ArrayList<>();
+        if (rules == null) return result;
+        for (RuleDto rule : rules) {
+            if (rule == null || rule.getCommand() == null) continue;
+            String cd = rule.getCommand().getContentDevice();
+            String cn = rule.getCommand().getContent();
+            if (cn == null || !cn.equals(contentName)) continue;
+            if (cd != null && (cd.equals(deviceVarName) || cd.equals(templateName))) {
+                result.add(rule);
+            }
+        }
+        return result;
     }
 
     private void appendVariableRateTransitions(StringBuilder content,
@@ -1221,6 +1349,28 @@ public class SmvMainModuleBuilder {
         return new int[]{lowerRate, upperRate};
     }
 
+    private Map<String, String> resolveEnvVarInitValues(Map<String, Map<String, String>> envVarInitSources) {
+        Map<String, String> resolved = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, String>> entry : envVarInitSources.entrySet()) {
+            String varName = entry.getKey();
+            Map<String, String> sourceValues = entry.getValue();
+            Set<String> uniqueValues = new LinkedHashSet<>(sourceValues.values());
+            if (uniqueValues.size() > 1) {
+                StringBuilder details = new StringBuilder();
+                boolean first = true;
+                for (Map.Entry<String, String> sv : sourceValues.entrySet()) {
+                    if (!first) details.append(", ");
+                    first = false;
+                    details.append("'").append(sv.getKey()).append("'=").append(sv.getValue());
+                }
+                throw SmvGenerationException.envVarConflict(varName,
+                        "conflicting user init values across devices: " + details);
+            }
+            resolved.put(varName, uniqueValues.iterator().next());
+        }
+        return resolved;
+    }
+
     /**
      * 校验环境变量初始值是否在声明范围内。
      * 对于数值型变量，超出范围时 clamp 到边界并记录警告。
@@ -1261,22 +1411,174 @@ public class SmvMainModuleBuilder {
                 return null;
             }
         }
-        return userInit;
+        // 无枚举/无边界定义时，变量在 main 中以 0..100 声明，初值也应保持同范围整数
+        try {
+            int value = Integer.parseInt(userInit.trim());
+            if (value < 0) {
+                log.warn("Env variable '{}': init value {} below default lower bound 0, clamped", varName, value);
+                return "0";
+            }
+            if (value > 100) {
+                log.warn("Env variable '{}': init value {} above default upper bound 100, clamped", varName, value);
+                return "100";
+            }
+            return String.valueOf(value);
+        } catch (NumberFormatException e) {
+            log.warn("Env variable '{}': init value '{}' is not a valid integer for default range 0..100, ignored",
+                    varName, userInit);
+            return null;
+        }
     }
 
     /**
-     * 将前端关系符（EQ/NEQ/GT/GTE/LT/LTE）归一化为 NuSMV 运算符。
+     * 将前端关系符归一化为 NuSMV 运算符。
      */
     private static String normalizeRuleRelation(String relation) {
         if (relation == null) return "=";
-        return switch (relation.toUpperCase()) {
+        String normalized = relation.trim();
+        return switch (normalized.toUpperCase()) {
             case "EQ", "==" -> "=";
             case "NEQ", "!=" -> "!=";
             case "GT" -> ">";
             case "GTE" -> ">=";
             case "LT" -> "<";
             case "LTE" -> "<=";
-            default -> relation;
+            case "IN" -> "in";
+            case "NOT_IN", "NOT IN" -> "not in";
+            default -> normalized;
         };
+    }
+
+    private static boolean isSupportedRuleRelation(String relation) {
+        return "=".equals(relation)
+                || "!=".equals(relation)
+                || ">".equals(relation)
+                || ">=".equals(relation)
+                || "<".equals(relation)
+                || "<=".equals(relation)
+                || "in".equals(relation)
+                || "not in".equals(relation);
+    }
+
+    /**
+     * 将 IN/NOT_IN 展开为 NuSMV 的 (x=a | x=b) 或 (x!=a & x!=b)。
+     * 非集合运算符直接返回 left + relation + value。
+     */
+    private static String buildRuleRelationExpr(String left, String relation, String value) {
+        if ("in".equals(relation) || "not in".equals(relation)) {
+            String[] parts = value.split("[,;|]");
+            List<String> cleaned = new ArrayList<>();
+            for (String p : parts) {
+                String trimmed = p.trim();
+                if (!trimmed.isEmpty()) {
+                    cleaned.add(trimmed);
+                }
+            }
+            if (cleaned.isEmpty()) {
+                log.warn("Empty value list for '{}' relation on {}", relation, left);
+                return null;
+            }
+            String op = "in".equals(relation) ? "=" : "!=";
+            String join = "in".equals(relation) ? " | " : " & ";
+            if (cleaned.size() == 1) {
+                return left + op + cleaned.get(0);
+            }
+            StringBuilder sb = new StringBuilder("(");
+            for (int i = 0; i < cleaned.size(); i++) {
+                if (i > 0) sb.append(join);
+                sb.append(left).append(op).append(cleaned.get(i));
+            }
+            sb.append(")");
+            return sb.toString();
+        }
+        return left + relation + value;
+    }
+
+    /**
+     * 按 ,;| 拆分值列表（用于 IN/NOT_IN），单值时返回包含原值的单元素列表。
+     */
+    private static List<String> splitRuleValues(String value) {
+        if (value == null) return List.of();
+        String[] parts = value.split("[,;|]");
+        List<String> result = new ArrayList<>();
+        for (String p : parts) {
+            String trimmed = p.trim();
+            if (!trimmed.isEmpty()) {
+                result.add(trimmed);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 对 mode 状态值做 cleanStateName，IN/NOT_IN 时逐个清理再用逗号拼接。
+     */
+    private static String cleanRuleValueByRelation(String normalizedRelation, String value) {
+        if (value == null) return null;
+        if ("in".equals(normalizedRelation) || "not in".equals(normalizedRelation)) {
+            List<String> parts = splitRuleValues(value);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < parts.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(DeviceSmvDataFactory.cleanStateName(parts.get(i)));
+            }
+            return sb.toString();
+        }
+        return DeviceSmvDataFactory.cleanStateName(value);
+    }
+
+    private static DeviceManifest.InternalVariable findInternalVariableByName(DeviceSmvData smv, String attr) {
+        if (smv == null || attr == null || smv.getManifest() == null || smv.getManifest().getInternalVariables() == null) {
+            return null;
+        }
+        for (DeviceManifest.InternalVariable iv : smv.getManifest().getInternalVariables()) {
+            if (attr.equals(iv.getName())) {
+                return iv;
+            }
+        }
+        return null;
+    }
+
+    private static DeviceManifest.API findSignalApiByName(DeviceSmvData smv, String attr) {
+        if (smv == null || attr == null || smv.getManifest() == null || smv.getManifest().getApis() == null) {
+            return null;
+        }
+        for (DeviceManifest.API api : smv.getManifest().getApis()) {
+            if (attr.equals(api.getName()) && Boolean.TRUE.equals(api.getSignal())) {
+                return api;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isSupportedApiSignalRuleRelation(String relation) {
+        return "=".equals(relation)
+                || "!=".equals(relation)
+                || "in".equals(relation)
+                || "not in".equals(relation);
+    }
+
+    private static String normalizeApiSignalRuleValue(String relation, String value) {
+        if (value == null) return null;
+        if ("in".equals(relation) || "not in".equals(relation)) {
+            List<String> values = splitRuleValues(value);
+            if (values.isEmpty()) return null;
+            List<String> normalized = new ArrayList<>();
+            for (String item : values) {
+                String boolLiteral = normalizeBooleanLiteral(item);
+                if (boolLiteral == null) return null;
+                normalized.add(boolLiteral);
+            }
+            return String.join(",", normalized);
+        }
+        return normalizeBooleanLiteral(value);
+    }
+
+    private static String normalizeBooleanLiteral(String raw) {
+        if (raw == null) return null;
+        String normalized = raw.trim();
+        if ("TRUE".equalsIgnoreCase(normalized)) return "TRUE";
+        if ("FALSE".equalsIgnoreCase(normalized)) return "FALSE";
+        return null;
     }
 }

@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 
 /**
  * NuSMV 执行器
- * 职责：执行 NuSMV 命令并提取 per-spec 验证结果
+ * 职责：执行 NuSMV 批处理验证 和 交互式随机模拟
  */
 @Slf4j
 @Service
@@ -31,12 +31,15 @@ public class NusmvExecutor {
             "-- specification (.+?) is true", Pattern.CASE_INSENSITIVE);
     private static final Pattern SPEC_FALSE_PATTERN = Pattern.compile(
             "-- specification (.+?) is false", Pattern.CASE_INSENSITIVE);
+
+    // ==================== 批处理验证 ====================
+
     public NusmvResult execute(File smvFile) throws InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
         }
 
-        List<String> command = buildCommand(smvFile);
+        List<String> command = buildCommand(smvFile, List.of());
         log.info("Executing NuSMV command: {}", String.join(" ", command));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -121,7 +124,13 @@ public class NusmvExecutor {
         }
     }
 
-    private List<String> buildCommand(File smvFile) {
+    /**
+     * 构建 NuSMV 命令行。
+     *
+     * @param smvFile   模型文件
+     * @param extraArgs 额外参数（如 "-int"），插入在 nusmvPath 与 smvFile 之间
+     */
+    private List<String> buildCommand(File smvFile, List<String> extraArgs) {
         String nusmvPath = nusmvConfig.getPath();
         String commandPrefix = nusmvConfig.getCommandPrefix();
         List<String> command = new ArrayList<>();
@@ -131,16 +140,20 @@ public class NusmvExecutor {
         // It MUST only come from trusted server-side configuration (application.yaml / env vars),
         // NEVER from user input.
         if (commandPrefix != null && !commandPrefix.isEmpty()) {
-            String fullCommand = commandPrefix + " " + quoteForShell(nusmvPath, isWindows)
-                    + " " + quoteForShell(smvFile.getAbsolutePath(), isWindows);
+            StringBuilder fullCommand = new StringBuilder();
+            fullCommand.append(commandPrefix).append(" ").append(quoteForShell(nusmvPath, isWindows));
+            for (String arg : extraArgs) {
+                fullCommand.append(" ").append(arg);
+            }
+            fullCommand.append(" ").append(quoteForShell(smvFile.getAbsolutePath(), isWindows));
             if (isWindows) {
                 command.add("cmd.exe");
                 command.add("/c");
-                command.add(fullCommand);
+                command.add(fullCommand.toString());
             } else {
                 command.add("sh");
                 command.add("-c");
-                command.add(fullCommand);
+                command.add(fullCommand.toString());
             }
             return command;
         }
@@ -148,6 +161,7 @@ public class NusmvExecutor {
         // Do NOT wrap with cmd.exe /c — its quoting rules are fragile and can
         // cause the command to be misinterpreted (e.g. opening an interactive shell).
         command.add(nusmvPath);
+        command.addAll(extraArgs);
         command.add(smvFile.getAbsolutePath());
         return command;
     }
@@ -170,6 +184,210 @@ public class NusmvExecutor {
             log.warn("Invalid NUSMV_TIMEOUT_MS value, using config default: {}", nusmvConfig.getTimeoutMs());
         }
         return nusmvConfig.getTimeoutMs();
+    }
+
+    // ==================== 交互式模拟 ====================
+
+    /** NuSMV 交互模式提示符，需要从输出中过滤 */
+    private static final Pattern NUSMV_PROMPT_PATTERN = Pattern.compile("^\\s*NuSMV\\s*>.*$");
+    private static final String TRACE_SIMULATION_MARKER = "Trace Type: Simulation";
+
+    /**
+     * 以交互模式启动 NuSMV，执行随机模拟 N 步，返回模拟轨迹文本。
+     *
+     * 流程：go → pick_state -r → simulate -r -k N → show_traces → quit
+     */
+    public SimulationOutput executeInteractiveSimulation(File smvFile, int steps) throws InterruptedException {
+        if (smvFile == null || !smvFile.exists()) {
+            return SimulationOutput.error("NuSMV model file does not exist or is null");
+        }
+
+        List<String> command = buildCommand(smvFile, List.of("-int"));
+        log.info("Executing NuSMV interactive simulation: {}", String.join(" ", command));
+
+        ProcessBuilder processBuilder = new ProcessBuilder(command);
+        // 不合并 stderr，以便区分错误信息
+        processBuilder.redirectErrorStream(false);
+
+        Process process = null;
+        try {
+            process = processBuilder.start();
+            long timeout = getTimeoutFromEnvironment();
+
+            final Process fp = process;
+            StringBuilder stdoutBuilder = new StringBuilder();
+            StringBuilder stderrBuilder = new StringBuilder();
+
+            // 独立线程读 stdout，防止管道缓冲区满导致死锁
+            Thread stdoutThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(fp.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stdoutBuilder.append(line).append("\n");
+                    }
+                } catch (IOException e) {
+                    log.warn("Error reading NuSMV stdout: {}", e.getMessage());
+                }
+            }, "nusmv-sim-stdout");
+
+            // 独立线程读 stderr
+            Thread stderrThread = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(fp.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stderrBuilder.append(line).append("\n");
+                    }
+                } catch (IOException e) {
+                    log.warn("Error reading NuSMV stderr: {}", e.getMessage());
+                }
+            }, "nusmv-sim-stderr");
+
+            stdoutThread.start();
+            stderrThread.start();
+
+            // 向 stdin 写入交互命令，然后关闭（NuSMV 收到 EOF 后会退出）
+            try (OutputStream stdin = process.getOutputStream()) {
+                String commands = "go\npick_state -r\nsimulate -r -k " + steps + "\nshow_traces\nquit\n";
+                stdin.write(commands.getBytes(StandardCharsets.UTF_8));
+                stdin.flush();
+            }
+
+            boolean finished = process.waitFor(timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (!finished) {
+                log.warn("NuSMV simulation timed out after {}ms, destroying process", timeout);
+                process.destroyForcibly();
+                process.waitFor(PROCESS_DESTROY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+                reclaimReaderThread(stdoutThread, process.getInputStream(), "stdout");
+                reclaimReaderThread(stderrThread, process.getErrorStream(), "stderr");
+                return SimulationOutput.error("NuSMV simulation timed out after " + timeout + "ms");
+            }
+
+            stdoutThread.join();
+            stderrThread.join();
+
+            String rawOutput = stdoutBuilder.toString();
+            String stderrOutput = stderrBuilder.toString();
+
+            // 保存原始输出到文件（与批处理模式一致）
+            saveOutputToFile(smvFile, rawOutput);
+
+            if (!stderrOutput.isBlank()) {
+                log.warn("NuSMV simulation stderr: {}", stderrOutput);
+            }
+
+            // 校验进程退出码：非 0 表示 NuSMV 执行异常
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                log.warn("NuSMV simulation exited with code {}", exitCode);
+                String summary = "NuSMV exited with code " + exitCode + ".";
+                if (!stderrOutput.isBlank()) {
+                    summary += " stderr: " + stderrOutput.substring(0, Math.min(stderrOutput.length(), 1000));
+                }
+                if (!rawOutput.isBlank()) {
+                    summary += " stdout: " + rawOutput.substring(0, Math.min(rawOutput.length(), 1000));
+                }
+                return SimulationOutput.error(summary);
+            }
+
+            // 从输出中提取模拟轨迹
+            String traceText = extractSimulationTrace(rawOutput);
+            if (traceText == null || traceText.isBlank()) {
+                log.warn("No simulation trace found in NuSMV output");
+                return SimulationOutput.error(
+                        "No simulation trace produced. Model may have errors. Raw output: "
+                                + rawOutput.substring(0, Math.min(rawOutput.length(), 2000)));
+            }
+
+            return SimulationOutput.success(traceText, rawOutput);
+
+        } catch (IOException e) {
+            log.error("Failed to execute NuSMV simulation", e);
+            if (process != null) {
+                process.destroyForcibly();
+            }
+            return SimulationOutput.error("Failed to execute NuSMV simulation: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("NuSMV simulation interrupted");
+            if (process != null) {
+                process.destroyForcibly();
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * 带超时的线程回收：先 join(5s)，若仍存活则 interrupt + 关流 + 短暂重试，
+     * 避免"主线程不卡但后台线程静默泄漏"。
+     */
+    private void reclaimReaderThread(Thread thread, InputStream stream, String label) {
+        try {
+            thread.join(5000);
+            if (thread.isAlive()) {
+                log.warn("NuSMV {} reader thread still alive after join timeout, reclaiming", label);
+                thread.interrupt();
+                try { stream.close(); } catch (IOException ignored) { }
+                thread.join(2000);
+                if (thread.isAlive()) {
+                    log.warn("NuSMV {} reader thread could not be reclaimed, may leak", label);
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * 从交互模式的完整输出中提取模拟轨迹文本。
+     * 定位 "Trace Type: Simulation" 行，取其后所有内容，过滤掉 NuSMV 提示符行。
+     */
+    private String extractSimulationTrace(String rawOutput) {
+        if (rawOutput == null || rawOutput.isEmpty()) return null;
+
+        int markerIdx = rawOutput.indexOf(TRACE_SIMULATION_MARKER);
+        if (markerIdx < 0) return null;
+
+        String afterMarker = rawOutput.substring(markerIdx + TRACE_SIMULATION_MARKER.length());
+        String[] lines = afterMarker.split("\n");
+        StringBuilder trace = new StringBuilder();
+        for (String line : lines) {
+            if (NUSMV_PROMPT_PATTERN.matcher(line).matches()) continue;
+            trace.append(line).append("\n");
+        }
+        String normalized = trace.toString().stripTrailing();
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    /**
+     * 交互式模拟输出
+     */
+    public static class SimulationOutput {
+        private final String traceText;
+        private final String rawOutput;
+        private final boolean success;
+        private final String errorMessage;
+
+        private SimulationOutput(String traceText, String rawOutput, boolean success, String errorMessage) {
+            this.traceText = traceText;
+            this.rawOutput = rawOutput;
+            this.success = success;
+            this.errorMessage = errorMessage;
+        }
+
+        public static SimulationOutput success(String traceText, String rawOutput) {
+            return new SimulationOutput(traceText, rawOutput, true, null);
+        }
+
+        public static SimulationOutput error(String errorMessage) {
+            return new SimulationOutput(null, null, false, errorMessage);
+        }
+
+        public String getTraceText() { return traceText; }
+        public String getRawOutput() { return rawOutput; }
+        public boolean isSuccess() { return success; }
+        public String getErrorMessage() { return errorMessage; }
     }
 
     /**

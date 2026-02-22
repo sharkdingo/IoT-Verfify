@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWrit
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -422,6 +423,21 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
+    @DisplayName("P6: privacy condition targetType is case-insensitive")
+    void privacyTargetType_caseInsensitive_throws() {
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_privacy_upper");
+        spec.setAConditions(List.of(makeCondition("PRIVACY")));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> invokeValidateNoPrivacySpecs(List.of(spec)));
+        assertTrue(ex.getMessage().contains("spec_privacy_upper"));
+        assertEquals("PRIVACY_SPEC_WITHOUT_PRIVACY", ex.getErrorCategory());
+    }
+
+    @Test
     @DisplayName("P6: non-privacy specs pass validation")
     void nonPrivacySpecs_passes() {
         SpecificationDto spec = new SpecificationDto();
@@ -642,5 +658,500 @@ class SmvGeneratorFixesTest {
 
         assertTrue(smv.contains("INVAR intensity <= 0;"), "Lower bound should clamp to 0");
         assertTrue(smv.contains("temperature: 0..100;"), "Clamp=0 should produce no range expansion");
+    }
+
+    // ======================== P11: rule fail-closed + env init conflict ========================
+
+    @Test
+    @DisplayName("P11: unresolved multi-mode state condition returns null (fail-closed)")
+    void unresolvedMultiModeStateCondition_returnsNull() throws Exception {
+        DeviceManifest sourceManifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("auto;on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("manual;off").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "thermostat_1", "Thermostat",
+                List.of("Mode", "FanMode"),
+                Map.of("Mode", List.of("auto", "manual"), "FanMode", List.of("on", "off")),
+                List.of(), sourceManifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("thermostat_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("thermostat_1");
+        condition.setAttribute("state");
+        condition.setRelation("=");
+        condition.setValue("unknown_state");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertNull(expr, "Unresolvable multi-mode state condition should fail-closed");
+    }
+
+    @Test
+    @DisplayName("P11: null/blank rule attribute fails closed")
+    void nullRuleAttribute_returnsNull() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("sensor_1");
+        condition.setAttribute("   ");
+        condition.setRelation("=");
+        condition.setValue("on");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertNull(expr, "Blank attribute should fail-closed");
+    }
+
+    @Test
+    @DisplayName("P11: rule relation with surrounding spaces is normalized")
+    void ruleRelationWithSpaces_isNormalized() throws Exception {
+        DeviceManifest.InternalVariable temp = numericVar("temperature", true, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temp))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(temp), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("sensor_1");
+        condition.setAttribute("temperature");
+        condition.setRelation(" EQ ");
+        condition.setValue("30");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertEquals("sensor_1.temperature=30", expr);
+    }
+
+    @Test
+    @DisplayName("P11: rule IN relation with empty value list fails closed")
+    void ruleInWithEmptyValueList_returnsNull() throws Exception {
+        DeviceManifest.InternalVariable temp = numericVar("temperature", true, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temp))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(temp), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("sensor_1");
+        condition.setAttribute("temperature");
+        condition.setRelation("IN");
+        condition.setValue(" , ; | ");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertNull(expr, "Empty IN list should fail-closed");
+    }
+
+    @Test
+    @DisplayName("P11: unknown rule attribute with relation fails closed")
+    void unknownRuleAttributeWithRelation_returnsNull() throws Exception {
+        DeviceManifest.InternalVariable temp = numericVar("temperature", true, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temp))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(temp), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("sensor_1");
+        condition.setAttribute("non_existing_attr");
+        condition.setRelation("=");
+        condition.setValue("1");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertNull(expr, "Unknown attribute should fail-closed");
+    }
+
+    @Test
+    @DisplayName("P11: API signal condition with relation maps to api signal var")
+    void apiSignalConditionWithRelation_mapsToApiSignalVar() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("auto").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("fanAuto").signal(true).endState("auto").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "fan_1", "Fan",
+                List.of("FanMode"),
+                Map.of("FanMode", List.of("off", "auto")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("fanAuto");
+        condition.setRelation(" EQ ");
+        condition.setValue(" true ");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertEquals("fan_1.fanAuto_a=TRUE", expr);
+    }
+
+    @Test
+    @DisplayName("P11: API signal condition with non-boolean value fails closed")
+    void apiSignalConditionWithNonBooleanValue_returnsNull() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("auto").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("fanAuto").signal(true).endState("auto").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "fan_1", "Fan",
+                List.of("FanMode"),
+                Map.of("FanMode", List.of("off", "auto")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("fanAuto");
+        condition.setRelation("=");
+        condition.setValue("on");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map);
+
+        assertNull(expr, "API signal relation value should be boolean");
+    }
+
+    @Test
+    @DisplayName("P11: conflicting env init values across devices throw conflict exception")
+    void envInitConflict_throws() {
+        DeviceManifest.InternalVariable time = numericVar("time", false, 0, 23);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(time))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+
+        DeviceSmvData d1 = buildSmvData("clock_1", "Clock",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(time), manifest);
+        d1.getEnvVariables().put("time", time);
+        d1.getCurrentModeStates().put("Mode", "on");
+        d1.getVariableValues().put("time", "10");
+
+        DeviceSmvData d2 = buildSmvData("clock_2", "Clock",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(time), manifest);
+        d2.getEnvVariables().put("time", time);
+        d2.getCurrentModeStates().put("Mode", "on");
+        d2.getVariableValues().put("time", "12");
+
+        DeviceVerificationDto dto1 = new DeviceVerificationDto();
+        dto1.setVarName("clock_1");
+        dto1.setTemplateName("Clock");
+        dto1.setState("on");
+
+        DeviceVerificationDto dto2 = new DeviceVerificationDto();
+        dto2.setVarName("clock_2");
+        dto2.setTemplateName("Clock");
+        dto2.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("clock_1", d1);
+        map.put("clock_2", d2);
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L, List.of(dto1, dto2), List.of(), map, false, 0, false));
+        assertTrue(ex.getMessage().contains("time"));
+        assertTrue(ex.getMessage().contains("conflicting user init values"));
+    }
+
+    @Test
+    @DisplayName("P11: env var with default range ignores non-numeric init")
+    void envDefaultRange_nonNumericInit_ignored() {
+        DeviceManifest.InternalVariable mystery = DeviceManifest.InternalVariable.builder()
+                .name("mystery").isInside(false).build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(mystery))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("device_1", "Device",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(mystery), manifest);
+        smv.getEnvVariables().put("mystery", mystery);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getVariableValues().put("mystery", "abc");
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("device_1");
+        dto.setTemplateName("Device");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("device_1", smv);
+
+        String smvText = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        assertTrue(smvText.contains("a_mystery: 0..100;"),
+                "Default env declaration should remain 0..100");
+        assertFalse(smvText.contains("init(a_mystery)"),
+                "Non-numeric init should be ignored for default numeric range");
+    }
+
+    // ======================== P12: spec key validation and env mapping ========================
+
+    @Test
+    @DisplayName("P12: variable condition maps env variable key to a_var")
+    void variableCondition_envKey_mapsToEnvVar() {
+        DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(tempEnv))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("sensor_1", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(tempEnv), manifest);
+        smv.getEnvVariables().put("temperature", tempEnv);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("sensor_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation("GT");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_env_var");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("a_temperature>30"),
+                "Environment variable should be referenced as a_temperature, got:\n" + result);
+        assertFalse(result.contains("sensor_1.temperature>30"),
+                "Should not reference env variable as device internal variable");
+    }
+
+    @Test
+    @DisplayName("P12: unresolved trust key generates invalid-spec placeholder")
+    void unresolvedTrustKey_generatesInvalidSpecPlaceholder() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of())
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("device_1", "Device",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("device_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("device_1");
+        cond.setTargetType("trust");
+        cond.setKey("not_exists");
+        cond.setRelation("=");
+        cond.setValue("trusted");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_bad_trust");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
+                "Invalid trust key should degrade to placeholder, got:\n" + result);
+        assertTrue(result.contains("cannot resolve property key"),
+                "Placeholder should include reason for diagnostics, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: spec relation with surrounding spaces is normalized")
+    void specRelationWithSpaces_isNormalized() {
+        DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(tempEnv))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("sensor_1", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(tempEnv), manifest);
+        smv.getEnvVariables().put("temperature", tempEnv);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("sensor_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation(" GT ");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_env_var_rel_spaces");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("a_temperature>30"),
+                "Relation with spaces should normalize to >, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: unsupported relation generates invalid-spec placeholder")
+    void unsupportedRelation_generatesInvalidSpecPlaceholder() {
+        DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(tempEnv))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("sensor_1", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(tempEnv), manifest);
+        smv.getEnvVariables().put("temperature", tempEnv);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("sensor_1");
+        cond.setTargetType("variable");
+        cond.setKey("temperature");
+        cond.setRelation("CONTAINS");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_bad_relation");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
+                "Unsupported relation should degrade to invalid-spec placeholder, got:\n" + result);
+        assertTrue(result.contains("unsupported relation"),
+                "Invalid-spec placeholder should include unsupported relation reason, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: safety spec variable key a_var maps trust to trust_var")
+    void safetySpec_envVariableKey_mapsTrustWithoutPrefix() {
+        DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(tempEnv))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("sensor_1", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(tempEnv), manifest);
+        smv.getEnvVariables().put("temperature", tempEnv);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("sensor_1");
+        cond.setTargetType("variable");
+        cond.setKey("a_temperature");
+        cond.setRelation("GT");
+        cond.setValue("30");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_safe_env_var");
+        spec.setTemplateId("7");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("a_temperature>30"),
+                "Safety spec should keep env expression on a_temperature, got:\n" + result);
+        assertTrue(result.contains("sensor_1.trust_temperature=untrusted"),
+                "Safety spec should inject trust_temperature, got:\n" + result);
+        assertFalse(result.contains("sensor_1.trust_a_temperature"),
+                "Safety spec should never reference trust_a_temperature");
     }
 }

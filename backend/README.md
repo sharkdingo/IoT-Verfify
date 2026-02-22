@@ -24,6 +24,7 @@ IoT-Verify 是一个智能家居模拟与形式化验证平台，核心功能包
 | 设备管理 | 创建、编辑 IoT 设备节点和连接 |
 | 规则引擎 | IFTTT 风格的设备交互规则 |
 | 规格验证 | 基于 NuSMV 的 CTL/LTL 形式化验证 |
+| 随机模拟 | NuSMV 交互式 N 步随机模拟 |
 | Trace 分析 | 反例可视化与分析 |
 | AI 助手 | 自然语言设备管理接口（火山引擎） |
 
@@ -31,10 +32,10 @@ IoT-Verify 是一个智能家居模拟与形式化验证平台，核心功能包
 
 ## 2. 技术栈
 
-- Spring Boot 3.5.7 / Java 21
+- Spring Boot 3.5.7 / Java 17
 - MySQL + Redis
 - JWT 认证
-- NuSMV 模型检测器
+- NuSMV 2.x 模型检测器（已测试 2.5–2.7，不兼容 nuXmv）
 - 火山引擎 Ark（AI 助手）
 
 ---
@@ -44,49 +45,156 @@ IoT-Verify 是一个智能家居模拟与形式化验证平台，核心功能包
 ```
 src/main/java/cn/edu/nju/Iot_Verify/
 ├── controller/
-│   └── VerificationController.java      # 验证 API 入口
+│   ├── AuthController.java                # 认证（注册/登录/登出）
+│   ├── BoardStorageController.java        # 画布（设备节点/边 CRUD）
+│   ├── ChatController.java               # AI 助手（SSE 流式对话）
+│   ├── VerificationController.java        # 验证 API 入口
+│   └── SimulationController.java          # 模拟 API 入口
 ├── service/
-│   └── impl/VerificationServiceImpl.java # 验证业务逻辑（同步/异步）
-├── component/nusmv/                      # ★ NuSMV 核心模块
-│   ├── generator/
-│   │   ├── SmvGenerator.java             # 协调器：组装完整 SMV 文件
-│   │   ├── SmvModelValidator.java        # 前置校验器 (P1-P5)
-│   │   ├── PropertyDimension.java        # Trust/Privacy 维度枚举
-│   │   ├── data/
-│   │   │   ├── DeviceSmvData.java        # 设备 SMV 数据模型（纯 POJO）
-│   │   │   └── DeviceSmvDataFactory.java # DTO + 模板 → DeviceSmvData
-│   │   └── module/
-│   │       ├── SmvDeviceModuleBuilder.java  # 设备 MODULE 定义
-│   │       ├── SmvMainModuleBuilder.java    # main MODULE + ASSIGN 规则
-│   │       ├── SmvRuleCommentWriter.java    # 规则 → SMV 注释
-│   │       └── SmvSpecificationBuilder.java # CTLSPEC / LTLSPEC 生成
-│   ├── executor/
-│   │   └── NusmvExecutor.java            # 执行 NuSMV 进程，per-spec 结果解析
-│   └── parser/
-│       └── SmvTraceParser.java           # 反例文本 → TraceStateDto
+│   ├── AuthService.java                   # 认证服务
+│   ├── BoardStorageService.java           # 画布存储服务
+│   ├── ChatService.java                   # AI 对话服务
+│   ├── DeviceTemplateService.java         # 设备模板服务
+│   ├── NodeService.java                   # 节点服务
+│   ├── TokenBlacklistService.java         # Token 黑名单服务
+│   ├── UserService.java                   # 用户服务
+│   ├── VerificationService.java           # 验证服务接口
+│   ├── SimulationService.java             # 模拟服务接口
+│   └── impl/
+│       ├── AuthServiceImpl.java
+│       ├── BoardStorageServiceImpl.java
+│       ├── ChatServiceImpl.java
+│       ├── DeviceTemplateServiceImpl.java
+│       ├── NodeServiceImpl.java
+│       ├── RedisTokenBlacklistService.java
+│       ├── UserServiceImpl.java
+│       ├── VerificationServiceImpl.java   # 验证业务逻辑（同步/异步）
+│       └── SimulationServiceImpl.java     # 模拟业务逻辑（执行 + 持久化）
+├── component/
+│   ├── aitool/                            # AI 工具组件
+│   │   ├── AiTool.java                    # 工具接口
+│   │   ├── AiToolManager.java             # 工具管理器
+│   │   └── node/                          # 节点操作工具
+│   │       ├── AddNodeTool.java
+│   │       ├── DeleteNodeTool.java
+│   │       └── SearchNodeTool.java
+│   └── nusmv/                             # ★ NuSMV 核心模块
+│       ├── generator/
+│       │   ├── SmvGenerator.java           # 协调器：组装完整 SMV 文件
+│       │   ├── SmvModelValidator.java      # 前置校验器 (P1-P5)
+│       │   ├── PropertyDimension.java      # Trust/Privacy 维度枚举
+│       │   ├── data/
+│       │   │   ├── DeviceSmvData.java      # 设备 SMV 数据模型（纯 POJO）
+│       │   │   └── DeviceSmvDataFactory.java # DTO + 模板 → DeviceSmvData
+│       │   └── module/
+│       │       ├── SmvDeviceModuleBuilder.java  # 设备 MODULE 定义
+│       │       ├── SmvMainModuleBuilder.java    # main MODULE + ASSIGN 规则
+│       │       ├── SmvRuleCommentWriter.java    # 规则 → SMV 注释
+│       │       └── SmvSpecificationBuilder.java # CTLSPEC / LTLSPEC 生成
+│       ├── executor/
+│       │   └── NusmvExecutor.java          # 执行 NuSMV 进程（批处理 + 交互式模拟）
+│       └── parser/
+│           └── SmvTraceParser.java         # 反例文本 → TraceStateDto
+├── client/
+│   └── ArkAiClient.java                   # 火山引擎 Ark AI 客户端
 ├── dto/
-│   ├── device/
-│   │   ├── DeviceVerificationDto.java    # 验证专用设备数据
-│   │   ├── VariableStateDto.java         # 变量状态（name, value, trust）
-│   │   └── PrivacyStateDto.java          # 隐私状态（name, privacy）
-│   ├── rule/RuleDto.java                 # IFTTT 规则
+│   ├── Result.java                        # 统一响应包装
+│   ├── auth/                              # 认证 DTO
+│   │   ├── LoginRequestDto.java
+│   │   ├── RegisterRequestDto.java
+│   │   ├── AuthResponseDto.java
+│   │   └── RegisterResponseDto.java
+│   ├── board/                             # 画布 DTO
+│   │   ├── BoardActiveDto.java
+│   │   └── BoardLayoutDto.java
+│   ├── chat/                              # AI 对话 DTO
+│   │   ├── ChatRequestDto.java
+│   │   ├── ChatMessageResponseDto.java
+│   │   ├── ChatSessionResponseDto.java
+│   │   └── StreamResponseDto.java
+│   ├── device/                            # 设备 DTO
+│   │   ├── DeviceNodeDto.java
+│   │   ├── DeviceTemplateDto.java
+│   │   ├── DeviceVerificationDto.java     # 验证专用设备数据
+│   │   ├── VariableStateDto.java          # 变量状态（name, value, trust）
+│   │   └── PrivacyStateDto.java           # 隐私状态（name, privacy）
+│   ├── rule/
+│   │   ├── RuleDto.java                   # IFTTT 规则
+│   │   └── DeviceEdgeDto.java             # 设备连接边
 │   ├── spec/
-│   │   ├── SpecificationDto.java         # 验证规格
-│   │   └── SpecConditionDto.java         # 规格条件
+│   │   ├── SpecificationDto.java          # 验证规格
+│   │   └── SpecConditionDto.java          # 规格条件
+│   ├── simulation/
+│   │   ├── SimulationRequestDto.java      # 模拟请求
+│   │   ├── SimulationResultDto.java       # 模拟结果（不落库）
+│   │   ├── SimulationTraceDto.java        # 模拟轨迹详情（持久化）
+│   │   └── SimulationTraceSummaryDto.java # 模拟轨迹摘要（列表用）
 │   ├── verification/
-│   │   ├── VerificationRequestDto.java   # 验证请求
-│   │   ├── VerificationResultDto.java    # 验证结果
-│   │   └── VerificationTaskDto.java      # 异步任务状态
+│   │   ├── VerificationRequestDto.java    # 验证请求
+│   │   ├── VerificationResultDto.java     # 验证结果
+│   │   └── VerificationTaskDto.java       # 异步任务状态
 │   └── trace/
-│       ├── TraceDto.java                 # Trace 持久化
-│       ├── TraceStateDto.java            # 反例状态
-│       ├── TraceDeviceDto.java           # 反例设备
-│       ├── TraceVariableDto.java         # 反例变量
-│       └── TraceTrustPrivacyDto.java     # 反例信任/隐私
-├── exception/
-│   └── SmvGenerationException.java       # SMV 生成异常（含工厂方法）
+│       ├── TraceDto.java                  # Trace 持久化
+│       ├── TraceStateDto.java             # 反例状态
+│       ├── TraceDeviceDto.java            # 反例设备（state + mode）
+│       ├── TraceVariableDto.java          # 反例变量
+│       └── TraceTrustPrivacyDto.java      # 反例信任/隐私
+├── po/                                    # 持久化实体
+│   ├── UserPo.java
+│   ├── DeviceNodePo.java
+│   ├── DeviceEdgePo.java / DeviceEdgeId.java
+│   ├── DeviceTemplatePo.java
+│   ├── BoardActivePo.java / BoardLayoutPo.java
+│   ├── ChatSessionPo.java / ChatMessagePo.java
+│   ├── RulePo.java
+│   ├── SpecificationPo.java
+│   ├── TracePo.java                       # 验证反例轨迹
+│   ├── VerificationTaskPo.java            # 异步验证任务
+│   └── SimulationTracePo.java             # 模拟轨迹（simulation_trace 表）
+├── repository/                            # JPA Repository
+│   ├── UserRepository.java
+│   ├── DeviceNodeRepository.java / DeviceEdgeRepository.java
+│   ├── DeviceTemplateRepository.java
+│   ├── BoardActiveRepository.java / BoardLayoutRepository.java
+│   ├── ChatSessionRepository.java / ChatMessageRepository.java
+│   ├── RuleRepository.java
+│   ├── SpecificationRepository.java
+│   ├── TraceRepository.java
+│   ├── VerificationTaskRepository.java
+│   └── SimulationTraceRepository.java
+├── security/                              # 安全模块
+│   ├── SecurityConfig.java                # Spring Security 配置
+│   ├── JwtAuthenticationFilter.java       # JWT 过滤器
+│   ├── CurrentUser.java                   # @CurrentUser 注解
+│   ├── CurrentUserArgumentResolver.java   # 用户 ID 参数解析
+│   └── UserContextHolder.java             # 用户上下文
+├── util/
+│   ├── JwtUtil.java                       # JWT 工具
+│   ├── JsonUtils.java                     # JSON 序列化工具
+│   ├── LevenshteinDistanceUtil.java       # 编辑距离（AI 工具用）
+│   ├── FunctionParameterSchema.java       # AI 函数参数 Schema
+│   └── mapper/                            # PO ↔ DTO 转换
+│       ├── UserMapper.java
+│       ├── DeviceNodeMapper.java / DeviceEdgeMapper.java
+│       ├── ChatMapper.java
+│       ├── RuleMapper.java
+│       ├── SpecificationMapper.java
+│       ├── TraceMapper.java
+│       ├── VerificationTaskMapper.java
+│       └── SimulationTraceMapper.java
+├── exception/                             # 异常体系
+│   ├── BaseException.java                 # 基类
+│   ├── GlobalExceptionHandler.java        # 全局异常处理
+│   ├── SmvGenerationException.java        # SMV 生成异常（含工厂方法）
+│   ├── BadRequestException.java / ValidationException.java
+│   ├── UnauthorizedException.java / ForbiddenException.java
+│   ├── ResourceNotFoundException.java / ConflictException.java
+│   ├── InternalServerException.java
+│   └── ServiceUnavailableException.java
 └── configure/
-    └── NusmvConfig.java                  # NuSMV 路径/超时配置
+    ├── NusmvConfig.java                   # NuSMV 路径/超时配置
+    ├── ThreadConfig.java                  # 线程池配置
+    └── WebConfig.java                     # Web 配置（CORS 等）
 ```
 
 ---
@@ -176,14 +284,14 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - `varName_rate: min..max` — 受影响变量的变化率（范围根据模板 Dynamics.ChangeRate 动态计算，无 Dynamics 时 fallback 为 -10..10）
 3. `ASSIGN` — 初始值
    - `init(modeVar)` — 从用户 state 或模板 InitState 确定
-   - `init(variable)` — 从用户 variableValues 或模板默认值
+   - `init(variable)` — 从用户 variableValues 或模板默认值，经 `validateInternalInitValue()` 校验（枚举值不在枚举内回退首值；数值超范围 clamp；无枚举/无范围的变量不生成 `init()`）
    - `init(trust_*)` / `init(privacy_*)` — 从模板默认 + 用户覆盖
 
 ### 4.5 SmvMainModuleBuilder — main MODULE
 
 `component/nusmv/generator/module/SmvMainModuleBuilder.java`
 
-生成 `MODULE main`，是最复杂的构建器（~1270 行），包含：
+生成 `MODULE main`，是最复杂的构建器（~1580 行），包含：
 
 1. `FROZENVAR intensity: 0..50` — 仅攻击模式
 2. `VAR` — 设备实例化 + 环境变量声明
@@ -196,15 +304,21 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - `appendTransitionSignalTransitions()` — 模板 Transition 信号变量
    - `appendPropertyTransitions()` — 状态级信任/隐私传播（使用 `PropertyDimension` 枚举统一逻辑）
    - `appendVariablePropertyTransitions()` — 变量级信任/隐私自保持
-   - `appendContentPrivacyTransitions()` — IsChangeable=true 的 content 隐私自保持
+   - `appendContentPrivacyTransitions()` — IsChangeable=true 的 content 隐私转换（规则命中时设为 `private`，否则自保持）
    - `appendVariableRateTransitions()` — 受影响变量的变化率
    - `appendExternalVariableAssignments()` — 外部变量镜像环境变量（简单赋值，非 next）
    - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下范围扩展）
 
 关键设计：
 - 环境变量使用 `a_` 前缀在 main 模块声明，避免跨设备引用问题
+- 同名环境变量在 `main` 中只声明一次；`init(a_varName)` 通过 `resolveEnvVarInitValues()` 汇总各设备提供的用户初值（经 `validateEnvVarInitValue()` 校验范围）
+- 同名环境变量初值在归一化后若不一致，`resolveEnvVarInitValues()` 抛出 `envVarConflict`
+- 对无枚举且无上下界定义的环境变量，`main` 默认声明为 `0..100`；初值仅接受整数，越界会 clamp 到 `0/100`
 - `PropertyDimension` 枚举合并了 trust 和 privacy 的重复生成逻辑
 - 规则条件中的关系符通过 `normalizeRuleRelation()` 归一化
+- 规则条件采用 fail-closed：当条件无法解析（设备不存在、空属性、未知属性、不支持 relation、空 value、`IN/NOT_IN` 空列表）时，整条规则 guard 会被置为 `FALSE`
+- 当规则条件 `relation != null` 且 `attribute` 指向 API signal 时，会映射为 `device.apiName_a`；仅支持 `=`/`!=`/`IN`/`NOT_IN`，且 value 必须为 `TRUE`/`FALSE`（大小写不敏感）
+- 当规则条件 `relation == null` 且 `attribute` 指向 `signal=true` 的 API 时，兼容生成 `(device.apiName_a=TRUE | mode=endState)` 形式条件
 
 ### 4.6 SmvSpecificationBuilder — 规格生成
 
@@ -216,6 +330,8 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 - 其余 → `CTLSPEC` 各模板（1=AG, 2=AF, 3=AG!, 4=AG→AX, 5=AG→AF）
 
 条件构建通过 `genConditionSpec()` 将 `SpecConditionDto` 映射为 SMV 表达式，支持 `IN`/`NOT_IN` 集合运算。
+`targetType` 仅允许 `state|variable|api|trust|privacy`（DTO 层 `@Pattern` 校验 + 生成层 fail-closed）。
+`api` 类型条件仅支持 `=`/`!=`/`IN`/`NOT_IN`，值必须为 `TRUE`/`FALSE`，不再硬编码为 `=TRUE`。
 
 攻击预算约束统一放在 `main` 模块的 `INVAR intensity <= N` 中，规格本身不注入 intensity 条件。
 
@@ -225,14 +341,15 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 `component/nusmv/executor/NusmvExecutor.java`
 
-职责：调用 NuSMV 进程并解析输出。
+职责：调用 NuSMV 进程并解析输出（批处理验证 + 交互式随机模拟）。
 
 核心逻辑：
-- 构建命令：`NuSMV [options] model.smv`
+- 构建命令：`NuSMV [extraArgs] model.smv`（支持 `command-prefix` 包装）
 - 超时控制：从环境变量 `NUSMV_TIMEOUT_MS` 读取，默认由 `NusmvConfig` 配置
 - 输出解析：逐行匹配 `-- specification ... is true/false`
 - 反例提取：false spec 后的文本直到下一个 spec 结果为 counterexample
 - 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed + counterexample）
+- 交互模拟：`executeInteractiveSimulation()` 通过 `-int` 执行 `go -> pick_state -r -> simulate -r -k N -> show_traces -> quit`，并过滤 `NuSMV >` 提示符
 
 ### 4.8 SmvTraceParser — 反例解析
 
@@ -240,11 +357,15 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 将 NuSMV 反例文本解析为 `List<TraceStateDto>`：
 
-- 按 `State X.Y:` 正则分割状态
+- 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
 - `device.var = value` → 匹配到对应 `DeviceSmvData` 的变量/状态/信任/隐私
 - `a_varName = value` → 环境变量
+- 自动补全 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
+- `trust_` 前缀按类型分流：状态级进入 `trustPrivacy[]`（布尔 trust），变量级写入 `variables[].trust`
+- `privacy_` 前缀进入 `privacies[]`（不再混入 `trustPrivacy[]`）
+- 过滤内部控制变量：`is_attack`、`*_rate`、`*_a`
 - 增量解析：NuSMV 只输出变化项，解析器通过 `previousModeValuesByDevice` 追踪上一状态
-- `finalizeModeStates()` — 补全未变化的模式状态
+- `finalizeModeStates()` — 用临时 `__mode__*` 变量补全未变化模式，并回填最终 `state/mode`
 
 ### 4.9 SmvModelValidator — 前置校验
 
@@ -297,20 +418,27 @@ public enum PropertyDimension {
 | `GET` | `/api/verify/tasks/{id}` | 任务状态 |
 | `GET` | `/api/verify/tasks/{id}/progress` | 任务进度 (0-100) |
 | `POST` | `/api/verify/tasks/{id}/cancel` | 取消任务 |
-| `GET` | `/api/verify/traces` | 用户所有 Trace |
+| `GET` | `/api/verify/traces` | 用户所有 Trace（验证反例） |
 | `GET` | `/api/verify/traces/{id}` | 单个 Trace |
 | `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
 
+### 模拟相关
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库） |
+| `POST` | `/api/verify/simulations` | 执行模拟并持久化 |
+| `GET` | `/api/verify/simulations` | 用户所有模拟记录（摘要） |
+| `GET` | `/api/verify/simulations/{id}` | 单条模拟记录（详情） |
+| `DELETE` | `/api/verify/simulations/{id}` | 删除模拟记录 |
+
 ### 其他端点
 
-| 模块 | 前缀 | 说明 |
-|------|------|------|
-| 认证 | `/api/auth` | 注册、登录、登出 |
-| 画布 | `/api/board` | 设备节点和边的 CRUD |
-| 设备模板 | `/api/device-templates` | 模板管理 |
-| 规则 | `/api/rules` | IFTTT 规则 CRUD |
-| 规格 | `/api/specifications` | 验证规格 CRUD |
-| AI 助手 | `/api/ai` | SSE 流式对话 |
+| 模块   | 前缀          | 说明                                           |
+|--------|---------------|------------------------------------------------|
+| 认证   | `/api/auth`   | 注册、登录、登出                               |
+| 画布   | `/api/board`  | 设备节点/边/规则/规格/模板/布局的 CRUD（统一入口） |
+| AI 助手 | `/api/chat`  | SSE 流式对话                                   |
 
 ---
 
@@ -355,9 +483,47 @@ public enum PropertyDimension {
 {
   "safe": false,
   "specResults": [true, false],
-  "traces": [{ "id": 1, "specId": "spec_2", "states": [...] }],
+  "traces": [
+    {
+      "id": 1,
+      "userId": 100,
+      "verificationTaskId": null,
+      "violatedSpecId": "spec_2",
+      "violatedSpecJson": "{\"id\":\"spec_2\",\"templateId\":\"1\",...}",
+      "states": [...]
+    }
+  ],
   "checkLogs": ["validation warning..."],
   "nusmvOutput": "-- specification AG(...) is false\n..."
+}
+```
+
+### 模拟轨迹 (SimulationTraceDto)
+
+```json
+{
+  "id": 1,
+  "userId": 100,
+  "requestedSteps": 10,
+  "steps": 10,
+  "states": [{ "stateIndex": 0, "devices": [...], "rules": [], "envVariables": [] }, ...],
+  "logs": ["Generating NuSMV model...", "Simulation completed."],
+  "nusmvOutput": "NuSMV > ...",
+  "requestJson": "{\"devices\":[...],\"rules\":[...],\"steps\":10,\"isAttack\":false,\"intensity\":3,\"enablePrivacy\":false}",
+  "createdAt": "2026-02-23T12:00:00"
+}
+```
+
+### 模拟轨迹摘要 (SimulationTraceSummaryDto)
+
+列表接口返回，不含 states/logs/nusmvOutput 等大字段：
+
+```json
+{
+  "id": 1,
+  "requestedSteps": 10,
+  "steps": 10,
+  "createdAt": "2026-02-23T12:00:00"
 }
 ```
 
@@ -367,18 +533,18 @@ public enum PropertyDimension {
 
 ### 环境要求
 
-- JDK 21+
+- JDK 17+
 - MySQL 8.0+
 - Redis 7.0+
-- NuSMV 2.6+ (需配置路径)
+- NuSMV 2.x (已测试 2.5–2.7，需配置路径)
 
-### 关键配置 (application.yml)
+### 关键配置 (application.yaml)
 
 ```yaml
 nusmv:
   path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
-  timeout: 60000                 # 执行超时（毫秒）
-  options: ""                    # 额外命令行参数
+  command-prefix: ""             # 可选：命令前缀（如 docker exec ...）
+  timeout-ms: 60000              # 执行超时（毫秒）
 ```
 
 ### 构建与运行
@@ -405,6 +571,9 @@ java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
 | 进度追踪 | Done | Progress API (0-100%) |
 | 攻击模式 | Done | `isAttack` + `intensity` |
 | 隐私维度 | Done | `enablePrivacy` + `PropertyDimension` |
+| 随机模拟 | Done | `SimulationServiceImpl` + `NusmvExecutor.executeInteractiveSimulation()` |
+| 模拟结果持久化 | Done | `SimulationTraceRepository` + `SimulationController` |
+| 输入校验强化 | Done | `SmvDeviceModuleBuilder.validateInternalInitValue()` + `SmvMainModuleBuilder.resolveEnvVarInitValues()` / `validateEnvVarInitValue()` + `SmvSpecificationBuilder.buildVariableCondition()` / `validateApiSignalExists()` / `validateApiBooleanRelation()` + `SpecConditionDto @Pattern` |
 
 ---
 

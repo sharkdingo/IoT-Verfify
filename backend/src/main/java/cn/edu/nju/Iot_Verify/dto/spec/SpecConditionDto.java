@@ -2,6 +2,7 @@
 package cn.edu.nju.Iot_Verify.dto.spec;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 /**
@@ -25,6 +26,8 @@ public class SpecConditionDto {
      * 目标类型: state | variable | api | trust | privacy
      */
     @NotBlank(message = "Target type is required for spec condition")
+    @Pattern(regexp = "(?i:state|variable|api|trust|privacy)",
+             message = "targetType must be one of: state, variable, api, trust, privacy")
     private String targetType;
     @NotBlank(message = "Key is required for spec condition")
     private String key;
