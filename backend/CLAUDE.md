@@ -30,19 +30,23 @@ cn.edu.nju.Iot_Verify/
 │   │   │   ├── SmvModelValidator.java     # Pre-generation validation (P1-P5)
 │   │   │   ├── PropertyDimension.java     # TRUST/PRIVACY enum
 │   │   │   ├── data/    # DeviceSmvData, DeviceSmvDataFactory
-│   │   │   └── module/  # SmvDeviceModuleBuilder, SmvMainModuleBuilder, etc.
+│   │   │   └── module/  # SmvDeviceModuleBuilder, SmvMainModuleBuilder, SmvRuleCommentWriter, SmvSpecificationBuilder
 │   │   ├── executor/    # NusmvExecutor (process execution + per-spec parsing)
 │   │   └── parser/      # SmvTraceParser (counterexample → TraceStateDto)
 │   └── aitool/          # AI tool integration (add/delete/search nodes)
-├── dto/                 # Data transfer objects (by domain: auth, board, chat, device, rule, spec, trace, verification)
-├── po/                  # JPA entities (12 tables)
-├── repository/          # Spring Data JPA repositories
-├── security/            # JWT filter, @CurrentUser resolver, SecurityConfig
-├── configure/           # NusmvConfig, ThreadConfig, WebConfig
+├── client/              # ArkAiClient (Volcengine Ark AI SDK wrapper)
+├── dto/                 # Data transfer objects (by domain: auth, board, chat, device, rule, spec, simulation, trace, verification)
+├── po/                  # JPA entities (13 tables + DeviceEdgeId composite key)
+├── repository/          # Spring Data JPA repositories (13)
+├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
+├── configure/           # NusmvConfig, ThreadConfig (chatExecutor + verificationTaskExecutor), WebConfig
 ├── exception/           # BaseException hierarchy + GlobalExceptionHandler
 └── util/
     ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct)
-    └── JsonUtils.java   # JSON serialization helpers
+    ├── JsonUtils.java   # JSON serialization helpers
+    ├── JwtUtil.java     # JWT token generation/validation
+    ├── FunctionParameterSchema.java  # AI function parameter schema builder
+    └── LevenshteinDistanceUtil.java  # Edit distance (used by AI tools)
 ```
 
 ## Build & Run
@@ -181,6 +185,7 @@ Parses NuSMV counterexample output. Supports both formats:
 - `POST /api/auth/register|login|logout` — Authentication
 - `GET|POST /api/board/nodes|edges|rules|specs|layout|active|templates` — Board CRUD
 - `DELETE /api/board/templates/{id}` — Delete custom template
+- `POST /api/board/templates/reload` — Reload built-in templates from resources
 - `POST /api/verify` — Synchronous verification
 - `POST /api/verify/async` — Async verification (returns taskId)
 - `GET /api/verify/tasks/{id}` — Task status
@@ -188,12 +193,17 @@ Parses NuSMV counterexample output. Supports both formats:
 - `POST /api/verify/tasks/{id}/cancel` — Cancel task
 - `GET /api/verify/traces` — User's all traces
 - `GET|DELETE /api/verify/traces/{id}` — Single trace
+- `POST /api/verify/simulate` — Random simulation N steps (not persisted)
+- `POST /api/verify/simulations` — Simulate and persist
+- `GET /api/verify/simulations` — User's all simulation traces (summary)
+- `GET /api/verify/simulations/{id}` — Single simulation trace (detail)
+- `DELETE /api/verify/simulations/{id}` — Delete simulation trace
 - `GET|POST|DELETE /api/chat/sessions` — Chat sessions
 - `GET /api/chat/sessions/{id}/messages` — Chat history
 - `POST /api/chat/completions` — SSE streaming chat
 
-## Database Tables (12)
+## Database Tables (13)
 
-`users`, `device_node`, `device_edge`, `rule`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `chat_session`, `chat_message`
+`users`, `device_node`, `device_edge`, `rule`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
 
 All tables auto-created by Hibernate (`ddl-auto: update`).

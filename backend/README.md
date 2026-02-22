@@ -437,7 +437,7 @@ public enum PropertyDimension {
 | 模块   | 前缀          | 说明                                           |
 |--------|---------------|------------------------------------------------|
 | 认证   | `/api/auth`   | 注册、登录、登出                               |
-| 画布   | `/api/board`  | 设备节点/边/规则/规格/模板/布局的 CRUD（统一入口） |
+| 画布   | `/api/board`  | 设备节点/边/规则/规格/模板/布局的 CRUD + 模板重载（统一入口） |
 | AI 助手 | `/api/chat`  | SSE 流式对话                                   |
 
 ---
@@ -544,7 +544,7 @@ public enum PropertyDimension {
 nusmv:
   path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
   command-prefix: ""             # 可选：命令前缀（如 docker exec ...）
-  timeout-ms: 60000              # 执行超时（毫秒）
+  timeout-ms: 120000              # 执行超时（毫秒）
 ```
 
 ### 构建与运行
