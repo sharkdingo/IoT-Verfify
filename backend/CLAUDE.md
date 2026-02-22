@@ -70,6 +70,8 @@ Key config in `src/main/resources/application.yaml`:
 - `nusmv.command-prefix` — Optional prefix (e.g. `wsl` on Windows)
 - `nusmv.timeout-ms` — Execution timeout (default 120000)
 - `volcengine.ark.*` — AI chat API settings
+- `cors.allowed-origins` — CORS allowed origins (used by SecurityConfig)
+- `server.port` — HTTP port (default 8080)
 
 ## Key Conventions
 
@@ -204,6 +206,6 @@ Parses NuSMV counterexample output. Supports both formats:
 
 ## Database Tables (13)
 
-`users`, `device_node`, `device_edge`, `rule`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
+`user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
 
 All tables auto-created by Hibernate (`ddl-auto: update`).
