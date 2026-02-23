@@ -13,7 +13,7 @@ Reference project: `D:\MEDIC-test\MEDIC-test` (MEDIC — the original research p
 - Java 17 + Spring Boot 3.x
 - MySQL + Redis (token blacklist)
 - JWT authentication (BCrypt passwords)
-- NuSMV 2.7.1 for formal verification
+- NuSMV 2.x for formal verification (tested 2.5–2.7, incompatible with nuXmv)
 - Volcengine Ark AI (chat assistant with SSE streaming)
 
 ## Package Structure
@@ -40,9 +40,10 @@ cn.edu.nju.Iot_Verify/
 ├── repository/          # Spring Data JPA repositories (13)
 ├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
 ├── configure/           # NusmvConfig, ThreadConfig (chatExecutor + verificationTaskExecutor), WebConfig
+                         # SimulationServiceImpl uses its own simulationExecutor (fixed 4 threads)
 ├── exception/           # BaseException hierarchy + GlobalExceptionHandler
 └── util/
-    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct)
+    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTraceMapper
     ├── JsonUtils.java   # JSON serialization helpers
     ├── JwtUtil.java     # JWT token generation/validation
     ├── FunctionParameterSchema.java  # AI function parameter schema builder
@@ -200,8 +201,9 @@ Parses NuSMV counterexample output. Supports both formats:
 - `GET /api/verify/simulations` — User's all simulation traces (summary)
 - `GET /api/verify/simulations/{id}` — Single simulation trace (detail)
 - `DELETE /api/verify/simulations/{id}` — Delete simulation trace
-- `GET|POST|DELETE /api/chat/sessions` — Chat sessions
-- `GET /api/chat/sessions/{id}/messages` — Chat history
+- `GET|POST /api/chat/sessions` — Chat sessions (list / create)
+- `DELETE /api/chat/sessions/{sessionId}` — Delete chat session
+- `GET /api/chat/sessions/{sessionId}/messages` — Chat history
 - `POST /api/chat/completions` — SSE streaming chat
 
 ## Database Tables (13)

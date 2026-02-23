@@ -61,7 +61,8 @@
 |------|------|--------|----------|
 | 同步验证 | `POST /api/verify` | `VerificationResultDto` | 小规模模型，快速验证 |
 | 异步验证 | `POST /api/verify/async` | `taskId (Long)` | 大规模模型，后台执行 |
-| 随机模拟 | `POST /api/verify/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为 |
+| 随机模拟 | `POST /api/verify/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为（不落库） |
+| 模拟并持久化 | `POST /api/verify/simulations` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
 
 异步模式下通过 `GET /api/verify/tasks/{id}` 轮询状态，`GET /api/verify/tasks/{id}/progress` 获取进度百分比 (0-100)。
 
