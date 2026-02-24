@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 冰箱门传感器 - Working -->
+    <rect x="10" y="8" width="20" height="24" rx="3" fill="#F8FAFC"/>
+    <rect x="10" y="8" width="20" height="24" rx="3" stroke="#94A3B8" stroke-width="2"/>
+    <!-- 冰箱门缝 -->
+    <path d="M10 18H30" stroke="#94A3B8" stroke-width="2"/>
+    <!-- 门把手 -->
+    <rect x="26" y="12" width="2" height="8" rx="1" fill="#64748B"/>
+    <!-- 传感器指示灯 -->
+    <circle cx="16" cy="12" r="2" fill="#22C55E"/>
+    <!-- 温度显示 -->
+    <rect x="14" y="28" width="12" height="6" rx="1" fill="#1F2937"/>
+    <text x="20" y="33" text-anchor="middle" font-family="monospace" font-size="4" fill="#22C55E">4°C</text>
+</svg>
+
+
+
+
+

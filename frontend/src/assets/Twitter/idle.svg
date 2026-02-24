@@ -1,0 +1,14 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Twitter - 空闲状态 (Idle) -->
+    <!-- 背景 -->
+    <rect x="4" y="8" width="32" height="24" rx="4" fill="#E0F2FE"/>
+    <rect x="4" y="8" width="32" height="24" rx="4" stroke="#0EA5E9" stroke-width="2"/>
+    <!-- Twitter鸟图标 -->
+    <path d="M10 20C10 20 12 18 16 18C18 18 20 19 20 17C20 15 18 14 16 14C18 13 20 11 20 9C20 9 18 10 16 10C14 10 12 11 12 13C12 13 10 12 10 10C10 12 11 14 13 14C12 15 11 16 11 17C11 18 12 19 14 19C12 20 10 21 10 20Z" fill="#0EA5E9"/>
+    <!-- 状态文字 -->
+    <text x="20" y="28" text-anchor="middle" font-family="Arial" font-size="6" fill="#0EA5E9">IDLE</text>
+</svg>
+
+
+
+

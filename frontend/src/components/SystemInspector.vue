@@ -37,9 +37,11 @@ const emit = defineEmits<{
 const activeDevicesCount = computed(() => props.devices.length)
 const activeSpecsCount = computed(() => props.specifications.length)
 
-// Convert real device nodes to display format
+// Convert real device nodes to display format (过滤掉变量节点)
 const displayDevices = computed(() => {
-  return props.devices.map(device => ({
+  return props.devices
+    .filter(device => !device.templateName.startsWith('variable_'))  // 排除变量节点
+    .map(device => ({
     id: device.id,
     name: device.label,
     type: device.templateName || 'Device',

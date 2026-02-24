@@ -1,0 +1,28 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烘干机 - 低热运行状态 (LowHeat;Run) -->
+    <!-- 机身 -->
+    <rect x="8" y="12" width="24" height="22" rx="3" fill="#FEF9C3"/>
+    <rect x="8" y="12" width="24" height="22" rx="3" stroke="#EAB308" stroke-width="2"/>
+    
+    <!-- 门 -->
+    <circle cx="20" cy="23" r="8" fill="#FEF08A"/>
+    <circle cx="20" cy="23" r="8" stroke="#EAB308" stroke-width="1.5"/>
+    
+    <!-- 旋转图标 -->
+    <path d="M16 20C16 20 17 23 20 23C23 23 24 20 24 20" stroke="#EAB308" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M24 26C24 26 23 23 20 23C17 23 16 26 16 26" stroke="#EAB308" stroke-width="1.5" stroke-linecap="round"/>
+    
+    <!-- 热气效果 -->
+    <path d="M14 12C14 12 13 10 15 9" stroke="#EAB308" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <path d="M26 12C26 12 27 10 25 9" stroke="#EAB308" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    
+    <!-- 控制面板 -->
+    <rect x="10" y="8" width="20" height="4" rx="1" fill="#FEF08A"/>
+    <circle cx="15" cy="10" r="1.5" fill="#22C55E"/>
+    <circle cx="20" cy="10" r="1.5" fill="#22C55E"/>
+    <circle cx="25" cy="10" r="1.5" fill="#94A3B8"/>
+</svg>
+
+
+
+

@@ -1,0 +1,17 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 液位传感器 -->
+    <!-- 主体容器 -->
+    <rect x="10" y="10" width="20" height="20" rx="2" fill="#E0E7FF" stroke="#4F46E5" stroke-width="2"/>
+    <!-- 液体 -->
+    <path d="M12 30 L12 20 Q12 16 16 16 L24 16 Q28 16 28 20 L28 30 Z" fill="#3B82F6" opacity="0.6"/>
+    <!-- 液位刻度 -->
+    <path d="M14 26 H18" stroke="#6366F1" stroke-width="1"/>
+    <path d="M14 22 H18" stroke="#6366F1" stroke-width="1"/>
+    <path d="M14 18 H18" stroke="#6366F1" stroke-width="1"/>
+    <!-- 传感器点 -->
+    <circle cx="22" cy="24" r="2" fill="#4F46E5"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#4F46E5" text-anchor="middle">level</text>
+</svg>
+
+

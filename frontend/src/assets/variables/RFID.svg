@@ -1,0 +1,17 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- RFID -->
+    <!-- 主体卡片 -->
+    <rect x="6" y="10" width="28" height="20" rx="2" fill="#E0E7FF" stroke="#4F46E5" stroke-width="2"/>
+    <!-- 芯片 -->
+    <rect x="10" y="14" width="8" height="6" rx="1" fill="#6366F1"/>
+    <rect x="11" y="15" width="6" height="4" rx="0.5" fill="#A5B4FC"/>
+    <!-- RFID图标 -->
+    <path d="M22 15 C24 15 26 17 26 20 C26 23 24 25 22 25" stroke="#4F46E5" stroke-width="2" fill="none"/>
+    <path d="M25 15 C27 15 29 17 29 20 C29 23 27 25 25 25" stroke="#4F46E5" stroke-width="1.5" fill="none" opacity="0.5"/>
+    <!-- 文字 -->
+    <text x="20" y="32" font-size="4" fill="#4F46E5" text-anchor="middle">RFID</text>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#4F46E5" text-anchor="middle">RFID</text>
+</svg>
+
+

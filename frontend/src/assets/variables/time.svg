@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 时钟/时间 -->
+    <!-- 主体 -->
+    <circle cx="20" cy="20" r="15" fill="#FEF3C7" stroke="#D97706" stroke-width="2"/>
+    <!-- 指针 -->
+    <path d="M20 20 L20 11" stroke="#D97706" stroke-width="2" stroke-linecap="round"/>
+    <path d="M20 20 L26 20" stroke="#D97706" stroke-width="2" stroke-linecap="round"/>
+    <!-- 中心点 -->
+    <circle cx="20" cy="20" r="2" fill="#D97706"/>
+    <!-- 刻度 -->
+    <path d="M20 6V8" stroke="#D97706" stroke-width="1.5"/>
+    <path d="M20 32V34" stroke="#D97706" stroke-width="1.5"/>
+    <path d="M6 20H8" stroke="#D97706" stroke-width="1.5"/>
+    <path d="M32 20H34" stroke="#D97706" stroke-width="1.5"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#D97706" text-anchor="middle">time</text>
+</svg>
+
+

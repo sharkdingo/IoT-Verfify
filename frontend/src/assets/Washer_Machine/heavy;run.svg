@@ -1,0 +1,20 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 洗衣机 - 强力运行状态 (Heavy;Run) -->
+    <rect x="8" y="10" width="24" height="24" rx="3" fill="#FEF3C7"/>
+    <rect x="8" y="10" width="24" height="24" rx="3" stroke="#F59E0B" stroke-width="2"/>
+    <!-- 滚筒 - 旋转 -->
+    <circle cx="20" cy="22" r="8" fill="#FDE68A"/>
+    <circle cx="20" cy="22" r="8" stroke="#F59E0B" stroke-width="1.5"/>
+    <!-- 强力水流 -->
+    <path d="M14 18C14 18 15 22 20 22C25 22 26 18 26 18" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M26 26C26 26 25 22 20 22C15 22 14 26 14 26" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 控制面板 -->
+    <rect x="10" y="6" width="20" height="4" rx="1" fill="#FDE68A"/>
+    <circle cx="15" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="20" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="25" cy="8" r="1.5" fill="#94A3B8"/>
+</svg>
+
+
+
+

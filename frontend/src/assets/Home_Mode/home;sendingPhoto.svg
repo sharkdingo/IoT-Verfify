@@ -1,0 +1,28 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 家居模式 - 在家发送照片状态 (Home;SendingPhoto) -->
+    <!-- 房子背景 -->
+    <path d="M6 20L20 8L34 20V32H6V20Z" fill="#DBEAFE"/>
+    <path d="M6 20L20 8L34 20V32H6V20Z" stroke="#3B82F6" stroke-width="2"/>
+    
+    <!-- 屋顶 -->
+    <path d="M4 20L20 6L36 20" stroke="#3B82F6" stroke-width="2"/>
+    
+    <!-- 门 -->
+    <rect x="17" y="24" width="6" height="8" fill="#BFDBFE"/>
+    <rect x="17" y="24" width="6" height="8" stroke="#3B82F6" stroke-width="1"/>
+    
+    <!-- 窗户 - 相机图标 -->
+    <rect x="9" y="16" width="5" height="5" fill="#93C5FD"/>
+    <rect x="9" y="16" width="5" height="5" stroke="#3B82F6" stroke-width="1"/>
+    <circle cx="11.5" cy="18.5" r="1.5" fill="#3B82F6"/>
+    
+    <rect x="26" y="16" width="5" height="5" fill="#93C5FD"/>
+    <rect x="26" y="16" width="5" height="5" stroke="#3B82F6" stroke-width="1"/>
+    
+    <!-- 发送图标 -->
+    <path d="M20 34L22 36M22 36L24 34" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
+
+
+
+

@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烤箱 - 烧烤就绪状态 (Grill;Ready) -->
+    <rect x="6" y="10" width="28" height="24" rx="3" fill="#FEF9C3"/>
+    <rect x="6" y="10" width="28" height="24" rx="3" stroke="#EAB308" stroke-width="2"/>
+    <!-- 玻璃门 -->
+    <rect x="10" y="14" width="20" height="14" rx="2" fill="#1F2937"/>
+    <!-- 烧烤架图标 -->
+    <path d="M12 20H28M12 24H28M12 28H28" stroke="#EAB308" stroke-width="1" stroke-linecap="round"/>
+    <!-- 控制面板 -->
+    <rect x="10" y="6" width="20" height="4" rx="1" fill="#FEF08A"/>
+    <circle cx="15" cy="8" r="1.5" fill="#EAB308"/>
+    <circle cx="20" cy="8" r="1.5" fill="#EAB308"/>
+    <circle cx="25" cy="8" r="1.5" fill="#94A3B8"/>
+    <text x="20" y="35" text-anchor="middle" font-family="Arial" font-size="5" fill="#EAB308">GRILL</text>
+</svg>
+
+
+
+

@@ -1,0 +1,22 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 油烟机 - 开启状态 (On) -->
+    <!-- 机身 -->
+    <rect x="8" y="14" width="24" height="20" rx="2" fill="#E0E7FF"/>
+    <rect x="8" y="14" width="24" height="20" rx="2" stroke="#6366F1" stroke-width="2"/>
+    <!-- 油烟机罩 -->
+    <path d="M10 14L20 6L30 14" fill="#C7D2FE"/>
+    <path d="M10 14L20 6L30 14" stroke="#6366F1" stroke-width="2"/>
+    <!-- 过滤网 -->
+    <rect x="12" y="18" width="16" height="12" rx="1" fill="#A5B4FC"/>
+    <path d="M14 20H26M14 24H26M14 28H26" stroke="#6366F1" stroke-width="1"/>
+    <!-- 风扇转动效果 -->
+    <path d="M20 22C20 22 18 24 20 26C22 28 24 26 24 26" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M16 24C16 24 14 26 16 28" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M24 24C24 24 26 26 24 28" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 指示灯 -->
+    <circle cx="20" cy="32" r="2" fill="#22C55E"/>
+</svg>
+
+
+
+

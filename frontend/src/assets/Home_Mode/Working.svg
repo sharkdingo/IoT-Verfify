@@ -1,0 +1,18 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 家庭模式 - Working -->
+    <path d="M20 8L8 16V32H32V16L20 8Z" fill="#F59E0B"/>
+    <path d="M20 8L8 16V32H32V16L20 8Z" stroke="#D97706" stroke-width="2"/>
+    <!-- 屋顶 -->
+    <path d="M20 8L14 14H26L20 8Z" fill="#FBBF24"/>
+    <!-- 门 -->
+    <rect x="16" y="22" width="8" height="10" rx="1" fill="#FEF3C7"/>
+    <circle cx="22" cy="27" r="1" fill="#D97706"/>
+    <!-- 窗户 -->
+    <rect x="11" y="18" width="6" height="6" rx="1" fill="#FEF3C7"/>
+    <rect x="23" y="18" width="6" height="6" rx="1" fill="#FEF3C7"/>
+</svg>
+
+
+
+
+

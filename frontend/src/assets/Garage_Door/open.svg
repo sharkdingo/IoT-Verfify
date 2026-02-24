@@ -1,0 +1,18 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 车库门 - 打开状态 (Open) -->
+    <!-- 门框 -->
+    <rect x="6" y="6" width="28" height="32" rx="2" fill="#DCFCE7"/>
+    <rect x="6" y="6" width="28" height="32" rx="2" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- 打开的门板 - 向上折叠 -->
+    <rect x="10" y="10" width="20" height="8" fill="#86EFAC"/>
+    <rect x="10" y="10" width="20" height="8" stroke="#22C55E" stroke-width="1.5"/>
+    
+    <!-- 内部空间 -->
+    <rect x="10" y="18" width="20" height="16" fill="#F0FDF4"/>
+    <rect x="10" y="18" width="20" height="16" stroke="#86EFAC" stroke-width="1.5"/>
+    
+    <!-- 把手 -->
+    <rect x="24" y="12" width="3" height="4" rx="1" fill="#22C55E"/>
+    <circle cx="25.5" cy="14" r="1.5" fill="#16A34A"/>
+</svg>

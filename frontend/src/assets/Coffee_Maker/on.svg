@@ -1,0 +1,25 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 咖啡机 - 开启状态 (On) -->
+    <!-- 机身 -->
+    <rect x="8" y="14" width="24" height="20" rx="3" fill="#FEF3C7"/>
+    <rect x="8" y="14" width="24" height="20" rx="3" stroke="#D97706" stroke-width="2"/>
+    
+    <!-- 水箱 -->
+    <rect x="10" y="18" width="8" height="10" rx="1" fill="#FDE68A"/>
+    <rect x="10" y="18" width="8" height="10" rx="1" stroke="#D97706" stroke-width="1"/>
+    
+    <!-- 咖啡杯 -->
+    <path d="M20 20H28V26C28 27.5 27 28 25.5 28H20V20Z" fill="#78350F"/>
+    <path d="M28 22H30C31 22 31.5 22.5 31.5 23.5V25C31.5 26 31 27 29.5 27H28" stroke="#78350F" stroke-width="1.5" fill="none"/>
+    
+    <!-- 蒸汽 -->
+    <path d="M22 14C22 14 21 11 23 9" stroke="#D97706" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M26 14C26 14 26 11 28 9" stroke="#D97706" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+    
+    <!-- 指示灯 -->
+    <circle cx="15" cy="30" r="2" fill="#22C55E"/>
+</svg>
+
+
+
+

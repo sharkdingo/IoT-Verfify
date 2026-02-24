@@ -1,0 +1,20 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 洗衣机 - 标准运行状态 (Regular;Run) -->
+    <rect x="8" y="10" width="24" height="24" rx="3" fill="#E0E7FF"/>
+    <rect x="8" y="10" width="24" height="24" rx="3" stroke="#6366F1" stroke-width="2"/>
+    <!-- 滚筒 - 旋转 -->
+    <circle cx="20" cy="22" r="8" fill="#C7D2FE"/>
+    <circle cx="20" cy="22" r="8" stroke="#6366F1" stroke-width="1.5"/>
+    <!-- 旋转水流 -->
+    <path d="M16 18C16 18 17 22 20 22C23 22 24 18 24 18" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M24 26C24 26 23 22 20 22C17 22 16 26 16 26" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 控制面板 -->
+    <rect x="10" y="6" width="20" height="4" rx="1" fill="#C7D2FE"/>
+    <circle cx="15" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="20" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="25" cy="8" r="1.5" fill="#94A3B8"/>
+</svg>
+
+
+
+

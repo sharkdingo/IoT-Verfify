@@ -1,0 +1,27 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 空调 - 制冷模式 (Cool) -->
+    <!-- 机身 -->
+    <rect x="6" y="12" width="28" height="20" rx="3" fill="#E0F2FE"/>
+    <rect x="6" y="12" width="28" height="20" rx="3" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- 出风口 -->
+    <path d="M10 18H30" stroke="#0EA5E9" stroke-width="2" stroke-linecap="round"/>
+    <path d="M10 22H30" stroke="#0EA5E9" stroke-width="2" stroke-linecap="round"/>
+    <path d="M10 26H30" stroke="#0EA5E9" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- 雪花图标 - 制冷 -->
+    <path d="M24 8L22 12H26L24 16" stroke="#06B6D4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="22" cy="12" r="1" fill="#06B6D4"/>
+    <circle cx="26" cy="12" r="1" fill="#06B6D4"/>
+    <circle cx="24" cy="10" r="1" fill="#06B6D4"/>
+
+    <!-- 冷气效果 -->
+    <path d="M12 32C12 32 10 28 14 26" stroke="#0EA5E9" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <path d="M20 32C20 32 18 28 22 26" stroke="#0EA5E9" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <path d="M28 32C28 32 26 28 30 26" stroke="#0EA5E9" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+</svg>
+
+
+
+
+

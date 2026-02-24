@@ -1,0 +1,16 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 加湿器 - 关闭状态 -->
+    <!-- 机身 -->
+    <rect x="12" y="14" width="16" height="20" rx="3" fill="#F1F5F9"/>
+    <rect x="12" y="14" width="16" height="20" rx="3" stroke="#94A3B8" stroke-width="2"/>
+
+    <!-- 水箱 -->
+    <rect x="14" y="18" width="12" height="10" rx="1" fill="#E2E8F0"/>
+
+    <!-- 指示灯 - 关闭 -->
+    <circle cx="20" cy="30" r="2" fill="#94A3B8"/>
+</svg>
+
+
+
+

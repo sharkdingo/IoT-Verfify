@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烤箱工作状态 -->
+    <!-- 主体烤箱 -->
+    <rect x="6" y="10" width="28" height="20" rx="2" fill="#FEF3C7" stroke="#D97706" stroke-width="2"/>
+    <!-- 烤箱门 -->
+    <rect x="9" y="13" width="22" height="14" rx="1" fill="#FFF7ED" stroke="#F59E0B" stroke-width="1"/>
+    <!-- 温度显示 -->
+    <rect x="12" y="15" width="10" height="5" rx="1" fill="#1F2937"/>
+    <text x="17" y="19" font-size="4" fill="#10B981" text-anchor="middle">180°</text>
+    <!-- 旋钮 -->
+    <circle cx="27" cy="17" r="3" fill="#D97706"/>
+    <circle cx="27" cy="17" r="1" fill="#FEF3C7"/>
+    <!-- 状态指示灯 -->
+    <circle cx="27" cy="24" r="2" fill="#22C55E"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#D97706" text-anchor="middle">ovenJobState</text>
+</svg>
+
+

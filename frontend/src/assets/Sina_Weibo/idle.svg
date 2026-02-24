@@ -1,0 +1,15 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 新浪微博 - 空闲状态 (Idle) -->
+    <!-- 背景 -->
+    <rect x="4" y="8" width="32" height="24" rx="4" fill="#FEE2E2"/>
+    <rect x="4" y="8" width="32" height="24" rx="4" stroke="#EF4444" stroke-width="2"/>
+    <!-- 微博Logo -->
+    <path d="M12 14C12 14 10 16 10 18C10 20 12 22 16 22C18 22 20 20 20 18C20 16 18 14 16 14" stroke="#E11D48" stroke-width="2" fill="none"/>
+    <circle cx="16" cy="18" r="2" fill="#E11D48"/>
+    <path d="M22 16H26M24 14V18" stroke="#E11D48" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="20" y="28" text-anchor="middle" font-family="Arial" font-size="6" fill="#EF4444">IDLE</text>
+</svg>
+
+
+
+

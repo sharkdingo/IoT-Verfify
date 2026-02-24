@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 进度 -->
+    <!-- 主体进度条背景 -->
+    <rect x="6" y="14" width="28" height="12" rx="6" fill="#E5E7EB" stroke="#6B7280" stroke-width="2"/>
+    <!-- 进度填充 -->
+    <rect x="8" y="16" width="16" height="8" rx="4" fill="#3B82F6"/>
+    <!-- 百分比文字 -->
+    <text x="30" y="23" font-size="6" fill="#3B82F6" text-anchor="middle">50%</text>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#6B7280" text-anchor="middle">progress</text>
+</svg>
+
+

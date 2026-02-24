@@ -76,34 +76,263 @@
     border-radius: var(--iot-radius-node);
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
-    gap: var(--iot-node-gap);
     cursor: grab;
     box-shadow: var(--iot-node-shadow);
     border: 1px solid;
     color: var(--iot-color-text);
     user-select: none;
+    padding: 4px;
+    box-sizing: border-box;
 }
 
 .iot-board .device-node:active {
     cursor: grabbing;
 }
 
+/* 变量节点（内部变量）- 圆形设计 */
+.iot-board .device-node.variable-node {
+    border-radius: 50% !important;
+    border-width: 2px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), inset 0 1px 3px rgba(255, 255, 255, 0.5) !important;
+}
+
+.iot-board .device-node.variable-node .device-node-content {
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+}
+
+.iot-board .device-node.variable-node .device-img {
+    width: 32px !important;
+    height: 32px !important;
+    filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3));
+}
+
+.iot-board .device-node.variable-node .device-label-wrapper {
+    display: none;  /* 隐藏变量节点的文字标签，只显示图标 */
+}
+
+/* 变量节点内容容器 */
+.iot-board .variable-node-content {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+}
+
+/* 变量节点图标 */
+.iot-board .variable-node-content .variable-img {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3));
+}
+
+/* 变量节点悬停提示 */
+.iot-board .device-node.variable-node {
+    cursor: pointer;
+}
+
+/* 反例路径激活时的设备节点 */
+.iot-board .device-node.trace-active {
+    animation: tracePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes tracePulse {
+    0%, 100% {
+        box-shadow: var(--iot-node-shadow), 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    50% {
+        box-shadow: var(--iot-node-shadow), 0 0 0 6px rgba(239, 68, 68, 0);
+    }
+}
+
+/* 变量节点包装器 - 用于定位提示框 */
+.iot-board .variable-node-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* 自定义悬浮提示框 */
+.iot-board .variable-tooltip {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
+    transform: translateX(-50%) scale(0.9);
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s ease;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* 提示框小箭头 */
+.iot-board .variable-tooltip::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 12px;
+    height: 12px;
+    background: #f8fafc;
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* 悬停时显示提示框 */
+.iot-board .device-node.variable-node:hover .variable-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) scale(1);
+    bottom: calc(100% + 14px);
+    animation: tooltipFadeIn 0.2s ease-out;
+}
+
+/* 反例路径时提示框一直显示 */
+.iot-board .device-node.variable-node .variable-tooltip.variable-tooltip-active {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) scale(1);
+    bottom: calc(100% + 14px);
+}
+
+/* 变量值变化时添加动画效果 */
+.iot-board .variable-img.variable-changed {
+    animation: variablePulse 1s ease-in-out;
+}
+
+@keyframes variablePulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.15);
+        filter: brightness(1.2);
+    }
+}
+
+@keyframes tooltipFadeIn {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) scale(0.9) translateY(5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) scale(1) translateY(0);
+    }
+}
+
+/* 提示框图标 */
+.iot-board .variable-tooltip-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 3px;
+}
+
+.iot-board .variable-tooltip-icon img {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+}
+
+/* 提示框信息 */
+.iot-board .variable-tooltip-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.iot-board .variable-tooltip-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    letter-spacing: 0.3px;
+}
+
+/* 提示框变量值 */
+.iot-board .variable-tooltip-value {
+    font-size: 10px;
+    color: #3b82f6;
+    font-weight: 500;
+}
+
+/* 设备节点主体容器：包含上部分和状态 */
+.iot-board .device-node-content {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: space-between;
+    width: 100%;
+    height: 100%;
+    gap: 4px;
+    padding: 4px;
+    box-sizing: border-box;
+}
+
+/* 上部分：左边图标，右边名字 */
+.iot-board .device-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+}
+
+/* 节点名字容器：带背景和圆角 */
+.iot-board .device-label-wrapper {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+}
+
 /* 节点图标图片：不响应鼠标事件，避免拖拽图片 */
 .iot-board .device-img {
     pointer-events: none;
+    flex-shrink: 0;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.15));
 }
 
 /* 节点文字：基础排版，具体字号由 JS 控制 */
 .iot-board .device-label {
     font-weight: 600;
-    text-align: center;
-    padding: var(--iot-space-2xs) var(--iot-space-sm) var(--iot-space-sm);
+    text-align: left;
+    padding: 3px 6px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--iot-color-title);
+    color: #1e293b;
+    font-size: 11px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.85) 100%);
+    border-radius: 5px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    line-height: 1.3;
 }
 
 /* ========== 节点缩放手柄 ========== */

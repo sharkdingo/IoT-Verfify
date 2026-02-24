@@ -1,0 +1,15 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- CO2传感器 -->
+    <!-- 主体 -->
+    <rect x="6" y="12" width="28" height="20" rx="2" fill="#F0FDF4" stroke="#22C55E" stroke-width="2"/>
+    <!-- CO2分子式 -->
+    <text x="20" y="22" font-size="8" fill="#166534" text-anchor="middle" font-weight="bold">CO</text>
+    <text x="20" y="30" font-size="6" fill="#15803D" text-anchor="middle">2</text>
+    <!-- 传感器指示 -->
+    <circle cx="32" cy="16" r="3" fill="#22C55E"/>
+    <circle cx="32" cy="16" r="1" fill="#F0FDF4"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#22C55E" text-anchor="middle">carbonDioxide</text>
+</svg>
+
+

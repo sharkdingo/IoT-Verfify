@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Facebook - 发帖中状态 (Posting) -->
+    <!-- 背景 -->
+    <rect x="4" y="8" width="32" height="24" rx="4" fill="#DCFCE7"/>
+    <rect x="4" y="8" width="32" height="24" rx="4" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- Facebook图标 -->
+    <path d="M22 12H25C26.5 12 28 13.5 28 15V20C28 21.5 26.5 23 25 23H22V28H18V23H15V19H18V16C18 14.5 19 13.5 20.5 13.5H22V12Z" fill="#1877F2"/>
+    
+    <!-- 发送箭头 -->
+    <path d="M26 8L32 8M30 6L32 8L30 10" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- 状态文字 -->
+    <text x="20" y="15" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#22C55E">POSTING</text>
+</svg>
+
+
+
+

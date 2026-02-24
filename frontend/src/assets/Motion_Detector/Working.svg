@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 运动检测器 - Working -->
+    <circle cx="20" cy="20" r="14" fill="#8B5CF6"/>
+    <circle cx="20" cy="20" r="14" stroke="#6D28D9" stroke-width="2"/>
+    <!-- 传感器区域 -->
+    <circle cx="20" cy="20" r="10" fill="#A78BFA"/>
+    <!-- 雷达波纹 -->
+    <path d="M10 20A10 10 0 0 1 30 20" stroke="white" stroke-width="1.5" fill="none" stroke-dasharray="3 2"/>
+    <path d="M8 20A12 12 0 0 1 32 20" stroke="white" stroke-width="1" fill="none" opacity="0.5"/>
+    <!-- 中心点 -->
+    <circle cx="20" cy="20" r="3" fill="#FCD34D"/>
+    <!-- 检测信号 -->
+    <path d="M16 12L18 14L22 10L24 12" stroke="white" stroke-width="1.5" fill="none"/>
+</svg>
+
+
+
+
+

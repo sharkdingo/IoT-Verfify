@@ -1,0 +1,14 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 天气 -->
+    <!-- 天空背景 -->
+    <circle cx="20" cy="20" r="14" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
+    <!-- 太阳 -->
+    <circle cx="14" cy="14" r="5" fill="#FBBF24"/>
+    <path d="M14 6V8M14 20V22M6 14H8M20 14H22" stroke="#FBBF24" stroke-width="2" stroke-linecap="round"/>
+    <!-- 云朵 -->
+    <path d="M22 18 Q24 14 28 16 Q32 14 34 18 Q36 20 34 22 Q32 24 28 22 Q24 24 22 22 Q20 20 22 18Z" fill="#F9FAFB" stroke="#9CA3AF" stroke-width="1"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#F59E0B" text-anchor="middle">weather</text>
+</svg>
+
+

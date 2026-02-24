@@ -225,7 +225,7 @@ public class SmvMainModuleBuilder {
                             String startState = getStateForMode(matchedApi.getStartState(), modeIdx);
 
                             content.append("\t\t");
-                            appendRuleConditions(content, rule, deviceSmvMap);
+                            appendRuleConditions(content, rule, deviceSmvMap, true);
 
                             if (startState != null && !startState.isEmpty()) {
                                 content.append(" & ").append(varName).append(".").append(mode).append("=").append(startState);
@@ -270,7 +270,7 @@ public class SmvMainModuleBuilder {
         }
     }
 
-    private void appendRuleConditions(StringBuilder content, RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap) {
+    private void appendRuleConditions(StringBuilder content, RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap, boolean useNext) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
             content.append("TRUE");
             return;
@@ -285,7 +285,7 @@ public class SmvMainModuleBuilder {
                 return;
             }
 
-            String part = buildSingleCondition(condition, deviceSmvMap);
+            String part = buildSingleCondition(condition, deviceSmvMap, useNext);
             if (part != null && !part.isEmpty()) {
                 parts.add(part);
             } else {
@@ -306,7 +306,7 @@ public class SmvMainModuleBuilder {
         }
     }
 
-    private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap) {
+    private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap, boolean useNext) {
         String deviceId = condition.getDeviceName();
         DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvData(deviceId, deviceSmvMap);
 
@@ -358,13 +358,18 @@ public class SmvMainModuleBuilder {
                                 String suffix = ms.startsWith(mode + "_") ? ms.substring(mode.length() + 1) : ms;
                                 if (suffix.equals(cleanValue) || ms.equals(cleanValue)) {
                                     matchedCurrentValue = true;
+                                    // 根据 useNext 决定是否使用 next() 包装
+                                    String stateExpr = varName + "." + mode + "=" + ms;
+                                    if (useNext) {
+                                        stateExpr = "next(" + stateExpr + ")";
+                                    }
                                     // 对于 IN/NOT_IN，每个值单独用 = 或 != 匹配
                                     if ("in".equals(normalizedRel)) {
-                                        matchedExprs.add(varName + "." + mode + "=" + ms);
+                                        matchedExprs.add(stateExpr);
                                     } else if ("not in".equals(normalizedRel)) {
-                                        matchedExprs.add(varName + "." + mode + "!=" + ms);
+                                        matchedExprs.add(useNext ? "!(next(" + varName + "." + mode + "=" + ms + "))" : varName + "." + mode + "!=" + ms);
                                     } else {
-                                        matchedExprs.add(varName + "." + mode + normalizedRel + ms);
+                                        matchedExprs.add(stateExpr);
                                     }
                                     break;
                                 }
@@ -444,7 +449,12 @@ public class SmvMainModuleBuilder {
                         deviceId, attr);
                 return null;
             }
-            String expr = buildRuleRelationExpr(varName + "." + lhsAttr, normalizedRel, rhsValue);
+            // 构建左边的属性表达式，根据 useNext 决定是否使用 next()
+            String lhsExpr = varName + "." + lhsAttr;
+            if (useNext) {
+                lhsExpr = "next(" + lhsExpr + ")";
+            }
+            String expr = buildRuleRelationExpr(lhsExpr, normalizedRel, rhsValue);
             if (expr == null || expr.isBlank()) {
                 log.warn("Rule condition failed to build relation expression for device '{}' attribute '{}'", deviceId, attr);
                 return null;
@@ -854,7 +864,7 @@ public class SmvMainModuleBuilder {
                             String endState = getStateForMode(api.getEndState(), i);
                             if (endState != null && endState.replace(" ", "").equals(cleanState)) {
                                 content.append("\t\t");
-                                appendRuleConditions(content, rule, deviceSmvMap);
+                                appendRuleConditions(content, rule, deviceSmvMap, false);
                                 content.append(" & (");
                                 appendRulePropertyConditions(content, rule, deviceSmvMap, dim);
                                 // content 隐私传播：规则携带 contentDevice.content 时追加 content privacy 条件
@@ -868,7 +878,7 @@ public class SmvMainModuleBuilder {
 
                                 if (dim == PropertyDimension.TRUST) {
                                     content.append("\t\t");
-                                    appendRuleConditions(content, rule, deviceSmvMap);
+                                    appendRuleConditions(content, rule, deviceSmvMap, false);
                                     content.append(": untrusted;\n");
                                 }
                             }
@@ -1048,7 +1058,7 @@ public class SmvMainModuleBuilder {
                     content.append("\tcase\n");
                     for (RuleDto rule : matchingRules) {
                         content.append("\t\t");
-                        appendRuleConditions(content, rule, deviceSmvMap);
+                        appendRuleConditions(content, rule, deviceSmvMap, false);
                         content.append(": private;\n");
                     }
                     content.append("\t\tTRUE: ").append(propVar).append(";\n");

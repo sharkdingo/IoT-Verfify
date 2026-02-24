@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 温控器 - 开启;自动状态 (On;Auto) -->
+    <circle cx="20" cy="20" r="16" fill="#E0E7FF"/>
+    <circle cx="20" cy="20" r="16" stroke="#6366F1" stroke-width="2"/>
+    <!-- 电源图标 -->
+    <path d="M20 8V16M15 12C15 12 16 14 20 14C24 14 25 12 25 12" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="20" y="28" text-anchor="middle" font-family="Arial" font-size="10" fill="#6366F1">72°</text>
+    <text x="20" y="34" text-anchor="middle" font-family="Arial" font-size="5" fill="#6366F1">ON</text>
+</svg>
+
+
+
+

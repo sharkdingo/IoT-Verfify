@@ -1,0 +1,21 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烤箱 - 加热运行状态 (Heating;Running) -->
+    <rect x="6" y="10" width="28" height="24" rx="3" fill="#FEE2E2"/>
+    <rect x="6" y="10" width="28" height="24" rx="3" stroke="#EF4444" stroke-width="2"/>
+    <!-- 玻璃门 -->
+    <rect x="10" y="14" width="20" height="14" rx="2" fill="#1F2937"/>
+    <!-- 加热火焰效果 -->
+    <path d="M16 24C16 24 15 20 18 18" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M20 22C20 22 20 17 22 15" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M24 24C24 24 25 20 22 18" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 控制面板 -->
+    <rect x="10" y="6" width="20" height="4" rx="1" fill="#FECACA"/>
+    <circle cx="15" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="20" cy="8" r="1.5" fill="#22C55E"/>
+    <circle cx="25" cy="8" r="1.5" fill="#94A3B8"/>
+    <text x="20" y="35" text-anchor="middle" font-family="Arial" font-size="5" fill="#EF4444">HEATING</text>
+</svg>
+
+
+
+

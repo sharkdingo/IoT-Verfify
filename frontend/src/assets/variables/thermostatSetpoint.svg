@@ -1,0 +1,18 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 温控器设定温度 -->
+    <!-- 主体 -->
+    <circle cx="20" cy="18" r="14" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
+    <!-- 温度刻度 -->
+    <path d="M20 6V10" stroke="#F59E0B" stroke-width="2"/>
+    <path d="M20 26V30" stroke="#EF4444" stroke-width="2"/>
+    <path d="M8 18H12" stroke="#F59E0B" stroke-width="2"/>
+    <path d="M28 18H32" stroke="#EF4444" stroke-width="2"/>
+    <!-- 指针 -->
+    <path d="M20 18L26 12" stroke="#374151" stroke-width="2" stroke-linecap="round"/>
+    <!-- 中心点 -->
+    <circle cx="20" cy="18" r="2" fill="#374151"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="4" fill="#F59E0B" text-anchor="middle">thermostatSetpoint</text>
+</svg>
+
+

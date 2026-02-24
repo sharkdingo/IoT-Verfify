@@ -1,0 +1,16 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 雨水传感器 -->
+    <!-- 主体 -->
+    <rect x="6" y="14" width="28" height="16" rx="2" fill="#E0E7FF" stroke="#4F46E5" stroke-width="2"/>
+    <!-- 雨滴 -->
+    <path d="M12 10 L12 16 M12 16 Q12 18 14 18 Q16 18 16 16 L16 10" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+    <path d="M20 8 L20 14 M20 14 Q20 16 22 16 Q24 16 24 14 L24 8" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+    <path d="M28 10 L28 16 M28 16 Q28 18 30 18 Q32 18 32 16 L32 10" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+    <!-- 传感器网格 -->
+    <path d="M10 20 H30" stroke="#6366F1" stroke-width="1"/>
+    <path d="M10 24 H30" stroke="#6366F1" stroke-width="1"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#4F46E5" text-anchor="middle">rain</text>
+</svg>
+
+

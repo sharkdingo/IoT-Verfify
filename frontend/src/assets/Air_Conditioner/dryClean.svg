@@ -1,0 +1,27 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 空调 - 除湿清洁模式 (Dry Clean) -->
+    <!-- 机身 -->
+    <rect x="6" y="12" width="28" height="20" rx="3" fill="#E0E7FF"/>
+    <rect x="6" y="12" width="28" height="20" rx="3" stroke="#8B5CF6" stroke-width="2"/>
+
+    <!-- 出风口 -->
+    <path d="M10 18H30" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round"/>
+    <path d="M10 22H30" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round"/>
+    <path d="M10 26H30" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- 水滴图标 - 除湿 -->
+    <path d="M22 6C22 6 18 11 18 14C18 16 19.5 17 22 17C24.5 17 26 16 26 14C26 11 22 6 22 6Z" fill="#06B6D4"/>
+    <path d="M20 14C20 14 20.5 15 22 15C23.5 15 24 14 24 14" stroke="#0EA5E9" stroke-width="1" stroke-linecap="round"/>
+
+    <!-- 清洁图标 - 星星 -->
+    <path d="M24 19L25 21L27 21L25.5 22.5L26 25L24 23.5L22 25L22.5 22.5L21 21L23 21L24 19Z" fill="#10B981"/>
+
+    <!-- 除湿效果 -->
+    <path d="M12 32C12 32 10 29 13 27" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <path d="M20 32C20 32 18 29 21 27" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <path d="M28 32C28 32 26 29 29 27" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+</svg>
+
+
+
+

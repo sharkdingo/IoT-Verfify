@@ -1,0 +1,18 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 水质传感器 -->
+    <!-- 主体容器 -->
+    <rect x="8" y="10" width="24" height="20" rx="2" fill="#E0F2FE" stroke="#0284C7" stroke-width="2"/>
+    <!-- 水滴 -->
+    <path d="M20 12 Q16 18 16 22 Q16 26 20 28 Q24 26 24 22 Q24 18 20 12Z" fill="#38BDF8"/>
+    <!-- 水波纹 -->
+    <path d="M12 26 Q16 24 20 26 Q24 28 28 26" stroke="#0EA5E9" stroke-width="1.5" fill="none"/>
+    <!-- 传感器电极 -->
+    <rect x="14" y="14" width="2" height="8" rx="1" fill="#0369A1"/>
+    <rect x="24" y="14" width="2" height="8" rx="1" fill="#0369A1"/>
+    <!-- 检测指标文字 -->
+    <text x="20" y="32" font-size="4" fill="#0284C7" text-anchor="middle">pH 7.2</text>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="4" fill="#0284C7" text-anchor="middle">waterQuality</text>
+</svg>
+
+

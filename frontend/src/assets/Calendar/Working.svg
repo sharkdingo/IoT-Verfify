@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 日历 - Working -->
+    <rect x="6" y="8" width="28" height="26" rx="3" fill="#F8FAFC"/>
+    <rect x="6" y="8" width="28" height="26" rx="3" stroke="#64748B" stroke-width="2"/>
+    <!-- 标题栏 -->
+    <rect x="6" y="8" width="28" height="8" rx="3" fill="#3B82F6"/>
+    <rect x="6" y="12" width="28" height="4" fill="#3B82F6"/>
+    <!-- 日期 -->
+    <text x="20" y="20" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="white">FEB</text>
+    <text x="20" y="30" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#1F2937">22</text>
+    <!-- 标记点 -->
+    <circle cx="14" cy="28" r="1.5" fill="#EF4444"/>
+    <circle cx="26" cy="28" r="1.5" fill="#EF4444"/>
+</svg>
+
+
+
+
+

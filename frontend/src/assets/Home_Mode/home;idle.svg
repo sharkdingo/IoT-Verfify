@@ -1,0 +1,26 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 家居模式 - 在家空闲状态 (Home;Idle) -->
+    <!-- 房子背景 -->
+    <path d="M6 20L20 8L34 20V32H6V20Z" fill="#DCFCE7"/>
+    <path d="M6 20L20 8L34 20V32H6V20Z" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- 屋顶 -->
+    <path d="M4 20L20 6L36 20" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- 门 -->
+    <rect x="17" y="24" width="6" height="8" fill="#86EFAC"/>
+    <rect x="17" y="24" width="6" height="8" stroke="#22C55E" stroke-width="1"/>
+    
+    <!-- 窗户 -->
+    <rect x="9" y="16" width="5" height="5" fill="#BBF7D0"/>
+    <rect x="9" y="16" width="5" height="5" stroke="#22C55E" stroke-width="1"/>
+    <rect x="26" y="16" width="5" height="5" fill="#BBF7D0"/>
+    <rect x="26" y="16" width="5" height="5" stroke="#22C55E" stroke-width="1"/>
+    
+    <!-- 状态文字 -->
+    <text x="20" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#22C55E">HOME</text>
+</svg>
+
+
+
+

@@ -18,6 +18,11 @@ const props = withDefaults(defineProps<Props>(), {
   deviceTemplates: () => []
 })
 
+// 过滤掉内部变量节点（只保留真实设备）
+const deviceNodes = computed(() => {
+  return (props.nodes || []).filter((node: DeviceNode) => !node.templateName?.startsWith('variable_'))
+})
+
 // Emits
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -95,25 +100,12 @@ const getDeviceVariables = (templateName: string) => {
 
   const variables: { name: string; type: string }[] = []
 
-  // 1. InternalVariables（内部变量）
+  // 只使用 InternalVariables（内部变量）
   if (template && template.manifest?.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
       if (v.Name || v.name) {
         variables.push({
           name: v.Name || v.name || '',
-          type: 'variable'  // 统一使用 'variable' 类型
-        })
-      }
-    })
-  }
-
-  // 2. ImpactedVariables（外部影响变量）
-  if (template && template.manifest?.ImpactedVariables) {
-    template.manifest.ImpactedVariables.forEach((v: any) => {
-      const varName = typeof v === 'string' ? v : (v.Name || v.name || '')
-      if (varName && !variables.some(existing => existing.name === varName)) {
-        variables.push({
-          name: varName,
           type: 'variable'  // 统一使用 'variable' 类型
         })
       }
@@ -397,14 +389,14 @@ const formatApiLabel = (api: string) => {
               <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Device</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  {{ currentSource.fromId ? getDeviceIcon(nodes.find(n => n.id === currentSource.fromId)!) : 'sensors' }}
+                  {{ currentSource.fromId ? getDeviceIcon(deviceNodes.find(n => n.id === currentSource.fromId)!) : 'sensors' }}
                 </span>
                 <select
                   v-model="currentSource.fromId"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
                   <option value="" disabled hidden>Select</option>
-                  <option v-for="node in nodes" :key="node.id" :value="node.id">
+                  <option v-for="node in deviceNodes" :key="node.id" :value="node.id">
                     {{ node.label }}
                   </option>
                 </select>
@@ -523,7 +515,7 @@ const formatApiLabel = (api: string) => {
             >
               <span class="material-icons-round text-blue-500 text-sm">sensors</span>
               <span class="text-sm text-slate-700 dark:text-slate-200">
-                {{ nodes.find(n => n.id === source.fromId)?.label }}
+                {{ deviceNodes.find(n => n.id === source.fromId)?.label }}
               </span>
               <span class="text-xs text-slate-400">•</span>
               <span class="text-sm font-medium text-blue-600 dark:text-blue-400">
@@ -569,14 +561,14 @@ const formatApiLabel = (api: string) => {
               <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Device</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  {{ ruleData.toId ? getDeviceIcon(nodes.find(n => n.id === ruleData.toId)!) : 'sensors' }}
+                  {{ ruleData.toId ? getDeviceIcon(deviceNodes.find(n => n.id === ruleData.toId)!) : 'sensors' }}
                 </span>
                 <select
                   v-model="ruleData.toId"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
                 >
                   <option value="" disabled hidden>Select device</option>
-                  <option v-for="node in nodes" :key="node.id" :value="node.id">
+                  <option v-for="node in deviceNodes" :key="node.id" :value="node.id">
                     {{ node.label }}
                   </option>
                 </select>
@@ -615,7 +607,7 @@ const formatApiLabel = (api: string) => {
               <template v-for="(source, index) in rulePreview.sourceConditions" :key="source.fromId + index">
                 <div class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs">
                   <span class="material-icons-round text-blue-500 text-sm">sensors</span>
-                  <span>{{ nodes.find(n => n.id === source.fromId)?.label || 'Unknown' }}</span>
+                  <span>{{ deviceNodes.find(n => n.id === source.fromId)?.label || 'Unknown' }}</span>
                   <span class="text-slate-400">→</span>
                   <span class="text-blue-600 dark:text-blue-400">{{ formatApiLabel(source.fromApi) }}</span>
                   <span class="text-xs px-1 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600' : 'bg-green-100 text-green-600'">

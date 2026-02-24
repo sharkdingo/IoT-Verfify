@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
@@ -12,7 +12,7 @@ import {
 
 import { getLinkPoints } from '../utils/rule'
 
-import { getNodeIconWithFallback, getDefaultDeviceIcon } from '../utils/device'
+import { getNodeIconWithFallback, getDefaultDeviceIcon, getDeviceIconPath, getVariableIconPath } from '../utils/device'
 
 import {
   createNodeDragState,
@@ -34,8 +34,18 @@ const getParticleOpacity = (index: number): string => {
   return opacities[index % opacities.length]
 }
 
+// 判断是否为内部变量连线
+const isInternalVariableEdge = (edge: DeviceEdge): boolean => {
+  return edge.itemType === 'variable' && edge.relation === 'contains'
+}
+
 // Get particle color based on source device color (for edges)
 const getParticleColorByEdge = (edge: DeviceEdge): string => {
+  // 内部变量连线使用简单的灰色
+  if (isInternalVariableEdge(edge)) {
+    return '#94a3b8'
+  }
+
   const sourceNode = props.nodes.find(n => n.id === edge.from)
   if (!sourceNode) return 'url(#grad-blue)' // fallback
 
@@ -141,8 +151,33 @@ const getNodeBorderColor = (nodeId: string): string => {
   return borderColors[colorIndex] || borderColors[0]
 }
 
+// 获取变量节点的边框颜色（使用父设备的颜色）
+const getVariableNodeBorderColor = (node: DeviceNode): string => {
+  if (!node.templateName.startsWith('variable_')) {
+    return getNodeBorderColor(node.id)
+  }
+  // 从变量节点ID提取父设备ID（格式：deviceId_variableName，使用lastIndexOf处理deviceId中可能存在的下划线）
+  const parentDeviceId = node.id.substring(0, node.id.lastIndexOf('_'))
+  return getNodeBorderColor(parentDeviceId)
+}
+
+// 获取变量节点的背景颜色（使用父设备的颜色）
+const getVariableNodeBgColor = (node: DeviceNode): string => {
+  if (!node.templateName.startsWith('variable_')) {
+    return getNodeBgColor(node.id)
+  }
+  // 从变量节点ID提取父设备ID
+  const parentDeviceId = node.id.substring(0, node.id.lastIndexOf('_'))
+  return getNodeBgColor(parentDeviceId)
+}
+
 // Get arrow marker ID based on source device color
 const getArrowMarker = (edge: DeviceEdge): string => {
+  // 内部变量连线不显示箭头
+  if (edge.itemType === 'variable' && edge.relation === 'contains') {
+    return ''
+  }
+
   const sourceNode = props.nodes.find(n => n.id === edge.from)
   if (!sourceNode) return 'url(#arrow-blue)' // fallback
 
@@ -170,8 +205,125 @@ const getParticleFillColor = (edge: DeviceEdge): string => {
 // Handle image loading errors by showing default icon
 const handleImageError = (event: Event, node: DeviceNode) => {
   const img = event.target as HTMLImageElement
+  // 如果是变量节点，使用变量默认图标
+  if (node.templateName.startsWith('variable_')) {
+    const variableName = node.templateName.replace('variable_', '')
+    const iconPath = getVariableIconPath(variableName)
+    if (iconPath) {
+      img.src = iconPath
+      return
+    }
+  }
   const defaultIcon = getDefaultDeviceIcon(node.templateName)
   img.src = `data:image/svg+xml;base64,${btoa(defaultIcon)}`
+}
+
+// 获取设备在轨迹中的最新状态（从之前的轨迹状态中查找）
+const getLatestTraceState = (nodeId: string, nodeLabel: string): string | null => {
+  if (!props.highlightedTrace?.states) return null
+  
+  const nodeIdLower = nodeId.toLowerCase()
+  const nodeLabelLower = nodeLabel.toLowerCase()
+  
+  // 从当前选中状态向前查找，找到设备最近的状态
+  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
+  for (let i = currentIndex; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+    
+    const device = state.devices.find(d => 
+      d.deviceId.toLowerCase() === nodeIdLower || 
+      d.deviceLabel.toLowerCase() === nodeLabelLower ||
+      d.deviceId.toLowerCase() === nodeLabelLower ||
+      d.deviceLabel.toLowerCase() === nodeIdLower
+    )
+    
+    if (device) {
+      return (device as any).state || (device as any).newState || null
+    }
+  }
+  
+  return null
+}
+
+// 获取节点的当前状态
+const getNodeState = (node: DeviceNode): string => {
+  // 如果有高亮轨迹且当前选中了某个状态，显示轨迹中的状态
+  if (props.highlightedTrace && props.highlightedTrace.selectedStateIndex !== undefined) {
+    // 先尝试从当前状态中获取设备状态
+    const traceDevice = getTraceDeviceForNode(node.id, node.label)
+    if (traceDevice) {
+      // 优先使用 state 字段，兼容历史 JSON 中的 newState 字段
+      return (traceDevice as any).state || (traceDevice as any).newState || node.state || 'Working'
+    }
+    
+    // 如果当前状态中没有该设备，从之前的轨迹状态中获取最新状态
+    const latestState = getLatestTraceState(node.id, node.label)
+    if (latestState) {
+      return latestState
+    }
+    
+    // 如果轨迹中没有记录，保持当前节点状态不变
+    return node.state || 'Working'
+  }
+  // 否则显示节点的初始状态
+  return node.state || 'Working'
+}
+
+// 获取状态显示的样式类
+const getStateDisplayClass = (node: DeviceNode): string => {
+  const state = getNodeState(node) || 'Working'
+  // 根据状态返回不同的样式类
+  const stateLower = state.toLowerCase()
+  if (stateLower === 'off' || stateLower === 'closed' || stateLower === 'locked' || stateLower === 'stop' || stateLower === 'pause') {
+    return 'state-offline'
+  }
+  if (stateLower === 'on' || stateLower === 'open' || stateLower === 'unlocked' || stateLower === 'run' || stateLower === 'working') {
+    return 'state-online'
+  }
+  if (stateLower.includes('heat') || stateLower.includes('cool') || stateLower.includes('dry')) {
+    return 'state-active'
+  }
+  return 'state-default'
+}
+
+// 判断是否为变量节点
+const isVariableNode = (node: DeviceNode): boolean => {
+  return node.templateName.startsWith('variable_')
+}
+
+// 获取节点当前状态对应的图标
+const getCurrentNodeIcon = (node: DeviceNode): string => {
+  // 如果是变量节点（templateName 以 variable_ 开头），从 variables 文件夹获取图标
+  if (node.templateName.startsWith('variable_')) {
+    const variableName = node.templateName.replace('variable_', '')
+    return getVariableIconPath(variableName)
+  }
+
+  const folder = node.templateName.replace(/ /g, '_')
+  const currentState = getNodeState(node) || 'Working'
+
+  // 尝试不同的状态名称变体
+  const possibleStates = [
+    currentState,
+    currentState.toLowerCase(),
+    currentState.charAt(0).toUpperCase() + currentState.slice(1).toLowerCase(),
+    'Working',
+    'On',
+    'Off'
+  ]
+
+  for (const stateName of possibleStates) {
+    try {
+      const path = getDeviceIconPath(folder, stateName)
+      if (path) return path
+    } catch (e) {
+      continue
+    }
+  }
+
+  // 如果所有尝试都失败，返回默认图标
+  return `data:image/svg+xml;base64,${btoa(getDefaultDeviceIcon(node.templateName))}`
 }
 
 const props = defineProps<{
@@ -187,7 +339,151 @@ const props = defineProps<{
   getNodeIcon: (node: DeviceNode) => string
   /** 获取节点标签样式（Board.vue 传入 getNodeLabelStyle） */
   getNodeLabelStyle: (node: DeviceNode) => Record<string, string | number>
+  /** 高亮显示的反例路径 */
+  highlightedTrace?: {
+    states: Array<{
+      devices: Array<{
+        deviceId: string
+        deviceLabel: string
+        state?: string  // 新字段
+        newState?: string  // 兼容旧数据
+        variables?: Array<{ name: string; value: string }>
+      }>
+      envVariables?: Array<{ name: string; value: string; trust?: string }>
+    }>
+    selectedStateIndex?: number
+  } | null
 }>()
+
+// 获取当前选中状态的设备信息
+const currentTraceDevices = computed(() => {
+  if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
+    return []
+  }
+  return props.highlightedTrace.states[props.highlightedTrace.selectedStateIndex]?.devices || []
+})
+
+// 判断是否有反例路径动画在进行
+const isTraceActive = computed(() => {
+  return props.highlightedTrace?.states && 
+         props.highlightedTrace.selectedStateIndex !== undefined &&
+         props.highlightedTrace.selectedStateIndex >= 0
+})
+
+// 判断节点是否在当前反例路径中
+const isNodeInTrace = (node: DeviceNode): boolean => {
+  if (!isTraceActive.value || !props.highlightedTrace?.states) return false
+  
+  const nodeIdLower = node.id.toLowerCase()
+  const nodeLabelLower = node.label.toLowerCase()
+  
+  // 检查当前选中状态
+  if (currentTraceDevices.value.some(d => 
+    d.deviceId.toLowerCase() === nodeIdLower || 
+    d.deviceLabel.toLowerCase() === nodeLabelLower ||
+    d.deviceId.toLowerCase() === nodeLabelLower ||
+    d.deviceLabel.toLowerCase() === nodeIdLower
+  )) {
+    return true
+  }
+  
+  // 检查之前的轨迹状态
+  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
+  for (let i = 0; i < currentIndex; i++) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+    
+    if (state.devices.some(d => 
+      d.deviceId.toLowerCase() === nodeIdLower || 
+      d.deviceLabel.toLowerCase() === nodeLabelLower ||
+      d.deviceId.toLowerCase() === nodeLabelLower ||
+      d.deviceLabel.toLowerCase() === nodeIdLower
+    )) {
+      return true
+    }
+  }
+  
+  return false
+}
+
+// 获取变量节点在反例路径中的值
+const getTraceVariableValue = (node: DeviceNode): { value: string; state: string } | null => {
+  if (!isTraceActive.value || !props.highlightedTrace?.states) return null
+  
+  // 从节点ID提取父设备ID和变量名（格式：parentDeviceId_variableName）
+  const parts = node.id.split('_')
+  if (parts.length < 2) return null
+  
+  const parentDeviceId = parts[0]
+  const variableName = parts.slice(1).join('_')
+  const parentIdLower = parentDeviceId.toLowerCase()
+  
+  // 从当前选中状态向前查找，找到设备最近的变量值和状态
+  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
+  for (let i = currentIndex; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+    
+    const deviceState = state.devices.find(d => 
+      d.deviceId.toLowerCase() === parentIdLower || 
+      d.deviceLabel.toLowerCase() === parentIdLower ||
+      d.deviceId.toLowerCase() === parentIdLower ||
+      d.deviceLabel.toLowerCase() === parentIdLower
+    )
+    
+    if (deviceState) {
+      // 查找对应的变量值
+      const variable = deviceState.variables?.find(v => v.name === variableName)
+      
+      if (variable) {
+        return {
+          value: variable.value || 'Unknown',
+          state: (deviceState as any).state || (deviceState as any).newState || 'Working'
+        }
+      }
+    }
+  }
+  
+  return null
+}
+
+// 获取环境变量在反例路径中的值（如 a_temperature, a_airQuality）
+const getTraceEnvVariableValue = (variableName: string): string | null => {
+  if (!isTraceActive.value || !props.highlightedTrace?.states) return null
+  
+  const varNameLower = variableName.toLowerCase()
+  
+  // 从当前选中状态向前查找，找到最近的变量值
+  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
+  for (let i = currentIndex; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.envVariables) continue
+    
+    const envVar = state.envVariables.find(v => 
+      v.name.toLowerCase() === varNameLower ||
+      v.name.toLowerCase() === `a_${varNameLower}` ||
+      v.name.toLowerCase() === varNameLower.replace('a_', '')
+    )
+    
+    if (envVar) {
+      return envVar.value
+    }
+  }
+  
+  return null
+}
+
+// 根据节点ID或标签查找对应的trace设备
+const getTraceDeviceForNode = (nodeId: string, nodeLabel: string) => {
+  const nodeIdLower = nodeId.toLowerCase()
+  const nodeLabelLower = nodeLabel.toLowerCase()
+  return currentTraceDevices.value.find(d => 
+    d.deviceId.toLowerCase() === nodeIdLower || 
+    d.deviceLabel.toLowerCase() === nodeLabelLower ||
+    d.deviceId.toLowerCase() === nodeLabelLower ||
+    d.deviceLabel.toLowerCase() === nodeIdLower
+  )
+}
 
 const emit = defineEmits<{
   /** 背景按下，用于 Board.vue 开始画布平移 */
@@ -358,6 +654,7 @@ onBeforeUnmount(() => {
     >
       <!-- 连线层 -->
       <svg class="edge-layer">
+
         <defs>
           <!-- Glow filter for particle effect -->
           <filter id="glow">
@@ -457,6 +754,7 @@ onBeforeUnmount(() => {
               filter="url(#glow)"
               :stroke="getParticleColorByEdge(edge)"
               stroke-width="2"
+              :stroke-dasharray="isInternalVariableEdge(edge) ? '5,5' : ''"
               :marker-end="getArrowMarker(edge)"
           />
           <line
@@ -487,6 +785,7 @@ onBeforeUnmount(() => {
               filter="url(#glow)"
               :stroke="getParticleColorByEdge(edge)"
               stroke-width="2"
+              :stroke-dasharray="isInternalVariableEdge(edge) ? '5,5' : ''"
               :marker-end="getArrowMarker(edge)"
           />
 
@@ -529,31 +828,77 @@ onBeforeUnmount(() => {
           :key="node.id"
           :data-node-id="node.id"
           class="device-node"
-          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id)]"
+          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
-          backgroundColor: getNodeBgColor(node.id),
-          borderColor: getNodeBorderColor(node.id)
+          backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeBgColor(node.id),
+          borderColor: isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.prevent="onNodeContextInternal(node, $event)"
       >
-        <img
-            class="device-img"
-            :src="getNodeIconWithFallback(node)"
-            :alt="node.label"
-            draggable="false"
-            :style="{
-            width: node.width * 0.55 + 'px',
-            height: node.height * 0.35 + 'px'
-          }"
-            @error="handleImageError($event, node)"
-        />
-        <div class="device-label" :style="getNodeLabelStyle(node)">
-          {{ node.label }}
+        <!-- 变量节点：只显示图标（圆形） -->
+        <div v-if="isVariableNode(node)" class="variable-node-wrapper">
+          <div class="variable-node-content">
+            <img
+                class="variable-img"
+                :src="getCurrentNodeIcon(node)"
+                :alt="node.label"
+                draggable="false"
+                @error="handleImageError($event, node)"
+                :class="{ 'variable-changed': isTraceActive && getTraceVariableValue(node) }"
+            />
+          </div>
+          <!-- 自定义悬浮提示 - 反例路径时一直显示 -->
+          <div 
+            class="variable-tooltip" 
+            :class="{ 'variable-tooltip-active': isTraceActive }"
+          >
+            <div class="variable-tooltip-icon">
+              <img
+                  :src="getCurrentNodeIcon(node)"
+                  :alt="node.label"
+                  @error="handleImageError($event, node)"
+              />
+            </div>
+            <div class="variable-tooltip-info">
+              <span class="variable-tooltip-label">{{ node.label }}</span>
+              <span v-if="isTraceActive && getTraceVariableValue(node)" class="variable-tooltip-value">
+                值: {{ getTraceVariableValue(node)?.value }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 普通设备节点：图标+名字+状态 -->
+        <div v-else class="device-node-content">
+          <!-- 上部分：左边图标，右边名字 -->
+          <div class="device-top-row">
+            <img
+                class="device-img"
+                :src="getCurrentNodeIcon(node)"
+                :alt="node.label"
+                draggable="false"
+                :style="{
+                width: node.width * 0.38 + 'px',
+                height: node.height * 0.35 + 'px'
+              }"
+                @error="handleImageError($event, node)"
+            />
+            <div class="device-label-wrapper">
+              <div class="device-label" :style="getNodeLabelStyle(node)">
+                {{ node.label }}
+              </div>
+            </div>
+          </div>
+          <!-- 下部分：设备状态显示 -->
+          <div class="device-state" :class="getStateDisplayClass(node)">
+            <span class="device-state-dot"></span>
+            <span class="device-state-value">{{ getNodeState(node) }}</span>
+          </div>
         </div>
 
         <!-- 四角缩放手柄 -->
@@ -579,4 +924,199 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.device-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  z-index: 5;
+  width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  line-height: 1;
+}
+
+.device-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.device-state-value {
+  max-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.state-offline {
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.2) 0%, rgba(100, 116, 139, 0.15) 100%);
+  color: #475569;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.state-offline .device-state-dot {
+  background: #94A3B8;
+  box-shadow: 0 0 4px #94A3B8;
+}
+
+.state-online {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(16, 185, 129, 0.15) 100%);
+  color: #059669;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.state-online .device-state-dot {
+  background: #22C55E;
+  box-shadow: 0 0 5px #22C55E;
+  animation: pulse-green 2s infinite;
+}
+
+.state-active {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.15) 100%);
+  color: #2563EB;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.state-active .device-state-dot {
+  background: #3B82F6;
+  box-shadow: 0 0 5px #3B82F6;
+  animation: pulse-blue 1.5s infinite;
+}
+
+.state-default {
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.15) 0%, rgba(100, 116, 139, 0.1) 100%);
+  color: #64748B;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.state-default .device-state-dot {
+  background: #94A3B8;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes pulse-blue {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.trace-info-card {
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+
+.trace-info-card.violated {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #fca5a5;
+}
+
+.trace-info-card.intermediate {
+  background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%);
+  border: 1px solid #fde047;
+}
+
+.trace-state-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.trace-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.violated .trace-state-dot {
+  background-color: #ef4444;
+  box-shadow: 0 0 4px #ef4444;
+  animation: pulse-red 1s infinite;
+}
+
+.intermediate .trace-state-dot {
+  background-color: #f59e0b;
+  box-shadow: 0 0 4px #f59e0b;
+  animation: pulse-amber 1s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes pulse-amber {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.trace-state-label {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.trace-state-value {
+  font-weight: bold;
+}
+
+.violated .trace-state-value {
+  color: #dc2626;
+}
+
+.intermediate .trace-state-value {
+  color: #d97706;
+}
+
+.trace-variables-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 3px;
+  border-top: 1px dashed;
+}
+
+.violated .trace-variables-list {
+  border-color: #fecaca;
+}
+
+.intermediate .trace-variables-list {
+  border-color: #fde047;
+}
+
+.trace-variable-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.trace-var-name {
+  color: #4b5563;
+  font-size: 9px;
+}
+
+.trace-var-value {
+  font-weight: bold;
+  color: #1f2937;
+  font-size: 10px;
+}
 </style>

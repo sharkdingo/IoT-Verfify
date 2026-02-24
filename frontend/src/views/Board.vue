@@ -88,7 +88,13 @@ let panOrigin = { x: 0, y: 0 }
 const deviceTemplates = ref<DeviceTemplate[]>([])
 const nodes = ref<DeviceNode[]>([])
 const edges = ref<DeviceEdge[]>([])
+const internalVariableEdges = ref<DeviceEdge[]>([])  // 内部变量连线
 const rules = ref<RuleForm[]>([])  // 独立存储规则列表
+
+// 合并所有连线（规则连线 + 内部变量连线）
+const allEdges = computed(() => {
+  return [...edges.value, ...internalVariableEdges.value]
+})
 const specifications = ref<Specification[]>([])
 const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
@@ -233,7 +239,96 @@ const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: 
     height: 90
   }
   nodes.value.push(node)
+
+  // 如果有内部变量，创建变量节点和连线
+  const internalVariables = tpl.manifest.InternalVariables || []
+  if (internalVariables.length > 0) {
+    // 变量节点从主设备右侧开始排列，使用圆形设计
+    const variableStartX = pos.x + 160
+    const variableSpacingY = 70  // 变量节点垂直间距
+
+    internalVariables.forEach((variable, index) => {
+      const variableId = `${uniqueLabel}_${variable.Name}`
+      const variableNode: DeviceNode = {
+        id: variableId,
+        templateName: `variable_${variable.Name}`,  // 使用variable_前缀标识为变量节点
+        label: variable.Name,
+        position: {
+          x: variableStartX,
+          y: pos.y + index * variableSpacingY
+        },
+        state: 'variable',
+        width: 60,   // 圆形宽度
+        height: 60   // 圆形高度
+      }
+      nodes.value.push(variableNode)
+
+      // 创建从主设备到变量节点的连线
+      const edgeId = `edge_${uniqueLabel}_to_${variableId}`
+      const edge: DeviceEdge = {
+        id: edgeId,
+        from: uniqueLabel,
+        to: variableId,
+        fromLabel: uniqueLabel,
+        toLabel: variable.Name,
+        fromPos: { x: pos.x + 110, y: pos.y + 45 },  // 主设备右侧中间
+        toPos: { x: variableStartX, y: pos.y + index * variableSpacingY + 30 },  // 变量节点左侧中间
+        itemType: 'variable',
+        relation: 'contains',
+        value: variable.Name
+      }
+      internalVariableEdges.value.push(edge)
+    })
+  }
+
   await saveNodesToServer()
+}
+
+/**
+ * 根据已加载的节点和设备模板，重新生成内部变量节点和连线
+ * 用于从服务器加载画布后恢复内部变量连接
+ */
+const regenerateInternalVariableEdges = () => {
+  // 清空现有的内部变量连线
+  internalVariableEdges.value = []
+
+  // 找出所有变量节点（templateName 以 variable_ 开头）
+  const variableNodes = nodes.value.filter(n => n.templateName.startsWith('variable_'))
+
+  // 为每个变量节点创建连线
+  variableNodes.forEach(varNode => {
+    // 从变量节点ID中提取主设备ID（格式：deviceId_variableName）
+    const parts = varNode.id.split('_')
+    if (parts.length < 2) return
+
+    const deviceId = parts[0]
+    const variableName = parts.slice(1).join('_')  // 处理变量名中可能包含下划线的情况
+
+    // 找到对应的设备节点
+    const deviceNode = nodes.value.find(n => n.id === deviceId)
+    if (!deviceNode) return
+
+    // 查找设备模板以确认这是内部变量
+    const template = deviceTemplates.value.find(t => t.manifest.Name === deviceNode.templateName)
+    const internalVar = template?.manifest.InternalVariables?.find(v => v.Name === variableName)
+    if (!internalVar) return
+
+    // 创建连线
+    const edgeId = `edge_${deviceId}_to_${varNode.id}`
+    const edge: DeviceEdge = {
+      id: edgeId,
+      from: deviceId,
+      to: varNode.id,
+      fromLabel: deviceNode.label,
+      toLabel: variableName,
+      fromPos: { x: deviceNode.position.x + 110, y: deviceNode.position.y + 45 },
+      toPos: { x: varNode.position.x, y: varNode.position.y + 30 },
+      itemType: 'variable',
+      relation: 'contains',
+      value: variableName
+    }
+    internalVariableEdges.value.push(edge)
+  })
 }
 
 
@@ -259,8 +354,26 @@ const onCanvasDrop = async (e: DragEvent) => {
 }
 
 const handleNodeMovedOrResized = async () => {
+  // 更新内部变量连线的位置
+  updateInternalVariableEdgePositions()
+
   await saveNodesToServer()
   // edges 由 rules 动态生成，不需要单独保存
+}
+
+/**
+ * 更新内部变量连线的位置（当节点移动时调用）
+ */
+const updateInternalVariableEdgePositions = () => {
+  internalVariableEdges.value.forEach(edge => {
+    const fromNode = nodes.value.find(n => n.id === edge.from)
+    const toNode = nodes.value.find(n => n.id === edge.to)
+
+    if (fromNode && toNode) {
+      edge.fromPos = { x: fromNode.position.x + fromNode.width, y: fromNode.position.y + fromNode.height / 2 }
+      edge.toPos = { x: toNode.position.x, y: toNode.position.y + toNode.height / 2 }
+    }
+  })
 }
 
 const handleAddRule = async (payload: RuleForm) => {
@@ -284,7 +397,8 @@ const handleAddRule = async (payload: RuleForm) => {
   if (sources.length > 0) {
     try {
       // 只保存 rules（edges 由 rules 动态生成）
-      const allRules = [...rules.value, newRule]
+      // 将 Proxy 对象转换为普通对象后再发送
+      const allRules = JSON.parse(JSON.stringify([...rules.value, newRule]))
       await boardApi.saveRules(allRules)
 
       // 更新前端状态
@@ -352,6 +466,12 @@ const contextMenu = ref({
 
 const onNodeContext = (node: DeviceNode, event: MouseEvent) => {
   event.preventDefault()
+  
+  // 禁止内部变量节点右击操作
+  if (node.templateName?.startsWith('variable_')) {
+    return
+  }
+  
   contextMenu.value = {
     visible: true,
     x: event.clientX,
@@ -405,8 +525,13 @@ const viewDeviceDetails = () => {
 
 
 const forceDeleteNode = async (nodeId: string) => {
-  // 先更新本地状态，确保UI立即响应
-  nodes.value = nodes.value.filter(n => n.id !== nodeId)
+  // 先找出要删除的内部变量节点ID（在删除主节点之前）
+  const variableNodeIds = nodes.value
+    .filter(n => n.id.startsWith(`${nodeId}_`) && n.templateName?.startsWith('variable_'))
+    .map(n => n.id)
+  
+  // 删除设备及其内部变量节点
+  nodes.value = nodes.value.filter(n => n.id !== nodeId && !n.id.startsWith(`${nodeId}_`))
 
   // 删除与该设备相关的规则
   const rulesToDelete = rules.value.filter(rule =>
@@ -418,14 +543,21 @@ const forceDeleteNode = async (nodeId: string) => {
   // 动态生成 edges（自动删除与该设备相关的边）
   edges.value = generateEdgesFromRules()
 
+  // 删除相关的内部变量连线
+  internalVariableEdges.value = internalVariableEdges.value.filter(
+    edge => edge.from !== nodeId && !variableNodeIds.includes(edge.to)
+  )
+
   const { nextSpecs, removed } = removeSpecsForNode(specifications.value, nodeId)
   specifications.value = nextSpecs
 
   // 尝试保存到服务器，但不让保存失败影响UI更新
   try {
+    // 将 Proxy 对象转换为普通对象后再发送
+    const rulesToSave = JSON.parse(JSON.stringify(rules.value))
     await Promise.all([
       saveNodesToServer(),
-      boardApi.saveRules(rules.value),
+      boardApi.saveRules(rulesToSave),
       saveSpecsToServer()
     ])
 
@@ -530,7 +662,9 @@ const deleteRule = async (ruleId: string) => {
 
   // 只保存 rules
   try {
-    await boardApi.saveRules(rules.value)
+    // 将 Proxy 对象转换为普通对象后再发送
+    const rulesToSave = JSON.parse(JSON.stringify(rules.value))
+    await boardApi.saveRules(rulesToSave)
     ElMessage.success('删除规则成功')
   } catch (e) {
     console.error('删除规则失败', e)
@@ -609,8 +743,21 @@ const generateEdgesFromRules = (): DeviceEdge[] => {
 }
 
 const saveSpecsToServer = async () => {
-  try { await boardApi.saveSpecs(specifications.value) }
-  catch (e) { ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败') }
+  try {
+    // 将 Proxy 对象转换为普通对象后再发送
+    const specsToSave = JSON.parse(JSON.stringify(specifications.value))
+    console.log('[Board] Saving specs to server:', specsToSave)
+    await boardApi.saveSpecs(specsToSave)
+  }
+  catch (e) {
+    console.error('[Board] Save specs failed:', e)
+    // 打印更详细的错误信息
+    if (e.response) {
+      console.error('[Board] Server error response:', e.response.data)
+      console.error('[Board] Server error status:', e.response.status)
+    }
+    ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败')
+  }
 }
 
 const ruleBuilderVisible = ref(false)
@@ -646,6 +793,9 @@ const refreshDevices = async () => {
   try { nodes.value = await boardApi.getNodes() } catch(e) {
     console.error('加载设备失败', e)
     nodes.value = [] }
+
+  // 重新生成内部变量连线（根据已加载的节点和设备模板）
+  regenerateInternalVariableEdges()
 }
 
 // 2.定义刷新规则的函数（edges 由 rules 动态生成）
@@ -722,6 +872,12 @@ onMounted(async () => {
 
 // Color utilities (matching CanvasBoard colors)
 const getCanvasMapColorIndex = (nodeId: string): number => {
+  // 内部变量节点使用父设备的颜色
+  if (nodeId.includes('_') && !nodeId.startsWith('edge_')) {
+    const parentDeviceId = nodeId.substring(0, nodeId.lastIndexOf('_'))
+    return getCanvasMapColorIndex(parentDeviceId)
+  }
+  
   // 为每个节点生成随机但一致的颜色索引
   // 使用节点ID作为种子，确保同一个节点始终有相同颜色
   let hash = 5381
@@ -735,6 +891,11 @@ const getCanvasMapColorIndex = (nodeId: string): number => {
 }
 
 const getCanvasMapColor = (nodeId: string): string => {
+  // 内部变量连线使用灰色
+  if (nodeId.startsWith('edge_') || isInternalVariableEdgeById(nodeId)) {
+    return '#94a3b8' // 灰色
+  }
+  
   // Return actual color values instead of Tailwind classes
   const colorIndex = getCanvasMapColorIndex(nodeId)
   const colorValues = [
@@ -744,8 +905,19 @@ const getCanvasMapColor = (nodeId: string): string => {
   return colorValues[colorIndex] || colorValues[0]
 }
 
+// 辅助函数：判断是否是内部变量连线
+const isInternalVariableEdgeById = (edgeId: string): boolean => {
+  const edge = allEdges.value.find(e => e.id === edgeId)
+  return edge?.itemType === 'variable' && edge?.relation === 'contains'
+}
+
 // Convert Tailwind bg- class to actual color value for SVG
 const getCanvasMapColorValue = (nodeId: string): string => {
+  // 内部变量连线使用灰色
+  if (nodeId.startsWith('edge_') || isInternalVariableEdgeById(nodeId)) {
+    return '#94a3b8' // 灰色
+  }
+  
   const colorIndex = getCanvasMapColorIndex(nodeId)
   // Map to actual color values that match the Tailwind colors
   const colorValues = [
@@ -810,8 +982,8 @@ const canvasMapData = computed(() => {
   // Create node lookup map for easy access
   const nodeMap = new Map(dots.map(dot => [dot.id, dot]))
 
-  // Generate lines for edges
-  const lines = edges.value.map((edge) => {
+  // Generate lines for edges (including internal variable edges)
+  const lines = allEdges.value.map((edge) => {
     const fromDot = nodeMap.get(edge.from)
     const toDot = nodeMap.get(edge.to)
 
@@ -838,7 +1010,8 @@ const canvasMapData = computed(() => {
       y1: fromDot.y + 4 + offsetY,
       x2: toDot.x + 4,
       y2: toDot.y + 4 + offsetY,
-      color: getCanvasMapColor(edge.from), // Use source device color
+      // 内部变量连线使用灰色，其他连线使用源设备颜色
+      color: (edge.itemType === 'variable' && edge.relation === 'contains') ? '#94a3b8' : getCanvasMapColor(edge.from),
       isBidirectional
     }
   }).filter(Boolean)
@@ -864,6 +1037,47 @@ const handleCreateDevice = async (data: { template: DeviceTemplate, customName: 
     height: 90
   }
   nodes.value.push(node)
+
+  // 如果有内部变量，创建变量节点和连线（圆形设计）
+  const internalVariables = template.manifest.InternalVariables || []
+  if (internalVariables.length > 0) {
+    const pos = node.position
+    const variableStartX = pos.x + 160
+    const variableSpacingY = 70
+
+    internalVariables.forEach((variable, index) => {
+      const variableId = `${uniqueLabel}_${variable.Name}`
+      const variableNode: DeviceNode = {
+        id: variableId,
+        templateName: `variable_${variable.Name}`,
+        label: variable.Name,
+        position: {
+          x: variableStartX,
+          y: pos.y + index * variableSpacingY
+        },
+        state: 'variable',
+        width: 60,   // 圆形宽度
+        height: 60   // 圆形高度
+      }
+      nodes.value.push(variableNode)
+
+      const edgeId = `edge_${uniqueLabel}_to_${variableId}`
+      const edge: DeviceEdge = {
+        id: edgeId,
+        from: uniqueLabel,
+        to: variableId,
+        fromLabel: uniqueLabel,
+        toLabel: variable.Name,
+        fromPos: { x: pos.x + 110, y: pos.y + 45 },
+        toPos: { x: variableStartX, y: pos.y + index * variableSpacingY + 30 },
+        itemType: 'variable',
+        relation: 'contains',
+        value: variable.Name
+      }
+      internalVariableEdges.value.push(edge)
+    })
+  }
+
   await saveNodesToServer()
 }
 
@@ -999,6 +1213,320 @@ const isVerifying = ref(false)
 const verificationResult = ref<any>(null)
 const verificationError = ref<string | null>(null)
 
+// 反例路径高亮状态
+const highlightedTrace = ref<any>(null)
+
+// 反例路径动画控制状态
+const traceAnimationState = ref({
+  visible: false,
+  selectedTraceIndex: 0,
+  selectedStateIndex: 0,
+  isPlaying: false
+})
+
+// 独立保存的 traces 数据（用于对话框关闭后）
+const savedTraces = ref<any[]>([])
+
+let playInterval: ReturnType<typeof setInterval> | null = null
+
+// 当前选中的 trace
+const currentTrace = computed(() => {
+  // 优先使用 savedTraces
+  if (savedTraces.value.length > 0) {
+    return savedTraces.value[traceAnimationState.value.selectedTraceIndex] || null
+  }
+  return verificationResult.value?.traces?.[traceAnimationState.value.selectedTraceIndex] || null
+})
+
+// 当前状态
+const currentState = computed(() => {
+  if (!currentTrace.value?.states) return null
+  return currentTrace.value.states[traceAnimationState.value.selectedStateIndex] || null
+})
+
+// 所有状态数量
+const totalStates = computed(() => {
+  return currentTrace.value?.states?.length || 0
+})
+
+// 当前状态下的所有设备状态（包括之前状态已确定但当前未变化的设备）
+const currentStateDevices = computed(() => {
+  if (!currentTrace.value?.states) return []
+  
+  const stateIndex = traceAnimationState.value.selectedStateIndex
+  const states = currentTrace.value.states
+  
+  // 收集所有出现过的设备及其最新状态
+  const deviceStates = new Map<string, any>()
+  
+  // 遍历从开始到当前状态的所有状态，收集每个设备的最新状态
+  for (let i = 0; i <= stateIndex; i++) {
+    const state = states[i]
+    if (!state?.devices) continue
+    
+    for (const device of state.devices) {
+      const existingDevice = deviceStates.get(device.deviceId)
+      
+      // 合并变量：当前状态的变量 + 之前状态的变量
+      let mergedVariables = device.variables || []
+      if (existingDevice?.variables) {
+        // 将之前状态的变量与当前状态的变量合并
+        const existingVars = new Map(existingDevice.variables.map((v: any) => [v.name, v]))
+        for (const newVar of mergedVariables) {
+          existingVars.set(newVar.name, newVar)
+        }
+        mergedVariables = Array.from(existingVars.values())
+      }
+      
+      // 更新设备的最新状态
+      deviceStates.set(device.deviceId, {
+        ...existingDevice,
+        ...device,
+        // 优先使用 state 字段，兼容 newState
+        state: device.state || device.newState || existingDevice?.state || existingDevice?.newState,
+        newState: device.newState || existingDevice?.newState,
+        variables: mergedVariables
+      })
+    }
+  }
+  
+  return Array.from(deviceStates.values())
+})
+
+// 当前状态下的所有环境变量（包括之前状态已确定但当前未变化的变量）
+const currentEnvVariables = computed(() => {
+  if (!currentTrace.value?.states) return []
+  
+  const stateIndex = traceAnimationState.value.selectedStateIndex
+  const states = currentTrace.value.states
+  
+  // 收集所有出现过的环境变量及其最新值
+  const envVars = new Map<string, any>()
+  
+  // 遍历从开始到当前状态的所有状态，收集每个环境变量的最新值
+  for (let i = 0; i <= stateIndex; i++) {
+    const state = states[i]
+    if (!state?.envVariables) continue
+    
+    for (const envVar of state.envVariables) {
+      envVars.set(envVar.name, envVar)
+    }
+  }
+  
+  return Array.from(envVars.values())
+})
+
+// 打开反例路径动画
+const openTraceAnimation = () => {
+  if (verificationResult.value?.traces?.length > 0) {
+    // 保存 traces 数据到独立变量
+    savedTraces.value = [...verificationResult.value.traces]
+    
+    // 关闭验证结果对话框
+    closeResultDialog()
+    
+    // 打开反例路径动画
+    traceAnimationState.value = {
+      visible: true,
+      selectedTraceIndex: 0,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    // 高亮第一个状态 - 添加防御性检查确保 currentTrace 不为 null
+    const trace = currentTrace.value
+    if (trace) {
+      highlightedTrace.value = {
+        ...trace,
+        selectedStateIndex: traceAnimationState.value.selectedStateIndex
+      }
+    }
+  }
+}
+
+// 选择并播放指定索引的反例路径动画
+const selectAndPlayTrace = (traceIndex: number) => {
+  if (verificationResult.value?.traces?.length > 0 && traceIndex < verificationResult.value.traces.length) {
+    // 保存 traces 数据到独立变量
+    savedTraces.value = [...verificationResult.value.traces]
+    
+    // 关闭验证结果对话框
+    closeResultDialog()
+    
+    // 设置选中的 trace 索引
+    traceAnimationState.value = {
+      visible: true,
+      selectedTraceIndex: traceIndex,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    
+    // 高亮第一个状态
+    const trace = currentTrace.value
+    if (trace) {
+      highlightedTrace.value = {
+        ...trace,
+        selectedStateIndex: 0
+      }
+    }
+  }
+}
+
+// 关闭反例路径动画
+const closeTraceAnimation = () => {
+  stopTraceAnimation()
+  traceAnimationState.value.visible = false
+  highlightedTrace.value = null
+}
+
+// 选择违规规约
+const selectTrace = (index: number) => {
+  traceAnimationState.value.selectedTraceIndex = index
+  traceAnimationState.value.selectedStateIndex = 0
+  const trace = currentTrace.value
+  if (trace) {
+    highlightedTrace.value = {
+      ...trace,
+      selectedStateIndex: traceAnimationState.value.selectedStateIndex
+    }
+  }
+}
+
+// 跳转到指定状态
+const goToState = (index: number) => {
+  traceAnimationState.value.selectedStateIndex = index
+  const trace = currentTrace.value
+  if (trace) {
+    highlightedTrace.value = {
+      ...trace,
+      selectedStateIndex: traceAnimationState.value.selectedStateIndex
+    }
+  }
+}
+
+// 播放/停止动画
+const toggleTraceAnimation = () => {
+  if (traceAnimationState.value.isPlaying) {
+    stopTraceAnimation()
+  } else {
+    startTraceAnimation()
+  }
+}
+
+const startTraceAnimation = () => {
+  if (traceAnimationState.value.isPlaying) return
+  
+  traceAnimationState.value.isPlaying = true
+  playInterval = setInterval(() => {
+    const trace = currentTrace.value
+    if (!trace) {
+      stopTraceAnimation()
+      return
+    }
+    if (traceAnimationState.value.selectedStateIndex < totalStates.value - 1) {
+      traceAnimationState.value.selectedStateIndex++
+      highlightedTrace.value = {
+        ...trace,
+        selectedStateIndex: traceAnimationState.value.selectedStateIndex
+      }
+    } else {
+      // 到达最后一个状态时停止播放，不循环
+      stopTraceAnimation()
+    }
+  }, 1500)
+}
+
+const stopTraceAnimation = () => {
+  traceAnimationState.value.isPlaying = false
+  if (playInterval) {
+    clearInterval(playInterval)
+    playInterval = null
+  }
+}
+
+// 获取设备状态颜色
+const getStateColor = (state: string): string => {
+  const stateColors: Record<string, string> = {
+    'heat': 'bg-red-500',
+    'cool': 'bg-blue-500',
+    'off': 'bg-gray-400',
+    'on': 'bg-green-500',
+    'auto': 'bg-purple-500',
+    'dry': 'bg-yellow-500',
+    'fanOnly': 'bg-cyan-500',
+    'heatClean': 'bg-orange-500',
+    'dryClean': 'bg-amber-500',
+    'coolClean': 'bg-sky-500'
+  }
+  return stateColors[state?.toLowerCase()] || 'bg-slate-500'
+}
+
+// 格式化规约为易读格式
+const formatSpec = (specJson: string): string => {
+  try {
+    const spec = JSON.parse(specJson)
+    
+    //: Always □(condition)
+    if (spec.templateId === '1' && spec.aConditions) {
+      const conditions = spec.aConditions.map((c: any) => {
+        const device = c.deviceId || c.deviceLabel || 'device'
+        const key = c.key || ''
+        const relation = formatRelation(c.relation)
+        const value = c.value ? `"${c.value}"` : ''
+        return `${device}_${key} ${relation} ${value}`.trim()
+      }).join(' ∧ ')
+      return `□(${conditions})`
+    }
+    
+    // Response: □(A → ◇B)
+    if (spec.templateId === '5') {
+      const ifPart = spec.ifConditions?.map((c: any) => 
+        `${c.deviceId}_${c.key} ${formatRelation(c.relation)} "${c.value}"`
+      ).join(' ∧ ') || ''
+      const thenPart = spec.thenConditions?.map((c: any) => 
+        `${c.deviceId}_${c.key} = "${c.value}"`
+      ).join(' ∧ ') || ''
+      return `□(${ifPart} → ◇(${thenPart}))`
+    }
+    
+    return spec.templateLabel || 'Spec'
+  } catch {
+    return specJson
+  }
+}
+
+const formatRelation = (relation: string): string => {
+  const relations: Record<string, string> = {
+    '=': '=',
+    '!=': '≠',
+    '>': '>',
+    '<': '<',
+    '>=': '≥',
+    '<=': '≤'
+  }
+  return relations[relation] || relation
+}
+
+// 当前规约的格式化显示
+const formattedSpec = computed(() => {
+  if (!currentTrace.value?.violatedSpecJson) return ''
+  return formatSpec(currentTrace.value.violatedSpecJson)
+})
+
+// 高亮反例路径
+const handleHighlightTrace = (trace: any) => {
+  if (trace) {
+    highlightedTrace.value = {
+      ...trace,
+      selectedStateIndex: traceAnimationState.value.selectedStateIndex
+    }
+  }
+}
+
+// 清除高亮
+const clearHighlight = () => {
+  highlightedTrace.value = null
+}
+
 const handleVerify = async () => {
   if (nodes.value.length === 0) {
     ElMessage.warning({ message: 'No devices to verify', type: 'warning' })
@@ -1033,12 +1561,16 @@ const handleVerify = async () => {
 
     // Create a mapping from original label to normalized name
     const deviceNameMap = new Map<string, string>()
-    nodes.value.forEach(node => {
+    
+    // 过滤掉变量节点（templateName 以 variable_ 开头）
+    const deviceNodes = nodes.value.filter(node => !node.templateName.startsWith('variable_'))
+    
+    deviceNodes.forEach(node => {
       deviceNameMap.set(node.label, normalizeDeviceName(node.label))
     })
 
     // Prepare devices: Add default variables/privacies if missing
-    const devices = nodes.value.map(node => {
+    const devices = deviceNodes.map(node => {
       // Get template
       const tpl = deviceTemplates.value.find(t => t.manifest?.Name === node.templateName)
       const manifest = tpl?.manifest
@@ -1139,10 +1671,7 @@ const handleVerify = async () => {
       intensity: 3
     }
 
-    console.log('[Verify] Full request payload:', JSON.stringify(req, null, 2))
-
     const result = await boardApi.verify(req)
-    console.log('[Verify] Response result:', JSON.stringify(result, null, 2))
     verificationResult.value = result
 
     if (result.safe) {
@@ -1209,11 +1738,12 @@ const closeResultDialog = () => {
       <!-- Canvas Board -->
       <CanvasBoard
           :nodes="nodes"
-          :edges="edges"
+          :edges="allEdges"
           :pan="canvasPan"
           :zoom="canvasZoom"
           :get-node-icon="getNodeIcon"
           :get-node-label-style="getNodeLabelStyle"
+          :highlighted-trace="highlightedTrace"
           @canvas-pointerdown="onCanvasPointerDown"
           @canvas-dragover="onCanvasDragOver"
           @canvas-drop="onCanvasDrop"
@@ -1311,7 +1841,7 @@ const closeResultDialog = () => {
             :y1="line.y1"
             :x2="line.x2"
             :y2="line.y2"
-            :stroke="getCanvasMapColorValue(line.fromId)"
+            :stroke="line.color"
             stroke-width="2"
             stroke-opacity="0.8"
             stroke-linecap="round"
@@ -1449,22 +1979,27 @@ const closeResultDialog = () => {
           </div>
         </div>
 
-        <div v-if="verificationResult.checkLogs && verificationResult.checkLogs.length > 0" class="mb-4">
-          <h4 class="text-sm font-bold text-slate-700 mb-2">Logs</h4>
-          <div class="bg-slate-100 p-2 rounded text-xs font-mono h-32 overflow-y-auto">
-            <div v-for="(log, i) in verificationResult.checkLogs" :key="i">{{ log }}</div>
-          </div>
-        </div>
-
         <div v-if="!verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
           <h4 class="text-sm font-bold text-slate-700 mb-2">Violations ({{ verificationResult.traces.length }})</h4>
           <div class="space-y-2">
-            <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-2">
+            <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-xs font-bold text-red-600">Violation #{{ Number(i) + 1 }}</div>
+                <button
+                  @click="selectAndPlayTrace(Number(i))"
+                  class="px-2 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
+                >
+                  <span class="material-symbols-outlined text-xs">play_arrow</span>
+                  View Trace
+                </button>
+              </div>
               <div class="text-xs font-bold text-slate-600 mb-1">Spec: {{ trace.violatedSpecId }}</div>
-              <div class="text-xs text-slate-500">
+              <div v-if="trace.violatedSpecJson" class="text-xs font-mono text-slate-700 bg-slate-50 p-2 rounded mt-1">
+                {{ formatSpec(trace.violatedSpecJson) }}
+              </div>
+              <div class="text-xs text-slate-500 mt-1">
                 States: {{ trace.states?.length || 0 }}
               </div>
-              <!-- Detailed trace display could go here -->
             </div>
           </div>
         </div>
@@ -1477,6 +2012,133 @@ const closeResultDialog = () => {
         >
           Close
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Counterexample Trace Animation Panel -->
+  <div 
+    v-if="traceAnimationState.visible && savedTraces.length > 0"
+    class="fixed left-4 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2"
+    style="max-height: 80vh;"
+  >
+  </div>
+
+  <!-- Trace Animation Control Bar (Bottom) -->
+  <div 
+    v-if="traceAnimationState.visible && currentTrace"
+    class="fixed left-2/3 -translate-x-1/2 bottom-8 z-40"
+  >
+    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-4 w-[600px] max-h-[70vh] overflow-y-auto">
+      
+      <!-- Violation Info - Only show at violation point -->
+      <div 
+        v-if="traceAnimationState.selectedStateIndex === totalStates - 1"
+        class="mb-3 pb-3 border-b border-slate-200"
+      >
+        <!-- Violated Spec -->
+        <div v-if="formattedSpec" class="p-2 bg-red-50 border border-red-200 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-xs font-semibold text-red-600 uppercase">Violated Specification</div>
+            <button @click="closeTraceAnimation" class="text-slate-400 hover:text-slate-600">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+          <div class="text-xs font-mono text-slate-800">{{ formattedSpec }}</div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-bold text-slate-700">State Sequence</span>
+            <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
+              {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
+            </span>
+          </div>
+          <button
+            @click="toggleTraceAnimation"
+            class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+            :class="traceAnimationState.isPlaying 
+              ? 'bg-red-500 text-white' 
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+          >
+            <span class="material-symbols-outlined text-sm">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
+            {{ traceAnimationState.isPlaying ? 'Stop' : 'Play' }}
+          </button>
+        </div>
+        
+        <!-- Timeline bar -->
+        <div class="relative h-8 px-2">
+          <div class="absolute top-1/2 left-2 right-2 h-2 bg-slate-200 rounded"></div>
+          <!-- 红色横线 - 只在非最后一个状态时显示 -->
+          <div 
+            v-if="traceAnimationState.selectedStateIndex < totalStates - 1"
+            class="absolute top-1/2 h-2 bg-red-500 rounded transition-all duration-300"
+            :style="{ 
+              left: totalStates > 1 ? `${(traceAnimationState.selectedStateIndex / (totalStates - 1)) * 100}%` : '0%',
+              width: totalStates > 1 ? `${(1 / (totalStates - 1)) * 100}%` : '100%',
+              transform: 'translateY(-50%)'
+            }"
+          ></div>
+          
+          <!-- State nodes -->
+          <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
+            <button
+              v-for="(_, index) in currentTrace.states || []"
+              :key="index"
+              @click="goToState(Number(index))"
+              class="w-6 h-6 rounded-full border-3 transition-all flex items-center justify-center relative z-10"
+              :class="Number(index) === traceAnimationState.selectedStateIndex 
+                ? 'bg-red-500 border-red-500 scale-125 shadow-lg' 
+                : Number(index) < traceAnimationState.selectedStateIndex 
+                  ? 'bg-green-500 border-green-500' 
+                  : 'bg-white border-slate-300 hover:border-red-300'"
+            >
+              <span 
+                v-if="Number(index) === traceAnimationState.selectedStateIndex" 
+                class="text-white text-[8px] font-bold"
+              >★</span>
+              <span v-else class="text-slate-500 text-[6px] font-medium">{{ Number(index) + 1 }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Current State Details -->
+      <div class="mt-3 pt-3 border-t border-slate-200">
+        <div class="text-xs font-semibold text-slate-600 mb-2">State {{ traceAnimationState.selectedStateIndex + 1 }} Details</div>
+        
+        <!-- Environment Variables -->
+        <div v-if="currentEnvVariables.length > 0" class="mb-2">
+          <div class="text-xs text-slate-500 mb-1">Environment Variables:</div>
+          <div class="flex flex-wrap gap-2">
+            <div 
+              v-for="envVar in currentEnvVariables" 
+              :key="envVar.name"
+              class="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs"
+            >
+              <span class="text-blue-600 font-medium">{{ envVar.name }}:</span>
+              <span class="text-blue-800 font-bold ml-1">{{ envVar.value }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Device States -->
+        <div v-if="currentStateDevices.length > 0">
+          <div class="text-xs text-slate-500 mb-1">Device States:</div>
+          <div class="flex flex-wrap gap-2">
+            <div 
+              v-for="device in currentStateDevices" 
+              :key="device.deviceId"
+              class="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs"
+            >
+              <span class="text-slate-600 font-medium">{{ device.deviceLabel }}:</span>
+              <span class="text-slate-800 font-bold ml-1">{{ device.state || device.newState || 'Unknown' }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

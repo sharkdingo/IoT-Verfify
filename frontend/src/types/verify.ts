@@ -28,13 +28,15 @@ export interface Trace {
 export interface TraceState {
   stateIndex: number;
   devices: TraceDevice[];
+  envVariables?: TraceVariable[];  // 环境变量（如 a_temperature, a_airQuality）
 }
 
 export interface TraceDevice {
   deviceId: string;
   deviceLabel: string;
   templateName: string;
-  newState: string;
+  state?: string;  // 新字段
+  newState?: string;  // 兼容旧数据
   variables: TraceVariable[];
   trustPrivacy: TraceTrustPrivacy[];
   privacies: TraceTrustPrivacy[];
@@ -66,6 +68,10 @@ export interface VerificationTask {
   nusmvOutput?: string;
   errorMessage?: string;
 }
+
+
+
+
 
 
 

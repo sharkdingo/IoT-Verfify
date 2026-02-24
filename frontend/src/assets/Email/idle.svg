@@ -1,0 +1,20 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 邮箱 - 空闲状态 (Idle) -->
+    <!-- 信封底 -->
+    <rect x="6" y="12" width="28" height="20" rx="3" fill="#E0E7FF"/>
+    <rect x="6" y="12" width="28" height="20" rx="3" stroke="#6366F1" stroke-width="2"/>
+    
+    <!-- 信封折纸 -->
+    <path d="M6 15L20 24L34 15" stroke="#6366F1" stroke-width="2" fill="none"/>
+    
+    <!-- 等待图标 -->
+    <circle cx="20" cy="28" r="2" fill="#6366F1"/>
+    <circle cx="20" cy="28" r="1" fill="#E0E7FF"/>
+    
+    <!-- 状态指示 -->
+    <text x="20" y="10" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#6366F1">IDLE</text>
+</svg>
+
+
+
+

@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 电力/能耗 -->
+    <!-- 主体-电池 -->
+    <rect x="10" y="12" width="20" height="16" rx="2" fill="#FEF3C7" stroke="#EAB308" stroke-width="2"/>
+    <!-- 电池正极 -->
+    <rect x="30" y="16" width="3" height="8" rx="1" fill="#EAB308"/>
+    <!-- 闪电图标 -->
+    <path d="M22 14 L18 20 L21 20 L19 28 L24 21 L21 21 Z" fill="#F59E0B" stroke="#D97706" stroke-width="1"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#EAB308" text-anchor="middle">power</text>
+</svg>
+
+

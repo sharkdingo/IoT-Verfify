@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烟雾传感器 - 工作状态 (Working) -->
+    <!-- 传感器机身 -->
+    <rect x="12" y="14" width="16" height="20" rx="2" fill="#FEE2E2"/>
+    <rect x="12" y="14" width="16" height="20" rx="2" stroke="#EF4444" stroke-width="2"/>
+    <!-- 烟雾检测区域 -->
+    <circle cx="20" cy="22" r="5" fill="#FECACA"/>
+    <circle cx="20" cy="22" r="3" stroke="#EF4444" stroke-width="1" fill="none"/>
+    <!-- 检测波纹 -->
+    <path d="M18 20C18 20 17 19 17 18" stroke="#EF4444" stroke-width="1" stroke-linecap="round"/>
+    <path d="M22 20C22 20 23 19 23 18" stroke="#EF4444" stroke-width="1" stroke-linecap="round"/>
+    <!-- 指示灯 - 绿色表示正常 -->
+    <circle cx="20" cy="30" r="2" fill="#22C55E"/>
+    <text x="20" y="8" text-anchor="middle" font-family="Arial" font-size="6" fill="#22C55E">OK</text>
+</svg>
+
+
+
+

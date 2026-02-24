@@ -1,0 +1,27 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 家居模式 - 睡眠发送警报状态 (Sleep;SendingAlertMessage) -->
+    <!-- 房子背景 -->
+    <path d="M6 20L20 8L34 20V32H6V20Z" fill="#E0E7FF"/>
+    <path d="M6 20L20 8L34 20V32H6V20Z" stroke="#6366F1" stroke-width="2"/>
+    
+    <!-- 屋顶 - 月亮 -->
+    <path d="M8 6C8 6 6 8 6 10C6 12 8 14 12 14C10 14 8 16 8 18C8 20 10 22 14 22C14 18 16 16 18 16C18 14 20 12 20 10C20 8 18 6 14 6C14 10 12 12 10 12C10 10 8 8 8 6Z" fill="#6366F1"/>
+    
+    <!-- 门 -->
+    <rect x="17" y="24" width="6" height="8" fill="#C7D2FE"/>
+    <rect x="17" y="24" width="6" height="8" stroke="#6366F1" stroke-width="1"/>
+    
+    <!-- 窗户 -->
+    <rect x="9" y="16" width="5" height="5" fill="#C7D2FE"/>
+    <rect x="9" y="16" width="5" height="5" stroke="#6366F1" stroke-width="1"/>
+    <rect x="26" y="16" width="5" height="5" fill="#C7D2FE"/>
+    <rect x="26" y="16" width="5" height="5" stroke="#6366F1" stroke-width="1"/>
+    
+    <!-- 警报图标 -->
+    <path d="M20 4L21 6H19L20 4Z" fill="#EF4444"/>
+    <path d="M18 6H22V7H18V6Z" fill="#EF4444"/>
+</svg>
+
+
+
+

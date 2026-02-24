@@ -1,0 +1,17 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 烘干机工作状态 -->
+    <!-- 主体烘干机 -->
+    <rect x="8" y="10" width="24" height="20" rx="2" fill="#FEF3C7" stroke="#D97706" stroke-width="2"/>
+    <!-- 滚筒 -->
+    <circle cx="20" cy="20" r="7" fill="#FFF7ED" stroke="#F59E0B" stroke-width="1.5"/>
+    <circle cx="20" cy="20" r="2" fill="#D97706"/>
+    <!-- 烘干热度指示 -->
+    <path d="M12 14L14 16" stroke="#EF4444" stroke-width="1.5"/>
+    <path d="M28 26L26 24" stroke="#EF4444" stroke-width="1.5"/>
+    <!-- 控制面板 -->
+    <rect x="10" y="6" width="20" height="4" rx="1" fill="#D97706"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#D97706" text-anchor="middle">dryerJobState</text>
+</svg>
+
+

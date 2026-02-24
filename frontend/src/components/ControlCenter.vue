@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import { 
   specTemplateDetails, 
@@ -19,8 +18,6 @@ import { getDefaultDeviceIcon } from '@/utils/device'
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
 
-const router = useRouter()
-
 // Props
 interface Props {
   deviceTemplates?: any[]
@@ -36,6 +33,11 @@ const props = withDefaults(defineProps<Props>(), {
   edges: () => [],
   canvasPan: () => ({ x: 0, y: 0 }),
   canvasZoom: 1
+})
+
+// 过滤掉变量节点（templateName 以 variable_ 开头），只保留真实设备
+const deviceNodes = computed(() => {
+  return (props.nodes || []).filter((node: any) => !node.templateName?.startsWith('variable_'))
 })
 
 // Device form data
@@ -56,7 +58,8 @@ const deviceTypes = computed(() => {
 // Get template icon SVG
 const getTemplateIcon = (template: any): string => {
   const name = template.manifest?.Name || template.name
-  return getDefaultDeviceIcon(name)
+  const initState = template.manifest?.InitState || 'Working'
+  return getDefaultDeviceIcon(name, initState)
 }
 
 // Specification form data
@@ -171,17 +174,50 @@ const saveCondition = () => {
     })
     return
   }
-  
-  const device = props.nodes.find(n => n.label === editingConditionData.deviceId)
+
+  // value 不能为空，否则后端验证会失败
+  // 但 API 类型只需要检查 API 是否被调用，不需要具体的 value
+  if (editingConditionData.targetType !== 'api') {
+    if (!editingConditionData.value || !editingConditionData.value.trim()) {
+      ElMessage.warning({
+        message: 'Please enter a value',
+        center: true
+      })
+      return
+    }
+  }
+
+  // key 不能为空，否则后端验证会失败
+  // 对于 state 类型，key 可以用 targetType 代替
+  const keyValue = editingConditionData.targetType === 'state'
+    ? (editingConditionData.key || 'state')
+    : (editingConditionData.key || '')
+
+  if (!keyValue.trim()) {
+    ElMessage.warning({
+      message: 'Please select a property',
+      center: true
+    })
+    return
+  }
+
+  const device = deviceNodes.value.find(n => n.label === editingConditionData.deviceId)
+
+  // API 类型使用 'TRUE' 作为默认 value（表示 API 被调用）
+  // 因为后端 @NotBlank 要求 value 不能为空
+  const finalValue = editingConditionData.targetType === 'api'
+    ? 'TRUE'
+    : editingConditionData.value
+
   const condition: SpecCondition = {
     id: editingConditionData.id || generateConditionId(),
     side: editingConditionSide.value,
     deviceId: editingConditionData.deviceId,  // Now stores node.label (for backend compatibility)
     deviceLabel: device?.label || editingConditionData.deviceId,
     targetType: editingConditionData.targetType || 'state',
-    key: editingConditionData.key,
+    key: keyValue,
     relation: editingConditionData.relation || '=',
-    value: editingConditionData.value || ''
+    value: finalValue
   }
   
   switch (editingConditionSide.value) {
@@ -231,14 +267,14 @@ const removeCondition = (side: SpecSide, index: number) => {
 // Get device display name
 const getDeviceLabel = (deviceIdOrLabel: string) => {
   // deviceIdOrLabel can be either node.id or node.label (for backward compatibility)
-  const device = props.nodes.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
+  const device = deviceNodes.value.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
   return device?.label || deviceIdOrLabel
 }
 
 // Get device template
 const getDeviceTemplate = (deviceIdOrLabel: string) => {
   // deviceIdOrLabel can be either node.id or node.label (for backward compatibility)
-  const device = props.nodes.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
+  const device = deviceNodes.value.find(n => n.id === deviceIdOrLabel || n.label === deviceIdOrLabel)
   if (!device) return null
 
   // Try different ways to match the template
@@ -277,20 +313,10 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
 
   const keys: Array<{label: string, value: string}> = []
 
-  // Internal Variables
+  // 只使用 InternalVariables（内部变量）
   if (targetType === 'variable' && template.manifest.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
       keys.push({ label: v.Name, value: v.Name })
-    })
-  }
-
-  // Impacted Variables (外部影响变量)
-  if (targetType === 'variable' && template.manifest.ImpactedVariables) {
-    template.manifest.ImpactedVariables.forEach((v: any) => {
-      const varName = typeof v === 'string' ? v : (v.Name || v.name || '')
-      if (varName && !keys.some(k => k.value === varName)) {
-        keys.push({ label: varName, value: varName })
-      }
     })
   }
 
@@ -352,7 +378,7 @@ const currentRelation = computed(() => editingConditionData.relation || '=')
 const availableStates = computed(() => {
   if (!editingConditionData.deviceId) return []
   // Find the node by label (deviceId now stores label)
-  const node = props.nodes.find(n => n.label === editingConditionData.deviceId)
+  const node = deviceNodes.value.find(n => n.label === editingConditionData.deviceId)
   const manifest = node ? getCachedManifestForNode(node.id) : null
   if (!manifest || !manifest.WorkingStates) return []
   return manifest.WorkingStates.map((s: any) => s.Name)
@@ -722,8 +748,38 @@ const createDevice = () => {
   handleCreateDevice()
 }
 
-const goToCreateTemplate = () => {
-  router.push('/create-template')
+const handleImportTemplate = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+
+  try {
+    const text = await file.text()
+    const templateData = JSON.parse(text)
+    
+    const token = localStorage.getItem('iot_verify_token')
+    const response = await fetch('/api/device-templates/import', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : ''
+      },
+      body: JSON.stringify(templateData)
+    })
+
+    if (response.ok) {
+      ElMessage.success({ message: 'Template imported successfully', type: 'success' })
+      emit('refresh-templates')
+    } else {
+      const error = await response.text()
+      ElMessage.error({ message: `Import failed: ${error}`, type: 'error' })
+    }
+  } catch (error) {
+    ElMessage.error({ message: 'Invalid JSON file', type: 'error' })
+  }
+  
+  // 清空 input 以便重新选择同一文件
+  target.value = ''
 }
 
 const openRuleBuilder = () => {
@@ -912,18 +968,6 @@ const exportTemplate = (template: any) => {
     <div v-if="!isCollapsed" class="px-4 py-3 bg-white border-b border-slate-200">
       <div class="grid grid-cols-4 gap-2 p-1 bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
         <button
-          @click="activeSection = 'templates'"
-          :class="[
-            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
-            activeSection === 'templates'
-              ? 'bg-orange-500 text-white shadow-md'
-              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-          ]"
-        >
-          <span class="material-symbols-outlined text-sm">inventory_2</span>
-          <span class="text-[10px]">Templates</span>
-        </button>
-        <button
           @click="activeSection = 'devices'"
           :class="[
             'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
@@ -934,6 +978,18 @@ const exportTemplate = (template: any) => {
         >
           <span class="material-symbols-outlined text-sm">devices</span>
           <span class="text-[10px]">Devices</span>
+        </button>
+        <button
+          @click="activeSection = 'templates'"
+          :class="[
+            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+            activeSection === 'templates'
+              ? 'bg-orange-500 text-white shadow-md'
+              : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
+          ]"
+        >
+          <span class="material-symbols-outlined text-sm">inventory_2</span>
+          <span class="text-[10px]">Templates</span>
         </button>
         <button
           @click="activeSection = 'rules'"
@@ -1043,22 +1099,19 @@ const exportTemplate = (template: any) => {
         </summary>
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
-          <!-- Create New Template Button -->
-          <div class="relative overflow-hidden group cursor-pointer rounded-xl bg-orange-500 hover:bg-orange-600 transition-all" @click="goToCreateTemplate">
-            <div class="relative p-3 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
-                  <span class="material-symbols-outlined text-white text-lg">add</span>
-                </div>
-                <div>
-                  <div class="text-sm font-bold text-white">Create New Template</div>
-                </div>
+          <!-- Import JSON Template Button -->
+          <label class="mb-6 group cursor-pointer relative overflow-hidden rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 hover:border-orange-500 bg-orange-50 dark:bg-slate-800/50 transition-all block">
+            <input type="file" accept=".json" class="hidden" @change="handleImportTemplate">
+            <div class="p-4 flex items-center gap-3">
+              <div class="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined text-white text-lg">upload_file</span>
               </div>
-              <div class="w-8 h-8 bg-orange-400 rounded-lg flex items-center justify-center group-hover:bg-orange-300 transition-colors">
-                <span class="material-symbols-outlined text-white text-sm">chevron_right</span>
+              <div>
+                <div class="text-sm font-bold text-orange-700 dark:text-orange-400">Import JSON Template</div>
+                <p class="text-xs text-orange-600 dark:text-orange-500">Upload a JSON file to create template automatically</p>
               </div>
             </div>
-          </div>
+          </label>
 
           <!-- Existing Templates List -->
           <div class="space-y-2">
@@ -1521,7 +1574,7 @@ const exportTemplate = (template: any) => {
             >
               <option value="" hidden>Select a device</option>
               <option
-                v-for="device in props.nodes"
+                v-for="device in deviceNodes"
                 :key="device.id"
                 :value="device.label"
               >

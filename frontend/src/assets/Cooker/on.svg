@@ -1,0 +1,24 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 电炉 - 开启状态 (On) -->
+    <!-- 机身 -->
+    <rect x="6" y="12" width="28" height="22" rx="3" fill="#FEF3C7"/>
+    <rect x="6" y="12" width="28" height="22" rx="3" stroke="#D97706" stroke-width="2"/>
+    
+    <!-- 炉灶面 -->
+    <rect x="9" y="15" width="22" height="16" rx="2" fill="#FDE68A"/>
+    <rect x="9" y="15" width="22" height="16" rx="2" stroke="#D97706" stroke-width="1"/>
+    
+    <!-- 加热圈 -->
+    <circle cx="15" cy="23" r="5" stroke="#EF4444" stroke-width="2" fill="none"/>
+    <circle cx="15" cy="23" r="3" fill="#EF4444" opacity="0.5"/>
+    
+    <circle cx="25" cy="23" r="5" stroke="#EF4444" stroke-width="2" fill="none"/>
+    <circle cx="25" cy="23" r="3" fill="#EF4444" opacity="0.5"/>
+    
+    <!-- 指示灯 -->
+    <circle cx="20" cy="10" r="2" fill="#22C55E"/>
+</svg>
+
+
+
+

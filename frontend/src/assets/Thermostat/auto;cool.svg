@@ -1,0 +1,15 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 温控器 - 自动;制冷状态 (Auto;Cool) -->
+    <circle cx="20" cy="20" r="16" fill="#E0F2FE"/>
+    <circle cx="20" cy="20" r="16" stroke="#0EA5E9" stroke-width="2"/>
+    <!-- 雪花图标 -->
+    <path d="M18 14L20 18L22 14M16 16L20 20L24 16" stroke="#0EA5E9" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 温度显示 -->
+    <text x="20" y="28" text-anchor="middle" font-family="Arial" font-size="10" fill="#0EA5E9">68°</text>
+    <!-- 模式显示 -->
+    <text x="20" y="34" text-anchor="middle" font-family="Arial" font-size="5" fill="#0EA5E9">COOL</text>
+</svg>
+
+
+
+

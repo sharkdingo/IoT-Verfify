@@ -1,0 +1,22 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 日期/日历 -->
+    <!-- 主体 -->
+    <rect x="6" y="8" width="28" height="26" rx="2" fill="#FEF3C7" stroke="#D97706" stroke-width="2"/>
+    <!-- 顶部装饰 -->
+    <rect x="12" y="6" width="16" height="4" rx="1" fill="#D97706"/>
+    <!-- 日历网格 -->
+    <rect x="10" y="14" width="20" height="16" rx="1" fill="#FFF" stroke="#F59E0B" stroke-width="1"/>
+    <!-- 日期数字 -->
+    <text x="14" y="21" font-size="4" fill="#D97706">1</text>
+    <text x="18" y="21" font-size="4" fill="#D97706">2</text>
+    <text x="22" y="21" font-size="4" fill="#D97706">3</text>
+    <text x="26" y="21" font-size="4" fill="#D97706">4</text>
+    <text x="14" y="26" font-size="4" fill="#D97706">5</text>
+    <text x="18" y="26" font-size="4" fill="#EF4444">6</text>
+    <text x="22" y="26" font-size="4" fill="#D97706">7</text>
+    <text x="26" y="26" font-size="4" fill="#D97706">8</text>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#D97706" text-anchor="middle">date</text>
+</svg>
+
+

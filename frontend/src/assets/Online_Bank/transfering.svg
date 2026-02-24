@@ -1,0 +1,24 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 在线银行 - 转账中状态 (Transfering) -->
+    <!-- 银行卡背景 -->
+    <rect x="6" y="12" width="28" height="20" rx="3" fill="#DCFCE7"/>
+    <rect x="6" y="12" width="28" height="20" rx="3" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- 芯片 -->
+    <rect x="10" y="16" width="6" height="5" rx="1" fill="#FCD34D"/>
+    <rect x="10" y="16" width="6" height="5" rx="1" stroke="#F59E0B" stroke-width="1"/>
+    
+    <!-- 银行Logo -->
+    <circle cx="24" cy="20" r="4" fill="#22C55E"/>
+    <text x="24" y="22" text-anchor="middle" font-family="Arial" font-size="5" fill="white">$</text>
+    
+    <!-- 转账箭头 -->
+    <path d="M14 28L20 34L26 28" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- 状态 -->
+    <text x="20" y="8" text-anchor="middle" font-family="Arial" font-size="6" fill="#22C55E">SENDING</text>
+</svg>
+
+
+
+

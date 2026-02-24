@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 光照传感器 -->
+    <!-- 主体 -->
+    <circle cx="20" cy="18" r="14" fill="#FEF9C3" stroke="#EAB308" stroke-width="2"/>
+    <!-- 太阳 rays -->
+    <circle cx="20" cy="18" r="6" fill="#FDE047"/>
+    <path d="M20 6V8" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M20 28V30" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M8 18H10" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M30 18H32" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M11 11L13 13" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M27 27L29 29" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M11 27L13 25" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <path d="M27 11L29 13" stroke="#EAB308" stroke-width="2" stroke-linecap="round"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#EAB308" text-anchor="middle">illuminance</text>
+</svg>
+
+

@@ -1,0 +1,27 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 窗户 - 打开状态 -->
+    <!-- 窗框 -->
+    <rect x="6" y="10" width="28" height="20" rx="2" fill="#E0F2FE"/>
+    <rect x="6" y="10" width="28" height="20" rx="2" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- 窗格 - 打开（两扇窗户分开） -->
+    <rect x="8" y="12" width="11" height="16" rx="1" fill="#BAE6FD"/>
+    <rect x="21" y="12" width="11" height="16" rx="1" fill="#BAE6FD"/>
+
+    <!-- 窗框横杠 -->
+    <path d="M6 16H34" stroke="#0EA5E9" stroke-width="2"/>
+    <path d="M6 24H34" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- 打开状态 - 窗户向两侧分开效果 -->
+    <path d="M8 12V28" stroke="#0EA5E9" stroke-width="2"/>
+    <path d="M32 12V28" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- 打开指示箭头 -->
+    <path d="M4 20H2M2 17L4 20L2 23" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M36 20H38M38 17L36 20L38 23" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+
+
+
+
+

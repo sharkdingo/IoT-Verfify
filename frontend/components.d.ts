@@ -68,5 +68,6 @@ declare module 'vue' {
     StatusPanel: typeof import('./src/components/StatusPanel.vue')['default']
     SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
     TemplateList: typeof import('./src/components/TemplateList.vue')['default']
+    TraceVisualization: typeof import('./src/components/TraceVisualization.vue')['default']
   }
 }

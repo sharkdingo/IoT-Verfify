@@ -1,0 +1,14 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 土壤湿度传感器 -->
+    <!-- 土壤部分 -->
+    <rect x="8" y="22" width="24" height="12" rx="2" fill="#92400E" stroke="#78350F" stroke-width="2"/>
+    <!-- 水分指示 -->
+    <rect x="10" y="24" width="8" height="8" rx="1" fill="#3B82F6" opacity="0.6"/>
+    <!-- 传感器探针 -->
+    <rect x="22" y="10" width="4" height="20" rx="2" fill="#6B7280" stroke="#374151" stroke-width="2"/>
+    <circle cx="24" cy="10" r="3" fill="#EF4444"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#92400E" text-anchor="middle">water</text>
+</svg>
+
+

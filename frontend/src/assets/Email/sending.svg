@@ -1,0 +1,23 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 邮箱 - 发送中状态 (Sending) -->
+    <!-- 信封底 -->
+    <rect x="6" y="12" width="28" height="20" rx="3" fill="#DCFCE7"/>
+    <rect x="6" y="12" width="28" height="20" rx="3" stroke="#22C55E" stroke-width="2"/>
+    
+    <!-- 信封折纸 -->
+    <path d="M6 15L20 24L34 15" stroke="#22C55E" stroke-width="2" fill="none"/>
+    
+    <!-- 发送箭头 -->
+    <path d="M16 22L24 22M22 20L24 22L22 24" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- 发送效果 -->
+    <path d="M30 8L32 6" stroke="#22C55E" stroke-width="2" stroke-linecap="round"/>
+    <path d="M34 12L36 10" stroke="#22C55E" stroke-width="2" stroke-linecap="round"/>
+    
+    <!-- 状态指示 -->
+    <text x="20" y="10" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#22C55E">SENDING</text>
+</svg>
+
+
+
+

@@ -1,0 +1,13 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 音量/声音 -->
+    <!-- 主体 -->
+    <rect x="6" y="14" width="28" height="16" rx="2" fill="#F3F4F6" stroke="#6B7280" stroke-width="2"/>
+    <!-- 声音波 -->
+    <path d="M14 18 Q18 22 14 26" stroke="#6B7280" stroke-width="2" fill="none"/>
+    <path d="M18 16 Q24 22 18 28" stroke="#6B7280" stroke-width="2" fill="none"/>
+    <path d="M22 14 Q30 22 22 30" stroke="#6B7280" stroke-width="2" fill="none"/>
+    <!-- 标签 -->
+    <text x="20" y="38" font-size="5" fill="#6B7280" text-anchor="middle">volume</text>
+</svg>
+
+

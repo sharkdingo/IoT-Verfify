@@ -1,0 +1,21 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 报警器 - 闪光模式 (Strobe) -->
+    <!-- 机身 -->
+    <rect x="10" y="10" width="20" height="24" rx="3" fill="#FEE2E2"/>
+    <rect x="10" y="10" width="20" height="24" rx="3" stroke="#EF4444" stroke-width="2"/>
+    
+    <!-- 闪光灯 -->
+    <path d="M14 14L18 14L20 10L22 14L26 14" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M14 18L26 18" stroke="#EF4444" stroke-width="2" stroke-linecap="round"/>
+    
+    <!-- 闪烁效果 -->
+    <path d="M12 6L14 10" stroke="#EF4444" stroke-width="2" stroke-linecap="round"/>
+    <path d="M28 6L26 10" stroke="#EF4444" stroke-width="2" stroke-linecap="round"/>
+    
+    <!-- 指示灯 -->
+    <circle cx="20" cy="30" r="2" fill="#EF4444"/>
+</svg>
+
+
+
+
