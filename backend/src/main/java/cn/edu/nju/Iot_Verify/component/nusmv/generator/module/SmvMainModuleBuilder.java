@@ -325,9 +325,6 @@ public class SmvMainModuleBuilder {
         }
     }
 
-    private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap, boolean useNext) {
-        return buildSingleCondition(condition, deviceSmvMap, useNext, null);
-    }
 
     private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap,
                                         boolean useNext, String transitionTargetVarName) {

@@ -221,6 +221,7 @@ class SimulationServiceImplTest {
     }
 
     @Test
+    @SuppressWarnings("null")
     void simulateAsync_success_writesResultJson() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
@@ -235,7 +236,7 @@ class SimulationServiceImplTest {
             po.setId(100L);
             return po;
         });
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
 
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(9L)
@@ -252,8 +253,9 @@ class SimulationServiceImplTest {
     }
 
     @Test
+    @SuppressWarnings("null")
     void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(10L)
                 .userId(1L)
@@ -335,6 +337,7 @@ class SimulationServiceImplTest {
     // ==================== simulateAndSave tests ====================
 
     @Test
+    @SuppressWarnings("null")
     void simulateAndSave_success_savesPoAndReturnsDto() throws Exception {
         // Arrange: make simulate() produce a valid result via doSimulate
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);

@@ -45,9 +45,9 @@ public class SmvSpecificationBuilder {
                 content.append("\n\t").append(specString);
                 generatedSpecs++;
             } catch (InvalidConditionException e) {
-                // 无效条件导致 spec 无法生成，跳过并记录警告
+                // Invalid condition makes this spec invalid; skip and log warning.
                 log.warn("Skipping spec '{}': {}", spec.getId(), e.getMessage());
-                // 生成一个必定失败的 spec 占位，保�?spec 数量�?effectiveSpecs 一�?
+                // Emit a guaranteed-false placeholder to keep spec count aligned with effectiveSpecs.
                 String safeMsg = e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown";
                 content.append("\n\tCTLSPEC FALSE -- invalid spec: ").append(safeMsg);
                 generatedSpecs++;
@@ -59,7 +59,7 @@ public class SmvSpecificationBuilder {
     }
 
     /**
-     * 生成单个规格字符串（需要传�?deviceSmvMap 以正确解�?trust/privacy 变量名）
+     * Generate one specification string (deviceSmvMap is required to resolve trust/privacy variables).
      */
     public String generateSpecString(SpecificationDto spec, boolean isAttack, int intensity,
                                      Map<String, DeviceSmvData> deviceSmvMap) {
@@ -88,7 +88,7 @@ public class SmvSpecificationBuilder {
         switch (templateId) {
             case "1": // always
                 if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
-                    // aConditions 为空但有 if/then 条件时，生成 AG(if -> then)
+                    // If aConditions is empty but if/then exists, generate AG(if -> then).
                     return "CTLSPEC AG((" + ifPart + ") -> (" + thenPart + "))";
                 }
                 return "CTLSPEC AG(" + aPart + ")";
@@ -127,9 +127,9 @@ public class SmvSpecificationBuilder {
             if (apiSignal == null) {
                 throw new InvalidConditionException("api signal name resolved to null for key '" + cond.getKey() + "' on device " + cond.getDeviceId());
             }
-            // 校验 API 存在且为 signal 类型
+            // Validate API exists and is a signal.
             validateApiSignalExists(smv, cond.getKey(), cond.getDeviceId());
-            // API 信号为布尔变量，仅允�?=, !=, IN, NOT_IN
+            // API signals are boolean; only allow =, !=, IN, NOT_IN.
             validateApiBooleanRelation(cond);
             return buildSimpleCondition(varName + "." + apiSignal, cond);
         }
@@ -152,7 +152,7 @@ public class SmvSpecificationBuilder {
             return buildSimpleCondition(varName + "." + resolved, cond);
         }
 
-        // 未知 targetType �?fail-closed，不再猜测拼�?
+        // Unknown targetType: fail-closed, do not guess concatenation.
         throw new InvalidConditionException("unsupported targetType '" + targetType
                 + "' for device " + cond.getDeviceId() + "; allowed: state, variable, api, trust, privacy");
     }
@@ -409,7 +409,7 @@ public class SmvSpecificationBuilder {
                 if (trustExpr != null) {
                     parts.add(trustExpr + "=untrusted");
                 }
-                // is_attack 变量仅在攻击模式下声明，非攻击模式引用会导致 NuSMV undefined variable 错误
+                // is_attack is declared only in attack mode; otherwise this would be undefined in NuSMV.
                 if (isAttack) {
                     String attackExpr = buildAttackFalseForCondition(cond, deviceSmvMap);
                     if (attackExpr != null) {
@@ -419,7 +419,7 @@ public class SmvSpecificationBuilder {
             }
         }
 
-        // intensity 约束已由 main module �?INVAR 全局控制，不再注入到 safety spec
+        // intensity is constrained globally by main module INVAR; do not inject it into safety spec.
 
         String body = parts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, parts);
         return "CTLSPEC AG !(" + body + ")";
@@ -521,11 +521,11 @@ public class SmvSpecificationBuilder {
     }
 
     /**
-     * 解析 trust/privacy 条件�?key 为完整的 SMV 变量名�?
-     * key 可能是：
-     * 1. 已包�?mode 前缀的完整名（如 "LockState_unlocked"）→ 直接使用
-     * 2. 变量名（�?"temperature"）→ 直接使用
-     * 3. 裸状态值（�?"unlocked"）→ 需要解析为 "Mode_value"
+     * Resolve the trust/privacy key into a full SMV variable suffix.
+     * key can be:
+     * 1) Full mode_state name (for example, "LockState_unlocked") -> use directly.
+     * 2) Variable name (for example, "temperature") -> use directly.
+     * 3) Bare state value (for example, "unlocked") -> resolve to "Mode_value".
      */
     private String resolvePropertyKey(DeviceSmvData smv, String key, String prefix, String deviceId) {
         if (smv == null) {
@@ -557,12 +557,12 @@ public class SmvSpecificationBuilder {
             }
         }
 
-        // 2) 变量�?
+        // 2) Variable name.
         if (hasInternalVariable(smv, cleanKey)) {
             return prefix + cleanKey;
         }
 
-        // 3) 裸状态�?-> 解析�?mode_state
+        // 3) Bare state value -> resolve to mode_state.
         if (smv.getModes() != null && smv.getModeStates() != null) {
             List<String> matchedModes = new ArrayList<>();
             for (String mode : smv.getModes()) {
@@ -619,7 +619,7 @@ public class SmvSpecificationBuilder {
             throw new InvalidConditionException("api condition only supports =, !=, IN, NOT_IN relations, got '"
                     + rel + "' for device " + cond.getDeviceId());
         }
-        // 值必须为布尔字面量（TRUE/FALSE），�?IN/NOT_IN 的逗号分隔布尔列表
+        // Values must be boolean literals (TRUE/FALSE), or IN/NOT_IN boolean lists.
         String value = cond.getValue();
         if (value != null) {
             if ("in".equals(normalized) || "not in".equals(normalized)) {
@@ -659,15 +659,6 @@ public class SmvSpecificationBuilder {
                 .collect(Collectors.toList());
     }
 
-    private String normalizeStateValueByRelation(String relation, String value) {
-        if (value == null) return null;
-        if ("in".equals(relation) || "not in".equals(relation)) {
-            return splitValues(value).stream()
-                    .map(DeviceSmvDataFactory::cleanStateName)
-                    .collect(Collectors.joining(","));
-        }
-        return DeviceSmvDataFactory.cleanStateName(value);
-    }
 
     private String normalizeRelation(String relation) {
         if (relation == null) return null;
@@ -700,7 +691,7 @@ public class SmvSpecificationBuilder {
         return s == null || s.trim().isEmpty() || "TRUE".equalsIgnoreCase(s.trim());
     }
 
-    /** 标记无效条件数据导致 spec 无法正确生成 */
+    /** Signals invalid condition data that prevents correct spec generation. */
     static class InvalidConditionException extends RuntimeException {
         InvalidConditionException(String message) {
             super(message);

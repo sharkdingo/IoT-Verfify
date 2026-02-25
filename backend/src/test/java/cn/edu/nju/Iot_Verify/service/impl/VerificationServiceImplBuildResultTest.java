@@ -273,6 +273,7 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
+    @SuppressWarnings("null")
     void verifyAsync_success_writesResultJson() throws Exception {
         File smv = createTempModelFile();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
@@ -287,7 +288,7 @@ class VerificationServiceImplBuildResultTest {
                 .createdAt(LocalDateTime.now())
                 .build();
         when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
-        when(taskRepository.save(any(VerificationTaskPo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, VerificationTaskPo.class)));
 
         service.verifyAsync(
                 1L, 7L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
