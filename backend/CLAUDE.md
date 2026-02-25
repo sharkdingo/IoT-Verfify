@@ -87,8 +87,10 @@ Key config in `src/main/resources/application.yaml`:
 - JSON serialization: `JsonUtils.toJson()` for objects, `JsonUtils.toJsonOrEmpty()` for lists.
 - Device templates are in `src/main/resources/deviceTemplate/`.
 - `ValidationException` uses HTTP 422 (not 400). Handler and exception code are aligned.
-- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Error categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `TRUST_PRIVACY_CONFLICT`, etc.
+- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Common categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `ILLEGAL_TRIGGER_RELATION`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `AMBIGUOUS_DEVICE_REFERENCE`, `TRUST_PRIVACY_CONFLICT`, etc.
 - `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
+- Rule/spec device resolution is strict: prefer `varName`, allow `templateName` only when uniquely matched; ambiguous matches throw `AMBIGUOUS_DEVICE_REFERENCE`.
+- Sync verification/simulation unwrap `ExecutionException` and rethrow `SmvGenerationException` so `errorCategory` is preserved in API responses.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
 - Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
@@ -101,6 +103,7 @@ Key config in `src/main/resources/application.yaml`:
 VerificationRequestDto (devices, rules, specs, isAttack, intensity, enablePrivacy)
   → SmvGenerator.generate()
     → DeviceSmvDataFactory.buildDeviceSmvMap() — merge user device instances with templates
+    → SmvModelValidator.validate() — hard checks (trigger attribute/relation, state format, env conflicts, trust/privacy consistency)
     → SmvRuleCommentWriter.build(rules) — rule comments
     → SmvDeviceModuleBuilder.build(smv, isAttack, intensity, enablePrivacy) — per-device MODULE definitions
     → SmvMainModuleBuilder.build(..., enablePrivacy) — main MODULE (instances, ASSIGN, transitions)
@@ -145,7 +148,7 @@ Corresponds to MEDIC's `outMain()`. Generates:
 3. Environment variable declarations: `a_<varName>: type;` (attack mode expands numeric ranges)
 4. Environment variable init value validation (clamp to range, enum membership check)
 5. `init(intensity)` computation (sum of `toint(device.is_attack)`, no `next()` needed for FROZENVAR)
-6. State transitions via `next(<var>.<mode>)` with rule conditions + API matching
+6. State transitions via `next(<var>.<mode>)` with rule conditions + API matching (self-target conditions auto downgrade to current-state reads to avoid recursive `next(...)` definitions)
 7. Environment variable transitions (sensor assignments, numeric rate-based)
 8. API signal transitions (`next(<var>.<api>_a)`)
 9. Trust propagation: `next(<var>.trust_<mode>_<state>)` — transitive from rule condition sources (AND logic, stricter than MEDIC's OR)
@@ -167,6 +170,10 @@ Key method: `getStateForMode(multiModeState, modeIndex)` — splits semicolon-se
 - `"7"` safety (trust-based): `CTLSPEC AG(untrusted → !(A))`
 
 Condition types (`targetType`): `state`, `variable`, `api`, `trust`, `privacy`.
+
+Spec fail-closed behavior:
+- General invalid spec conditions degrade to `CTLSPEC FALSE -- invalid spec: ...`.
+- Ambiguous device reference (`AMBIGUOUS_DEVICE_REFERENCE`) is treated as a hard generation error, not degraded.
 
 ### Trace Parsing (SmvTraceParser)
 

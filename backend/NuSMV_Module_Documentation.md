@@ -11,6 +11,7 @@
 > - 运行时模板来源是“当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
 > - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为“重置模板”：先删除该用户现有模板，再导入默认模板）。
 > - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
+> - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
 
 ---
 
@@ -74,6 +75,8 @@
 | 模拟并持久化 | `POST /api/verify/simulations` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
 
 异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/verify/simulations/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
+
+同步 `POST /api/verify` 与 `POST /api/verify/simulate` 会透传 `SmvGenerationException`（包含 `errorCategory`），不会统一降级为通用 internal error。
 
 ---
 
@@ -146,13 +149,13 @@
 
 | 字段 | 说明 |
 |------|------|
-| `conditions[].deviceName` | 触发条件的设备变量名 |
+| `conditions[].deviceName` | 触发条件设备引用。解析顺序：先 `varName`，再 `templateName`（仅唯一匹配）。找不到时规则 fail-closed（guard=`FALSE`）；若 `templateName` 匹配多个实例则抛 `AMBIGUOUS_DEVICE_REFERENCE`。 |
 | `conditions[].attribute` | 属性名（支持 `state`、mode 名、InternalVariable 名、或 `signal=true` 的 API 名）。当 relation 非空时，attribute 必须解析到 mode/internal variable/API signal 之一，否则 fail-closed。`state` 是保留别名，会根据 value 解析到具体 mode 状态。 |
 | `conditions[].relation` | 关系运算符：`EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`/`IN`/`NOT_IN`，归一化为 `=`/`!=`/`>`/`>=`/`<`/`<=`/`in`/`not in`。支持前后空格（如 `" GT "`），`IN`/`NOT_IN` 展开为 `(x=a \| x=b)` / `(x!=a & x!=b)`。若 relation 不在支持集合内，规则条件解析失败（fail-closed）。若 attribute 为 API signal，则 relation 仅支持 `=`/`!=`/`IN`/`NOT_IN`。 |
 | `conditions[].value` | 比较值（`IN`/`NOT_IN` 时为逗号/分号/竖线分隔的值列表）。当 relation 非空时 value 必须非空；`IN`/`NOT_IN` 的空列表（如 `" , ; | "`) 视为无效条件并 fail-closed。若 attribute 为 API signal，则 value 必须是 `TRUE`/`FALSE`（或其列表，大小写不敏感）。 |
-| `command.deviceName` | 目标设备变量名 |
+| `command.deviceName` | 目标设备引用，使用严格解析（先 `varName`，再唯一 `templateName`）。找不到抛 `DEVICE_NOT_FOUND`；歧义抛 `AMBIGUOUS_DEVICE_REFERENCE`。 |
 | `command.action` | 触发的 API 名称 |
-| `command.contentDevice` | 隐私规则：内容来源设备 |
+| `command.contentDevice` | 隐私规则内容来源设备，使用与 `command.deviceName` 相同的严格解析（歧义会抛异常，不会静默绑定）。 |
 | `command.content` | 隐私规则：内容名称 |
 
 ### 2.4 SpecificationDto（验证规格）
@@ -191,6 +194,7 @@
 
 - 支持：`EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`/`IN`/`NOT_IN`（归一化为 `=`/`!=`/`>`/`>=`/`<`/`<=`/`in`/`not in`）。
 - `api` 类型仅支持：`=`/`!=`/`IN`/`NOT_IN`，且值必须为 `TRUE`/`FALSE`（或其列表）。
+- `SpecConditionDto.deviceId` 使用严格设备解析（先 `varName`，再唯一 `templateName`）；若歧义，直接抛 `SmvGenerationException(AMBIGUOUS_DEVICE_REFERENCE)`。
 - 不支持的 relation、空白 value、无法解析的 key/targetType 会触发 `InvalidConditionException`，最终该 spec 降级为：
   - `CTLSPEC FALSE -- invalid spec: ...`
 
@@ -252,7 +256,8 @@
 
 - **模板缺失/模板非法**：在 `DeviceSmvDataFactory.buildDeviceSmvMap()` 阶段失败，直接返回错误，不进入 NuSMV 执行。
 - **规则条件无法解析**：规则 guard 置为 `FALSE`（fail-closed），避免“无效条件变无条件触发”。
-- **规格条件无法解析**：降级为 `CTLSPEC FALSE -- invalid spec: ...`（fail-closed），保持 spec 数量与结果可对齐。
+- **规格条件无法解析**：一般降级为 `CTLSPEC FALSE -- invalid spec: ...`（fail-closed），保持 spec 数量与结果可对齐。
+- **设备引用歧义**：不会降级为占位；直接抛 `AMBIGUOUS_DEVICE_REFERENCE`，请求失败并返回明确错误。
 - **NuSMV 结果数量与规格数量不一致**：验证结果标记为不安全（fail-closed）。
 
 ---
@@ -483,6 +488,8 @@ esac;
 注意：信任传播生成两行——条件满足且源可信时设为 trusted，条件满足但源不可信时设为 untrusted。隐私传播只生成一行（条件满足且源为 private 时设为 private）。
 
 **规则条件解析失败处理（fail-closed）：** 当规则的某个 IF 条件无法解析（例如设备不存在、`attribute` 为空、`relation!=null` 时 attribute 无法匹配任何 mode/internal variable/API signal、relation 不受支持、relation 非空但 value 为空、`IN/NOT_IN` 值列表为空、API signal 的 relation/value 不合法）时，`appendRuleConditions` 会将整条规则的 guard 设为 `FALSE`，使该规则永远不触发。这是 fail-closed 策略——宁可规则不生效，也不让无效条件被静默忽略导致规则变成无条件触发。日志会输出 warn 级别信息指明失败原因。
+
+**`useNext` 递归规避（状态建模关键）：** 在构建 `next(target.mode)` 的 rule guard 时，若条件引用的正是同一目标设备，生成器会将该条件改为读取当前态（`effectiveUseNext=false`），避免产生 `next(x)` 依赖 `next(x)` 的递归定义（NuSMV `recursively defined` 错误）。
 
 ### 5.6 SmvMainModuleBuilder 完整转换类型
 
@@ -773,6 +780,7 @@ Spec 构建的 fail-closed 策略：
 
 - 若条件无法构建（如 relation 不支持、value 为空、key 无法解析、targetType 不支持），该 spec 不会被静默忽略，而是降级为：
   - `CTLSPEC FALSE -- invalid spec: <reason>`
+- 若设备引用歧义（`deviceId` 按 `templateName` 命中多个实例），则直接抛 `AMBIGUOUS_DEVICE_REFERENCE`，不降级。
 
 ---
 
@@ -871,7 +879,7 @@ Trace Type: Counterexample
 
 | 编号 | 校验内容 | 失败行为 |
 |------|---------|---------|
-| P1 | Transition.Trigger.Attribute 必须在 modes + internalVariables 中（即合法的模式名或内部变量名） | 抛出 `illegalTriggerAttribute` |
+| P1 | Trigger.Attribute 必须在 modes + internalVariables 中，且 Trigger.Relation 归一化后必须为 `=`/`!=`/`>`/`>=`/`<`/`<=` | 抛出 `illegalTriggerAttribute` / `illegalTriggerRelation` |
 | P2 | 多模式设备的 Transition.EndState 分号段数必须等于模式数 | 抛出 `invalidStateFormat` |
 | P3 | 同名环境变量（IsInside=false）在不同设备模板中的范围/枚举值必须一致 | 抛出 `envVarConflict` |
 | P4 | Transition trigger 引用环境变量（IsInside=false）时，生成阶段自动使用 `a_<attr>` 引用而非 `device.<attr>`，避免引用未声明的设备内部变量 | 生成阶段内联处理（`SmvMainModuleBuilder.appendEnvTransitions` / `appendInternalVariableTransitions`），非前置校验 |
@@ -886,6 +894,7 @@ Trace Type: Counterexample
 生成阶段附加校验 / fail-closed（不属于 P1-P5）：
 
 - Rule 条件解析失败（设备不存在、空属性、未知属性、不支持 relation、空 value、`IN/NOT_IN` 空列表、API signal 的 relation/value 不合法等）时，规则 guard 置为 `FALSE`。
+- Rule/Command/Spec 设备引用若出现 templateName 歧义，直接抛 `AMBIGUOUS_DEVICE_REFERENCE`（不会 fail-closed）。
 - Spec 条件解析失败（不支持 relation、空 value、无法解析 key、不支持 targetType 等）时，降级输出 `CTLSPEC FALSE -- invalid spec: ...`。
 - 同名环境变量的用户初值在不同设备间冲突时，抛出 `envVarConflict`。
 - 对默认范围 `0..100` 的环境变量，非整数初值会被忽略，越界值会被 clamp。
@@ -960,6 +969,7 @@ Trace Type: Counterexample
 | 空轨迹检测 | 若 `go` 阶段模型有错误，`show_traces` 无输出，返回带 raw output 的错误 |
 | 超时保护 | 通过 `syncSimulationExecutor`（`thread-pool.sync-simulation.*`）+ `nusmvConfig.timeoutMs * 2` |
 | 过载保护 | 当 `syncSimulationExecutor`（同步模拟）或 `syncVerificationExecutor`（同步验证）饱和时，抛出 `ServiceUnavailableException`，HTTP 返回 `503` |
+| 生成异常透传 | 同步 verify/sim 在 `ExecutionException` 解包和内部执行链路中会透传 `SmvGenerationException`，保留 `errorCategory` |
 | 同步队列策略 | `syncVerificationExecutor` / `syncSimulationExecutor` 默认使用小队列（16），减少长队列导致的排队超时 |
 | 取消回收策略 | 同步请求超时 `future.cancel(true)` 后，会调用线程池 `purge()` 以更快清理已取消的排队任务 |
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |

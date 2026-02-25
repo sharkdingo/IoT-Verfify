@@ -255,7 +255,8 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 静态工具方法：
 - `cleanStateName(raw)` — 移除分号和空格
-- `findDeviceSmvData(name, map)` — 按 varName 或 templateName 查找
+- `findDeviceSmvData(name, map)` — 兼容查找（先按 varName，再按 templateName）
+- `findDeviceSmvDataStrict(name, map)` — 严格查找；当 templateName 匹配到多个实例时抛出 `SmvGenerationException`（`AMBIGUOUS_DEVICE_REFERENCE`）
 - `toVarName(deviceId)` — 转为安全变量名
 - `findApi(manifest, actionName)` — 按名称查找 API 定义
 
@@ -327,6 +328,8 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 - `PropertyDimension` 枚举合并了 trust 和 privacy 的重复生成逻辑
 - 规则条件中的关系符通过 `normalizeRuleRelation()` 归一化
 - 规则条件采用 fail-closed：当条件无法解析（设备不存在、空属性、未知属性、不支持 relation、空 value、`IN/NOT_IN` 空列表）时，整条规则 guard 会被置为 `FALSE`
+- 规则与内容相关设备引用（`command.deviceName`、`command.contentDevice`、`conditions[].deviceName`）统一使用严格设备解析；templateName 仅在“唯一匹配”时允许回退，歧义时报错而非静默选择
+- 在构建 `next(target.mode)` 的规则条件时，若条件同时读取同一目标设备，则自动降级为当前态读取（`effectiveUseNext=false`），避免产生 `next(x)` 递归定义
 - 当规则条件 `relation != null` 且 `attribute` 指向 API signal 时，会映射为 `device.apiName_a`；仅支持 `=`/`!=`/`IN`/`NOT_IN`，且 value 必须为 `TRUE`/`FALSE`（大小写不敏感）
 - 当规则条件 `relation == null` 且 `attribute` 指向 `signal=true` 的 API 时，兼容生成 `(device.apiName_a=TRUE | mode=endState)` 形式条件
 
@@ -345,7 +348,9 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 攻击预算约束统一放在 `main` 模块的 `INVAR intensity <= N` 中，规格本身不注入 intensity 条件。
 
-无效条件（如找不到设备）抛出 `InvalidConditionException`，生成 `CTLSPEC FALSE` 占位。
+规格构建的异常策略：
+- 一般无效条件（如 relation/key/targetType 不合法）抛 `InvalidConditionException`，并降级生成 `CTLSPEC FALSE -- invalid spec: ...` 占位
+- 设备引用歧义（`AMBIGUOUS_DEVICE_REFERENCE`）直接抛 `SmvGenerationException`，不会降级为占位规格
 
 ### 4.7 NusmvExecutor — 执行器
 
@@ -389,7 +394,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 | 校验 | 方法 | 说明 |
 |------|------|------|
-| P1 | `validateTriggerAttributes()` | Transition.Trigger.Attribute 必须是合法属性名 |
+| P1 | `validateTriggerAttributes()` | Trigger.Attribute 合法性 + Trigger.Relation 归一化后合法性（`=`/`!=`/`>`/`>=`/`<`/`<=`） |
 | P2 | `validateStartEndStates()` | 多模式 EndState 分号段数 = 模式数 |
 | P3 | `validateEnvVarConflicts()` | 同名环境变量跨设备范围一致 |
 | P5 | `validateTrustPrivacyConsistency()` | 同 (mode, state) 的 trust/privacy 值一致 |
@@ -452,6 +457,7 @@ public enum PropertyDimension {
 
 说明：
 - 当 syncSimulationExecutor 或 syncVerificationExecutor 饱和时，同步接口会返回 503 Service Unavailable。
+- 当同步链路中的 SMV 生成阶段抛出 `SmvGenerationException` 时，会原样透传到全局异常处理，响应中保留 `errorCategory`（如 `AMBIGUOUS_DEVICE_REFERENCE`、`ILLEGAL_TRIGGER_RELATION`）。
 - sync-* 线程池采用小队列（默认 16）以减少长队列导致的排队超时。
 - 同步超时后会执行 `future.cancel(true)` 并调用线程池 `purge()`，尽快清理已取消的排队任务。
 
@@ -586,6 +592,7 @@ public enum PropertyDimension {
 - 后端验证/模拟链路依赖“用户模板表”中的 `DeviceManifest` 数据。
 - 新用户注册后会自动导入默认模板；历史用户可调用 `POST /api/board/templates/reload` 重置（删除现有模板后重建默认模板）。
 - 在调用 `/api/verify*` 或 `/api/verify/simulate*` 前，应确保请求中的每个 `templateName` 都能在当前用户模板列表中匹配。
+- 规则/规格中的设备引用建议使用 `varName`；若使用 `templateName` 且在本次请求中匹配到多个实例，将抛出 `AMBIGUOUS_DEVICE_REFERENCE`。
 
 ### 关键配置 (application.yaml)
 
