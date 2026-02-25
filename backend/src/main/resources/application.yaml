@@ -46,3 +46,32 @@ nusmv:
   path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}
   command-prefix: ${NUSMV_PREFIX:}
   timeout-ms: ${NUSMV_TIMEOUT_MS:120000}
+  max-concurrent: ${NUSMV_MAX_CONCURRENT:6}
+  acquire-permit-timeout-ms: ${NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS:10000}
+
+thread-pool:
+  chat:
+    core-pool-size: ${THREAD_POOL_CHAT_CORE:10}
+    max-pool-size: ${THREAD_POOL_CHAT_MAX:50}
+    queue-capacity: ${THREAD_POOL_CHAT_QUEUE:200}
+    await-termination-seconds: ${THREAD_POOL_CHAT_AWAIT:30}
+  verification-task:
+    core-pool-size: ${THREAD_POOL_VERIFICATION_TASK_CORE:5}
+    max-pool-size: ${THREAD_POOL_VERIFICATION_TASK_MAX:20}
+    queue-capacity: ${THREAD_POOL_VERIFICATION_TASK_QUEUE:100}
+    await-termination-seconds: ${THREAD_POOL_VERIFICATION_TASK_AWAIT:60}
+  sync-verification:
+    core-pool-size: ${THREAD_POOL_SYNC_VERIFICATION_CORE:4}
+    max-pool-size: ${THREAD_POOL_SYNC_VERIFICATION_MAX:4}
+    queue-capacity: ${THREAD_POOL_SYNC_VERIFICATION_QUEUE:100}
+    await-termination-seconds: ${THREAD_POOL_SYNC_VERIFICATION_AWAIT:30}
+  sync-simulation:
+    core-pool-size: ${THREAD_POOL_SYNC_SIMULATION_CORE:4}
+    max-pool-size: ${THREAD_POOL_SYNC_SIMULATION_MAX:4}
+    queue-capacity: ${THREAD_POOL_SYNC_SIMULATION_QUEUE:100}
+    await-termination-seconds: ${THREAD_POOL_SYNC_SIMULATION_AWAIT:30}
+  simulation-task:
+    core-pool-size: ${THREAD_POOL_SIMULATION_TASK_CORE:5}
+    max-pool-size: ${THREAD_POOL_SIMULATION_TASK_MAX:20}
+    queue-capacity: ${THREAD_POOL_SIMULATION_TASK_QUEUE:100}
+    await-termination-seconds: ${THREAD_POOL_SIMULATION_TASK_AWAIT:60}

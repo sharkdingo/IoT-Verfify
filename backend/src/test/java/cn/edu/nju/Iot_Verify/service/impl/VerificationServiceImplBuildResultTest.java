@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
@@ -10,25 +11,30 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.Map;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 
 import java.lang.reflect.Method;
+import java.io.File;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Tests for VerificationServiceImpl.buildVerificationResult fail-closed logic.
@@ -39,6 +45,7 @@ class VerificationServiceImplBuildResultTest {
 
     @Mock private SmvGenerator smvGenerator;
     @Mock private SmvTraceParser smvTraceParser;
+    @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
     @Mock private VerificationTaskRepository taskRepository;
     @Mock private TraceRepository traceRepository;
@@ -47,14 +54,23 @@ class VerificationServiceImplBuildResultTest {
     @Mock private VerificationTaskMapper verificationTaskMapper;
 
     private VerificationServiceImpl service;
+    private ThreadPoolTaskExecutor syncVerificationExecutor;
     private Method buildVerificationResult;
 
     @BeforeEach
     void setUp() throws Exception {
+        syncVerificationExecutor = new ThreadPoolTaskExecutor();
+        syncVerificationExecutor.setCorePoolSize(1);
+        syncVerificationExecutor.setMaxPoolSize(1);
+        syncVerificationExecutor.setQueueCapacity(10);
+        syncVerificationExecutor.setThreadNamePrefix("test-sync-verify-");
+        syncVerificationExecutor.initialize();
+
         service = new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, null, nusmvConfig,
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper,
-                specificationMapper, verificationTaskMapper, new ObjectMapper());
+                specificationMapper, verificationTaskMapper, new ObjectMapper(),
+                syncVerificationExecutor);
 
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
@@ -63,12 +79,24 @@ class VerificationServiceImplBuildResultTest {
         buildVerificationResult.setAccessible(true);
     }
 
+    @AfterEach
+    void tearDown() {
+        syncVerificationExecutor.shutdown();
+    }
+
     private VerificationResultDto invoke(NusmvResult result,
                                          List<DeviceVerificationDto> devices,
                                          List<SpecificationDto> specs,
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
                 service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of());
+    }
+
+    private List<DeviceVerificationDto> singleDevice() {
+        DeviceVerificationDto d = new DeviceVerificationDto();
+        d.setVarName("testDevice");
+        d.setTemplateName("light");
+        return List.of(d);
     }
 
     // --- effectiveSpecs = 0: all specs filtered out -> safe=true ---
@@ -169,6 +197,34 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(dto.isSafe());
         assertEquals(1, dto.getSpecResults().size());
         assertTrue(dto.getSpecResults().get(0));
+    }
+
+    @Test
+    void verify_executorRejected_throwsServiceUnavailable() {
+        syncVerificationExecutor.shutdown();
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> service.verify(
+                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                        false, 0, false));
+        assertTrue(ex.getMessage().contains("busy"));
+    }
+
+    @Test
+    void verify_nusmvBusy_throwsServiceUnavailable() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        File smv = File.createTempFile("verify-busy", ".smv");
+        smv.deleteOnExit();
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(new SmvGenerator.GenerateResult(smv, Map.of()));
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(NusmvResult.busy("NuSMV execution is busy, please retry later"));
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> service.verify(
+                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                        false, 0, false));
+        assertTrue(ex.getMessage().contains("busy"));
     }
 
     private SpecificationDto makeEffectiveSpec(String id) {

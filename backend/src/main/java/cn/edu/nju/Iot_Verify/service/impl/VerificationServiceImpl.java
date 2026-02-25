@@ -16,6 +16,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
@@ -27,10 +28,10 @@ import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,7 +47,6 @@ import java.util.concurrent.*;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class VerificationServiceImpl implements VerificationService {
 
     private final SmvGenerator smvGenerator;
@@ -59,6 +59,7 @@ public class VerificationServiceImpl implements VerificationService {
     private final SpecificationMapper specificationMapper;
     private final VerificationTaskMapper verificationTaskMapper;
     private final ObjectMapper objectMapper;
+    private final ThreadPoolTaskExecutor syncVerificationExecutor;
 
     private static final int MAX_OUTPUT_LENGTH = 10000;
     private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
@@ -66,8 +67,30 @@ public class VerificationServiceImpl implements VerificationService {
     private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
     private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
-    private final ExecutorService syncVerificationExecutor = Executors.newFixedThreadPool(
-            4, r -> { Thread t = new Thread(r, "sync-verify"); return t; });
+
+    public VerificationServiceImpl(SmvGenerator smvGenerator,
+                                   SmvTraceParser smvTraceParser,
+                                   NusmvExecutor nusmvExecutor,
+                                   NusmvConfig nusmvConfig,
+                                   VerificationTaskRepository taskRepository,
+                                   TraceRepository traceRepository,
+                                   TraceMapper traceMapper,
+                                   SpecificationMapper specificationMapper,
+                                   VerificationTaskMapper verificationTaskMapper,
+                                   ObjectMapper objectMapper,
+                                   @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor) {
+        this.smvGenerator = smvGenerator;
+        this.smvTraceParser = smvTraceParser;
+        this.nusmvExecutor = nusmvExecutor;
+        this.nusmvConfig = nusmvConfig;
+        this.taskRepository = taskRepository;
+        this.traceRepository = traceRepository;
+        this.traceMapper = traceMapper;
+        this.specificationMapper = specificationMapper;
+        this.verificationTaskMapper = verificationTaskMapper;
+        this.objectMapper = objectMapper;
+        this.syncVerificationExecutor = syncVerificationExecutor;
+    }
 
     @PostConstruct
     void cleanupStaleTasks() {
@@ -84,19 +107,6 @@ public class VerificationServiceImpl implements VerificationService {
                 writeCheckLogs(task, List.of(msg));
                 taskRepository.save(task);
             }
-        }
-    }
-
-    @PreDestroy
-    void shutdownSyncExecutor() {
-        syncVerificationExecutor.shutdown();
-        try {
-            if (!syncVerificationExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                syncVerificationExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            syncVerificationExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
         }
     }
 
@@ -123,9 +133,15 @@ public class VerificationServiceImpl implements VerificationService {
         log.info("Starting sync verification: userId={}, devices={}, specs={}, attack={}, intensity={}",
                 userId, devices.size(), specs.size(), isAttack, intensity);
 
-        long timeoutMs = nusmvConfig.getTimeoutMs() * 2; // generate + execute 总超时
-        Future<VerificationResultDto> future = syncVerificationExecutor.submit(() ->
-                doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
+        long timeoutMs = nusmvConfig.getTimeoutMs() * 2; // generate + execute total timeout
+        Future<VerificationResultDto> future;
+        try {
+            future = syncVerificationExecutor.submit(() ->
+                    doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
+        } catch (RejectedExecutionException e) {
+            log.warn("Sync verification request rejected: executor is saturated");
+            throw new ServiceUnavailableException("Verification service is busy, please retry later", e);
+        }
 
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
@@ -136,6 +152,7 @@ public class VerificationServiceImpl implements VerificationService {
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
+            if (cause instanceof ServiceUnavailableException sue) throw sue;
             log.error("Sync verification failed", cause);
             throw new InternalServerException("Verification failed: " + cause.getMessage());
         } catch (InterruptedException e) {
@@ -157,7 +174,8 @@ public class VerificationServiceImpl implements VerificationService {
 
         try {
             checkLogs.add("Generating NuSMV model...");
-            SmvGenerator.GenerateResult genResult = smvGenerator.generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+            SmvGenerator.GenerateResult genResult = smvGenerator.generate(
+                    userId, devices, rules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             deviceSmvMap = genResult.deviceSmvMap();
             if (smvFile == null || !smvFile.exists()) {
@@ -171,6 +189,9 @@ public class VerificationServiceImpl implements VerificationService {
             NusmvResult result = nusmvExecutor.execute(smvFile);
 
             if (!result.isSuccess()) {
+                if (result.isBusy()) {
+                    throw new ServiceUnavailableException("NuSMV verification service is busy, please retry later");
+                }
                 checkLogs.add("NuSMV execution failed: " + result.getErrorMessage());
                 finalResult = buildErrorResult("", checkLogs);
                 return finalResult;
@@ -187,6 +208,8 @@ public class VerificationServiceImpl implements VerificationService {
             checkLogs.add("Error: " + e.getMessage());
             finalResult = buildErrorResult("", checkLogs);
             return finalResult;
+        } catch (ServiceUnavailableException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Verification failed", e);
             throw new InternalServerException("Verification failed: " + e.getMessage());
@@ -276,7 +299,8 @@ public class VerificationServiceImpl implements VerificationService {
             }
 
             updateTaskProgress(taskId, 20, "Generating NuSMV model");
-            SmvGenerator.GenerateResult genResult = smvGenerator.generate(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+            SmvGenerator.GenerateResult genResult = smvGenerator.generate(
+                    userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
             if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
@@ -388,9 +412,18 @@ public class VerificationServiceImpl implements VerificationService {
     @Override
     public int getTaskProgress(Long userId, Long taskId) {
         // 校验任务归属
-        taskRepository.findByIdAndUserId(taskId, userId)
+        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
-        return taskProgress.getOrDefault(taskId, 0);
+        Integer progress = taskProgress.get(taskId);
+        if (progress != null) {
+            return progress;
+        }
+        if (task.getStatus() == VerificationTaskPo.TaskStatus.COMPLETED
+                || task.getStatus() == VerificationTaskPo.TaskStatus.FAILED
+                || task.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED) {
+            return 100;
+        }
+        return 0;
     }
 
     // ==================== 核心：构建 per-spec 验证结果 ====================

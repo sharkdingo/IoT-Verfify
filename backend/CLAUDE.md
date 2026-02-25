@@ -36,14 +36,14 @@ cn.edu.nju.Iot_Verify/
 │   └── aitool/          # AI tool integration (add/delete/search nodes)
 ├── client/              # ArkAiClient (Volcengine Ark AI SDK wrapper)
 ├── dto/                 # Data transfer objects (by domain: auth, board, chat, device, rule, spec, simulation, trace, verification)
-├── po/                  # JPA entities (13 tables + DeviceEdgeId composite key)
-├── repository/          # Spring Data JPA repositories (13)
+├── po/                  # JPA entities (14 tables + DeviceEdgeId composite key)
+├── repository/          # Spring Data JPA repositories (14)
 ├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
-├── configure/           # NusmvConfig, ThreadConfig (chatExecutor + verificationTaskExecutor), WebConfig
-                         # SimulationServiceImpl uses its own simulationExecutor (fixed 4 threads)
+├── configure/           # NusmvConfig, ThreadConfig, ThreadPoolConfig, WebConfig
+                         # All executors are centrally managed in configure/ (chat, verificationTask, syncVerification, syncSimulation, simulationTask)
 ├── exception/           # BaseException hierarchy + GlobalExceptionHandler
 └── util/
-    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTraceMapper
+    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTaskMapper, SimulationTraceMapper
     ├── JsonUtils.java   # JSON serialization helpers
     ├── JwtUtil.java     # JWT token generation/validation
     ├── FunctionParameterSchema.java  # AI function parameter schema builder
@@ -70,6 +70,8 @@ Key config in `src/main/resources/application.yaml`:
 - `nusmv.path` — NuSMV executable path (OS-specific)
 - `nusmv.command-prefix` — Optional prefix (e.g. `wsl` on Windows)
 - `nusmv.timeout-ms` — Execution timeout (default 120000)
+- `nusmv.max-concurrent` — Global NuSMV concurrency cap shared by verification/simulation
+- `nusmv.acquire-permit-timeout-ms` — Timeout for waiting NuSMV execution permit
 - `volcengine.ark.*` — AI chat API settings
 - `cors.allowed-origins` — CORS allowed origins (used by SecurityConfig)
 - `server.port` — HTTP port (default 8080)
@@ -88,6 +90,7 @@ Key config in `src/main/resources/application.yaml`:
 - `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
+- Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
 
 ## NuSMV Verification Flow
 
@@ -197,6 +200,10 @@ Parses NuSMV counterexample output. Supports both formats:
 - `GET /api/verify/traces` — User's all traces
 - `GET|DELETE /api/verify/traces/{id}` — Single trace
 - `POST /api/verify/simulate` — Random simulation N steps (not persisted)
+- `POST /api/verify/simulate/async` — Async simulation (returns taskId)
+- `GET /api/verify/simulations/tasks/{id}` — Simulation task status
+- `GET /api/verify/simulations/tasks/{id}/progress` — Simulation task progress (0-100%)
+- `POST /api/verify/simulations/tasks/{id}/cancel` — Cancel simulation task
 - `POST /api/verify/simulations` — Simulate and persist
 - `GET /api/verify/simulations` — User's all simulation traces (summary)
 - `GET /api/verify/simulations/{id}` — Single simulation trace (detail)
@@ -206,8 +213,8 @@ Parses NuSMV counterexample output. Supports both formats:
 - `GET /api/chat/sessions/{sessionId}/messages` — Chat history
 - `POST /api/chat/completions` — SSE streaming chat
 
-## Database Tables (13)
+## Database Tables (14)
 
-`user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
+`user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `simulation_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
 
 All tables auto-created by Hibernate (`ddl-auto: update`).

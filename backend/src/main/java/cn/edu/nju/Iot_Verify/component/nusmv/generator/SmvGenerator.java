@@ -43,12 +43,24 @@ public class SmvGenerator {
     /** generate() 的返回值，包含 SMV 文件和构建过程中使用的 deviceSmvMap */
     public record GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {}
 
+    public enum GeneratePurpose {
+        VERIFICATION,
+        SIMULATION
+    }
+
     /**
      * 生成完整的 NuSMV 模型文件并写入临时目录
      */
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
-                         List<RuleDto> rules, List<SpecificationDto> specs,
-                         boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+                                   List<RuleDto> rules, List<SpecificationDto> specs,
+                                   boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+        return generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy, GeneratePurpose.VERIFICATION);
+    }
+
+    public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
+                                   List<RuleDto> rules, List<SpecificationDto> specs,
+                                   boolean isAttack, int intensity, boolean enablePrivacy,
+                                   GeneratePurpose purpose) throws Exception {
         // 防御性边界：即使绕过 DTO 校验，也确保 intensity 在 NuSMV 合法范围内
         intensity = Math.max(0, Math.min(50, intensity));
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
@@ -58,7 +70,7 @@ public class SmvGenerator {
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
         String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
 
-        Path tempDir = Files.createTempDirectory("nusmv_");
+        Path tempDir = Files.createTempDirectory(resolveTempDirPrefix(purpose));
         File smvFile = tempDir.resolve("model.smv").toFile();
 
         try (PrintWriter writer = new PrintWriter(new java.io.OutputStreamWriter(
@@ -116,6 +128,13 @@ public class SmvGenerator {
         content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap));
 
         return content.toString();
+    }
+
+    private String resolveTempDirPrefix(GeneratePurpose purpose) {
+        if (purpose == GeneratePurpose.SIMULATION) {
+            return "nusmv_sim_";
+        }
+        return "nusmv_verify_";
     }
 
     /**

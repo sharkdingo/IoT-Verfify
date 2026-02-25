@@ -127,6 +127,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── simulation/
 │   │   ├── SimulationRequestDto.java      # 模拟请求
 │   │   ├── SimulationResultDto.java       # 模拟结果（不落库）
+│   │   ├── SimulationTaskDto.java         # 模拟异步任务状态
 │   │   ├── SimulationTraceDto.java        # 模拟轨迹详情（持久化）
 │   │   └── SimulationTraceSummaryDto.java # 模拟轨迹摘要（列表用）
 │   ├── verification/
@@ -150,6 +151,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── SpecificationPo.java
 │   ├── TracePo.java                       # 验证反例轨迹
 │   ├── VerificationTaskPo.java            # 异步验证任务
+│   ├── SimulationTaskPo.java              # 异步模拟任务（simulation_task 表）
 │   └── SimulationTracePo.java             # 模拟轨迹（simulation_trace 表）
 ├── repository/                            # JPA Repository
 │   ├── UserRepository.java
@@ -161,9 +163,10 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── SpecificationRepository.java
 │   ├── TraceRepository.java
 │   ├── VerificationTaskRepository.java
+│   ├── SimulationTaskRepository.java
 │   └── SimulationTraceRepository.java
 ├── security/                              # 安全模块
-│   ├── SecurityConfig.java                # Spring Security 配置
+│   ├── SecurityConfig.java                # Spring Security + CORS 配置
 │   ├── JwtAuthenticationFilter.java       # JWT 过滤器
 │   ├── CurrentUser.java                   # @CurrentUser 注解
 │   ├── CurrentUserArgumentResolver.java   # 用户 ID 参数解析
@@ -181,6 +184,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       ├── SpecificationMapper.java
 │       ├── TraceMapper.java
 │       ├── VerificationTaskMapper.java
+│       ├── SimulationTaskMapper.java
 │       └── SimulationTraceMapper.java
 ├── exception/                             # 异常体系
 │   ├── BaseException.java                 # 基类
@@ -193,8 +197,9 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   └── ServiceUnavailableException.java
 └── configure/
     ├── NusmvConfig.java                   # NuSMV 路径/超时配置
+    ├── ThreadPoolConfig.java              # 线程池参数绑定与校验（thread-pool.*）
     ├── ThreadConfig.java                  # 线程池配置
-    └── WebConfig.java                     # Web 配置（CORS 等）
+    └── WebConfig.java                     # Web MVC 配置（@CurrentUser 参数解析）
 ```
 
 ---
@@ -427,10 +432,16 @@ public enum PropertyDimension {
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库） |
+| `POST` | `/api/verify/simulate/async` | 异步模拟，返回 `taskId` |
+| `GET` | `/api/verify/simulations/tasks/{id}` | 模拟任务状态 |
+| `GET` | `/api/verify/simulations/tasks/{id}/progress` | 模拟任务进度 (0-100) |
+| `POST` | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟任务 |
 | `POST` | `/api/verify/simulations` | 执行模拟并持久化 |
 | `GET` | `/api/verify/simulations` | 用户所有模拟记录（摘要） |
 | `GET` | `/api/verify/simulations/{id}` | 单条模拟记录（详情） |
 | `DELETE` | `/api/verify/simulations/{id}` | 删除模拟记录 |
+
+说明：当同步模拟线程池（`syncSimulationExecutor`）饱和时，`POST /api/verify/simulate` 会返回 `503 Service Unavailable`。
 
 ### 其他端点
 
@@ -527,6 +538,26 @@ public enum PropertyDimension {
 }
 ```
 
+### 模拟任务状态 (SimulationTaskDto)
+
+用于 `POST /api/verify/simulate/async` 创建的异步任务查询接口：
+
+```json
+{
+  "id": 101,
+  "status": "RUNNING",
+  "createdAt": "2026-02-24T09:00:00",
+  "startedAt": "2026-02-24T09:00:01",
+  "completedAt": null,
+  "processingTimeMs": null,
+  "requestedSteps": 20,
+  "steps": null,
+  "simulationTraceId": null,
+  "checkLogs": ["Task started", "Executing simulation"],
+  "errorMessage": null
+}
+```
+
 ---
 
 ## 7. 配置与运行
@@ -545,6 +576,34 @@ nusmv:
   path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
   command-prefix: ""             # 可选：命令前缀（如 docker exec ...）
   timeout-ms: 120000              # 执行超时（毫秒）
+  max-concurrent: 6               # NuSMV 全局并发上限（验证+模拟共享）
+  acquire-permit-timeout-ms: 10000 # 获取执行许可的等待时长（毫秒）
+thread-pool:
+  chat:
+    core-pool-size: 10
+    max-pool-size: 50
+    queue-capacity: 200
+    await-termination-seconds: 30
+  verification-task:
+    core-pool-size: 5
+    max-pool-size: 20
+    queue-capacity: 100
+    await-termination-seconds: 60
+  sync-verification:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 100
+    await-termination-seconds: 30
+  sync-simulation:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 100
+    await-termination-seconds: 30
+  simulation-task:
+    core-pool-size: 5
+    max-pool-size: 20
+    queue-capacity: 100
+    await-termination-seconds: 60
 ```
 
 ### 构建与运行
@@ -573,6 +632,8 @@ java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
 | 隐私维度 | Done | `enablePrivacy` + `PropertyDimension` |
 | 随机模拟 | Done | `SimulationServiceImpl` + `NusmvExecutor.executeInteractiveSimulation()` |
 | 模拟结果持久化 | Done | `SimulationTraceRepository` + `SimulationController` |
+| 模拟异步任务 | Done | `SimulationTaskPo/Repository` + `/api/verify/simulate/async` + `/api/verify/simulations/tasks/*` |
+| 线程池统一配置 | Done | `ThreadPoolConfig` + `ThreadConfig` |
 | 输入校验强化 | Done | `SmvDeviceModuleBuilder.validateInternalInitValue()` + `SmvMainModuleBuilder.resolveEnvVarInitValues()` / `validateEnvVarInitValue()` + `SmvSpecificationBuilder.buildVariableCondition()` / `validateApiSignalExists()` / `validateApiBooleanRelation()` + `SpecConditionDto @Pattern` |
 
 ---

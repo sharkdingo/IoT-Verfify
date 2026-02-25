@@ -55,10 +55,6 @@ class SmvGeneratorFixesTest {
                 .name(name).isInside(isInside).lowerBound(lo).upperBound(hi).build();
     }
 
-    private DeviceManifest.InternalVariable enumVar(String name, boolean isInside, String... vals) {
-        return DeviceManifest.InternalVariable.builder()
-                .name(name).isInside(isInside).values(Arrays.asList(vals)).build();
-    }
 
     /** 构建一个最小的 DeviceSmvData（单 mode 或多 mode） */
     private DeviceSmvData buildSmvData(String varName, String templateName,

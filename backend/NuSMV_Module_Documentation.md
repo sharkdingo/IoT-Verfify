@@ -1,7 +1,7 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年2月23日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟 + 输入校验强化
+> **最后更新**: 2026年2月24日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
@@ -62,9 +62,10 @@
 | 同步验证 | `POST /api/verify` | `VerificationResultDto` | 小规模模型，快速验证 |
 | 异步验证 | `POST /api/verify/async` | `taskId (Long)` | 大规模模型，后台执行 |
 | 随机模拟 | `POST /api/verify/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为（不落库） |
+| 异步模拟 | `POST /api/verify/simulate/async` | `taskId (Long)` | 大规模模拟，后台执行 |
 | 模拟并持久化 | `POST /api/verify/simulations` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
 
-异步模式下通过 `GET /api/verify/tasks/{id}` 轮询状态，`GET /api/verify/tasks/{id}/progress` 获取进度百分比 (0-100)。
+异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/verify/simulations/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
 
 ---
 
@@ -940,7 +941,10 @@ Trace Type: Counterexample
 | stdout/stderr 分离 | 不合并 stderr，独立线程读取，便于区分模型错误 |
 | 提示符过滤 | 交互模式输出含 `NuSMV >` 提示符行，提取轨迹时过滤 |
 | 空轨迹检测 | 若 `go` 阶段模型有错误，`show_traces` 无输出，返回带 raw output 的错误 |
-| 超时保护 | 独立 `simulationExecutor`（固定 4 线程池）+ `nusmvConfig.timeoutMs * 2` |
+| 超时保护 | 通过 `syncSimulationExecutor`（`thread-pool.sync-simulation.*`）+ `nusmvConfig.timeoutMs * 2` |
+| 过载保护 | 当 `syncSimulationExecutor`（同步模拟）或 `syncVerificationExecutor`（同步验证）饱和时，抛出 `ServiceUnavailableException`，HTTP 返回 `503` |
+| 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
+| 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
 | 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
 
 ---
@@ -951,14 +955,18 @@ Trace Type: Counterexample
 |------|------|------|
 | `POST` | `/api/verify` | 同步验证，返回 `VerificationResultDto` |
 | `POST` | `/api/verify/async` | 异步验证，返回 `taskId` |
+| `GET` | `/api/verify/tasks/{id}` | 获取异步验证任务状态 |
+| `GET` | `/api/verify/tasks/{id}/progress` | 获取验证任务进度 (0-100) |
+| `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步验证任务 |
 | `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库），返回 `SimulationResultDto` |
+| `POST` | `/api/verify/simulate/async` | 异步随机模拟，返回 `taskId` |
+| `GET` | `/api/verify/simulations/tasks/{id}` | 获取模拟异步任务状态 |
+| `GET` | `/api/verify/simulations/tasks/{id}/progress` | 获取模拟任务进度 (0-100) |
+| `POST` | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟异步任务 |
 | `POST` | `/api/verify/simulations` | 随机模拟 N 步并持久化，返回 `SimulationTraceDto` |
 | `GET` | `/api/verify/simulations` | 获取当前用户所有模拟记录（摘要） |
 | `GET` | `/api/verify/simulations/{id}` | 获取单条模拟记录（含完整 states） |
 | `DELETE` | `/api/verify/simulations/{id}` | 删除单条模拟记录 |
-| `GET` | `/api/verify/tasks/{id}` | 获取异步任务状态 |
-| `GET` | `/api/verify/tasks/{id}/progress` | 获取任务进度 (0-100) |
-| `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步任务 |
 | `GET` | `/api/verify/traces` | 获取用户所有 Trace |
 | `GET` | `/api/verify/traces/{id}` | 获取单个 Trace |
 | `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
