@@ -227,7 +227,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 1. `DeviceSmvDataFactory.buildDeviceSmvMap()` — 构建设备数据映射
 2. `SmvModelValidator.validate()` — P1-P5 前置校验
 3. 按顺序拼接 SMV 文本：RuleComment → DeviceModule → MainModule → Specification
-4. 写入临时文件 `model.smv`
+4. 写入临时目录下的 `model.smv`（验证: `nusmv_verify_*`，模拟: `nusmv_sim_*`）
 5. 返回 `GenerateResult`（文件 + deviceSmvMap，后者供 trace 解析复用）
 
 额外校验：当 `enablePrivacy=false` 时，检查 specs 中是否包含 `targetType="privacy"` 条件，有则抛异常。
@@ -243,10 +243,15 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 2. `extractModes()` — 解析模式列表
 3. `extractStatesAndTrust()` — 解析 WorkingStates，构建 `modeStates` 映射和 trust 默认值
 4. `parseCurrentModeStates()` — 将用户传入的 `state` 映射到各模式的初始状态
-5. `extractVariables()` — 分离内部变量 (`IsInside=true`) 和环境变量 (`IsInside=false`)
+5. 读取 `InternalVariables`，并通过 `extractEnvVariables()` 提取环境变量 (`IsInside=false`)
 6. `extractSignalVars()` — 从 Transitions 和 APIs 中提取信号变量
 7. `extractContents()` — 解析内容（如手机照片）及其隐私属性
 8. 合并用户运行时输入（variableValues, instanceVariableTrust, instanceVariablePrivacy）
+
+模板来源与生命周期（重要）：
+- 验证/模拟运行时只从当前用户的模板表读取（`DeviceTemplateService.findTemplateByName(userId, templateName)`），不直接读取 `resources` 目录。
+- 默认模板来自 `src/main/resources/deviceTemplate/*.json`，在用户注册后自动入库；也可通过 `POST /api/board/templates/reload` 重置（先删除该用户现有模板，再导入默认模板）。
+- 若请求中的 `templateName` 在该用户模板中不存在，生成阶段抛出 `SmvGenerationException`（`multipleDevicesFailed`）。
 
 静态工具方法：
 - `cleanStateName(raw)` — 移除分号和空格
@@ -351,10 +356,14 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 核心逻辑：
 - 构建命令：`NuSMV [extraArgs] model.smv`（支持 `command-prefix` 包装）
 - 超时控制：从环境变量 `NUSMV_TIMEOUT_MS` 读取，默认由 `NusmvConfig` 配置
+- 全局并发：`Semaphore` 限流（`nusmv.max-concurrent`），验证与模拟共享 NuSMV 进程并发上限
 - 输出解析：逐行匹配 `-- specification ... is true/false`
 - 反例提取：false spec 后的文本直到下一个 spec 结果为 counterexample
 - 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed + counterexample）
 - 交互模拟：`executeInteractiveSimulation()` 通过 `-int` 执行 `go -> pick_state -r -> simulate -r -k N -> show_traces -> quit`，并过滤 `NuSMV >` 提示符
+- 排障产物：执行器会在 `model.smv` 同目录写出 `output.txt`；验证/模拟在生成 `model.smv` 且流程产出结果对象时会写 `result.json`。
+- `result.json` 外层 `code/message` 与结果语义对齐，不固定为 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志含 `timed out` 时 `504`，其余失败 `500`。
+- 说明：若请求在生成 `model.smv` 之前就失败（例如输入前置校验失败）不会产生 `result.json`；异步取消若发生在结果对象产出前，也可能只保留 `model.smv` 而没有 `result.json`。
 
 ### 4.8 SmvTraceParser — 反例解析
 
@@ -572,11 +581,17 @@ public enum PropertyDimension {
 - Redis 7.0+
 - NuSMV 2.x (已测试 2.5–2.7，需配置路径)
 
+### 模板前置条件（重要）
+
+- 后端验证/模拟链路依赖“用户模板表”中的 `DeviceManifest` 数据。
+- 新用户注册后会自动导入默认模板；历史用户可调用 `POST /api/board/templates/reload` 重置（删除现有模板后重建默认模板）。
+- 在调用 `/api/verify*` 或 `/api/verify/simulate*` 前，应确保请求中的每个 `templateName` 都能在当前用户模板列表中匹配。
+
 ### 关键配置 (application.yaml)
 
 ```yaml
 nusmv:
-  path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
+  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}  # NuSMV 可执行文件路径
   command-prefix: ""             # 可选：命令前缀（如 docker exec ...）
   timeout-ms: 120000              # 执行超时（毫秒）
   max-concurrent: 6               # NuSMV 全局并发上限（验证+模拟共享）
@@ -614,7 +629,7 @@ thread-pool:
 ```bash
 cd backend
 mvn clean package -DskipTests
-java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
+java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 ```
 
 ---

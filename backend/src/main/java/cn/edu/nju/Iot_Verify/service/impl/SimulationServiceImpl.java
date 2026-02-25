@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
+import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
@@ -334,6 +335,7 @@ public class SimulationServiceImpl implements SimulationService {
                                            boolean enablePrivacy) {
         List<String> logs = new ArrayList<>();
         File smvFile = null;
+        SimulationResultDto finalResult = null;
 
         try {
             logs.add("Generating NuSMV model (simulation mode)...");
@@ -344,8 +346,9 @@ public class SimulationServiceImpl implements SimulationService {
 
             if (smvFile == null || !smvFile.exists()) {
                 logs.add("Failed to generate NuSMV model file");
-                return SimulationResultDto.builder()
+                finalResult = SimulationResultDto.builder()
                         .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
+                return finalResult;
             }
             logs.add("Model generated: " + smvFile.getAbsolutePath());
 
@@ -354,12 +357,17 @@ public class SimulationServiceImpl implements SimulationService {
 
             if (!simOutput.isSuccess()) {
                 if (simOutput.isBusy()) {
+                    logs.add("Simulation busy: " + simOutput.getErrorMessage());
+                    finalResult = SimulationResultDto.builder()
+                            .states(List.of()).steps(0).requestedSteps(steps).logs(logs)
+                            .nusmvOutput(truncateOutput(simOutput.getErrorMessage())).build();
                     throw new ServiceUnavailableException("NuSMV simulation service is busy, please retry later");
                 }
                 logs.add("Simulation failed: " + simOutput.getErrorMessage());
-                return SimulationResultDto.builder()
+                finalResult = SimulationResultDto.builder()
                         .states(List.of()).steps(0).requestedSteps(steps).logs(logs)
                         .nusmvOutput(truncateOutput(simOutput.getErrorMessage())).build();
+                return finalResult;
             }
             logs.add("Simulation completed.");
 
@@ -369,34 +377,45 @@ public class SimulationServiceImpl implements SimulationService {
 
             if (states.isEmpty()) {
                 logs.add("No valid states parsed from simulation trace.");
-                return SimulationResultDto.builder()
+                finalResult = SimulationResultDto.builder()
                         .states(List.of()).steps(0).requestedSteps(steps)
                         .nusmvOutput(truncateOutput(simOutput.getRawOutput()))
                         .logs(logs).build();
+                return finalResult;
             }
 
             int actualSteps = Math.max(states.size() - 1, 0);
 
-            return SimulationResultDto.builder()
+            finalResult = SimulationResultDto.builder()
                     .states(states)
                     .steps(actualSteps)
                     .requestedSteps(steps)
                     .nusmvOutput(truncateOutput(simOutput.getRawOutput()))
                     .logs(logs)
                     .build();
+            return finalResult;
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.error("Simulation error", e);
             logs.add("Error: " + e.getMessage());
-            return SimulationResultDto.builder()
+            finalResult = SimulationResultDto.builder()
                     .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
+            return finalResult;
         } catch (ServiceUnavailableException e) {
             throw e;
         } catch (Exception e) {
             log.error("Simulation failed", e);
+            if (finalResult == null) {
+                logs.add("Error: " + e.getMessage());
+                finalResult = SimulationResultDto.builder()
+                        .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
+            }
             throw new InternalServerException("Simulation failed: " + e.getMessage());
         } finally {
+            if (finalResult != null) {
+                saveResultJson(smvFile, finalResult);
+            }
             cleanupTempFile(smvFile);
         }
     }
@@ -505,6 +524,60 @@ public class SimulationServiceImpl implements SimulationService {
         } catch (Exception e) {
             log.warn("Failed to serialize check logs for simulation task {}", task.getId(), e);
         }
+    }
+
+    private void saveResultJson(File smvFile, SimulationResultDto simulationResult) {
+        if (smvFile == null || smvFile.getParentFile() == null || simulationResult == null) return;
+        try {
+            File jsonFile = new File(smvFile.getParentFile(), "result.json");
+            Result<SimulationResultDto> wrapped = wrapResultForDebugFile(simulationResult);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(jsonFile, wrapped);
+            log.info("Simulation result JSON saved to: {}", jsonFile.getAbsolutePath());
+        } catch (IOException e) {
+            log.warn("Failed to save simulation result JSON: {}", e.getMessage());
+        }
+    }
+
+    private Result<SimulationResultDto> wrapResultForDebugFile(SimulationResultDto simulationResult) {
+        Result<SimulationResultDto> wrapped = new Result<>();
+        wrapped.setData(simulationResult);
+        if (isSimulationFailureResult(simulationResult)) {
+            wrapped.setCode(inferSimulationErrorCode(simulationResult));
+            wrapped.setMessage(inferSimulationErrorMessage(simulationResult));
+        } else {
+            wrapped.setCode(200);
+            wrapped.setMessage("success");
+        }
+        return wrapped;
+    }
+
+    private boolean isSimulationFailureResult(SimulationResultDto result) {
+        if (result == null) return true;
+        return result.getStates() == null || result.getStates().isEmpty();
+    }
+
+    private int inferSimulationErrorCode(SimulationResultDto result) {
+        List<String> logs = result != null ? result.getLogs() : null;
+        if (logs != null) {
+            for (String logLine : logs) {
+                if (logLine == null) continue;
+                String lower = logLine.toLowerCase();
+                if (lower.contains("busy")) return 503;
+                if (lower.contains("timed out")) return 504;
+            }
+        }
+        return 500;
+    }
+
+    private String inferSimulationErrorMessage(SimulationResultDto result) {
+        List<String> logs = result != null ? result.getLogs() : null;
+        if (logs != null && !logs.isEmpty()) {
+            String last = logs.get(logs.size() - 1);
+            if (last != null && !last.isBlank()) {
+                return last;
+            }
+        }
+        return "simulation failed";
     }
 
     private void cleanupTempFile(File file) {

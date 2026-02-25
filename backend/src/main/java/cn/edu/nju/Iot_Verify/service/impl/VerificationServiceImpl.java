@@ -191,6 +191,8 @@ public class VerificationServiceImpl implements VerificationService {
 
             if (!result.isSuccess()) {
                 if (result.isBusy()) {
+                    checkLogs.add("NuSMV execution is busy, please retry later");
+                    finalResult = buildErrorResult("", checkLogs);
                     throw new ServiceUnavailableException("NuSMV verification service is busy, please retry later");
                 }
                 checkLogs.add("NuSMV execution failed: " + result.getErrorMessage());
@@ -213,6 +215,8 @@ public class VerificationServiceImpl implements VerificationService {
             throw e;
         } catch (Exception e) {
             log.error("Verification failed", e);
+            checkLogs.add("Error: " + e.getMessage());
+            finalResult = buildErrorResult("", checkLogs);
             throw new InternalServerException("Verification failed: " + e.getMessage());
         } finally {
             // 只要 tempDir 存在就保存 result.json（成功/失败均保存，方便调试）
@@ -227,12 +231,56 @@ public class VerificationServiceImpl implements VerificationService {
         if (smvFile == null || smvFile.getParentFile() == null) return;
         try {
             File jsonFile = new File(smvFile.getParentFile(), "result.json");
-            Result<VerificationResultDto> wrapped = Result.success(verificationResult);
+            Result<VerificationResultDto> wrapped = wrapResultForDebugFile(verificationResult);
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(jsonFile, wrapped);
             log.info("Verification result JSON saved to: {}", jsonFile.getAbsolutePath());
         } catch (IOException e) {
             log.warn("Failed to save result JSON: {}", e.getMessage());
         }
+    }
+
+    private Result<VerificationResultDto> wrapResultForDebugFile(VerificationResultDto verificationResult) {
+        Result<VerificationResultDto> wrapped = new Result<>();
+        wrapped.setData(verificationResult);
+        if (isVerificationFailureResult(verificationResult)) {
+            wrapped.setCode(inferVerificationErrorCode(verificationResult));
+            wrapped.setMessage(inferVerificationErrorMessage(verificationResult));
+        } else {
+            wrapped.setCode(200);
+            wrapped.setMessage("success");
+        }
+        return wrapped;
+    }
+
+    private boolean isVerificationFailureResult(VerificationResultDto result) {
+        if (result == null) return true;
+        boolean hasSpecResults = result.getSpecResults() != null && !result.getSpecResults().isEmpty();
+        boolean hasTraces = result.getTraces() != null && !result.getTraces().isEmpty();
+        if (hasSpecResults || hasTraces) return false;
+        return !result.isSafe();
+    }
+
+    private int inferVerificationErrorCode(VerificationResultDto result) {
+        List<String> logs = result != null ? result.getCheckLogs() : null;
+        if (logs != null) {
+            for (String logLine : logs) {
+                if (logLine != null && logLine.toLowerCase().contains("busy")) {
+                    return 503;
+                }
+            }
+        }
+        return 500;
+    }
+
+    private String inferVerificationErrorMessage(VerificationResultDto result) {
+        List<String> logs = result != null ? result.getCheckLogs() : null;
+        if (logs != null && !logs.isEmpty()) {
+            String last = logs.get(logs.size() - 1);
+            if (last != null && !last.isBlank()) {
+                return last;
+            }
+        }
+        return "verification failed";
     }
 
     // ==================== 异步验证 ====================
@@ -273,6 +321,7 @@ public class VerificationServiceImpl implements VerificationService {
 
         File smvFile = null;
         VerificationTaskPo task = null;
+        VerificationResultDto finalResult = null;
         try {
             task = taskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
             if (task == null) {
@@ -291,11 +340,17 @@ public class VerificationServiceImpl implements VerificationService {
             taskRepository.save(task);
 
             if (devices == null || devices.isEmpty()) {
-                failTask(task, "Invalid input: devices list cannot be empty");
+                String msg = "Invalid input: devices list cannot be empty";
+                failTask(task, msg);
+                finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
             if (specs == null || specs.isEmpty()) {
-                completeTask(task, true, 0, List.of("No specifications to verify"), "");
+                List<String> logs = List.of("No specifications to verify");
+                completeTask(task, true, 0, logs, "");
+                finalResult = VerificationResultDto.builder()
+                        .safe(true).traces(List.of()).specResults(List.of())
+                        .checkLogs(logs).nusmvOutput("").build();
                 return;
             }
 
@@ -308,7 +363,9 @@ public class VerificationServiceImpl implements VerificationService {
                 return;
             }
             if (smvFile == null || !smvFile.exists()) {
-                failTask(task, "Failed to generate NuSMV model file");
+                String msg = "Failed to generate NuSMV model file";
+                failTask(task, msg);
+                finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
 
@@ -321,28 +378,35 @@ public class VerificationServiceImpl implements VerificationService {
             }
 
             if (!result.isSuccess()) {
-                failTask(task, "NuSMV execution failed: " + result.getErrorMessage());
+                String msg = "NuSMV execution failed: " + result.getErrorMessage();
+                failTask(task, msg);
+                finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
 
             updateTaskProgress(taskId, 80, "Parsing results");
-            VerificationResultDto vResult = buildVerificationResult(
+            finalResult = buildVerificationResult(
                     result, devices, safeRules, specs, userId, taskId, new ArrayList<>(), deviceSmvMap);
 
             updateTaskProgress(taskId, 100, "Verification completed");
-            completeTask(task, vResult.isSafe(),
-                    vResult.getTraces() != null ? vResult.getTraces().size() : 0,
-                    vResult.getCheckLogs(), truncateOutput(result.getOutput()));
+            completeTask(task, finalResult.isSafe(),
+                    finalResult.getTraces() != null ? finalResult.getTraces().size() : 0,
+                    finalResult.getCheckLogs(), truncateOutput(result.getOutput()));
 
         } catch (Exception e) {
             if (cancelledTasks.contains(taskId)) {
                 // 被取消导致的异常，由 finally 统一处理状态
                 log.info("Async verification cancelled for task: {}", taskId);
             } else {
+                String msg = "Verification failed: " + e.getMessage();
                 log.error("Async verification failed for task: {}", taskId, e);
-                failTask(task, "Verification failed: " + e.getMessage());
+                failTask(task, msg);
+                finalResult = buildErrorResult("", List.of(msg));
             }
         } finally {
+            if (finalResult != null) {
+                saveResultJson(smvFile, finalResult);
+            }
             cleanupTempFile(smvFile);
             // 统一处理取消状态
             if (cancelledTasks.remove(taskId)) {

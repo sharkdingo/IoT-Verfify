@@ -1,11 +1,16 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年2月24日
+> **最后更新**: 2026年2月25日
 > **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
 > **NuSMV 版本要求**: 本系统仅支持 NuSMV 2.x（已测试 2.5–2.7）。输出解析依赖 NuSMV 标准英文输出格式（`-- specification ... is true/false`、`Trace Type: Simulation`、`NuSMV >` 提示符等）。不兼容 nuXmv 或其他变体。
+>
+> **模板前置条件（重要）**:
+> - 运行时模板来源是“当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
+> - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为“重置模板”：先删除该用户现有模板，再导入默认模板）。
+> - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
 
 ---
 
@@ -22,6 +27,7 @@
 9. [校验规则 (P1-P5)](#9-校验规则-p1-p5)
 10. [随机模拟功能](#10-随机模拟功能)
 11. [API 端点速查](#11-api-端点速查)
+12. [逻辑完整性检查清单](#12-逻辑完整性检查清单)
 
 ---
 
@@ -30,6 +36,8 @@
 ### 伪代码流程
 
 ```
+前置: 请求中的每个 device.templateName 必须能在当前用户模板表中解析
+
 用户 → POST /api/verify (VerificationRequestDto)
   │
   ├─ VerificationController.verify()
@@ -113,7 +121,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `varName` | `String` | 设备实例变量名，作为 SMV 中的标识符（如 `thermostat_1`） |
-| `templateName` | `String` | 设备模板名称，用于从数据库加载 `DeviceManifest` |
+| `templateName` | `String` | 设备模板名称；运行时按 `userId + templateName` 从数据库加载 `DeviceManifest`（不直接读 resources） |
 | `state` | `String` | 当前状态（如 `cool`），映射到模板的 WorkingStates |
 | `currentStateTrust` | `String` | 设备级信任覆盖（`trusted`/`untrusted`） |
 | `variables` | `List<VariableStateDto>` | 每个变量的当前值和信任度 |
@@ -239,6 +247,13 @@
 │  → List<TraceStateDto>                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+失败闭环说明（关键）：
+
+- **模板缺失/模板非法**：在 `DeviceSmvDataFactory.buildDeviceSmvMap()` 阶段失败，直接返回错误，不进入 NuSMV 执行。
+- **规则条件无法解析**：规则 guard 置为 `FALSE`（fail-closed），避免“无效条件变无条件触发”。
+- **规格条件无法解析**：降级为 `CTLSPEC FALSE -- invalid spec: ...`（fail-closed），保持 spec 数量与结果可对齐。
+- **NuSMV 结果数量与规格数量不一致**：验证结果标记为不安全（fail-closed）。
 
 ---
 
@@ -932,6 +947,8 @@ Trace Type: Counterexample
 }
 ```
 
+> 说明：`steps` 为“实际可解析步数”，计算方式是 `states.size() - 1`。因此它可能小于 `requestedSteps`（例如 NuSMV 轨迹较短或解析后状态为空）。
+
 ### 10.4 关键实现细节
 
 | 要点 | 说明 |
@@ -948,6 +965,11 @@ Trace Type: Counterexample
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
 | 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
 | 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
+| 调试产物 | `NusmvExecutor` 会将原始输出写到 `output.txt`；验证/模拟在已生成 `model.smv` 且流程产出结果对象时会写 `result.json`（与 `model.smv` 同目录） |
+| `result.json` 语义 | `result.json` 外层 `code/message` 不固定 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志命中 `timed out` 时 `504`，其余失败 `500` |
+| 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `result.json` |
+| 取消边界说明 | 异步任务在结果对象产出前被取消时，可能不写 `result.json`（例如验证异步在生成 `model.smv` 后、执行前被取消） |
+| 临时文件策略 | 当前实现会保留 `model.smv` 临时文件用于排障（不在 finally 中删除） |
 
 ---
 
@@ -974,3 +996,22 @@ Trace Type: Counterexample
 | `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
 
 所有端点需要 JWT 认证（`Authorization: Bearer <token>`），用户 ID 通过 `@CurrentUser` 注解自动注入。
+
+---
+
+## 12. 逻辑完整性检查清单
+
+下列链路在当前后端实现中是闭合的：
+
+1. **输入约束闭环**：DTO 校验（`@NotNull/@Pattern/@Min/@Max`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。
+4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
+5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度、同步/异步统一错误语义。
+6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。
+7. **可观测性闭环**：`model.smv` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
+
+仍需依赖的运行前提：
+
+- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。
+- 当前用户模板已初始化且与前端请求中的 `templateName` 一致。

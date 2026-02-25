@@ -12,11 +12,13 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +33,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
 import java.io.File;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -99,6 +105,29 @@ class VerificationServiceImplBuildResultTest {
         d.setVarName("testDevice");
         d.setTemplateName("light");
         return List.of(d);
+    }
+
+    private File createTempModelFile() throws Exception {
+        Path dir = Files.createTempDirectory("verify-service-test-");
+        File smvFile = dir.resolve("model.smv").toFile();
+        assertTrue(smvFile.createNewFile());
+        smvFile.deleteOnExit();
+        dir.toFile().deleteOnExit();
+        return smvFile;
+    }
+
+    private int readResultCode(File smvFile) throws Exception {
+        File jsonFile = new File(smvFile.getParentFile(), "result.json");
+        assertTrue(jsonFile.exists());
+        JsonNode node = new ObjectMapper().readTree(jsonFile);
+        return node.path("code").asInt();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Long> cancelledTaskIds() throws Exception {
+        Field f = VerificationServiceImpl.class.getDeclaredField("cancelledTasks");
+        f.setAccessible(true);
+        return (Set<Long>) f.get(service);
     }
 
     // --- effectiveSpecs = 0: all specs filtered out -> safe=true ---
@@ -215,8 +244,7 @@ class VerificationServiceImplBuildResultTest {
     @Test
     void verify_nusmvBusy_throwsServiceUnavailable() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
-        File smv = File.createTempFile("verify-busy", ".smv");
-        smv.deleteOnExit();
+        File smv = createTempModelFile();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
                 .thenReturn(new SmvGenerator.GenerateResult(smv, Map.of()));
         when(nusmvExecutor.execute(any(File.class)))
@@ -227,6 +255,49 @@ class VerificationServiceImplBuildResultTest {
                         1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
                         false, 0, false));
         assertTrue(ex.getMessage().contains("busy"));
+        assertEquals(503, readResultCode(smv));
+    }
+
+    @Test
+    void verifyAsync_success_writesResultJson() throws Exception {
+        File smv = createTempModelFile();
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(new SmvGenerator.GenerateResult(smv, Map.of()));
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
+
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(7L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now())
+                .build();
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.verifyAsync(
+                1L, 7L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                false, 0, false);
+
+        assertEquals(200, readResultCode(smv));
+    }
+
+    @Test
+    void verifyAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(8L)
+                .userId(1L)
+                .status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now())
+                .build();
+        when(taskRepository.findById(8L)).thenReturn(Optional.of(task));
+        cancelledTaskIds().add(8L);
+
+        service.verifyAsync(
+                1L, 8L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                false, 0, false);
+
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
     @Test

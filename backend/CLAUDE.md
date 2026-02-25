@@ -126,12 +126,12 @@ JSON templates in `src/main/resources/deviceTemplate/` define:
 
 Corresponds to MEDIC's `outModule()`. For each unique device template:
 1. `FROZENVAR is_attack: boolean;` (if attack mode)
-2. `FROZENVAR trust_<state>: {trusted, untrusted};` for sensors (no APIs)
-3. `FROZENVAR privacy_<state>: {private, public};` for sensors (if `enablePrivacy=true`)
+2. `FROZENVAR trust_<var>: {trusted, untrusted};` for sensor internal variables
+3. `FROZENVAR privacy_<var>: {public, private};` for sensor internal variables (if `enablePrivacy=true`)
 4. `VAR <mode>: {state1, state2, ...};` for each mode
 5. `VAR <api>_a: boolean;` for signal APIs
-6. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges by 20%, min +10)
-7. `VAR <var>_rate: -1..1;` for impacted variables
+6. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges proportionally: `expansion=(upper-lower)/5*intensity/50`)
+7. `VAR <var>_rate: <min..max>;` for impacted variables (derived from `Dynamics.ChangeRate`, fallback `-10..10`)
 8. `VAR trust_<mode>_<state>: {trusted, untrusted};` for non-sensor devices
 9. `VAR privacy_<mode>_<state>: {private, public};` for non-sensor devices (if `enablePrivacy=true`)
 10. `VAR trust_<var>: {trusted, untrusted};` for variable-level trust
@@ -185,7 +185,7 @@ Parses NuSMV counterexample output. Supports both formats:
 | Privacy flag | `now == 3` global flag | `enablePrivacy` request parameter (default false) |
 | Trust condition joining | OR (`\|`) — any trusted source propagates | AND (`&`) — all sources must be trusted |
 | Trust init | `FROZENVAR` for sensors, `VAR` for actuators | Same pattern |
-| Attack model | `FROZENVAR is_attack` + `intensity: 0..50` | Same + sensor numeric range expansion (+20%, min +10) |
+| Attack model | `FROZENVAR is_attack` + `intensity: 0..50` | Same + proportional sensor numeric range expansion (`expansion=range/5*intensity/50`) |
 | Env var init validation | None | Clamp to range + enum membership check |
 | getModeIndexOfState | Counts leading semicolons | Multi-strategy: mode name match → semicolon split → state list lookup |
 
