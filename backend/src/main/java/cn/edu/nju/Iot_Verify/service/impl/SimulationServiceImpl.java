@@ -121,7 +121,7 @@ public class SimulationServiceImpl implements SimulationService {
             future = syncSimulationExecutor.submit(() ->
                     doSimulate(userId, devices, safeRules, steps, isAttack, intensity, enablePrivacy));
         } catch (RejectedExecutionException e) {
-            log.warn("Simulation request rejected: executor is saturated");
+            log.warn("Simulation request rejected: executor is saturated ({})", syncSimulationExecutorSnapshot());
             throw new ServiceUnavailableException("Simulation service is busy, please retry later", e);
         }
 
@@ -129,6 +129,7 @@ public class SimulationServiceImpl implements SimulationService {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
+            purgeCancelledSyncTasks();
             log.warn("Simulation timed out after {}ms", timeoutMs);
             return SimulationResultDto.builder()
                     .states(List.of()).steps(0).requestedSteps(steps)
@@ -516,5 +517,25 @@ public class SimulationServiceImpl implements SimulationService {
         if (output == null) return null;
         return output.length() > MAX_OUTPUT_LENGTH
                 ? output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)" : output;
+    }
+
+    private String syncSimulationExecutorSnapshot() {
+        try {
+            ThreadPoolExecutor nativeExecutor = syncSimulationExecutor.getThreadPoolExecutor();
+            return "poolSize=" + nativeExecutor.getPoolSize()
+                    + ", active=" + nativeExecutor.getActiveCount()
+                    + ", queueSize=" + nativeExecutor.getQueue().size()
+                    + ", remainingCapacity=" + nativeExecutor.getQueue().remainingCapacity();
+        } catch (IllegalStateException ignored) {
+            return "executor=uninitialized";
+        }
+    }
+
+    private void purgeCancelledSyncTasks() {
+        try {
+            syncSimulationExecutor.getThreadPoolExecutor().purge();
+        } catch (IllegalStateException ignored) {
+            // executor may not be initialized yet
+        }
     }
 }

@@ -683,9 +683,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("unknown_state");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertNull(expr, "Unresolvable multi-mode state condition should fail-closed");
     }
@@ -713,9 +713,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertNull(expr, "Blank attribute should fail-closed");
     }
@@ -745,9 +745,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("30");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertEquals("sensor_1.temperature=30", expr);
     }
@@ -777,9 +777,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" , ; | ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertNull(expr, "Empty IN list should fail-closed");
     }
@@ -809,9 +809,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("1");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertNull(expr, "Unknown attribute should fail-closed");
     }
@@ -843,9 +843,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" true ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertEquals("fan_1.fanAuto_a=TRUE", expr);
     }
@@ -877,11 +877,169 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
 
         assertNull(expr, "API signal relation value should be boolean");
+    }
+
+    @Test
+    @DisplayName("P11: API signal condition without relation uses current state when useNext=false")
+    void apiSignalConditionWithoutRelation_useNextFalse_usesCurrentStateExpr() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("auto").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("fanAuto").signal(true).endState("auto").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "fan_1", "Fan",
+                List.of("FanMode"),
+                Map.of("FanMode", List.of("off", "auto")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("fanAuto");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+
+        assertEquals("(fan_1.fanAuto_a=TRUE | fan_1.FanMode=auto)", expr);
+    }
+
+    @Test
+    @DisplayName("P11: API signal condition without relation uses next state when useNext=true")
+    void apiSignalConditionWithoutRelation_useNextTrue_usesNextStateExpr() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("auto").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("fanAuto").signal(true).endState("auto").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "fan_1", "Fan",
+                List.of("FanMode"),
+                Map.of("FanMode", List.of("off", "auto")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("fanAuto");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+
+        assertEquals("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto)", expr);
+    }
+
+    @Test
+    @DisplayName("P11: API signal no-mode fallback uses next(state) when useNext=true")
+    void apiSignalConditionWithoutRelation_noModeFallback_useNextTrue() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("powerOn").signal(true).endState("on").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "plug_1", "SmartPlug",
+                List.of(),
+                Map.of(),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("plug_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("plug_1");
+        condition.setAttribute("powerOn");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+
+        assertEquals("(next(plug_1.powerOn_a)=TRUE | next(plug_1.state)=on)", expr);
+    }
+
+    @Test
+    @DisplayName("P11: main build uses next-state expression for relation-null API signal condition")
+    void mainBuild_ruleWithNullRelationApiSignal_usesNextStateExpr() {
+        DeviceManifest fanManifest = DeviceManifest.builder()
+                .modes(List.of("FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("auto").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("fanAuto").signal(true).endState("auto").build()))
+                .build();
+        DeviceSmvData fan = buildSmvData(
+                "fan_1", "Fan",
+                List.of("FanMode"),
+                Map.of("FanMode", List.of("off", "auto")),
+                List.of(), fanManifest);
+
+        DeviceManifest lockManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("locked").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("unlocked").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("unlock").startState("locked").endState("unlocked").build()))
+                .build();
+        DeviceSmvData lock = buildSmvData(
+                "lock_1", "Lock",
+                List.of("Mode"),
+                Map.of("Mode", List.of("locked", "unlocked")),
+                List.of(), lockManifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", fan);
+        map.put("lock_1", lock);
+
+        DeviceVerificationDto fanDto = new DeviceVerificationDto();
+        fanDto.setVarName("fan_1");
+        fanDto.setTemplateName("Fan");
+        fanDto.setState("off");
+
+        DeviceVerificationDto lockDto = new DeviceVerificationDto();
+        lockDto.setVarName("lock_1");
+        lockDto.setTemplateName("Lock");
+        lockDto.setState("locked");
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("fanAuto");
+
+        RuleDto.Command command = new RuleDto.Command();
+        command.setDeviceName("lock_1");
+        command.setAction("unlock");
+
+        RuleDto rule = new RuleDto();
+        rule.setConditions(List.of(condition));
+        rule.setCommand(command);
+
+        String smv = mainBuilder.build(1L, List.of(fanDto, lockDto), List.of(rule), map, false, 0, false);
+
+        assertTrue(smv.contains("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto) & lock_1.Mode=locked: unlocked;"),
+                "State transition should use next-state API signal condition, got:\n" + smv);
     }
 
     @Test

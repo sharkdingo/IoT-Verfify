@@ -56,22 +56,22 @@ thread-pool:
     queue-capacity: ${THREAD_POOL_CHAT_QUEUE:200}
     await-termination-seconds: ${THREAD_POOL_CHAT_AWAIT:30}
   verification-task:
-    core-pool-size: ${THREAD_POOL_VERIFICATION_TASK_CORE:5}
-    max-pool-size: ${THREAD_POOL_VERIFICATION_TASK_MAX:20}
-    queue-capacity: ${THREAD_POOL_VERIFICATION_TASK_QUEUE:100}
+    core-pool-size: ${THREAD_POOL_VERIFICATION_TASK_CORE:4}
+    max-pool-size: ${THREAD_POOL_VERIFICATION_TASK_MAX:8}
+    queue-capacity: ${THREAD_POOL_VERIFICATION_TASK_QUEUE:40}
     await-termination-seconds: ${THREAD_POOL_VERIFICATION_TASK_AWAIT:60}
   sync-verification:
     core-pool-size: ${THREAD_POOL_SYNC_VERIFICATION_CORE:4}
     max-pool-size: ${THREAD_POOL_SYNC_VERIFICATION_MAX:4}
-    queue-capacity: ${THREAD_POOL_SYNC_VERIFICATION_QUEUE:100}
+    queue-capacity: ${THREAD_POOL_SYNC_VERIFICATION_QUEUE:16}
     await-termination-seconds: ${THREAD_POOL_SYNC_VERIFICATION_AWAIT:30}
   sync-simulation:
     core-pool-size: ${THREAD_POOL_SYNC_SIMULATION_CORE:4}
     max-pool-size: ${THREAD_POOL_SYNC_SIMULATION_MAX:4}
-    queue-capacity: ${THREAD_POOL_SYNC_SIMULATION_QUEUE:100}
+    queue-capacity: ${THREAD_POOL_SYNC_SIMULATION_QUEUE:16}
     await-termination-seconds: ${THREAD_POOL_SYNC_SIMULATION_AWAIT:30}
   simulation-task:
-    core-pool-size: ${THREAD_POOL_SIMULATION_TASK_CORE:5}
-    max-pool-size: ${THREAD_POOL_SIMULATION_TASK_MAX:20}
-    queue-capacity: ${THREAD_POOL_SIMULATION_TASK_QUEUE:100}
+    core-pool-size: ${THREAD_POOL_SIMULATION_TASK_CORE:4}
+    max-pool-size: ${THREAD_POOL_SIMULATION_TASK_MAX:8}
+    queue-capacity: ${THREAD_POOL_SIMULATION_TASK_QUEUE:40}
     await-termination-seconds: ${THREAD_POOL_SIMULATION_TASK_AWAIT:60}

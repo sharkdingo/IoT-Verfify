@@ -20,16 +20,16 @@ public class ThreadPoolConfig {
     private Pool chat = new Pool(10, 50, 200, 30);
     @Valid
     @NotNull
-    private Pool verificationTask = new Pool(5, 20, 100, 60);
+    private Pool verificationTask = new Pool(4, 8, 40, 60);
     @Valid
     @NotNull
-    private Pool syncVerification = new Pool(4, 4, 100, 30);
+    private Pool syncVerification = new Pool(4, 4, 16, 30);
     @Valid
     @NotNull
-    private Pool syncSimulation = new Pool(4, 4, 100, 30);
+    private Pool syncSimulation = new Pool(4, 4, 16, 30);
     @Valid
     @NotNull
-    private Pool simulationTask = new Pool(5, 20, 100, 60);
+    private Pool simulationTask = new Pool(4, 8, 40, 60);
 
     @Data
     public static class Pool {

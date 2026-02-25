@@ -35,6 +35,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -201,6 +203,30 @@ class SimulationServiceImplTest {
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
                 () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
         assertTrue(ex.getMessage().contains("busy"));
+    }
+
+    @Test
+    void simulate_timeout_returnsTimedOutAndPurgesQueuedTask() {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(50L);
+        Future<?> blocker = syncSimulationExecutor.submit(() -> {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        SimulationResultDto result = service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false);
+
+        assertTrue(result.getStates().isEmpty());
+        assertEquals(0, result.getSteps());
+        assertEquals(10, result.getRequestedSteps());
+        assertTrue(result.getLogs().stream().anyMatch(log -> log.contains("timed out")));
+
+        ThreadPoolExecutor nativeExecutor = syncSimulationExecutor.getThreadPoolExecutor();
+        assertNotNull(nativeExecutor);
+        assertEquals(0, nativeExecutor.getQueue().size());
+        blocker.cancel(true);
     }
 
     // ==================== simulateAndSave tests ====================

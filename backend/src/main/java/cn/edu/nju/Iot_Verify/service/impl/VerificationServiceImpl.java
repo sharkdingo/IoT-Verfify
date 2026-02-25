@@ -139,7 +139,7 @@ public class VerificationServiceImpl implements VerificationService {
             future = syncVerificationExecutor.submit(() ->
                     doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
         } catch (RejectedExecutionException e) {
-            log.warn("Sync verification request rejected: executor is saturated");
+            log.warn("Sync verification request rejected: executor is saturated ({})", syncVerificationExecutorSnapshot());
             throw new ServiceUnavailableException("Verification service is busy, please retry later", e);
         }
 
@@ -147,6 +147,7 @@ public class VerificationServiceImpl implements VerificationService {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
+            purgeCancelledSyncTasks();
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             return buildErrorResult("", List.of("Verification timed out"));
         } catch (ExecutionException e) {
@@ -652,6 +653,26 @@ public class VerificationServiceImpl implements VerificationService {
     private void cleanupTempFile(File file) {
         if (file != null && file.exists()) {
             log.info("Keeping NuSMV model file for review: {}", file.getAbsolutePath());
+        }
+    }
+
+    private String syncVerificationExecutorSnapshot() {
+        try {
+            ThreadPoolExecutor nativeExecutor = syncVerificationExecutor.getThreadPoolExecutor();
+            return "poolSize=" + nativeExecutor.getPoolSize()
+                    + ", active=" + nativeExecutor.getActiveCount()
+                    + ", queueSize=" + nativeExecutor.getQueue().size()
+                    + ", remainingCapacity=" + nativeExecutor.getQueue().remainingCapacity();
+        } catch (IllegalStateException ignored) {
+            return "executor=uninitialized";
+        }
+    }
+
+    private void purgeCancelledSyncTasks() {
+        try {
+            syncVerificationExecutor.getThreadPoolExecutor().purge();
+        } catch (IllegalStateException ignored) {
+            // executor may not be initialized yet
         }
     }
 }

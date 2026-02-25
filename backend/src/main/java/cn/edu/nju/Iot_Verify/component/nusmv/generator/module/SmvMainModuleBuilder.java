@@ -473,9 +473,14 @@ public class SmvMainModuleBuilder {
                 if (endState == null) break;
 
                 String apiSignal = DeviceSmvDataFactory.formatApiSignalName(api.getName());
-                String apiSignalExpr = apiSignal != null
-                        ? varName + "." + apiSignal + "=TRUE"
-                        : null;
+                String apiSignalExpr = null;
+                if (apiSignal != null) {
+                    String apiSignalLhs = varName + "." + apiSignal;
+                    if (useNext) {
+                        apiSignalLhs = "next(" + apiSignalLhs + ")";
+                    }
+                    apiSignalExpr = apiSignalLhs + "=TRUE";
+                }
 
                 if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
                     int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
@@ -483,7 +488,11 @@ public class SmvMainModuleBuilder {
                         String mode = condSmv.getModes().get(modeIdx);
                         String cleanEndState = getStateForMode(endState, modeIdx);
                         if (cleanEndState == null || cleanEndState.isEmpty()) break;
-                        String stateExpr = varName + "." + mode + "=" + cleanEndState;
+                        String stateLhs = varName + "." + mode;
+                        if (useNext) {
+                            stateLhs = "next(" + stateLhs + ")";
+                        }
+                        String stateExpr = stateLhs + "=" + cleanEndState;
                         return apiSignalExpr != null
                                 ? "(" + apiSignalExpr + " | " + stateExpr + ")"
                                 : stateExpr;
@@ -492,7 +501,11 @@ public class SmvMainModuleBuilder {
                     // 无模式 fallback
                     String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
                     String stateVar = (condSmv.getModes() != null && condSmv.getModes().size() == 1) ? condSmv.getModes().get(0) : "state";
-                    String stateExpr = varName + "." + stateVar + "=" + cleanEndState;
+                    String stateLhs = varName + "." + stateVar;
+                    if (useNext) {
+                        stateLhs = "next(" + stateLhs + ")";
+                    }
+                    String stateExpr = stateLhs + "=" + cleanEndState;
                     return apiSignalExpr != null
                             ? "(" + apiSignalExpr + " | " + stateExpr + ")"
                             : stateExpr;

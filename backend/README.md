@@ -441,7 +441,10 @@ public enum PropertyDimension {
 | `GET` | `/api/verify/simulations/{id}` | 单条模拟记录（详情） |
 | `DELETE` | `/api/verify/simulations/{id}` | 删除模拟记录 |
 
-说明：当同步模拟线程池（`syncSimulationExecutor`）饱和时，`POST /api/verify/simulate` 会返回 `503 Service Unavailable`。
+说明：
+- 当 syncSimulationExecutor 或 syncVerificationExecutor 饱和时，同步接口会返回 503 Service Unavailable。
+- sync-* 线程池采用小队列（默认 16）以减少长队列导致的排队超时。
+- 同步超时后会执行 `future.cancel(true)` 并调用线程池 `purge()`，尽快清理已取消的排队任务。
 
 ### 其他端点
 
@@ -585,24 +588,24 @@ thread-pool:
     queue-capacity: 200
     await-termination-seconds: 30
   verification-task:
-    core-pool-size: 5
-    max-pool-size: 20
-    queue-capacity: 100
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
     await-termination-seconds: 60
   sync-verification:
     core-pool-size: 4
     max-pool-size: 4
-    queue-capacity: 100
+    queue-capacity: 16
     await-termination-seconds: 30
   sync-simulation:
     core-pool-size: 4
     max-pool-size: 4
-    queue-capacity: 100
+    queue-capacity: 16
     await-termination-seconds: 30
   simulation-task:
-    core-pool-size: 5
-    max-pool-size: 20
-    queue-capacity: 100
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
     await-termination-seconds: 60
 ```
 

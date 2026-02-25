@@ -72,6 +72,7 @@ Key config in `src/main/resources/application.yaml`:
 - `nusmv.timeout-ms` — Execution timeout (default 120000)
 - `nusmv.max-concurrent` — Global NuSMV concurrency cap shared by verification/simulation
 - `nusmv.acquire-permit-timeout-ms` — Timeout for waiting NuSMV execution permit
+- `thread-pool.*` — Executor sizing and queue limits (sync executors use small queues for fast-fail)
 - `volcengine.ark.*` — AI chat API settings
 - `cors.allowed-origins` — CORS allowed origins (used by SecurityConfig)
 - `server.port` — HTTP port (default 8080)
@@ -91,6 +92,8 @@ Key config in `src/main/resources/application.yaml`:
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
 - Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
+- Chat completion (`/api/chat/completions`) throws `ServiceUnavailableException(503)` when `chatExecutor` is saturated.
+- Sync request timeout path uses `future.cancel(true)` and `ThreadPoolExecutor.purge()` to reduce cancelled-task buildup in queue.
 
 ## NuSMV Verification Flow
 

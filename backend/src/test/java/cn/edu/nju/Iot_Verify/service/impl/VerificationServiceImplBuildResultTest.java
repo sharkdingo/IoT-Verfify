@@ -32,6 +32,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.lang.reflect.Method;
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -225,6 +227,30 @@ class VerificationServiceImplBuildResultTest {
                         1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
                         false, 0, false));
         assertTrue(ex.getMessage().contains("busy"));
+    }
+
+    @Test
+    void verify_timeout_returnsTimedOutAndPurgesQueuedTask() {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(50L);
+        Future<?> blocker = syncVerificationExecutor.submit(() -> {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        VerificationResultDto result = service.verify(
+                1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                false, 0, false);
+
+        assertFalse(result.isSafe());
+        assertTrue(result.getCheckLogs().stream().anyMatch(log -> log.contains("timed out")));
+
+        ThreadPoolExecutor nativeExecutor = syncVerificationExecutor.getThreadPoolExecutor();
+        assertNotNull(nativeExecutor);
+        assertEquals(0, nativeExecutor.getQueue().size());
+        blocker.cancel(true);
     }
 
     private SpecificationDto makeEffectiveSpec(String id) {

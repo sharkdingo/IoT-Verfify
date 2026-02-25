@@ -943,6 +943,8 @@ Trace Type: Counterexample
 | 空轨迹检测 | 若 `go` 阶段模型有错误，`show_traces` 无输出，返回带 raw output 的错误 |
 | 超时保护 | 通过 `syncSimulationExecutor`（`thread-pool.sync-simulation.*`）+ `nusmvConfig.timeoutMs * 2` |
 | 过载保护 | 当 `syncSimulationExecutor`（同步模拟）或 `syncVerificationExecutor`（同步验证）饱和时，抛出 `ServiceUnavailableException`，HTTP 返回 `503` |
+| 同步队列策略 | `syncVerificationExecutor` / `syncSimulationExecutor` 默认使用小队列（16），减少长队列导致的排队超时 |
+| 取消回收策略 | 同步请求超时 `future.cancel(true)` 后，会调用线程池 `purge()` 以更快清理已取消的排队任务 |
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
 | 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
 | 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import jakarta.validation.Valid;
@@ -14,6 +15,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @RestController
@@ -49,14 +51,19 @@ public class ChatController {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
 
-        executor.execute(() -> {
-            try {
-                chatService.processStreamChat(userId, request.getSessionId(), request.getContent(), emitter);
-            } catch (Exception e) {
-                log.error("Error processing chat request for userId={}", userId, e);
-                emitter.completeWithError(e);
-            }
-        });
+        try {
+            executor.execute(() -> {
+                try {
+                    chatService.processStreamChat(userId, request.getSessionId(), request.getContent(), emitter);
+                } catch (Exception e) {
+                    log.error("Error processing chat request for userId={}", userId, e);
+                    emitter.completeWithError(e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            log.warn("Chat request rejected: executor is saturated, userId={}, sessionId={}", userId, request.getSessionId());
+            throw new ServiceUnavailableException("Chat service is busy, please retry later", e);
+        }
         return emitter;
     }
 
