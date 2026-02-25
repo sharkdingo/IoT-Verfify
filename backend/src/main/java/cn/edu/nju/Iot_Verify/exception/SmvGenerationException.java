@@ -97,6 +97,15 @@ public class SmvGenerationException extends InternalServerException {
         );
     }
 
+    public static SmvGenerationException illegalTriggerRelation(String device, String transitionOrApi,
+                                                                String relation, Object legalRelations) {
+        return new SmvGenerationException(
+                String.format("Device '%s': '%s' has illegal trigger relation '%s'. Legal relations: %s",
+                        device, transitionOrApi, relation, legalRelations),
+                ErrorCategories.ILLEGAL_TRIGGER_RELATION
+        );
+    }
+
     public static SmvGenerationException invalidStateFormat(String device, String itemType, String itemName,
                                                             String stateStr, String reason) {
         return new SmvGenerationException(
@@ -110,6 +119,14 @@ public class SmvGenerationException extends InternalServerException {
         return new SmvGenerationException(
                 String.format("Env variable '%s' conflict: %s", varName, reason),
                 ErrorCategories.ENV_VAR_CONFLICT
+        );
+    }
+
+    public static SmvGenerationException ambiguousDeviceReference(String requestedName, Object candidates) {
+        return new SmvGenerationException(
+                String.format("Ambiguous device reference '%s': candidates %s",
+                        requestedName, candidates),
+                ErrorCategories.AMBIGUOUS_DEVICE_REFERENCE
         );
     }
 
@@ -153,8 +170,10 @@ public class SmvGenerationException extends InternalServerException {
         public static final String SMV_GENERATION_ERROR = "SMV_GENERATION_ERROR";
         public static final String MULTIPLE_DEVICES_FAILED = "MULTIPLE_DEVICES_FAILED";
         public static final String ILLEGAL_TRIGGER_ATTRIBUTE = "ILLEGAL_TRIGGER_ATTRIBUTE";
+        public static final String ILLEGAL_TRIGGER_RELATION = "ILLEGAL_TRIGGER_RELATION";
         public static final String INVALID_STATE_FORMAT = "INVALID_STATE_FORMAT";
         public static final String ENV_VAR_CONFLICT = "ENV_VAR_CONFLICT";
+        public static final String AMBIGUOUS_DEVICE_REFERENCE = "AMBIGUOUS_DEVICE_REFERENCE";
         public static final String TRUST_PRIVACY_CONFLICT = "TRUST_PRIVACY_CONFLICT";
         public static final String INCOMPLETE_TRIGGER = "INCOMPLETE_TRIGGER";
         public static final String PRIVACY_SPEC_WITHOUT_PRIVACY = "PRIVACY_SPEC_WITHOUT_PRIVACY";

@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
@@ -162,6 +163,19 @@ class SimulationServiceImplTest {
     }
 
     @Test
+    void doSimulate_smvGenerationError_propagatesSmvGenerationException() throws Exception {
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenThrow(SmvGenerationException.ambiguousDeviceReference("Sensor", List.of("sensor_1", "sensor_2")));
+
+        InvocationTargetException ex = assertThrows(InvocationTargetException.class, () ->
+                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false, 3, false));
+
+        assertInstanceOf(SmvGenerationException.class, ex.getCause());
+        SmvGenerationException cause = (SmvGenerationException) ex.getCause();
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", cause.getErrorCategory());
+    }
+
+    @Test
     void doSimulate_emptyStates_returnsZeroSteps() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
@@ -305,6 +319,17 @@ class SimulationServiceImplTest {
         assertNotNull(nativeExecutor);
         assertEquals(0, nativeExecutor.getQueue().size());
         blocker.cancel(true);
+    }
+
+    @Test
+    void simulate_smvGenerationError_rethrowsSmvGenerationException() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenThrow(SmvGenerationException.ambiguousDeviceReference("Light", List.of("light_1", "light_2")));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
     }
 
     // ==================== simulateAndSave tests ====================

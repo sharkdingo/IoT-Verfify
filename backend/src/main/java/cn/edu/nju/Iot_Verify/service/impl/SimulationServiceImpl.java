@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
@@ -139,6 +140,7 @@ public class SimulationServiceImpl implements SimulationService {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
             if (cause instanceof ServiceUnavailableException sue) throw sue;
+            if (cause instanceof SmvGenerationException sge) throw sge;
             log.error("Simulation failed", cause);
             throw new InternalServerException("Simulation failed: " + cause.getMessage());
         } catch (InterruptedException e) {
@@ -403,6 +405,14 @@ public class SimulationServiceImpl implements SimulationService {
                     .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
             return finalResult;
         } catch (ServiceUnavailableException e) {
+            throw e;
+        } catch (SmvGenerationException e) {
+            log.error("SMV generation failed", e);
+            if (finalResult == null) {
+                logs.add("Error: " + e.getMessage());
+                finalResult = SimulationResultDto.builder()
+                        .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
+            }
             throw e;
         } catch (Exception e) {
             log.error("Simulation failed", e);

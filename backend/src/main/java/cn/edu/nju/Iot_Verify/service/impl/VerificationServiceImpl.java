@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.dto.trace.*;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
@@ -41,9 +42,9 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * 验证服务实现类
+ * 验证服务实现�?
  *
- * 统一管理同步/异步验证流程、任务生命周期、Trace 持久化
+ * 统一管理同步/异步验证流程、任务生命周期、Trace 持久�?
  */
 @Slf4j
 @Service
@@ -154,6 +155,7 @@ public class VerificationServiceImpl implements VerificationService {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
             if (cause instanceof ServiceUnavailableException sue) throw sue;
+            if (cause instanceof SmvGenerationException sge) throw sge;
             log.error("Sync verification failed", cause);
             throw new InternalServerException("Verification failed: " + cause.getMessage());
         } catch (InterruptedException e) {
@@ -201,7 +203,7 @@ public class VerificationServiceImpl implements VerificationService {
             }
             checkLogs.add("NuSMV execution completed.");
 
-            // Build per-spec results — 复用 generate 阶段的 deviceSmvMap
+            // Build per-spec results �?复用 generate 阶段�?deviceSmvMap
             finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap);
             return finalResult;
 
@@ -213,13 +215,18 @@ public class VerificationServiceImpl implements VerificationService {
             return finalResult;
         } catch (ServiceUnavailableException e) {
             throw e;
+        } catch (SmvGenerationException e) {
+            log.error("SMV generation failed", e);
+            checkLogs.add("Error: " + e.getMessage());
+            finalResult = buildErrorResult("", checkLogs);
+            throw e;
         } catch (Exception e) {
             log.error("Verification failed", e);
             checkLogs.add("Error: " + e.getMessage());
             finalResult = buildErrorResult("", checkLogs);
             throw new InternalServerException("Verification failed: " + e.getMessage());
         } finally {
-            // 只要 tempDir 存在就保存 result.json（成功/失败均保存，方便调试）
+            // 只要 tempDir 存在就保�?result.json（成�?失败均保存，方便调试�?
             if (finalResult != null) {
                 saveResultJson(smvFile, finalResult);
             }
@@ -329,7 +336,7 @@ public class VerificationServiceImpl implements VerificationService {
                 return;
             }
 
-            // 在设置 RUNNING 之前检查是否已被取消（PENDING 状态下被 cancelTask 直接写了 CANCELLED）
+            // 在设�?RUNNING 之前检查是否已被取消（PENDING 状态下�?cancelTask 直接写了 CANCELLED�?
             if (cancelledTasks.contains(taskId)) {
                 return;
             }
@@ -395,7 +402,7 @@ public class VerificationServiceImpl implements VerificationService {
 
         } catch (Exception e) {
             if (cancelledTasks.contains(taskId)) {
-                // 被取消导致的异常，由 finally 统一处理状态
+                // 被取消导致的异常，由 finally 统一处理状�?
                 log.info("Async verification cancelled for task: {}", taskId);
             } else {
                 String msg = "Verification failed: " + e.getMessage();
@@ -408,7 +415,7 @@ public class VerificationServiceImpl implements VerificationService {
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
-            // 统一处理取消状态
+            // 统一处理取消状�?
             if (cancelledTasks.remove(taskId)) {
                 if (task != null) handleCancellation(task);
             }
@@ -456,10 +463,10 @@ public class VerificationServiceImpl implements VerificationService {
         cancelledTasks.add(taskId);
         Thread taskThread = runningTasks.get(taskId);
         if (taskThread != null && taskThread.isAlive()) {
-            // 任务正在执行，interrupt 后由 verifyAsync 的 finally 统一处理状态
+            // 任务正在执行，interrupt 后由 verifyAsync �?finally 统一处理状�?
             taskThread.interrupt();
         } else {
-            // 任务尚未开始（PENDING 在队列中），直接更新数据库状态
+            // 任务尚未开始（PENDING 在队列中），直接更新数据库状�?
             task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
             task.setCompletedAt(LocalDateTime.now());
             taskRepository.save(task);
@@ -491,7 +498,7 @@ public class VerificationServiceImpl implements VerificationService {
         return 0;
     }
 
-    // ==================== 核心：构建 per-spec 验证结果 ====================
+    // ==================== 核心：构�?per-spec 验证结果 ====================
 
     private VerificationResultDto buildVerificationResult(NusmvResult result,
                                                           List<DeviceVerificationDto> devices,
@@ -504,14 +511,14 @@ public class VerificationServiceImpl implements VerificationService {
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> specCheckResults = result.getSpecResults();
 
-        // 过滤掉空 spec，与 SmvSpecificationBuilder 的跳过逻辑保持一致
+        // 过滤掉空 spec，与 SmvSpecificationBuilder 的跳过逻辑保持一�?
         List<SpecificationDto> effectiveSpecs = specs.stream()
                 .filter(s -> s != null)
                 .filter(s -> (s.getAConditions() != null && !s.getAConditions().isEmpty()) ||
                              (s.getIfConditions() != null && !s.getIfConditions().isEmpty()))
                 .toList();
 
-        // effectiveSpecs=0：所有 spec 都被过滤掉（无 A/IF 条件），无可验证规格
+        // effectiveSpecs=0：所�?spec 都被过滤掉（�?A/IF 条件），无可验证规格
         if (effectiveSpecs.isEmpty()) {
             checkLogs.add("No valid specifications to verify (all filtered out)");
             return VerificationResultDto.builder()
@@ -519,7 +526,7 @@ public class VerificationServiceImpl implements VerificationService {
                     .checkLogs(checkLogs).nusmvOutput(truncateOutput(result.getOutput())).build();
         }
 
-        // fail-closed: 无法解析 spec 结果时标记为不安全
+        // fail-closed: 无法解析 spec 结果时标记为不安�?
         boolean parseIncomplete = false;
 
         if (specCheckResults.isEmpty()) {
@@ -535,7 +542,7 @@ public class VerificationServiceImpl implements VerificationService {
                     + ", expected " + effectiveSpecs.size() + ")");
             // 仍然处理已有结果用于诊断，但缺失项补 false
             parseIncomplete = true;
-            // 只处理 min(specCheckResults, effectiveSpecs) 个结果，多余的丢弃
+            // 只处�?min(specCheckResults, effectiveSpecs) 个结果，多余的丢�?
             int bound = Math.min(specCheckResults.size(), effectiveSpecs.size());
             for (int specIdx = 0; specIdx < bound; specIdx++) {
                 SpecCheckResult scr = specCheckResults.get(specIdx);
@@ -562,12 +569,12 @@ public class VerificationServiceImpl implements VerificationService {
                     checkLogs.add("Spec " + (specIdx + 1) + " violated (no counterexample): " + scr.getSpecExpression());
                 }
             }
-            // 多余的 NuSMV 结果记录日志但不加入 specResults
+            // 多余�?NuSMV 结果记录日志但不加入 specResults
             if (specCheckResults.size() > effectiveSpecs.size()) {
                 checkLogs.add("Warning: " + (specCheckResults.size() - effectiveSpecs.size())
                         + " extra NuSMV result(s) discarded");
             }
-            // 缺失的 spec 补 false
+            // 缺失�?spec �?false
             for (int i = specCheckResults.size(); i < effectiveSpecs.size(); i++) {
                 specResults.add(false);
                 checkLogs.add("Spec " + (i + 1) + " result missing, treated as violated (fail-closed)");
@@ -601,7 +608,7 @@ public class VerificationServiceImpl implements VerificationService {
             }
         }
 
-        // safe 基于 specResults 判定；解析不完整时强制 unsafe
+        // safe 基于 specResults 判定；解析不完整时强�?unsafe
         boolean safe = !parseIncomplete && specResults.stream().allMatch(r -> r);
         if (!traces.isEmpty()) {
             saveTraces(traces, userId, taskId);
@@ -624,7 +631,7 @@ public class VerificationServiceImpl implements VerificationService {
                 .build();
     }
 
-    // ==================== 任务状态管理 ====================
+    // ==================== 任务状态管�?====================
 
     private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
                               List<String> checkLogs, String nusmvOutput) {

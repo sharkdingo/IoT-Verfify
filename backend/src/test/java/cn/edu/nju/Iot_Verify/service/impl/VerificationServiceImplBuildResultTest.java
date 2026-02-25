@@ -11,6 +11,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
@@ -256,6 +257,19 @@ class VerificationServiceImplBuildResultTest {
                         false, 0, false));
         assertTrue(ex.getMessage().contains("busy"));
         assertEquals(503, readResultCode(smv));
+    }
+
+    @Test
+    void verify_smvGenerationError_rethrowsSmvGenerationException() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenThrow(SmvGenerationException.ambiguousDeviceReference("Sensor", List.of("sensor_1", "sensor_2")));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> service.verify(
+                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                        false, 0, false));
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
     }
 
     @Test

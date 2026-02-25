@@ -128,6 +128,32 @@ class SmvGeneratorFixesTest {
         assertTrue(ex.getMessage().contains("t1"));
     }
 
+    @Test
+    @DisplayName("P1: illegal trigger relation throws SmvGenerationException")
+    void triggerRelation_illegal_throws() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(numericVar("temperature", false, 0, 50)))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("t1").startState("on").endState("on")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("temperature").relation("CONTAINS").value("1").build())
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "Dev",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(numericVar("temperature", false, 0, 50)), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> validator.validate(map));
+        assertEquals("ILLEGAL_TRIGGER_RELATION", ex.getErrorCategory());
+    }
+
     // ======================== P2: StartState/EndState 格式 ========================
 
     @Test
@@ -949,7 +975,7 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P11: API signal no-mode fallback uses next(state) when useNext=true")
+    @DisplayName("P11: API signal no-mode condition does not fallback to undeclared state var")
     void apiSignalConditionWithoutRelation_noModeFallback_useNextTrue() throws Exception {
         DeviceManifest manifest = DeviceManifest.builder()
                 .workingStates(List.of(
@@ -976,7 +1002,7 @@ class SmvGeneratorFixesTest {
         method.setAccessible(true);
         String expr = (String) method.invoke(mainBuilder, condition, map, true);
 
-        assertEquals("(next(plug_1.powerOn_a)=TRUE | next(plug_1.state)=on)", expr);
+        assertEquals("next(plug_1.powerOn_a)=TRUE", expr);
     }
 
     @Test
@@ -1040,6 +1066,265 @@ class SmvGeneratorFixesTest {
 
         assertTrue(smv.contains("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto) & lock_1.Mode=locked: unlocked;"),
                 "State transition should use next-state API signal condition, got:\n" + smv);
+    }
+
+    @Test
+    @DisplayName("P11: multi-mode state tuple with useNext builds conjunction on next(mode)")
+    void stateTupleCondition_useNext_buildsTupleConjunction() throws Exception {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("auto;on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("manual;off").trust("trusted").build()))
+                .build();
+        DeviceSmvData source = buildSmvData(
+                "thermostat_1", "Thermostat",
+                List.of("Mode", "FanMode"),
+                Map.of("Mode", List.of("auto", "manual"), "FanMode", List.of("on", "off")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("thermostat_1", source);
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("thermostat_1");
+        condition.setAttribute("state");
+        condition.setRelation("=");
+        condition.setValue("auto;on");
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+        method.setAccessible(true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+
+        assertEquals("(next(thermostat_1.Mode)=auto & next(thermostat_1.FanMode)=on)", expr);
+    }
+
+    @Test
+    @DisplayName("P11: self-referencing state condition in target transition avoids recursive next")
+    void selfReferencingStateCondition_targetTransition_noRecursiveNext() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").startState("off").endState("on").build()))
+                .build();
+
+        DeviceSmvData fan = buildSmvData(
+                "fan_1", "Fan",
+                List.of("Mode"),
+                Map.of("Mode", List.of("off", "on")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("fan_1", fan);
+
+        DeviceVerificationDto fanDto = new DeviceVerificationDto();
+        fanDto.setVarName("fan_1");
+        fanDto.setTemplateName("Fan");
+        fanDto.setState("off");
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("fan_1");
+        condition.setAttribute("state");
+        condition.setRelation("=");
+        condition.setValue("off");
+
+        RuleDto.Command command = new RuleDto.Command();
+        command.setDeviceName("fan_1");
+        command.setAction("turnOn");
+
+        RuleDto rule = new RuleDto();
+        rule.setConditions(List.of(condition));
+        rule.setCommand(command);
+
+        String smv = mainBuilder.build(1L, List.of(fanDto), List.of(rule), map, false, 0, false);
+        assertTrue(smv.contains("fan_1.Mode=off"), "Rule guard should use current state on self-reference");
+        assertFalse(smv.contains("next(fan_1.Mode)=off"),
+                "Self-referencing target transition must not read next(fan_1.Mode) recursively");
+    }
+
+    @Test
+    @DisplayName("P11: ambiguous template command target throws")
+    void ambiguousTemplateCommandTarget_throws() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", true, 0, 100);
+        DeviceManifest sensorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData sensor = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(temperature), sensorManifest);
+
+        DeviceManifest lightManifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder().name("turnOn").startState("off").endState("on").build()))
+                .build();
+        DeviceSmvData light1 = buildSmvData(
+                "light_1", "Light",
+                List.of("Power"),
+                Map.of("Power", List.of("off", "on")),
+                List.of(), lightManifest);
+        DeviceSmvData light2 = buildSmvData(
+                "light_2", "Light",
+                List.of("Power"),
+                Map.of("Power", List.of("off", "on")),
+                List.of(), lightManifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", sensor);
+        map.put("light_1", light1);
+        map.put("light_2", light2);
+
+        DeviceVerificationDto sensorDto = new DeviceVerificationDto();
+        sensorDto.setVarName("sensor_1");
+        sensorDto.setTemplateName("Sensor");
+        sensorDto.setState("on");
+        DeviceVerificationDto lightDto1 = new DeviceVerificationDto();
+        lightDto1.setVarName("light_1");
+        lightDto1.setTemplateName("Light");
+        lightDto1.setState("off");
+        DeviceVerificationDto lightDto2 = new DeviceVerificationDto();
+        lightDto2.setVarName("light_2");
+        lightDto2.setTemplateName("Light");
+        lightDto2.setState("off");
+
+        RuleDto.Condition condition = new RuleDto.Condition();
+        condition.setDeviceName("sensor_1");
+        condition.setAttribute("temperature");
+        condition.setRelation(">");
+        condition.setValue("30");
+
+        RuleDto.Command command = new RuleDto.Command();
+        command.setDeviceName("Light");
+        command.setAction("turnOn");
+
+        RuleDto rule = new RuleDto();
+        rule.setConditions(List.of(condition));
+        rule.setCommand(command);
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L, List.of(sensorDto, lightDto1, lightDto2), List.of(rule), map, false, 0, false));
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
+    }
+
+    @Test
+    @DisplayName("P11: ambiguous template contentDevice throws")
+    void ambiguousTemplateContentDevice_throws() throws Exception {
+        DeviceManifest phoneManifest = DeviceManifest.builder().build();
+        DeviceSmvData phone1 = buildSmvData("phone_1", "Phone",
+                List.of("Mode"), Map.of("Mode", List.of("on")), List.of(), phoneManifest);
+        DeviceSmvData phone2 = buildSmvData("phone_2", "Phone",
+                List.of("Mode"), Map.of("Mode", List.of("on")), List.of(), phoneManifest);
+
+        DeviceSmvData.ContentInfo photo = new DeviceSmvData.ContentInfo();
+        photo.setName("photo");
+        photo.setChangeable(true);
+        phone1.getContents().add(photo);
+        DeviceSmvData.ContentInfo photo2 = new DeviceSmvData.ContentInfo();
+        photo2.setName("photo");
+        photo2.setChangeable(true);
+        phone2.getContents().add(photo2);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("phone_1", phone1);
+        map.put("phone_2", phone2);
+
+        RuleDto.Command command = new RuleDto.Command();
+        command.setContentDevice("Phone");
+        command.setContent("photo");
+
+        RuleDto rule = new RuleDto();
+        rule.setCommand(command);
+        rule.setConditions(List.of());
+
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "findRulesReferencingContent", List.class, String.class, String.class, Map.class);
+        method.setAccessible(true);
+
+        java.lang.reflect.InvocationTargetException ex = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> method.invoke(mainBuilder, List.of(rule), "phone_1", "photo", map));
+        assertTrue(ex.getCause() instanceof SmvGenerationException);
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ((SmvGenerationException) ex.getCause()).getErrorCategory());
+    }
+
+    @Test
+    @DisplayName("P11: trigger relation keyword is normalized in generated transition")
+    void triggerRelationKeyword_normalizedInOutput() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", true, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("t1")
+                        .startState("off")
+                        .endState("on")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("temperature")
+                                .relation("GTE")
+                                .value("30")
+                                .build())
+                        .build()))
+                .build();
+        DeviceSmvData smvData = buildSmvData(
+                "heater_1", "Heater",
+                List.of("Mode"),
+                Map.of("Mode", List.of("off", "on")),
+                List.of(temperature), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("heater_1", smvData);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("heater_1");
+        dto.setTemplateName("Heater");
+        dto.setState("off");
+
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        assertTrue(smv.contains("heater_1.temperature>=30"), "Trigger relation should be normalized to >=, got:\n" + smv);
+        assertFalse(smv.contains("heater_1.temperatureGTE30"), "Raw relation keyword should not appear in output");
+    }
+
+    @Test
+    @DisplayName("P11: API signal transition on no-mode device does not reference undeclared .state")
+    void apiSignalTransition_noModeDevice_noStateFallback() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("powerOn").signal(true).startState("off").endState("on").build()))
+                .build();
+
+        DeviceSmvData smvData = buildSmvData(
+                "plug_1", "SmartPlug",
+                List.of(),
+                Map.of(),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("plug_1", smvData);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("plug_1");
+        dto.setTemplateName("SmartPlug");
+        dto.setState("on");
+
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+        assertTrue(smv.contains("next(plug_1.powerOn_a) :="));
+        assertFalse(smv.contains("plug_1.state"),
+                "No-mode device must not fallback to undeclared '.state' variable");
     }
 
     @Test
@@ -1120,6 +1405,116 @@ class SmvGeneratorFixesTest {
     }
 
     // ======================== P12: spec key validation and env mapping ========================
+
+    @Test
+    @DisplayName("P12: state tuple condition in spec keeps tuple conjunction semantics")
+    void specStateTupleCondition_keepsTupleConjunction() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("auto;on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("manual;off").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("thermostat_1", "Thermostat",
+                List.of("Mode", "FanMode"),
+                Map.of("Mode", List.of("auto", "manual"), "FanMode", List.of("on", "off")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("thermostat_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("thermostat_1");
+        cond.setTargetType("state");
+        cond.setRelation("=");
+        cond.setValue("auto;on");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_state_tuple");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("(thermostat_1.Mode=auto & thermostat_1.FanMode=on)"),
+                "State tuple should compile to conjunction, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: ambiguous spec device reference throws explicit generation error")
+    void specAmbiguousDeviceReference_throwsGenerationError() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build()))
+                .build();
+        DeviceSmvData sensor1 = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on", "off")),
+                List.of(), manifest);
+        DeviceSmvData sensor2 = buildSmvData(
+                "sensor_2", "Sensor",
+                List.of("Mode"), Map.of("Mode", List.of("on", "off")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", sensor1);
+        map.put("sensor_2", sensor2);
+
+        SpecConditionDto a = new SpecConditionDto();
+        a.setDeviceId("Sensor");
+        a.setTargetType("state");
+        a.setRelation("=");
+        a.setValue("on");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_ambiguous_device");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(a));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> specBuilder.build(List.of(spec), false, 0, map));
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
+    }
+
+    @Test
+    @DisplayName("P12: ambiguous multi-mode state value degrades to invalid-spec placeholder")
+    void specStateValueAmbiguousAcrossModes_generatesInvalidPlaceholder() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("M1", "M2"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on;off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("off;on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("dev_1", "Device",
+                List.of("M1", "M2"),
+                Map.of("M1", List.of("on", "off"), "M2", List.of("on", "off")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("dev_1");
+        cond.setTargetType("state");
+        cond.setRelation("=");
+        cond.setValue("on");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_state_ambiguous");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map);
+        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
+                "Ambiguous state value should degrade to invalid placeholder, got:\n" + result);
+        assertTrue(result.contains("ambiguous across modes"),
+                "Invalid placeholder should include ambiguity diagnostics, got:\n" + result);
+    }
 
     @Test
     @DisplayName("P12: variable condition maps env variable key to a_var")
