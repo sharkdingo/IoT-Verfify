@@ -36,6 +36,7 @@ import { defaultSpecTemplates } from '../assets/config/specTemplates'
 
 // API
 import boardApi from '@/api/board'
+import simulationApi from '@/api/simulation'
 
 // Components
 import DeviceDialog from '../components/DeviceDialog.vue'
@@ -43,6 +44,7 @@ import CanvasBoard from '../components/CanvasBoard.vue'
 import ControlCenter from '../components/ControlCenter.vue'
 import SystemInspector from '../components/SystemInspector.vue'
 import RuleBuilderDialog from '../components/RuleBuilderDialog.vue'
+import SimulationTimeline from '../components/SimulationTimeline.vue'
 
 // Styles
 import '../styles/board.css'
@@ -1213,6 +1215,32 @@ const isVerifying = ref(false)
 const verificationResult = ref<any>(null)
 const verificationError = ref<string | null>(null)
 
+// ==== Simulation Logic ====
+const isSimulating = ref(false)
+const simulationResult = ref<any>(null)
+const simulationError = ref<string | null>(null)
+
+// Simulation form state (moved from ControlCenter)
+const simulationForm = reactive({
+  steps: 10,
+  isAttack: false,
+  intensity: 3,
+  enablePrivacy: false
+})
+
+// Floating panel visibility state
+const showSimulationPanel = ref(false)
+
+// 模拟时间轴动画状态
+const simulationAnimationState = ref({
+  visible: false,
+  selectedStateIndex: 0,
+  isPlaying: false
+})
+
+// 独立保存的模拟 states 数据（用于对话框关闭后）
+const savedSimulationStates = ref<any[]>([])
+
 // 反例路径高亮状态
 const highlightedTrace = ref<any>(null)
 
@@ -1247,73 +1275,6 @@ const currentState = computed(() => {
 // 所有状态数量
 const totalStates = computed(() => {
   return currentTrace.value?.states?.length || 0
-})
-
-// 当前状态下的所有设备状态（包括之前状态已确定但当前未变化的设备）
-const currentStateDevices = computed(() => {
-  if (!currentTrace.value?.states) return []
-  
-  const stateIndex = traceAnimationState.value.selectedStateIndex
-  const states = currentTrace.value.states
-  
-  // 收集所有出现过的设备及其最新状态
-  const deviceStates = new Map<string, any>()
-  
-  // 遍历从开始到当前状态的所有状态，收集每个设备的最新状态
-  for (let i = 0; i <= stateIndex; i++) {
-    const state = states[i]
-    if (!state?.devices) continue
-    
-    for (const device of state.devices) {
-      const existingDevice = deviceStates.get(device.deviceId)
-      
-      // 合并变量：当前状态的变量 + 之前状态的变量
-      let mergedVariables = device.variables || []
-      if (existingDevice?.variables) {
-        // 将之前状态的变量与当前状态的变量合并
-        const existingVars = new Map(existingDevice.variables.map((v: any) => [v.name, v]))
-        for (const newVar of mergedVariables) {
-          existingVars.set(newVar.name, newVar)
-        }
-        mergedVariables = Array.from(existingVars.values())
-      }
-      
-      // 更新设备的最新状态
-      deviceStates.set(device.deviceId, {
-        ...existingDevice,
-        ...device,
-        // 优先使用 state 字段，兼容 newState
-        state: device.state || device.newState || existingDevice?.state || existingDevice?.newState,
-        newState: device.newState || existingDevice?.newState,
-        variables: mergedVariables
-      })
-    }
-  }
-  
-  return Array.from(deviceStates.values())
-})
-
-// 当前状态下的所有环境变量（包括之前状态已确定但当前未变化的变量）
-const currentEnvVariables = computed(() => {
-  if (!currentTrace.value?.states) return []
-  
-  const stateIndex = traceAnimationState.value.selectedStateIndex
-  const states = currentTrace.value.states
-  
-  // 收集所有出现过的环境变量及其最新值
-  const envVars = new Map<string, any>()
-  
-  // 遍历从开始到当前状态的所有状态，收集每个环境变量的最新值
-  for (let i = 0; i <= stateIndex; i++) {
-    const state = states[i]
-    if (!state?.envVariables) continue
-    
-    for (const envVar of state.envVariables) {
-      envVars.set(envVar.name, envVar)
-    }
-  }
-  
-  return Array.from(envVars.values())
 })
 
 // 打开反例路径动画
@@ -1514,10 +1475,10 @@ const formattedSpec = computed(() => {
 
 // 高亮反例路径
 const handleHighlightTrace = (trace: any) => {
-  if (trace) {
+  if (trace && trace.states) {
     highlightedTrace.value = {
-      ...trace,
-      selectedStateIndex: traceAnimationState.value.selectedStateIndex
+      states: trace.states,
+      selectedStateIndex: trace.selectedStateIndex
     }
   }
 }
@@ -1525,6 +1486,100 @@ const handleHighlightTrace = (trace: any) => {
 // 清除高亮
 const clearHighlight = () => {
   highlightedTrace.value = null
+}
+
+// ==== Simulation Timeline Animation Logic ====
+
+// 打开模拟时间轴动画
+const openSimulationTimeline = () => {
+  if (simulationResult.value?.states?.length > 0) {
+    // 保存模拟 states 数据到独立变量
+    savedSimulationStates.value = [...simulationResult.value.states]
+    
+    // 关闭模拟结果对话框
+    simulationResult.value = null
+    
+    // 打开模拟时间轴动画
+    simulationAnimationState.value = {
+      visible: true,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    
+    // 高亮第一个状态
+    highlightedTrace.value = {
+      states: savedSimulationStates.value,
+      selectedStateIndex: 0
+    }
+  }
+}
+
+// 关闭模拟时间轴动画
+const closeSimulationTimeline = () => {
+  stopSimulationAnimation()
+  simulationAnimationState.value.visible = false
+  highlightedTrace.value = null
+}
+
+// 跳转到指定状态
+const goToSimulationState = (index: number) => {
+  simulationAnimationState.value.selectedStateIndex = index
+  highlightedTrace.value = {
+    states: savedSimulationStates.value,
+    selectedStateIndex: index
+  }
+}
+
+// 播放/停止模拟动画
+const toggleSimulationAnimation = () => {
+  if (simulationAnimationState.value.isPlaying) {
+    stopSimulationAnimation()
+  } else {
+    startSimulationAnimation()
+  }
+}
+
+let simulationPlayInterval: ReturnType<typeof setInterval> | null = null
+
+const startSimulationAnimation = () => {
+  if (simulationAnimationState.value.isPlaying) return
+  
+  simulationAnimationState.value.isPlaying = true
+  simulationPlayInterval = setInterval(() => {
+    const states = savedSimulationStates.value
+    if (!states || states.length === 0) {
+      stopSimulationAnimation()
+      return
+    }
+    if (simulationAnimationState.value.selectedStateIndex < states.length - 1) {
+      simulationAnimationState.value.selectedStateIndex++
+      highlightedTrace.value = {
+        states: savedSimulationStates.value,
+        selectedStateIndex: simulationAnimationState.value.selectedStateIndex
+      }
+    } else {
+      // 到达最后一个状态时停止播放，不循环
+      stopSimulationAnimation()
+    }
+  }, 1500)
+}
+
+const stopSimulationAnimation = () => {
+  simulationAnimationState.value.isPlaying = false
+  if (simulationPlayInterval) {
+    clearInterval(simulationPlayInterval)
+    simulationPlayInterval = null
+  }
+}
+
+// 高亮模拟状态
+const handleHighlightSimulationState = (state: any) => {
+  if (state) {
+    highlightedTrace.value = {
+      states: savedSimulationStates.value,
+      selectedStateIndex: simulationAnimationState.value.selectedStateIndex
+    }
+  }
 }
 
 const handleVerify = async () => {
@@ -1689,6 +1744,164 @@ const handleVerify = async () => {
   }
 }
 
+const handleSimulate = async (simConfig: {
+  steps: number
+  isAttack: boolean
+  intensity: number
+  enablePrivacy: boolean
+}) => {
+  if (nodes.value.length === 0) {
+    ElMessage.warning({ message: 'No devices to simulate', type: 'warning' })
+    return
+  }
+
+  isSimulating.value = true
+  simulationError.value = null
+  simulationResult.value = null
+
+  try {
+    // 使用与验证相同的设备数据转换逻辑
+    const normalizeDeviceName = (name: string): string => {
+      if (!name) return name
+      if (/^\d/.test(name)) {
+        return 'd_' + name
+      }
+      return name
+    }
+
+    const normalizeValue = (val: string): string => {
+      if (!val) return val
+      if (/^"\d+"$/.test(val) || /^'\d+'$/.test(val)) {
+        return val.replace(/^["']|["']$/g, '')
+      }
+      return val
+    }
+
+    const deviceNameMap = new Map<string, string>()
+
+    // 过滤掉变量节点
+    const deviceNodes = nodes.value.filter(node => !node.templateName.startsWith('variable_'))
+
+    deviceNodes.forEach(node => {
+      deviceNameMap.set(node.label, normalizeDeviceName(node.label))
+    })
+
+    // Prepare devices
+    const devices = deviceNodes.map(node => {
+      const tpl = deviceTemplates.value.find(t => t.manifest?.Name === node.templateName)
+      const manifest = tpl?.manifest
+
+      let variables = (node as any).variables || []
+      if ((!variables || variables.length === 0) && manifest?.InternalVariables) {
+        variables = manifest.InternalVariables.map((v: any) => ({
+          name: v.Name,
+          value: v.Default || '0',
+          trust: 'trusted'
+        }))
+      }
+
+      let privacies = (node as any).privacies || []
+      if ((!privacies || privacies.length === 0) && manifest?.InternalVariables) {
+        privacies = manifest.InternalVariables.map((v: any) => ({
+          name: v.Name,
+          privacy: v.Privacy || 'public'
+        }))
+      }
+
+      const normalizedVarName = normalizeDeviceName(node.label)
+      return {
+        varName: normalizedVarName,
+        templateName: node.templateName,
+        state: node.state,
+        currentStateTrust: (node as any).currentStateTrust || 'trusted',
+        variables,
+        privacies
+      }
+    })
+
+    // Prepare rules
+    const rulesData = rules.value.map(r => ({
+      conditions: (r.sources || []).map(s => ({
+        deviceName: s.fromId,
+        attribute: s.fromApi || '',
+        relation: s.relation || '=',
+        value: s.value || 'true'
+      })),
+      command: {
+        deviceName: r.toId || '',
+        action: r.toApi || '',
+        contentDevice: null,
+        content: null
+      },
+      ruleString: r.name || ''
+    }))
+
+    // Normalize device names in rules
+    const normalizedRulesData = rulesData.map((r: any) => ({
+      ...r,
+      conditions: (r.conditions || []).map((c: any) => ({
+        ...c,
+        deviceName: c.deviceName ? normalizeDeviceName(c.deviceName) : c.deviceName,
+        value: normalizeValue(c.value || '')
+      })),
+      command: {
+        ...r.command,
+        deviceName: r.command.deviceName ? normalizeDeviceName(r.command.deviceName) : r.command.deviceName
+      }
+    }))
+
+    const req = {
+      devices,
+      rules: normalizedRulesData,
+      steps: simConfig.steps,
+      isAttack: simConfig.isAttack,
+      intensity: simConfig.intensity,
+      enablePrivacy: simConfig.enablePrivacy
+    }
+
+    const result = await simulationApi.simulate(req)
+    
+    // 直接打开时间轴动画，不显示结果对话框
+    if (result.states && result.states.length > 0) {
+      // 保存模拟 states 数据
+      savedSimulationStates.value = [...result.states]
+      
+      // 关闭模拟配置面板
+      showSimulationPanel.value = false
+      
+      // 打开模拟时间轴动画
+      simulationAnimationState.value = {
+        visible: true,
+        selectedStateIndex: 0,
+        isPlaying: false
+      }
+      
+      // 高亮第一个状态
+      highlightedTrace.value = {
+        states: savedSimulationStates.value,
+        selectedStateIndex: 0
+      }
+      
+      ElMessage.success({
+        message: `Simulation completed: ${result.states.length} states generated`,
+        type: 'success'
+      })
+    } else {
+      ElMessage.warning({
+        message: 'Simulation completed but no states were generated',
+        type: 'warning'
+      })
+    }
+
+  } catch (error: any) {
+    console.error('Simulation failed:', error)
+    simulationError.value = error.message || 'Simulation failed'
+    ElMessage.error({ message: simulationError.value || 'Simulation failed', type: 'error' })
+  } finally {
+    isSimulating.value = false
+  }
+}
+
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
 
@@ -1713,7 +1926,6 @@ const closeResultDialog = () => {
       @add-spec="handleAddSpec"
       @refresh-templates="refreshDeviceTemplates"
       @delete-template="handleDeleteTemplate"
-      @verify="handleVerify"
     />
 
     <!-- Right Sidebar - System Inspector -->
@@ -1753,6 +1965,160 @@ const closeResultDialog = () => {
           @node-moved-or-resized="handleNodeMovedOrResized"
       />
 
+    </div>
+
+    <!-- Floating Action Buttons - Left of System Inspector -->
+    <div class="fixed top-20 right-[285px] z-40 flex flex-col gap-3">
+      <!-- Simulation Button (Circle) -->
+      <button
+        @click="showSimulationPanel = !showSimulationPanel"
+        class="w-12 h-12 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center group"
+        title="Simulation"
+      >
+        <span class="material-symbols-outlined text-xl">play_circle</span>
+        <!-- Tooltip -->
+        <span class="absolute right-full mr-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none">
+          Simulation
+        </span>
+      </button>
+
+      <!-- Verify Button (Circle) -->
+      <button
+        @click="handleVerify"
+        :disabled="isVerifying"
+        class="w-12 h-12 rounded-full bg-green-500 hover:bg-green-600 disabled:bg-green-400 text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center group disabled:cursor-not-allowed disabled:hover:scale-100"
+        title="Start Verification"
+      >
+        <template v-if="isVerifying">
+          <span class="material-symbols-outlined text-xl animate-spin">sync</span>
+        </template>
+        <template v-else>
+          <span class="material-symbols-outlined text-xl">verified_user</span>
+        </template>
+        <!-- Tooltip -->
+        <span class="absolute right-full mr-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none">
+          Start Verification
+        </span>
+      </button>
+    </div>
+
+    <!-- Simulation Panel (Appears when clicking simulation button) -->
+    <div 
+      v-if="showSimulationPanel"
+      class="fixed top-20 right-[370px] z-30 w-72 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden"
+    >
+      <!-- Simulation Header -->
+      <div class="flex items-center justify-between p-3 bg-indigo-500">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+            <span class="material-symbols-outlined text-white text-lg">play_circle</span>
+          </div>
+          <div>
+            <span class="text-sm font-bold text-white">Simulation</span>
+            <p class="text-xs text-indigo-200">Config</p>
+          </div>
+        </div>
+        <button 
+          @click="showSimulationPanel = false"
+          class="text-white/80 hover:text-white"
+        >
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <!-- Simulation Content -->
+      <div class="p-3 space-y-3 bg-indigo-50">
+        <!-- Steps -->
+        <div>
+          <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-1">
+            Simulation Steps
+          </label>
+          <div class="flex items-center gap-2">
+            <input
+              v-model.number="simulationForm.steps"
+              type="range"
+              min="1"
+              max="100"
+              class="flex-1 h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+            />
+            <span class="w-10 text-xs font-bold text-indigo-800 text-center bg-white rounded px-2 py-1 border border-indigo-200">
+              {{ simulationForm.steps }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Attack Mode -->
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold text-indigo-700 uppercase tracking-wide">
+            Attack
+          </label>
+          <button
+            @click="simulationForm.isAttack = !simulationForm.isAttack"
+            :class="[
+              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+              simulationForm.isAttack ? 'bg-red-500' : 'bg-indigo-300'
+            ]"
+          >
+            <span
+              :class="[
+                'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                simulationForm.isAttack ? 'translate-x-6' : 'translate-x-1'
+              ]"
+            />
+          </button>
+        </div>
+
+        <!-- Intensity (visible when attack is enabled) -->
+        <div v-if="simulationForm.isAttack">
+          <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-1">
+            Intensity: {{ simulationForm.intensity }}
+          </label>
+          <input
+            v-model.number="simulationForm.intensity"
+            type="range"
+            min="0"
+            max="50"
+            class="w-full h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+          />
+        </div>
+
+        <!-- Privacy Analysis -->
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold text-indigo-700 uppercase tracking-wide">
+            Privacy
+          </label>
+          <button
+            @click="simulationForm.enablePrivacy = !simulationForm.enablePrivacy"
+            :class="[
+              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+              simulationForm.enablePrivacy ? 'bg-purple-500' : 'bg-indigo-300'
+            ]"
+          >
+            <span
+              :class="[
+                'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                simulationForm.enablePrivacy ? 'translate-x-6' : 'translate-x-1'
+              ]"
+            />
+          </button>
+        </div>
+
+        <!-- Simulate Button -->
+        <button
+          @click="handleSimulate({ ...simulationForm }); showSimulationPanel = false"
+          :disabled="isSimulating"
+          class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
+        >
+          <template v-if="isSimulating">
+            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+            Running...
+          </template>
+          <template v-else>
+            <span class="material-symbols-outlined text-sm">play_arrow</span>
+            Run
+          </template>
+        </button>
+      </div>
     </div>
 
     <!-- Floating panels -->
@@ -1822,7 +2188,7 @@ const closeResultDialog = () => {
         @save-rule="handleAddRule"
     />
 
-    <!-- Canvas Map - Fixed at top right -->
+    <!-- Canvas Map - Fixed at bottom right -->
     <div class="fixed bottom-4 right-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
       <div class="flex items-center justify-between mb-2">
         <span class="text-[10px] uppercase font-bold text-slate-400">Canvas Map</span>
@@ -1949,6 +2315,102 @@ const closeResultDialog = () => {
             删除设备
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Simulation Result Dialog -->
+  <div v-if="simulationResult || simulationError" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="simulationResult = null; simulationError = null">
+    <div class="bg-white rounded-xl p-6 w-[700px] max-w-[90vw] shadow-2xl max-h-[85vh] flex flex-col" @click.stop>
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+            <span class="material-symbols-outlined text-indigo-600 text-xl">play_circle</span>
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold text-slate-800">Simulation Result</h3>
+            <p class="text-xs text-slate-500" v-if="simulationResult">
+              {{ simulationResult.steps || 0 }} states generated from {{ simulationResult.requestedSteps || 0 }} requested steps
+            </p>
+          </div>
+        </div>
+        <button @click="simulationResult = null; simulationError = null" class="text-slate-400 hover:text-slate-600">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <div v-if="simulationError" class="text-red-600 mb-4 p-4 bg-red-50 rounded-lg">
+        {{ simulationError }}
+      </div>
+
+      <div v-else-if="simulationResult" class="flex-1 overflow-hidden flex flex-col">
+        <!-- Logs -->
+        <div class="mb-4">
+          <h4 class="text-sm font-bold text-slate-700 mb-2">Execution Logs</h4>
+          <div class="bg-slate-900 rounded-lg p-3 max-h-32 overflow-y-auto">
+            <pre class="text-xs text-green-400 font-mono whitespace-pre-wrap">{{ simulationResult.logs?.join('\n') || 'No logs available' }}</pre>
+          </div>
+        </div>
+
+        <!-- States Preview -->
+        <div class="flex-1 overflow-hidden flex flex-col">
+          <h4 class="text-sm font-bold text-slate-700 mb-2">Simulation States ({{ simulationResult.states?.length || 0 }})</h4>
+          <div class="flex-1 overflow-y-auto border border-slate-200 rounded-lg">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-50 sticky top-0">
+                <tr>
+                  <th class="text-left p-2 font-bold text-slate-600 border-b">State #</th>
+                  <th class="text-left p-2 font-bold text-slate-600 border-b">Devices</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(state, idx) in simulationResult.states" :key="idx" class="border-b border-slate-100 hover:bg-indigo-50">
+                  <td class="p-2 font-mono text-indigo-600">{{ state.stateIndex }}</td>
+                  <td class="p-2">
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        v-for="(device, dIdx) in state.devices"
+                        :key="dIdx"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-slate-700"
+                      >
+                        <span class="font-medium">{{ device.deviceId }}</span>
+                        <span class="text-slate-400">:</span>
+                        <span class="text-indigo-600">{{ device.state || 'N/A' }}</span>
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- NuSMV Output (collapsed by default) -->
+        <details class="mt-4">
+          <summary class="text-xs font-bold text-slate-500 cursor-pointer hover:text-slate-700">
+            Show Raw NuSMV Output
+          </summary>
+          <div class="mt-2 bg-slate-900 rounded-lg p-3 max-h-40 overflow-y-auto">
+            <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ simulationResult.nusmvOutput || 'No output' }}</pre>
+          </div>
+        </details>
+      </div>
+
+      <div class="mt-4 pt-4 border-t border-slate-200 flex justify-end gap-3">
+        <button
+          v-if="simulationResult && simulationResult.states && simulationResult.states.length > 0"
+          @click="openSimulationTimeline"
+          class="px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+        >
+          <span class="material-symbols-outlined text-lg">play_circle</span>
+          View Timeline
+        </button>
+        <button
+          @click="simulationResult = null; simulationError = null"
+          class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+        >
+          Close
+        </button>
       </div>
     </div>
   </div>
@@ -2105,41 +2567,14 @@ const closeResultDialog = () => {
           </div>
         </div>
       </div>
-
-      <!-- Current State Details -->
-      <div class="mt-3 pt-3 border-t border-slate-200">
-        <div class="text-xs font-semibold text-slate-600 mb-2">State {{ traceAnimationState.selectedStateIndex + 1 }} Details</div>
-        
-        <!-- Environment Variables -->
-        <div v-if="currentEnvVariables.length > 0" class="mb-2">
-          <div class="text-xs text-slate-500 mb-1">Environment Variables:</div>
-          <div class="flex flex-wrap gap-2">
-            <div 
-              v-for="envVar in currentEnvVariables" 
-              :key="envVar.name"
-              class="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs"
-            >
-              <span class="text-blue-600 font-medium">{{ envVar.name }}:</span>
-              <span class="text-blue-800 font-bold ml-1">{{ envVar.value }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Device States -->
-        <div v-if="currentStateDevices.length > 0">
-          <div class="text-xs text-slate-500 mb-1">Device States:</div>
-          <div class="flex flex-wrap gap-2">
-            <div 
-              v-for="device in currentStateDevices" 
-              :key="device.deviceId"
-              class="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs"
-            >
-              <span class="text-slate-600 font-medium">{{ device.deviceLabel }}:</span>
-              <span class="text-slate-800 font-bold ml-1">{{ device.state || device.newState || 'Unknown' }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
+
+  <!-- Simulation Timeline 组件 -->
+  <SimulationTimeline
+    :visible="simulationAnimationState.visible"
+    :states="savedSimulationStates"
+    @update:visible="simulationAnimationState.visible = $event"
+    @highlight-state="handleHighlightTrace"
+  />
 </template>

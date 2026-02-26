@@ -94,6 +94,14 @@ const editingConditionData = reactive<Partial<SpecCondition>>({
 const showDeleteConfirmDialog = ref(false)
 const templateToDelete = ref<any>(null)
 
+// Simulation form state
+const simulationForm = reactive({
+  steps: 10,
+  isAttack: false,
+  intensity: 3,
+  enablePrivacy: false
+})
+
 // Get current template details
 const currentTemplateDetail = computed(() => {
   if (!specForm.templateId) return null
@@ -739,6 +747,12 @@ const emit = defineEmits<{
   'refresh-templates': []
   'delete-template': [templateId: string]
   'verify': []
+  'simulate': [data: {
+    steps: number
+    isAttack: boolean
+    intensity: number
+    enablePrivacy: boolean
+  }]
 }>()
 
 // Component mounted
@@ -1511,16 +1525,6 @@ const exportTemplate = (template: any) => {
         </div>
       </details>
 
-      <!-- Verification Action -->
-      <div class="p-4 border-t border-slate-200 bg-white">
-        <button
-          @click="emit('verify')"
-          class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
-        >
-          <span class="material-symbols-outlined text-lg">verified_user</span>
-          Start Verification
-        </button>
-      </div>
 
     </div>
 

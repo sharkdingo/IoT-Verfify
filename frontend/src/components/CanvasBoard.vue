@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
@@ -246,6 +246,32 @@ const getLatestTraceState = (nodeId: string, nodeLabel: string): string | null =
   return null
 }
 
+// 获取节点的前一个状态（用于动画判断）
+const getPreviousState = (node: DeviceNode): string | null => {
+  if (!props.highlightedTrace?.states) return null
+  if (props.highlightedTrace.selectedStateIndex === undefined || props.highlightedTrace.selectedStateIndex <= 0) return null
+
+  const currentIndex = props.highlightedTrace.selectedStateIndex
+  // 查找前一个状态
+  for (let i = currentIndex - 1; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+
+    const device = state.devices.find(d =>
+      d.deviceId.toLowerCase() === node.id.toLowerCase() ||
+      d.deviceLabel.toLowerCase() === node.label.toLowerCase() ||
+      d.deviceId.toLowerCase() === node.label.toLowerCase() ||
+      d.deviceLabel.toLowerCase() === node.id.toLowerCase()
+    )
+
+    if (device) {
+      const prev = (device as any).state || (device as any).newState || null
+      return prev
+    }
+  }
+  return null
+}
+
 // 获取节点的当前状态
 const getNodeState = (node: DeviceNode): string => {
   // 如果有高亮轨迹且当前选中了某个状态，显示轨迹中的状态
@@ -272,7 +298,9 @@ const getNodeState = (node: DeviceNode): string => {
 
 // 获取状态显示的样式类
 const getStateDisplayClass = (node: DeviceNode): string => {
-  const state = getNodeState(node) || 'Working'
+  // 翻转动画时使用旧状态
+  const flippingState = getFlippingState(node)
+  const state = flippingState || getNodeState(node) || 'Working'
   // 根据状态返回不同的样式类
   const stateLower = state.toLowerCase()
   if (stateLower === 'off' || stateLower === 'closed' || stateLower === 'locked' || stateLower === 'stop' || stateLower === 'pause') {
@@ -301,7 +329,10 @@ const getCurrentNodeIcon = (node: DeviceNode): string => {
   }
 
   const folder = node.templateName.replace(/ /g, '_')
-  const currentState = getNodeState(node) || 'Working'
+  
+  // 如果正在翻转动画中，使用旧状态
+  const flippingState = getFlippingState(node)
+  const currentState = flippingState || getNodeState(node) || 'Working'
 
   // 尝试不同的状态名称变体
   const possibleStates = [
@@ -370,6 +401,84 @@ const isTraceActive = computed(() => {
          props.highlightedTrace.selectedStateIndex >= 0
 })
 
+// 跟踪每个节点是否需要触发动画（使用节点ID作为key）
+const nodeAnimationTrigger = ref<Record<string, number>>({})
+
+// 跟踪每个节点的旧状态（用于翻转动画显示）
+const nodePreviousState = ref<Record<string, string>>({})
+
+// 监听状态索引变化，触发节点状态变化动画
+watch(() => props.highlightedTrace?.selectedStateIndex, (newIndex, oldIndex) => {
+  if (newIndex === undefined || newIndex === oldIndex) return
+  
+  // 当状态变化时，比较每个节点的状态变化
+  const currentState = props.highlightedTrace?.states?.[newIndex]
+  const prevState = oldIndex !== undefined ? props.highlightedTrace?.states?.[oldIndex] : null
+  
+  if (!currentState?.devices) return
+  
+  for (const device of currentState.devices) {
+    const deviceIdLower = device.deviceId.toLowerCase()
+    const deviceLabelLower = device.deviceLabel.toLowerCase()
+    const currentDeviceState = device.state || device.newState || null
+    
+    // 获取前一个状态
+    let prevDeviceState: string | null = null
+    if (prevState?.devices) {
+      const prevDevice = prevState.devices.find((d: any) => 
+        d.deviceId.toLowerCase() === deviceIdLower || 
+        d.deviceLabel.toLowerCase() === deviceLabelLower
+      )
+      if (prevDevice) {
+        prevDeviceState = prevDevice.state || prevDevice.newState || null
+      }
+    }
+    
+    // 如果状态不同，触发动画（通过增加trigger值来强制重新渲染）
+    if (currentDeviceState && prevDeviceState && currentDeviceState !== prevDeviceState) {
+      const nodeId = deviceIdLower === deviceLabelLower ? deviceIdLower : deviceIdLower + '_' + deviceLabelLower
+      nodeAnimationTrigger.value[nodeId] = (nodeAnimationTrigger.value[nodeId] || 0) + 1
+      // 保存旧状态，用于翻转过程中显示
+      nodePreviousState.value[nodeId] = prevDeviceState
+    }
+  }
+  
+  // 动画完成后清除旧状态（延迟清除，给翻转动画时间完成）
+  setTimeout(() => {
+    nodePreviousState.value = {}
+    // 清除触发器，确保只有状态真正变化时才再次触发
+    nodeAnimationTrigger.value = {}
+  }, 650)
+})
+
+// 判断节点是否应该播放翻转动画
+const shouldAnimateFlip = (node: DeviceNode): boolean => {
+  const nodeIdLower = node.id.toLowerCase()
+  const nodeLabelLower = node.label.toLowerCase()
+  const triggerKey = nodeIdLower === nodeLabelLower ? nodeIdLower : nodeIdLower + '_' + nodeLabelLower
+  
+  // 检查是否有动画触发
+  return !!nodeAnimationTrigger.value[triggerKey]
+}
+
+// 用于模板中的翻转状态（计算属性）
+const getFlippingStateForNode = (node: DeviceNode): string | null => {
+  return getFlippingState(node)
+}
+
+// 获取节点在翻转动画中应该显示的状态（旧状态）
+const getFlippingState = (node: DeviceNode): string | null => {
+  const nodeIdLower = node.id.toLowerCase()
+  const nodeLabelLower = node.label.toLowerCase()
+  const triggerKey = nodeIdLower === nodeLabelLower ? nodeIdLower : nodeIdLower + '_' + nodeLabelLower
+  
+  // 如果正在动画，返回旧状态
+  if (shouldAnimateFlip(node) && nodePreviousState.value[triggerKey]) {
+    return nodePreviousState.value[triggerKey]
+  }
+  return null
+}
+
 // 判断节点是否在当前反例路径中
 const isNodeInTrace = (node: DeviceNode): boolean => {
   if (!isTraceActive.value || !props.highlightedTrace?.states) return false
@@ -417,6 +526,7 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
   const parentDeviceId = parts[0]
   const variableName = parts.slice(1).join('_')
   const parentIdLower = parentDeviceId.toLowerCase()
+  const varNameLower = variableName.toLowerCase()
   
   // 从当前选中状态向前查找，找到设备最近的变量值和状态
   const currentIndex = props.highlightedTrace.selectedStateIndex || 0
@@ -432,8 +542,11 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
     )
     
     if (deviceState) {
-      // 查找对应的变量值
-      const variable = deviceState.variables?.find(v => v.name === variableName)
+      // 查找对应的变量值（大小写不敏感匹配）
+      const variable = deviceState.variables?.find(v => 
+        v.name.toLowerCase() === varNameLower || 
+        v.name.toLowerCase() === `d_${varNameLower}`
+      )
       
       if (variable) {
         return {
@@ -441,6 +554,7 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
           state: (deviceState as any).state || (deviceState as any).newState || 'Working'
         }
       }
+      // 如果当前状态没有该变量，继续向前查找（使用上一个时间点的值）
     }
   }
   
@@ -825,17 +939,18 @@ onBeforeUnmount(() => {
       <!-- 设备节点 -->
       <div
           v-for="node in nodes"
-          :key="node.id"
+          :key="node.id + (highlightedTrace?.selectedStateIndex ?? '')"
           :data-node-id="node.id"
           class="device-node"
-          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }]"
+          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'node-flip': (getPreviousState(node) && getPreviousState(node) !== getNodeState(node)) || shouldAnimateFlip(node) }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
           backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeBgColor(node.id),
-          borderColor: isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)
+          borderColor: isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id),
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id) } : {})
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.prevent="onNodeContextInternal(node, $event)"
@@ -897,7 +1012,7 @@ onBeforeUnmount(() => {
           <!-- 下部分：设备状态显示 -->
           <div class="device-state" :class="getStateDisplayClass(node)">
             <span class="device-state-dot"></span>
-            <span class="device-state-value">{{ getNodeState(node) }}</span>
+            <span class="device-state-value">{{ getFlippingStateForNode(node) || getNodeState(node) }}</span>
           </div>
         </div>
 
@@ -1118,5 +1233,68 @@ onBeforeUnmount(() => {
   font-weight: bold;
   color: #1f2937;
   font-size: 10px;
+}
+
+/* 3D 翻转动画 - 设备内容区域 */
+.device-node-content {
+  transition: transform 0.3s ease-in-out;
+}
+
+.node-flip .device-node-content {
+  animation: flip-animation 0.6s ease-in-out;
+  transform-style: preserve-3d;
+}
+
+.node-flip .device-img {
+  animation: flip-inner 0.6s ease-in-out forwards;
+  transform-style: preserve-3d;
+}
+
+/* 节点整体轻微震动效果作为补充 */
+.node-flip {
+  position: relative;
+}
+
+/* 前30%时间展示旧图标，之后切换为新图标 */
+@keyframes flip-animation {
+  0% {
+    transform: perspective(600px) rotateY(0deg);
+  }
+  30% {
+    transform: perspective(600px) rotateY(0deg);
+  }
+  60% {
+    transform: perspective(600px) rotateY(90deg);
+  }
+  100% {
+    transform: perspective(600px) rotateY(0deg);
+  }
+}
+
+@keyframes flip-inner {
+  0% {
+    transform: perspective(200px) rotateY(0deg) scale(1);
+    opacity: 1;
+  }
+  25% {
+    transform: perspective(200px) rotateY(20deg) scale(1.1);
+    opacity: 1;
+  }
+  30% {
+    transform: perspective(200px) rotateY(0deg) scale(1);
+    opacity: 1;
+  }
+  31% {
+    opacity: 0;
+  }
+  32% {
+    opacity: 1;
+  }
+  100% {
+    transform: perspective(200px) rotateY(10deg) scale(1.05);
+  }
+  100% {
+    transform: perspective(200px) rotateY(0deg) scale(1);
+  }
 }
 </style>

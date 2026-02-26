@@ -144,10 +144,10 @@
 
 @keyframes tracePulse {
     0%, 100% {
-        box-shadow: var(--iot-node-shadow), 0 0 0 0 rgba(239, 68, 68, 0.4);
+        box-shadow: var(--iot-node-shadow), 0 0 0 0 var(--trace-glow-color, rgba(239, 68, 68, 0.4));
     }
     50% {
-        box-shadow: var(--iot-node-shadow), 0 0 0 6px rgba(239, 68, 68, 0);
+        box-shadow: var(--iot-node-shadow), 0 0 0 3px var(--trace-glow-color, rgba(239, 68, 68, 0));
     }
 }
 

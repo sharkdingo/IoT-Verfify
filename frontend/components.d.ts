@@ -65,6 +65,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']
+    SimulationTimeline: typeof import('./src/components/SimulationTimeline.vue')['default']
     StatusPanel: typeof import('./src/components/StatusPanel.vue')['default']
     SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
     TemplateList: typeof import('./src/components/TemplateList.vue')['default']
