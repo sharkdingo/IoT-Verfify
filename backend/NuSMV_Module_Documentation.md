@@ -274,17 +274,21 @@
 MODULE Thermostat_thermostat1
   FROZENVAR                          -- 冻结变量（验证期间不变）
     is_attack: boolean;              -- 仅 isAttack=true 时生成
-    trust_temperature: {trusted, untrusted};   -- 传感器变量信任
-    privacy_temperature: {public, private};    -- 仅 enablePrivacy=true
   VAR                                -- 状态变量
     ThermostatMode: {cool, heat, off};         -- 模式状态
-    temperature: 15..35;                        -- 内部变量
-    trust_ThermostatMode_cool: {trusted, untrusted};  -- 状态信任
-    privacy_ThermostatMode_cool: {public, private};   -- 仅 enablePrivacy
+    temperature: 15..35;                        -- 外部变量（由 main 的 a_temperature 映射）
+    setCool_a: boolean;                         -- API 信号
+    trust_ThermostatMode_cool: {untrusted, trusted};  -- 状态信任
+    trust_temperature: {untrusted, trusted};          -- 变量信任
+    privacy_ThermostatMode_cool: {private, public};   -- 仅 enablePrivacy
+    privacy_temperature: {private, public};           -- 变量隐私
   ASSIGN
     init(ThermostatMode) := cool;    -- 初始状态
-    init(temperature) := 22;
+    init(setCool_a) := FALSE;
     init(trust_ThermostatMode_cool) := trusted;
+    init(trust_temperature) := trusted;
+    init(privacy_ThermostatMode_cool) := public;
+    init(privacy_temperature) := public;
 
 -- 主模块 (SmvMainModuleBuilder)
 MODULE main
@@ -294,22 +298,25 @@ MODULE main
   VAR
     thermostat_1: Thermostat_thermostat1;      -- 设备实例化
     fan_1: Fan_fan1;
-    a_time: 0..23;                   -- 环境变量（a_ 前缀）
+    a_temperature: 15..35;              -- 环境变量（a_ 前缀）
   ASSIGN
-    -- 状态转换 (来自模板 Transitions)
+    -- 状态转换 (攻击劫持优先 + 模板 Transitions)
     next(thermostat_1.ThermostatMode) := case
-      thermostat_1.ThermostatMode = cool & thermostat_1.temperature > 30 : heat;
+      thermostat_1.is_attack=TRUE: {cool, heat, off};
+      thermostat_1.ThermostatMode = cool & thermostat_1.temperature > 30 & thermostat_1.is_attack=FALSE : heat;
       TRUE : thermostat_1.ThermostatMode;      -- 默认自保持
     esac;
-    -- 规则驱动的 API 信号
+    -- API 信号（基于状态变化检测）
     next(fan_1.fanAuto_a) := case
-      thermostat_1.temperature > 30 : TRUE;
-      TRUE : FALSE;
+      fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
+      TRUE: FALSE;
     esac;
     -- 信任传播 (PropertyDimension.TRUST)
     next(fan_1.trust_FanMode_auto) := case
-      fan_1.fanAuto_a = TRUE : thermostat_1.trust_temperature;
-      TRUE : fan_1.trust_FanMode_auto;         -- 自保持
+      fan_1.is_attack=TRUE: untrusted;
+      thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
+      thermostat_1.temperature > 30: untrusted;
+      TRUE: fan_1.trust_FanMode_auto;         -- 自保持
     esac;
 
 -- 规格 (SmvSpecificationBuilder)
@@ -395,7 +402,7 @@ FROZENVAR
 **设备模块 — 状态隐私：**
 ```smv
 VAR
-    privacy_ThermostatMode_cool: {public, private};   -- 每个 (mode, state) 组合
+    privacy_ThermostatMode_cool: {private, public};   -- 每个 (mode, state) 组合
 ```
 
 **设备模块 — 内容隐私：**
@@ -547,27 +554,30 @@ esac;
 MODULE Thermostat_thermostat1
 FROZENVAR
 	is_attack: boolean;
-	trust_temperature: {trusted, untrusted};
-	privacy_temperature: {public, private};
 VAR
 	ThermostatMode: {cool, heat, off};
 	temperature: 15..35;
-	trust_ThermostatMode_cool: {trusted, untrusted};
-	trust_ThermostatMode_heat: {trusted, untrusted};
-	trust_ThermostatMode_off: {trusted, untrusted};
-	privacy_ThermostatMode_cool: {public, private};
-	privacy_ThermostatMode_heat: {public, private};
-	privacy_ThermostatMode_off: {public, private};
+	setCool_a: boolean;
+	trust_ThermostatMode_cool: {untrusted, trusted};
+	trust_ThermostatMode_heat: {untrusted, trusted};
+	trust_ThermostatMode_off: {untrusted, trusted};
+	trust_temperature: {untrusted, trusted};
+	privacy_ThermostatMode_cool: {private, public};
+	privacy_ThermostatMode_heat: {private, public};
+	privacy_ThermostatMode_off: {private, public};
+	privacy_temperature: {private, public};
 ASSIGN
 	init(is_attack) := {TRUE, FALSE};
 	init(ThermostatMode) := cool;
-	init(temperature) := 22;
+	init(setCool_a) := FALSE;
 	init(trust_ThermostatMode_cool) := trusted;
 	init(trust_ThermostatMode_heat) := trusted;
 	init(trust_ThermostatMode_off) := trusted;
+	init(trust_temperature) := trusted;
 	init(privacy_ThermostatMode_cool) := public;
 	init(privacy_ThermostatMode_heat) := public;
 	init(privacy_ThermostatMode_off) := public;
+	init(privacy_temperature) := public;
 
 MODULE Fan_fan1
 FROZENVAR
@@ -575,19 +585,21 @@ FROZENVAR
 VAR
 	FanMode: {auto, manual, off};
 	fanAuto_a: boolean;
-	trust_FanMode_auto: {trusted, untrusted};
-	trust_FanMode_manual: {trusted, untrusted};
-	trust_FanMode_off: {trusted, untrusted};
-	privacy_FanMode_auto: {public, private};
-	privacy_FanMode_manual: {public, private};
-	privacy_FanMode_off: {public, private};
+	trust_FanMode_auto: {untrusted, trusted};
+	trust_FanMode_manual: {untrusted, trusted};
+	trust_FanMode_off: {untrusted, trusted};
+	privacy_FanMode_auto: {private, public};
+	privacy_FanMode_manual: {private, public};
+	privacy_FanMode_off: {private, public};
 ASSIGN
 	init(is_attack) := {TRUE, FALSE};
 	init(FanMode) := off;
 	init(fanAuto_a) := FALSE;
 	init(trust_FanMode_auto) := trusted;
+	init(trust_FanMode_manual) := trusted;
 	init(trust_FanMode_off) := trusted;
 	init(privacy_FanMode_auto) := public;
+	init(privacy_FanMode_manual) := public;
 	init(privacy_FanMode_off) := public;
 
 MODULE main
@@ -601,6 +613,10 @@ VAR
 ASSIGN
 	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
 	-- 状态转换（攻击劫持优先 + 规则条件驱动 + API startState 约束）
+	next(thermostat_1.ThermostatMode) := case
+		thermostat_1.is_attack=TRUE: {cool, heat, off};
+		TRUE: thermostat_1.ThermostatMode;
+	esac;
 	next(fan_1.FanMode) := case
 		fan_1.is_attack=TRUE: {auto, manual, off};
 		thermostat_1.temperature > 30 & fan_1.is_attack=FALSE & fan_1.FanMode=off : auto;
@@ -609,6 +625,10 @@ ASSIGN
 	-- API 信号（基于状态变化检测）
 	next(fan_1.fanAuto_a) := case
 		fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(thermostat_1.setCool_a) := case
+		thermostat_1.ThermostatMode!=cool & next(thermostat_1.ThermostatMode)=cool: TRUE;
 		TRUE: FALSE;
 	esac;
 	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查）
@@ -625,11 +645,42 @@ ASSIGN
 		thermostat_1.temperature > 30: untrusted;
 		TRUE: fan_1.trust_FanMode_auto;
 	esac;
+	next(fan_1.trust_FanMode_manual) := case
+		fan_1.is_attack=TRUE: untrusted;
+		TRUE: fan_1.trust_FanMode_manual;
+	esac;
+	next(fan_1.trust_FanMode_off) := case
+		fan_1.is_attack=TRUE: untrusted;
+		TRUE: fan_1.trust_FanMode_off;
+	esac;
+	-- thermostat_1 状态级 trust（攻击优先 + 自保持）
+	next(thermostat_1.trust_ThermostatMode_cool) := case
+		thermostat_1.is_attack=TRUE: untrusted;
+		TRUE: thermostat_1.trust_ThermostatMode_cool;
+	esac;
+	next(thermostat_1.trust_ThermostatMode_heat) := case
+		thermostat_1.is_attack=TRUE: untrusted;
+		TRUE: thermostat_1.trust_ThermostatMode_heat;
+	esac;
+	next(thermostat_1.trust_ThermostatMode_off) := case
+		thermostat_1.is_attack=TRUE: untrusted;
+		TRUE: thermostat_1.trust_ThermostatMode_off;
+	esac;
+	-- 变量级 trust（自保持）
+	next(thermostat_1.trust_temperature) := thermostat_1.trust_temperature;
 	-- 隐私传播
 	next(fan_1.privacy_FanMode_auto) := case
 		thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
 		TRUE: fan_1.privacy_FanMode_auto;
 	esac;
+	next(fan_1.privacy_FanMode_manual) := fan_1.privacy_FanMode_manual;
+	next(fan_1.privacy_FanMode_off) := fan_1.privacy_FanMode_off;
+	-- thermostat_1 状态级 privacy（自保持）
+	next(thermostat_1.privacy_ThermostatMode_cool) := thermostat_1.privacy_ThermostatMode_cool;
+	next(thermostat_1.privacy_ThermostatMode_heat) := thermostat_1.privacy_ThermostatMode_heat;
+	next(thermostat_1.privacy_ThermostatMode_off) := thermostat_1.privacy_ThermostatMode_off;
+	-- 变量级 privacy（自保持）
+	next(thermostat_1.privacy_temperature) := thermostat_1.privacy_temperature;
 	-- 外部变量赋值（简单赋值，非 next）
 	thermostat_1.temperature := a_temperature;
 -- Specifications
@@ -680,8 +731,8 @@ FROZENVAR
     is_attack: boolean;
     privacy_photo: {public, private};
 VAR
-    trust_Mode_on: {trusted, untrusted};
-    privacy_Mode_on: {public, private};
+    trust_Mode_on: {untrusted, trusted};
+    privacy_Mode_on: {private, public};
 ASSIGN
     init(is_attack) := {TRUE, FALSE};
 
@@ -817,9 +868,10 @@ Trace Type: Counterexample
     fan_1.privacy_FanMode_auto = public
     fan_1.privacy_FanMode_off = public
     intensity = 1
-    a_temperature = 35
+    a_temperature = 22
   -> State: 1.2 <-
     thermostat_1.temperature = 35
+    a_temperature = 35
     fan_1.fanAuto_a = TRUE
   -> State: 1.3 <-
     fan_1.FanMode = auto
