@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.rag.RagProcessor;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
@@ -38,6 +39,9 @@ public class ChatServiceImpl implements ChatService {
     private final AiToolManager aiToolManager;
     private final ObjectMapper objectMapper;
     private final ChatMapper chatMapper;
+    private final RagProcessor ragProcessor;
+
+    private final Set<String> processedDocuments = new HashSet<>();
 
     @Override
     public List<ChatSessionResponseDto> getUserSessions(Long userId) {
@@ -92,6 +96,31 @@ public class ChatServiceImpl implements ChatService {
                 sessionRepo.save(s);
             });
 
+            // Load knowledge base documents
+            initializeKnowledgeBase();
+
+            // Retrieve relevant knowledge base information
+            String enhancedContext = ragProcessor.processQuery(content);
+
+            // Combine user input with enhanced context to create AI prompt
+            String enhancedPrompt = String.format("""
+        Based on the device knowledge base information below, please answer the user's question.
+        
+        [Device Knowledge Base]:
+        %s
+        
+        [User Question]:
+        %s
+        
+        Remember to follow the system guidelines about:
+        - Reporting tool execution results
+        - Handling system notices
+        - Explaining verification results
+        - Hiding internal variables
+        - Casual conversation handling""",
+                enhancedContext, content);
+
+
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, 2000);
             List<ChatMessagePo> sortedPO = new ArrayList<>(historyPO);
             Collections.reverse(sortedPO);
@@ -99,24 +128,33 @@ public class ChatServiceImpl implements ChatService {
             List<ChatMessage> sdkMessages = arkAiClient.convertToSdkMessages(sortedPO);
 
             String systemPromptContent = """
-        You are the intelligent expert assistant for the IoT-Verify platform. This is a smart home simulation and formal verification platform based on NuSMV.
-        Your behavior guidelines:
-        0. **Markdown format isolation principle (critical)**:
-          - You must insert a blank line **before all block-level elements** (tables, lists, code blocks, headers).
-          - **Tables**: A blank line must precede tables, and table rows must be compact without blank lines between them.
-        1. **Must respond to tool results**: When a tool (like add_device, verify_model) finishes executing, you must report the execution status in natural language based on the returned JSON or text. Never return empty content or stay silent.
-        2. **Handle system prompts**: If the tool result contains "【System Notice】" (e.g., template mismatch causing auto-replacement), you must clearly inform the user of this change.
-        3. **Contextual explanation**: For device operations, confirm names and states; for NuSMV verification results, explain whether it "passed verification" or "found a safety counterexample", and guide users to view the animation demo.
-        4. **Hide internal variables**: Variables that users don't need to know; when mentioning devices, use device names directly. No need to show IDs.
-        5. **Casual mode**: When users ask questions unrelated to IoT device management or verification (like math calculations, greetings), answer the question directly without explaining why no tool is needed.
-        6. **Safe and harmless**: You should not make anti-human or violent actions or statements.
-        """;
+                    You are the intelligent expert assistant for the IoT-Verify platform. This is a smart home simulation and formal verification platform based on NuSMV.
+                    Your behavior guidelines:
+                    0. **Markdown format isolation principle (critical)**:
+                      - You must insert a blank line **before all block-level elements** (tables, lists, code blocks, headers).
+                      - **Tables**: A blank line must precede tables, and table rows must be compact without blank lines between them.
+                    1. **Must respond to tool results**: When a tool (like add_device, verify_model) finishes executing, you must report the execution status in natural language based on the returned JSON or text. Never return empty content or stay silent.
+                    2. **Handle system prompts**: If the tool result contains "【System Notice】" (e.g., template mismatch causing auto-replacement), you must clearly inform the user of this change.
+                    3. **Contextual explanation**: For device operations, confirm names and states; for NuSMV verification results, explain whether it "passed verification" or "found a safety counterexample", and guide users to view the animation demo.
+                    4. **Hide internal variables**: Variables that users don't need to know; when mentioning devices, use device names directly. No need to show IDs.
+                    5. **Casual mode**: When users ask questions unrelated to IoT device management or verification (like math calculations, greetings), answer the question directly without explaining why no tool is needed.
+                    6. **Safe and harmless**: You should not make anti-human or violent actions or statements.
+                    
+                    When answering questions, always use the device knowledge base provided in the user message as your primary source of information about available devices and their capabilities.
+                    """;
 
             ChatMessage systemPrompt = ChatMessage.builder()
                     .role(ChatMessageRole.SYSTEM)
                     .content(systemPromptContent)
                     .build();
             sdkMessages.add(0, systemPrompt);
+
+            // Add enhanced prompt to the message list
+            ChatMessage finalPrompt = ChatMessage.builder()
+                .role(ChatMessageRole.USER)
+                .content(enhancedPrompt)
+                .build();
+            sdkMessages.add(finalPrompt);
 
             List<ChatTool> tools = aiToolManager.getAllToolDefinitions();
             ChatCompletionResult result = arkAiClient.checkIntent(sdkMessages, tools);
@@ -141,8 +179,7 @@ public class ChatServiceImpl implements ChatService {
                     if (functionName.equals("add_device") || functionName.equals("delete_device")) {
                         commandSet.add(new StreamResponseDto.CommandDto(
                                 "REFRESH_DATA",
-                                Map.of("target", "device_list")
-                        ));
+                                Map.of("target", "device_list")));
                     }
                     String argsJson = toolCall.getFunction().getArguments();
                     String toolResult = aiToolManager.execute(functionName, argsJson);
@@ -277,4 +314,66 @@ public class ChatServiceImpl implements ChatService {
             emitter.completeWithError(ex);
         }
     }
+
+    private void initializeKnowledgeBase() {
+        List<String> documentPaths = List.of(
+            "src/main/resources/deviceTemplate/Air Conditioner.json",
+            "src/main/resources/deviceTemplate/Air Purifier.json",
+            "src/main/resources/deviceTemplate/Alarm.json",
+            "src/main/resources/deviceTemplate/Calendar.json",
+            "src/main/resources/deviceTemplate/Camera.json",
+            "src/main/resources/deviceTemplate/Car.json",
+            "src/main/resources/deviceTemplate/Clock.json",
+            "src/main/resources/deviceTemplate/Coffee Maker.json",
+            "src/main/resources/deviceTemplate/Cooker.json",
+            "src/main/resources/deviceTemplate/Door RFID.json",
+            "src/main/resources/deviceTemplate/Door.json",
+            "src/main/resources/deviceTemplate/Dryer.json",
+            "src/main/resources/deviceTemplate/Electricity Meter Sensor.json",
+            "src/main/resources/deviceTemplate/Email.json",
+            "src/main/resources/deviceTemplate/Facebook.json",
+            "src/main/resources/deviceTemplate/Garage Door.json",
+            "src/main/resources/deviceTemplate/Gas Sensor.json",
+            "src/main/resources/deviceTemplate/Home Mode.json",
+            "src/main/resources/deviceTemplate/Humidifier.json",
+            "src/main/resources/deviceTemplate/Humidity Sensor.json",
+            "src/main/resources/deviceTemplate/Illuminance Sensor.json",
+            "src/main/resources/deviceTemplate/Light.json",
+            "src/main/resources/deviceTemplate/Mobile Phone.json",
+            "src/main/resources/deviceTemplate/Motion Detector.json",
+            "src/main/resources/deviceTemplate/OnLine Bank.json",
+            "src/main/resources/deviceTemplate/Oven.json",
+            "src/main/resources/deviceTemplate/Range Hood.json",
+            "src/main/resources/deviceTemplate/Refrigerator Door Sensor.json",
+            "src/main/resources/deviceTemplate/Sina Weibo.json",
+            "src/main/resources/deviceTemplate/Smoke Sensor.json",
+            "src/main/resources/deviceTemplate/Soil Moisture Sensor.json",
+            "src/main/resources/deviceTemplate/Sprinkler Controller.json",
+            "src/main/resources/deviceTemplate/Swimming Pool Water Pump.json",
+            "src/main/resources/deviceTemplate/Swimming Pool Water Quality Sensor.json",
+            "src/main/resources/deviceTemplate/Temperature Sensor.json",
+            "src/main/resources/deviceTemplate/Thermostat.json",
+            "src/main/resources/deviceTemplate/TV.json",
+            "src/main/resources/deviceTemplate/Twitter.json",
+            "src/main/resources/deviceTemplate/Ventilator.json",
+            "src/main/resources/deviceTemplate/Washer Machine.json",
+            "src/main/resources/deviceTemplate/Water Heater.json",
+            "src/main/resources/deviceTemplate/Weather.json",
+            "src/main/resources/deviceTemplate/Window Shade.json",
+            "src/main/resources/deviceTemplate/Window.json"
+        );
+
+        for (String path : documentPaths) {
+            if (!processedDocuments.contains(path)) {
+                try {
+                    ragProcessor.loadAndProcessDocument(path);
+                    processedDocuments.add(path);
+                    log.info("成功加载文档: {}", path);
+                } catch (Exception e) {
+                    log.error("文档加载失败: {}", path, e);
+                }
+            }
+        }
+    }
+
 }
