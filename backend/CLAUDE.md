@@ -36,14 +36,14 @@ cn.edu.nju.Iot_Verify/
 │   └── aitool/          # AI tool integration (add/delete/search nodes)
 ├── client/              # ArkAiClient (Volcengine Ark AI SDK wrapper)
 ├── dto/                 # Data transfer objects (by domain: auth, board, chat, device, rule, spec, simulation, trace, verification)
-├── po/                  # JPA entities (13 tables + DeviceEdgeId composite key)
-├── repository/          # Spring Data JPA repositories (13)
+├── po/                  # JPA entities (14 tables + DeviceEdgeId composite key)
+├── repository/          # Spring Data JPA repositories (14)
 ├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
-├── configure/           # NusmvConfig, ThreadConfig (chatExecutor + verificationTaskExecutor), WebConfig
-                         # SimulationServiceImpl uses its own simulationExecutor (fixed 4 threads)
+├── configure/           # NusmvConfig, ThreadConfig, ThreadPoolConfig, WebConfig
+                         # All executors are centrally managed in configure/ (chat, verificationTask, syncVerification, syncSimulation, simulationTask)
 ├── exception/           # BaseException hierarchy + GlobalExceptionHandler
 └── util/
-    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTraceMapper
+    ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTaskMapper, SimulationTraceMapper
     ├── JsonUtils.java   # JSON serialization helpers
     ├── JwtUtil.java     # JWT token generation/validation
     ├── FunctionParameterSchema.java  # AI function parameter schema builder
@@ -55,7 +55,7 @@ cn.edu.nju.Iot_Verify/
 ```bash
 cd backend
 mvn compile          # Compile
-mvn spring-boot:run  # Run (requires MySQL + Redis)
+mvn spring-boot:run  # Run (requires MySQL; Redis optional — fail-open for logout revocation)
 mvn test             # Run tests
 ```
 
@@ -65,11 +65,14 @@ Test workflow: `powershell -File test_workflow.ps1` (end-to-end API test, requir
 
 Key config in `src/main/resources/application.yaml`:
 - `spring.datasource.*` — MySQL connection
-- `spring.data.redis.*` — Redis connection (token blacklist)
+- `spring.data.redis.*` — Redis connection (token blacklist: SHA-256 hashed keys, fail-open degradation — logout revocation ineffective when Redis is down (logged-out tokens remain valid until expiry), throttled error logging; requires `commons-pool2` for Lettuce connection pooling)
 - `jwt.secret` / `jwt.expiration` — JWT settings
 - `nusmv.path` — NuSMV executable path (OS-specific)
 - `nusmv.command-prefix` — Optional prefix (e.g. `wsl` on Windows)
 - `nusmv.timeout-ms` — Execution timeout (default 120000)
+- `nusmv.max-concurrent` — Global NuSMV concurrency cap shared by verification/simulation
+- `nusmv.acquire-permit-timeout-ms` — Timeout for waiting NuSMV execution permit
+- `thread-pool.*` — Executor sizing and queue limits (sync executors use small queues for fast-fail)
 - `volcengine.ark.*` — AI chat API settings
 - `cors.allowed-origins` — CORS allowed origins (used by SecurityConfig)
 - `server.port` — HTTP port (default 8080)
@@ -84,10 +87,15 @@ Key config in `src/main/resources/application.yaml`:
 - JSON serialization: `JsonUtils.toJson()` for objects, `JsonUtils.toJsonOrEmpty()` for lists.
 - Device templates are in `src/main/resources/deviceTemplate/`.
 - `ValidationException` uses HTTP 422 (not 400). Handler and exception code are aligned.
-- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Error categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `TRUST_PRIVACY_CONFLICT`, etc.
+- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Common categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `ILLEGAL_TRIGGER_RELATION`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `AMBIGUOUS_DEVICE_REFERENCE`, `TRUST_PRIVACY_CONFLICT`, etc.
 - `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
+- Rule/spec device resolution is strict: prefer `varName`, allow `templateName` only when uniquely matched; ambiguous matches throw `AMBIGUOUS_DEVICE_REFERENCE`.
+- Sync verification/simulation unwrap `ExecutionException` and rethrow `SmvGenerationException` so `errorCategory` is preserved in API responses.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
+- Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
+- Chat completion (`/api/chat/completions`) throws `ServiceUnavailableException(503)` when `chatExecutor` is saturated.
+- Sync request timeout path uses `future.cancel(true)` and `ThreadPoolExecutor.purge()` to reduce cancelled-task buildup in queue.
 
 ## NuSMV Verification Flow
 
@@ -95,6 +103,7 @@ Key config in `src/main/resources/application.yaml`:
 VerificationRequestDto (devices, rules, specs, isAttack, intensity, enablePrivacy)
   → SmvGenerator.generate()
     → DeviceSmvDataFactory.buildDeviceSmvMap() — merge user device instances with templates
+    → SmvModelValidator.validate() — hard checks (trigger attribute/relation, state format, env conflicts, trust/privacy consistency)
     → SmvRuleCommentWriter.build(rules) — rule comments
     → SmvDeviceModuleBuilder.build(smv, isAttack, intensity, enablePrivacy) — per-device MODULE definitions
     → SmvMainModuleBuilder.build(..., enablePrivacy) — main MODULE (instances, ASSIGN, transitions)
@@ -120,16 +129,18 @@ JSON templates in `src/main/resources/deviceTemplate/` define:
 
 Corresponds to MEDIC's `outModule()`. For each unique device template:
 1. `FROZENVAR is_attack: boolean;` (if attack mode)
-2. `FROZENVAR trust_<state>: {trusted, untrusted};` for sensors (no APIs)
-3. `FROZENVAR privacy_<state>: {private, public};` for sensors (if `enablePrivacy=true`)
-4. `VAR <mode>: {state1, state2, ...};` for each mode
-5. `VAR <api>_a: boolean;` for signal APIs
-6. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges by 20%, min +10)
-7. `VAR <var>_rate: -1..1;` for impacted variables
-8. `VAR trust_<mode>_<state>: {trusted, untrusted};` for non-sensor devices
-9. `VAR privacy_<mode>_<state>: {private, public};` for non-sensor devices (if `enablePrivacy=true`)
-10. `VAR trust_<var>: {trusted, untrusted};` for variable-level trust
-11. `VAR privacy_<var>: {private, public};` for variable-level privacy (if `enablePrivacy=true`)
+2. `FROZENVAR trust_<var>: {trusted, untrusted};` for sensor internal variables (sensor trust is inherent — frozen)
+3. `FROZENVAR privacy_<var>: {public, private};` for sensor internal variables (if `enablePrivacy=true`)
+4. `FROZENVAR privacy_<content>: {public, private};` for content with `IsChangeable=false` (if `enablePrivacy=true`)
+5. `VAR <mode>: {state1, state2, ...};` for each mode
+6. `VAR <api>_a: boolean;` for signal APIs
+7. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges proportionally: `expansion=(upper-lower)/5*intensity/50`)
+8. `VAR <var>_rate: <min..max>;` for impacted variables (derived from `Dynamics.ChangeRate`, fallback `-10..10`)
+9. `VAR trust_<mode>_<state>: {trusted, untrusted};` for non-sensor (actuator) devices — trust propagated via rules, must be VAR
+10. `VAR trust_<var>: {trusted, untrusted};` for non-sensor (actuator) variable-level trust
+11. `VAR privacy_<mode>_<state>: {private, public};` for non-sensor (actuator) devices (if `enablePrivacy=true`)
+12. `VAR privacy_<var>: {private, public};` for non-sensor (actuator) variable-level privacy (if `enablePrivacy=true`)
+13. `VAR privacy_<content>: {public, private};` for content with `IsChangeable=true` (if `enablePrivacy=true`)
 
 ### Main MODULE Generation (SmvMainModuleBuilder)
 
@@ -139,7 +150,7 @@ Corresponds to MEDIC's `outMain()`. Generates:
 3. Environment variable declarations: `a_<varName>: type;` (attack mode expands numeric ranges)
 4. Environment variable init value validation (clamp to range, enum membership check)
 5. `init(intensity)` computation (sum of `toint(device.is_attack)`, no `next()` needed for FROZENVAR)
-6. State transitions via `next(<var>.<mode>)` with rule conditions + API matching
+6. State transitions via `next(<var>.<mode>)` with rule conditions + API matching (self-target conditions auto downgrade to current-state reads to avoid recursive `next(...)` definitions)
 7. Environment variable transitions (sensor assignments, numeric rate-based)
 8. API signal transitions (`next(<var>.<api>_a)`)
 9. Trust propagation: `next(<var>.trust_<mode>_<state>)` — transitive from rule condition sources (AND logic, stricter than MEDIC's OR)
@@ -162,6 +173,10 @@ Key method: `getStateForMode(multiModeState, modeIndex)` — splits semicolon-se
 
 Condition types (`targetType`): `state`, `variable`, `api`, `trust`, `privacy`.
 
+Spec fail-closed behavior:
+- General invalid spec conditions degrade to `CTLSPEC FALSE -- invalid spec: ...`.
+- Ambiguous device reference (`AMBIGUOUS_DEVICE_REFERENCE`) is treated as a hard generation error, not degraded.
+
 ### Trace Parsing (SmvTraceParser)
 
 Parses NuSMV counterexample output. Supports both formats:
@@ -179,7 +194,7 @@ Parses NuSMV counterexample output. Supports both formats:
 | Privacy flag | `now == 3` global flag | `enablePrivacy` request parameter (default false) |
 | Trust condition joining | OR (`\|`) — any trusted source propagates | AND (`&`) — all sources must be trusted |
 | Trust init | `FROZENVAR` for sensors, `VAR` for actuators | Same pattern |
-| Attack model | `FROZENVAR is_attack` + `intensity: 0..50` | Same + sensor numeric range expansion (+20%, min +10) |
+| Attack model | `FROZENVAR is_attack` + `intensity: 0..50` | Same + proportional sensor numeric range expansion (`expansion=range/5*intensity/50`) |
 | Env var init validation | None | Clamp to range + enum membership check |
 | getModeIndexOfState | Counts leading semicolons | Multi-strategy: mode name match → semicolon split → state list lookup |
 
@@ -197,6 +212,10 @@ Parses NuSMV counterexample output. Supports both formats:
 - `GET /api/verify/traces` — User's all traces
 - `GET|DELETE /api/verify/traces/{id}` — Single trace
 - `POST /api/verify/simulate` — Random simulation N steps (not persisted)
+- `POST /api/verify/simulate/async` — Async simulation (returns taskId)
+- `GET /api/verify/simulations/tasks/{id}` — Simulation task status
+- `GET /api/verify/simulations/tasks/{id}/progress` — Simulation task progress (0-100%)
+- `POST /api/verify/simulations/tasks/{id}/cancel` — Cancel simulation task
 - `POST /api/verify/simulations` — Simulate and persist
 - `GET /api/verify/simulations` — User's all simulation traces (summary)
 - `GET /api/verify/simulations/{id}` — Single simulation trace (detail)
@@ -206,8 +225,8 @@ Parses NuSMV counterexample output. Supports both formats:
 - `GET /api/chat/sessions/{sessionId}/messages` — Chat history
 - `POST /api/chat/completions` — SSE streaming chat
 
-## Database Tables (13)
+## Database Tables (14)
 
-`user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
+`user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `simulation_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
 
 All tables auto-created by Hibernate (`ddl-auto: update`).

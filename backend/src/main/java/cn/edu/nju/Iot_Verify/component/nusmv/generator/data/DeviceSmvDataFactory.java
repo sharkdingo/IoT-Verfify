@@ -356,13 +356,43 @@ public class DeviceSmvDataFactory {
 
     /** 按 varName 或模板名查找设备 SMV 数据 */
     public static DeviceSmvData findDeviceSmvData(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
+        return findDeviceSmvDataInternal(deviceName, deviceSmvMap, false);
+    }
+
+    /** 严格模式：templateName 回退命中多个实例时抛错，避免静默绑定错误设备 */
+    public static DeviceSmvData findDeviceSmvDataStrict(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
+        return findDeviceSmvDataInternal(deviceName, deviceSmvMap, true);
+    }
+
+    private static DeviceSmvData findDeviceSmvDataInternal(String deviceName,
+                                                           Map<String, DeviceSmvData> deviceSmvMap,
+                                                           boolean failOnAmbiguousTemplateMatch) {
         if (deviceName == null || deviceSmvMap == null) return null;
         DeviceSmvData smv = deviceSmvMap.get(deviceName);
         if (smv != null) return smv;
+
+        Set<DeviceSmvData> matches = Collections.newSetFromMap(new IdentityHashMap<>());
         for (DeviceSmvData data : deviceSmvMap.values()) {
-            if (deviceName.equals(data.getTemplateName())) return data;
+            if (deviceName.equals(data.getTemplateName())) {
+                matches.add(data);
+            }
         }
-        return null;
+
+        if (matches.isEmpty()) {
+            return null;
+        }
+        if (matches.size() == 1) {
+            return matches.iterator().next();
+        }
+
+        if (failOnAmbiguousTemplateMatch) {
+            List<String> candidates = matches.stream()
+                    .map(DeviceSmvData::getVarName)
+                    .sorted()
+                    .toList();
+            throw SmvGenerationException.ambiguousDeviceReference(deviceName, candidates);
+        }
+        return matches.iterator().next();
     }
 
     /** 清理状态名：移除分号和空格 */

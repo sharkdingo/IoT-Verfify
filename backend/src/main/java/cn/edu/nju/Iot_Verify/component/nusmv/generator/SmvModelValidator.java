@@ -86,6 +86,7 @@ public class SmvModelValidator {
                     throw SmvGenerationException.illegalTriggerAttribute(
                             smv.getVarName(), ctx, attr, legalAttrs);
                 }
+                validateTriggerRelation(smv.getVarName(), ctx, trans.getTrigger().getRelation());
             }
         }
         if (manifest.getApis() != null) {
@@ -98,6 +99,7 @@ public class SmvModelValidator {
                     throw SmvGenerationException.illegalTriggerAttribute(
                             smv.getVarName(), ctx, attr, legalAttrs);
                 }
+                validateTriggerRelation(smv.getVarName(), ctx, api.getTrigger().getRelation());
             }
         }
     }
@@ -112,6 +114,38 @@ public class SmvModelValidator {
         if (trigger.getValue() == null || trigger.getValue().isBlank()) {
             throw SmvGenerationException.incompleteTrigger(deviceName, context, "value is null/blank");
         }
+    }
+
+    private void validateTriggerRelation(String deviceName, String context, String rawRelation) {
+        String normalized = normalizeTriggerRelation(rawRelation);
+        if (!isSupportedTriggerRelation(normalized)) {
+            throw SmvGenerationException.illegalTriggerRelation(
+                    deviceName, context, rawRelation,
+                    List.of("=", "!=", ">", ">=", "<", "<="));
+        }
+    }
+
+    private String normalizeTriggerRelation(String relation) {
+        if (relation == null) return null;
+        String normalized = relation.trim();
+        return switch (normalized.toUpperCase()) {
+            case "EQ", "==" -> "=";
+            case "NEQ", "!=" -> "!=";
+            case "GT" -> ">";
+            case "GTE" -> ">=";
+            case "LT" -> "<";
+            case "LTE" -> "<=";
+            default -> normalized;
+        };
+    }
+
+    private boolean isSupportedTriggerRelation(String relation) {
+        return "=".equals(relation)
+                || "!=".equals(relation)
+                || ">".equals(relation)
+                || ">=".equals(relation)
+                || "<".equals(relation)
+                || "<=".equals(relation);
     }
 
     private void validateAssignments(String deviceName, String context, List<DeviceManifest.Assignment> assignments) {

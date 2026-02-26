@@ -67,7 +67,7 @@ public class JwtUtil {
         Claims claims = parseClaims(token);
         long expMillis = claims.getExpiration().getTime();
         long nowMillis = System.currentTimeMillis();
-        return Math.max(0, (expMillis - nowMillis) / 1000);
+        return Math.max(60, (expMillis - nowMillis) / 1000);
     }
 
     public boolean validateToken(String token) {

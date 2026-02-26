@@ -30,19 +30,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String token = extractToken(request);
 
-        if (StringUtils.hasText(token)) {
-            // 检查黑名单
+        if (StringUtils.hasText(token) && jwtUtil.validateToken(token)) {
+            // 先验签再查黑名单，避免伪造 token 打 Redis
             if (tokenBlacklistService.isBlacklisted(token)) {
                 filterChain.doFilter(request, response);
                 return;
             }
 
-            if (jwtUtil.validateToken(token)) {
-                Long userId = jwtUtil.getUserIdFromToken(token);
-                UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-            }
+            Long userId = jwtUtil.getUserIdFromToken(token);
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
+            SecurityContextHolder.getContext().setAuthentication(authentication);
         }
 
         filterChain.doFilter(request, response);

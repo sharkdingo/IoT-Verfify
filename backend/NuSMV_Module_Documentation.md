@@ -1,11 +1,17 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年2月23日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟 + 输入校验强化
+> **最后更新**: 2026年2月25日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
 > **NuSMV 版本要求**: 本系统仅支持 NuSMV 2.x（已测试 2.5–2.7）。输出解析依赖 NuSMV 标准英文输出格式（`-- specification ... is true/false`、`Trace Type: Simulation`、`NuSMV >` 提示符等）。不兼容 nuXmv 或其他变体。
+>
+> **模板前置条件（重要）**:
+> - 运行时模板来源是“当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
+> - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为“重置模板”：先删除该用户现有模板，再导入默认模板）。
+> - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
+> - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
 
 ---
 
@@ -22,6 +28,7 @@
 9. [校验规则 (P1-P5)](#9-校验规则-p1-p5)
 10. [随机模拟功能](#10-随机模拟功能)
 11. [API 端点速查](#11-api-端点速查)
+12. [逻辑完整性检查清单](#12-逻辑完整性检查清单)
 
 ---
 
@@ -30,6 +37,8 @@
 ### 伪代码流程
 
 ```
+前置: 请求中的每个 device.templateName 必须能在当前用户模板表中解析
+
 用户 → POST /api/verify (VerificationRequestDto)
   │
   ├─ VerificationController.verify()
@@ -62,9 +71,12 @@
 | 同步验证 | `POST /api/verify` | `VerificationResultDto` | 小规模模型，快速验证 |
 | 异步验证 | `POST /api/verify/async` | `taskId (Long)` | 大规模模型，后台执行 |
 | 随机模拟 | `POST /api/verify/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为（不落库） |
+| 异步模拟 | `POST /api/verify/simulate/async` | `taskId (Long)` | 大规模模拟，后台执行 |
 | 模拟并持久化 | `POST /api/verify/simulations` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
 
-异步模式下通过 `GET /api/verify/tasks/{id}` 轮询状态，`GET /api/verify/tasks/{id}/progress` 获取进度百分比 (0-100)。
+异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/verify/simulations/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
+
+同步 `POST /api/verify` 与 `POST /api/verify/simulate` 会透传 `SmvGenerationException`（包含 `errorCategory`），不会统一降级为通用 internal error。
 
 ---
 
@@ -112,7 +124,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `varName` | `String` | 设备实例变量名，作为 SMV 中的标识符（如 `thermostat_1`） |
-| `templateName` | `String` | 设备模板名称，用于从数据库加载 `DeviceManifest` |
+| `templateName` | `String` | 设备模板名称；运行时按 `userId + templateName` 从数据库加载 `DeviceManifest`（不直接读 resources） |
 | `state` | `String` | 当前状态（如 `cool`），映射到模板的 WorkingStates |
 | `currentStateTrust` | `String` | 设备级信任覆盖（`trusted`/`untrusted`） |
 | `variables` | `List<VariableStateDto>` | 每个变量的当前值和信任度 |
@@ -137,13 +149,13 @@
 
 | 字段 | 说明 |
 |------|------|
-| `conditions[].deviceName` | 触发条件的设备变量名 |
+| `conditions[].deviceName` | 触发条件设备引用。解析顺序：先 `varName`，再 `templateName`（仅唯一匹配）。找不到时规则 fail-closed（guard=`FALSE`）；若 `templateName` 匹配多个实例则抛 `AMBIGUOUS_DEVICE_REFERENCE`。 |
 | `conditions[].attribute` | 属性名（支持 `state`、mode 名、InternalVariable 名、或 `signal=true` 的 API 名）。当 relation 非空时，attribute 必须解析到 mode/internal variable/API signal 之一，否则 fail-closed。`state` 是保留别名，会根据 value 解析到具体 mode 状态。 |
 | `conditions[].relation` | 关系运算符：`EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`/`IN`/`NOT_IN`，归一化为 `=`/`!=`/`>`/`>=`/`<`/`<=`/`in`/`not in`。支持前后空格（如 `" GT "`），`IN`/`NOT_IN` 展开为 `(x=a \| x=b)` / `(x!=a & x!=b)`。若 relation 不在支持集合内，规则条件解析失败（fail-closed）。若 attribute 为 API signal，则 relation 仅支持 `=`/`!=`/`IN`/`NOT_IN`。 |
 | `conditions[].value` | 比较值（`IN`/`NOT_IN` 时为逗号/分号/竖线分隔的值列表）。当 relation 非空时 value 必须非空；`IN`/`NOT_IN` 的空列表（如 `" , ; | "`) 视为无效条件并 fail-closed。若 attribute 为 API signal，则 value 必须是 `TRUE`/`FALSE`（或其列表，大小写不敏感）。 |
-| `command.deviceName` | 目标设备变量名 |
+| `command.deviceName` | 目标设备引用，使用严格解析（先 `varName`，再唯一 `templateName`）。找不到抛 `DEVICE_NOT_FOUND`；歧义抛 `AMBIGUOUS_DEVICE_REFERENCE`。 |
 | `command.action` | 触发的 API 名称 |
-| `command.contentDevice` | 隐私规则：内容来源设备 |
+| `command.contentDevice` | 隐私规则内容来源设备，使用与 `command.deviceName` 相同的严格解析（歧义会抛异常，不会静默绑定）。 |
 | `command.content` | 隐私规则：内容名称 |
 
 ### 2.4 SpecificationDto（验证规格）
@@ -172,7 +184,7 @@
 
 | targetType | SMV 变量映射 | 示例 |
 |------------|-------------|------|
-| `state` | `device.{mode}_{stateName}` | `thermostat_1.ThermostatMode = cool` |
+| `state` | `device.{mode} = stateName` | `thermostat_1.ThermostatMode = cool` |
 | `variable` | `device.varName` 或 `a_varName`（环境变量） | `thermostat_1.temperature > 30` |
 | `api` | `device.{apiName}_a` | `fan_1.fanAuto_a = FALSE`（仅支持 `=`/`!=`/`IN`/`NOT_IN`，值必须为 `TRUE`/`FALSE`） |
 | `trust` | `device.trust_{mode}_{state}` | `thermostat_1.trust_ThermostatMode_cool = untrusted` |
@@ -182,6 +194,7 @@
 
 - 支持：`EQ`/`NEQ`/`GT`/`GTE`/`LT`/`LTE`/`IN`/`NOT_IN`（归一化为 `=`/`!=`/`>`/`>=`/`<`/`<=`/`in`/`not in`）。
 - `api` 类型仅支持：`=`/`!=`/`IN`/`NOT_IN`，且值必须为 `TRUE`/`FALSE`（或其列表）。
+- `SpecConditionDto.deviceId` 使用严格设备解析（先 `varName`，再唯一 `templateName`）；若歧义，直接抛 `SmvGenerationException(AMBIGUOUS_DEVICE_REFERENCE)`。
 - 不支持的 relation、空白 value、无法解析的 key/targetType 会触发 `InvalidConditionException`，最终该 spec 降级为：
   - `CTLSPEC FALSE -- invalid spec: ...`
 
@@ -238,6 +251,14 @@
 │  → List<TraceStateDto>                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+失败闭环说明（关键）：
+
+- **模板缺失/模板非法**：在 `DeviceSmvDataFactory.buildDeviceSmvMap()` 阶段失败，直接返回错误，不进入 NuSMV 执行。
+- **规则条件无法解析**：规则 guard 置为 `FALSE`（fail-closed），避免“无效条件变无条件触发”。
+- **规格条件无法解析**：一般降级为 `CTLSPEC FALSE -- invalid spec: ...`（fail-closed），保持 spec 数量与结果可对齐。
+- **设备引用歧义**：不会降级为占位；直接抛 `AMBIGUOUS_DEVICE_REFERENCE`，请求失败并返回明确错误。
+- **NuSMV 结果数量与规格数量不一致**：验证结果标记为不安全（fail-closed）。
 
 ---
 
@@ -391,8 +412,10 @@ VAR
 **主模块 — 隐私传播规则：**
 ```smv
 -- 规则触发时，隐私从源设备传播到目标设备
+-- guard 使用完整的规则条件（appendRuleConditions），而非简化的 API 信号
+-- 例：规则 "IF condition THEN camera.takePhoto(MobilePhone.photo)"
 next(camera_1.privacy_photo) := case
-    camera_1.takePhoto_a = TRUE : private;   -- API 触发时设为 private
+    <规则条件>: private;                       -- 规则触发时设为 private
     TRUE : camera_1.privacy_photo;           -- 自保持
 esac;
 ```
@@ -429,7 +452,7 @@ esac;
 用户规则: IF thermostat_1.temperature > 30 THEN fan_1.fanAuto
 ```
 
-生成的 SMV（假设 fanAuto API: startState=off, endState=auto, signal=true）：
+生成的 SMV（假设 fanAuto API: startState=off, endState=auto, signal=true；以下示例假设 `isAttack=false`，攻击模式下会额外追加 `& fan_1.is_attack=FALSE` 条件）：
 ```smv
 -- 1. 状态转换（由规则条件直接驱动，API 的 EndState 决定目标状态）
 --    guard = 规则条件 + API startState 约束
@@ -468,13 +491,15 @@ esac;
 
 **规则条件解析失败处理（fail-closed）：** 当规则的某个 IF 条件无法解析（例如设备不存在、`attribute` 为空、`relation!=null` 时 attribute 无法匹配任何 mode/internal variable/API signal、relation 不受支持、relation 非空但 value 为空、`IN/NOT_IN` 值列表为空、API signal 的 relation/value 不合法）时，`appendRuleConditions` 会将整条规则的 guard 设为 `FALSE`，使该规则永远不触发。这是 fail-closed 策略——宁可规则不生效，也不让无效条件被静默忽略导致规则变成无条件触发。日志会输出 warn 级别信息指明失败原因。
 
+**`useNext` 递归规避（状态建模关键）：** 在构建 `next(target.mode)` 的 rule guard 时，若条件引用的正是同一目标设备，生成器会将该条件改为读取当前态（`effectiveUseNext=false`），避免产生 `next(x)` 依赖 `next(x)` 的递归定义（NuSMV `recursively defined` 错误）。
+
 ### 5.6 SmvMainModuleBuilder 完整转换类型
 
 `MODULE main` 的 `ASSIGN` 块按以下顺序生成各类 `next()` 转换：
 
 | 序号 | 方法名 | 生成内容 | 说明 |
 |------|--------|---------|------|
-| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | 规则驱动的状态转换 + 模板 Transition 驱动的状态转换 |
+| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | 规则驱动的状态转换 + 模板 Transition 驱动的状态转换。攻击模式下非传感器设备增加最高优先级分支 `is_attack=TRUE: {所有合法状态}`，模拟执行器被劫持 |
 | 2 | `appendEnvTransitions()` | `next(a_varName)` | 环境变量的 next() 转换，含 NaturalChangeRate、设备影响率、边界检查。Transition trigger 引用环境变量时使用 `a_<attr>`（仅检查当前设备的 env var，避免跨设备同名冲突） |
 | 3 | `appendApiSignalTransitions()` | `next(device.apiName_a)` | API 信号变量，基于状态变化检测（`current!=end & next(mode)=end`） |
 | 4 | `appendTransitionSignalTransitions()` | `next(device.transName_t)` | 模板 Transition 信号变量，基于状态变化检测 |
@@ -485,7 +510,7 @@ esac;
 | 9 | `appendContentPrivacyTransitions()` | `next(device.privacy_contentName)` | IsChangeable=true 的 content 隐私转换：当规则命令引用该 content 时（如 `THEN Facebook.post(MobilePhone.photo)`），规则触发将 content 隐私设为 `private`；否则自保持 |
 | 10 | `appendVariableRateTransitions()` | `next(device.varName_rate)` | 受影响变量的变化率，由设备 WorkingState.Dynamics 决定。`_rate` 范围根据模板中实际 ChangeRate 值动态计算（无 Dynamics 时 fallback 为 -10..10） |
 | 11 | `appendExternalVariableAssignments()` | `device.varName := a_varName` | 外部变量（IsInside=false）镜像环境变量（简单赋值，非 next）。注意：代码中此方法在 `appendVariableRateTransitions` 之后调用 |
-| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换，攻击模式下范围扩展。Transition trigger 引用同样使用当前设备 env var 检查 |
+| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换；攻击模式下生成 `is_attack=TRUE: lower..upper` 分支（使用模板原始范围，不含扩展）。Transition trigger 引用同样使用当前设备 env var 检查 |
 
 环境变量 `next()` 转换示例（数值型，有设备影响率）：
 ```smv
@@ -504,6 +529,7 @@ esac;
 
 1. **VAR 声明范围扩展**（`SmvDeviceModuleBuilder.appendInternalVariables`）：仅对传感器设备的数值型内部变量，公式与环境变量相同 `expansion = range/5 * intensity/50`，仅扩展上界。
 2. **next() 攻击分支**（`SmvMainModuleBuilder.appendInternalVariableTransitions`）：当 `isAttack=true` 且设备为传感器时，生成 `device.is_attack=TRUE: lower..upper` 分支，使用模板原始范围（不含扩展），允许攻击者将变量设为任意合法值。
+3. **执行器状态劫持**（`SmvMainModuleBuilder.appendStateTransitions`）：当 `isAttack=true` 且设备为非传感器（执行器）时，在 `next(device.ModeVar)` 的 case 中生成最高优先级分支 `device.is_attack=TRUE: {所有合法状态}`，允许攻击者将执行器劫持到任意合法状态。该分支优先于规则和模板 Transition，因此被攻击的执行器会绕过正常转换逻辑。由此产生的状态跳变也会触发 API 信号脉冲（`appendApiSignalTransitions` 检测到 `next(mode)=endState`），这是预期行为——被劫持的设备可以产生任意信号。
 
 ---
 
@@ -574,9 +600,10 @@ VAR
 	a_temperature: 15..39;
 ASSIGN
 	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
-	-- 状态转换（规则条件直接驱动 + API startState 约束）
+	-- 状态转换（攻击劫持优先 + 规则条件驱动 + API startState 约束）
 	next(fan_1.FanMode) := case
-		thermostat_1.temperature > 30 & fan_1.FanMode=off : auto;
+		fan_1.is_attack=TRUE: {auto, manual, off};
+		thermostat_1.temperature > 30 & fan_1.is_attack=FALSE & fan_1.FanMode=off : auto;
 		TRUE : fan_1.FanMode;
 	esac;
 	-- API 信号（基于状态变化检测）
@@ -587,8 +614,8 @@ ASSIGN
 	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查）
 	next(a_temperature) :=
 	case
-		a_temperature>=35: a_temperature;
-		a_temperature<=15: a_temperature;
+		a_temperature>=35: {a_temperature-1, a_temperature};   -- 上边界：禁止继续上升，允许下降和保持
+		a_temperature<=15: {a_temperature, a_temperature+1};   -- 下边界：禁止继续下降，允许上升和保持
 		TRUE: {a_temperature-1, a_temperature, a_temperature+1};
 	esac;
 	-- 信任传播
@@ -757,6 +784,7 @@ Spec 构建的 fail-closed 策略：
 
 - 若条件无法构建（如 relation 不支持、value 为空、key 无法解析、targetType 不支持），该 spec 不会被静默忽略，而是降级为：
   - `CTLSPEC FALSE -- invalid spec: <reason>`
+- 若设备引用歧义（`deviceId` 按 `templateName` 命中多个实例），则直接抛 `AMBIGUOUS_DEVICE_REFERENCE`，不降级。
 
 ---
 
@@ -766,6 +794,8 @@ Spec 构建的 fail-closed 策略：
 
 ### NuSMV 原始反例格式
 
+以下示例与 section 6 的 `isAttack=true, intensity=50, enablePrivacy=true` 场景一致。
+
 ```
 -- specification AG (...) is false
 -- as demonstrated by the following execution sequence
@@ -774,14 +804,26 @@ Trace Type: Counterexample
   -> State: 1.1 <-
     thermostat_1.ThermostatMode = cool
     thermostat_1.temperature = 22
+    thermostat_1.is_attack = FALSE
+    thermostat_1.trust_temperature = trusted
+    thermostat_1.privacy_temperature = public
+    thermostat_1.trust_ThermostatMode_cool = trusted
+    thermostat_1.privacy_ThermostatMode_cool = public
     fan_1.FanMode = off
+    fan_1.is_attack = TRUE
+    fan_1.fanAuto_a = FALSE
     fan_1.trust_FanMode_auto = trusted
+    fan_1.trust_FanMode_off = trusted
+    fan_1.privacy_FanMode_auto = public
+    fan_1.privacy_FanMode_off = public
+    intensity = 1
     a_temperature = 35
   -> State: 1.2 <-
     thermostat_1.temperature = 35
     fan_1.fanAuto_a = TRUE
   -> State: 1.3 <-
     fan_1.FanMode = auto
+    fan_1.fanAuto_a = FALSE
     fan_1.trust_FanMode_auto = untrusted
 ```
 
@@ -789,11 +831,19 @@ Trace Type: Counterexample
 
 > **注意：** `TraceDeviceDto` 中 `state` 为当前状态值，`mode` 为状态机名称。
 > 旧字段 `newState` 已移除，统一使用 `state` + `mode`。反序列化历史 JSON 时通过 `@JsonAlias("newState")` 自动映射。
+>
+> **过滤规则：** `*_rate` 和 `*_a` 变量被过滤不进入输出；`is_attack` 保留输出。
+> `trust_` 前缀分流：匹配 `mode_state` 格式的写入 `trustPrivacy[]`（布尔），其余写入 `variables[].trust`（字符串）。
+> `privacy_` 前缀统一写入 `privacies[]`。裸变量（`intensity`、`a_*`）写入 `envVariables[]`。
 
 ```json
 [
   {
     "stateIndex": 1,
+    "envVariables": [
+      { "name": "intensity", "value": "1" },
+      { "name": "a_temperature", "value": "35" }
+    ],
     "devices": [
       {
         "deviceId": "thermostat_1",
@@ -802,12 +852,14 @@ Trace Type: Counterexample
         "state": "cool",
         "mode": "ThermostatMode",
         "variables": [
-          { "name": "temperature", "value": "22", "trust": "trusted" }
+          { "name": "temperature", "value": "22", "trust": "trusted" },
+          { "name": "is_attack", "value": "FALSE" }
         ],
         "trustPrivacy": [
           { "name": "ThermostatMode_cool", "trust": true }
         ],
         "privacies": [
+          { "name": "temperature", "privacy": "public" },
           { "name": "ThermostatMode_cool", "privacy": "public" }
         ]
       },
@@ -817,19 +869,56 @@ Trace Type: Counterexample
         "templateName": "Fan",
         "state": "off",
         "mode": "FanMode",
-        "variables": [],
+        "variables": [
+          { "name": "is_attack", "value": "TRUE" }
+        ],
         "trustPrivacy": [
-          { "name": "FanMode_auto", "trust": true }
+          { "name": "FanMode_auto", "trust": true },
+          { "name": "FanMode_off", "trust": true }
         ],
         "privacies": [
-          { "name": "FanMode_auto", "privacy": "public" }
+          { "name": "FanMode_auto", "privacy": "public" },
+          { "name": "FanMode_off", "privacy": "public" }
         ]
       }
     ]
   },
   {
     "stateIndex": 2,
-    "devices": [ ... ]
+    "devices": [
+      {
+        "deviceId": "thermostat_1",
+        "deviceLabel": "thermostat_1",
+        "templateName": "Thermostat",
+        "state": "cool",
+        "mode": "ThermostatMode",
+        "variables": [
+          { "name": "temperature", "value": "35" }
+        ]
+      },
+      {
+        "deviceId": "fan_1",
+        "deviceLabel": "fan_1",
+        "templateName": "Fan",
+        "state": "off",
+        "mode": "FanMode"
+      }
+    ]
+  },
+  {
+    "stateIndex": 3,
+    "devices": [
+      {
+        "deviceId": "fan_1",
+        "deviceLabel": "fan_1",
+        "templateName": "Fan",
+        "state": "auto",
+        "mode": "FanMode",
+        "trustPrivacy": [
+          { "name": "FanMode_auto", "trust": false }
+        ]
+      }
+    ]
   }
 ]
 ```
@@ -838,12 +927,12 @@ Trace Type: Counterexample
 
 - 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
 - `device.var = value` 格式匹配设备内部变量
-- `a_varName = value` 格式匹配环境变量
+- `a_varName = value` 及其他裸变量（如 `intensity = value`）匹配环境/全局变量
 - 自动填充 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
 - 状态名通过 `DeviceSmvData.states` 反向匹配
 - `trust_` 前缀分流：状态级写入 `trustPrivacy[]`（`trust` 为布尔），变量级写入 `variables[].trust`
 - `privacy_` 前缀写入 `privacies[]`（条目名去掉前缀）
-- 内部控制变量 `is_attack`、`*_rate`、`*_a` 会被忽略，不进入输出
+- 内部控制变量 `*_rate`、`*_a` 会被忽略，不进入输出；`is_attack` 保留输出，供前端展示反例路径中哪些设备被攻击
 - 多模式设备先用临时 `__mode__*` 变量收集，再在 `finalizeModeStates()` 阶段回填最终 `state/mode`
 - 增量解析：只输出变化的变量（NuSMV 只打印变化项）
 
@@ -855,7 +944,7 @@ Trace Type: Counterexample
 
 | 编号 | 校验内容 | 失败行为 |
 |------|---------|---------|
-| P1 | Transition.Trigger.Attribute 必须在 modes + internalVariables 中（即合法的模式名或内部变量名） | 抛出 `illegalTriggerAttribute` |
+| P1 | Trigger.Attribute 必须在 modes + internalVariables 中，且 Trigger.Relation 归一化后必须为 `=`/`!=`/`>`/`>=`/`<`/`<=` | 抛出 `illegalTriggerAttribute` / `illegalTriggerRelation` |
 | P2 | 多模式设备的 Transition.EndState 分号段数必须等于模式数 | 抛出 `invalidStateFormat` |
 | P3 | 同名环境变量（IsInside=false）在不同设备模板中的范围/枚举值必须一致 | 抛出 `envVarConflict` |
 | P4 | Transition trigger 引用环境变量（IsInside=false）时，生成阶段自动使用 `a_<attr>` 引用而非 `device.<attr>`，避免引用未声明的设备内部变量 | 生成阶段内联处理（`SmvMainModuleBuilder.appendEnvTransitions` / `appendInternalVariableTransitions`），非前置校验 |
@@ -870,6 +959,7 @@ Trace Type: Counterexample
 生成阶段附加校验 / fail-closed（不属于 P1-P5）：
 
 - Rule 条件解析失败（设备不存在、空属性、未知属性、不支持 relation、空 value、`IN/NOT_IN` 空列表、API signal 的 relation/value 不合法等）时，规则 guard 置为 `FALSE`。
+- Rule/Command/Spec 设备引用若出现 templateName 歧义，直接抛 `AMBIGUOUS_DEVICE_REFERENCE`（不会 fail-closed）。
 - Spec 条件解析失败（不支持 relation、空 value、无法解析 key、不支持 targetType 等）时，降级输出 `CTLSPEC FALSE -- invalid spec: ...`。
 - 同名环境变量的用户初值在不同设备间冲突时，抛出 `envVarConflict`。
 - 对默认范围 `0..100` 的环境变量，非整数初值会被忽略，越界值会被 clamp。
@@ -931,6 +1021,8 @@ Trace Type: Counterexample
 }
 ```
 
+> 说明：`steps` 为“实际可解析步数”，计算方式是 `states.size() - 1`。因此它可能小于 `requestedSteps`（例如 NuSMV 轨迹较短或解析后状态为空）。
+
 ### 10.4 关键实现细节
 
 | 要点 | 说明 |
@@ -940,8 +1032,19 @@ Trace Type: Counterexample
 | stdout/stderr 分离 | 不合并 stderr，独立线程读取，便于区分模型错误 |
 | 提示符过滤 | 交互模式输出含 `NuSMV >` 提示符行，提取轨迹时过滤 |
 | 空轨迹检测 | 若 `go` 阶段模型有错误，`show_traces` 无输出，返回带 raw output 的错误 |
-| 超时保护 | 独立 `simulationExecutor`（固定 4 线程池）+ `nusmvConfig.timeoutMs * 2` |
+| 超时保护 | 通过 `syncSimulationExecutor`（`thread-pool.sync-simulation.*`）+ `nusmvConfig.timeoutMs * 2` |
+| 过载保护 | 当 `syncSimulationExecutor`（同步模拟）或 `syncVerificationExecutor`（同步验证）饱和时，抛出 `ServiceUnavailableException`，HTTP 返回 `503` |
+| 生成异常透传 | 同步 verify/sim 在 `ExecutionException` 解包和内部执行链路中会透传 `SmvGenerationException`，保留 `errorCategory` |
+| 同步队列策略 | `syncVerificationExecutor` / `syncSimulationExecutor` 默认使用小队列（16），减少长队列导致的排队超时 |
+| 取消回收策略 | 同步请求超时 `future.cancel(true)` 后，会调用线程池 `purge()` 以更快清理已取消的排队任务 |
+| 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
+| 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
 | 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
+| 调试产物 | `NusmvExecutor` 会将原始输出写到 `output.txt`；验证/模拟在已生成 `model.smv` 且流程产出结果对象时会写 `result.json`（与 `model.smv` 同目录） |
+| `result.json` 语义 | `result.json` 外层 `code/message` 不固定 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志命中 `timed out` 时 `504`，其余失败 `500` |
+| 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `result.json` |
+| 取消边界说明 | 异步任务在结果对象产出前被取消时，可能不写 `result.json`（例如验证异步在生成 `model.smv` 后、执行前被取消） |
+| 临时文件策略 | 当前实现会保留 `model.smv` 临时文件用于排障（不在 finally 中删除） |
 
 ---
 
@@ -951,16 +1054,39 @@ Trace Type: Counterexample
 |------|------|------|
 | `POST` | `/api/verify` | 同步验证，返回 `VerificationResultDto` |
 | `POST` | `/api/verify/async` | 异步验证，返回 `taskId` |
+| `GET` | `/api/verify/tasks/{id}` | 获取异步验证任务状态 |
+| `GET` | `/api/verify/tasks/{id}/progress` | 获取验证任务进度 (0-100) |
+| `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步验证任务 |
 | `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库），返回 `SimulationResultDto` |
+| `POST` | `/api/verify/simulate/async` | 异步随机模拟，返回 `taskId` |
+| `GET` | `/api/verify/simulations/tasks/{id}` | 获取模拟异步任务状态 |
+| `GET` | `/api/verify/simulations/tasks/{id}/progress` | 获取模拟任务进度 (0-100) |
+| `POST` | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟异步任务 |
 | `POST` | `/api/verify/simulations` | 随机模拟 N 步并持久化，返回 `SimulationTraceDto` |
 | `GET` | `/api/verify/simulations` | 获取当前用户所有模拟记录（摘要） |
 | `GET` | `/api/verify/simulations/{id}` | 获取单条模拟记录（含完整 states） |
 | `DELETE` | `/api/verify/simulations/{id}` | 删除单条模拟记录 |
-| `GET` | `/api/verify/tasks/{id}` | 获取异步任务状态 |
-| `GET` | `/api/verify/tasks/{id}/progress` | 获取任务进度 (0-100) |
-| `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步任务 |
 | `GET` | `/api/verify/traces` | 获取用户所有 Trace |
 | `GET` | `/api/verify/traces/{id}` | 获取单个 Trace |
 | `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
 
 所有端点需要 JWT 认证（`Authorization: Bearer <token>`），用户 ID 通过 `@CurrentUser` 注解自动注入。
+
+---
+
+## 12. 逻辑完整性检查清单
+
+下列链路在当前后端实现中是闭合的：
+
+1. **输入约束闭环**：DTO 校验（`@NotNull/@Pattern/@Min/@Max`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。
+4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
+5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度、同步/异步统一错误语义。
+6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。
+7. **可观测性闭环**：`model.smv` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
+
+仍需依赖的运行前提：
+
+- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。Redis 仅用于 JWT 黑名单（SHA-256 key），不可用时 fail-open 降级（不阻塞登录/验证流程，但登出撤销语义失效——已登出 token 仍可使用直至过期）；需 `commons-pool2` 启用 Lettuce 连接池。
+- 当前用户模板已初始化且与前端请求中的 `templateName` 一致。

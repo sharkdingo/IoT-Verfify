@@ -12,22 +12,40 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
+import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
+import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.File;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -44,21 +62,37 @@ class SimulationServiceImplTest {
     @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
     @Mock private SimulationTraceRepository simulationTraceRepository;
+    @Mock private SimulationTaskRepository simulationTaskRepository;
     @Mock private SimulationTraceMapper simulationTraceMapper;
+    @Mock private SimulationTaskMapper simulationTaskMapper;
 
     private SimulationServiceImpl service;
+    private ThreadPoolTaskExecutor syncSimulationExecutor;
     private Method doSimulate;
 
     @BeforeEach
     void setUp() throws Exception {
+        syncSimulationExecutor = new ThreadPoolTaskExecutor();
+        syncSimulationExecutor.setCorePoolSize(1);
+        syncSimulationExecutor.setMaxPoolSize(1);
+        syncSimulationExecutor.setQueueCapacity(10);
+        syncSimulationExecutor.setThreadNamePrefix("test-sync-simulation-");
+        syncSimulationExecutor.initialize();
+
         service = new SimulationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
-                simulationTraceRepository, simulationTraceMapper);
+                simulationTraceRepository, simulationTaskRepository,
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(), syncSimulationExecutor);
 
         doSimulate = SimulationServiceImpl.class.getDeclaredMethod(
                 "doSimulate", Long.class, List.class, List.class,
                 int.class, boolean.class, int.class, boolean.class);
         doSimulate.setAccessible(true);
+    }
+
+    @AfterEach
+    void tearDown() {
+        syncSimulationExecutor.shutdown();
     }
 
     private List<DeviceVerificationDto> singleDevice() {
@@ -68,14 +102,36 @@ class SimulationServiceImplTest {
         return List.of(d);
     }
 
+    private File createTempModelFile() throws Exception {
+        Path dir = Files.createTempDirectory("sim-service-test-");
+        File smvFile = dir.resolve("model.smv").toFile();
+        assertTrue(smvFile.createNewFile());
+        smvFile.deleteOnExit();
+        dir.toFile().deleteOnExit();
+        return smvFile;
+    }
+
+    private int readResultCode(File smvFile) throws Exception {
+        File jsonFile = new File(smvFile.getParentFile(), "result.json");
+        assertTrue(jsonFile.exists());
+        JsonNode node = new ObjectMapper().readTree(jsonFile);
+        return node.path("code").asInt();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Long> cancelledTaskIds() throws Exception {
+        Field f = SimulationServiceImpl.class.getDeclaredField("cancelledTasks");
+        f.setAccessible(true);
+        return (Set<Long>) f.get(service);
+    }
+
     // ==================== doSimulate tests ====================
 
     @Test
     void doSimulate_executorFails_returnsErrorResult() throws Exception {
-        File fakeFile = File.createTempFile("test", ".smv");
-        fakeFile.deleteOnExit();
+        File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean()))
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.error("NuSMV exited with code 1."));
@@ -87,14 +143,43 @@ class SimulationServiceImplTest {
         assertEquals(0, result.getSteps());
         assertEquals(10, result.getRequestedSteps());
         assertTrue(result.getLogs().stream().anyMatch(l -> l.contains("failed")));
+        assertEquals(500, readResultCode(fakeFile));
+    }
+
+    @Test
+    void doSimulate_executorBusy_throwsServiceUnavailable() throws Exception {
+        File fakeFile = createTempModelFile();
+        SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(genResult);
+        when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
+                .thenReturn(SimulationOutput.busy("NuSMV simulation is busy, please retry later"));
+
+        InvocationTargetException ex = assertThrows(InvocationTargetException.class, () ->
+                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false, 3, false));
+
+        assertInstanceOf(ServiceUnavailableException.class, ex.getCause());
+        assertEquals(503, readResultCode(fakeFile));
+    }
+
+    @Test
+    void doSimulate_smvGenerationError_propagatesSmvGenerationException() throws Exception {
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenThrow(SmvGenerationException.ambiguousDeviceReference("Sensor", List.of("sensor_1", "sensor_2")));
+
+        InvocationTargetException ex = assertThrows(InvocationTargetException.class, () ->
+                doSimulate.invoke(service, 1L, singleDevice(), List.of(), 10, false, 3, false));
+
+        assertInstanceOf(SmvGenerationException.class, ex.getCause());
+        SmvGenerationException cause = (SmvGenerationException) ex.getCause();
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", cause.getErrorCategory());
     }
 
     @Test
     void doSimulate_emptyStates_returnsZeroSteps() throws Exception {
-        File fakeFile = File.createTempFile("test", ".smv");
-        fakeFile.deleteOnExit();
+        File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean()))
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("-> State: 1.1 <-\n", "raw"));
@@ -112,10 +197,9 @@ class SimulationServiceImplTest {
 
     @Test
     void doSimulate_success_stepsEqualsStatesMinusOne() throws Exception {
-        File fakeFile = File.createTempFile("test", ".smv");
-        fakeFile.deleteOnExit();
+        File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean()))
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -133,6 +217,58 @@ class SimulationServiceImplTest {
         assertEquals(4, result.getStates().size());
         assertEquals(3, result.getSteps());
         assertEquals(10, result.getRequestedSteps());
+        assertEquals(200, readResultCode(fakeFile));
+    }
+
+    @Test
+    @SuppressWarnings("null")
+    void simulateAsync_success_writesResultJson() throws Exception {
+        File fakeFile = createTempModelFile();
+        SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(genResult);
+        when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
+                .thenReturn(SimulationOutput.success("trace", "raw"));
+        when(smvTraceParser.parseCounterexampleStates(any(), any()))
+                .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
+        when(simulationTraceRepository.save(any(SimulationTracePo.class))).thenAnswer(inv -> {
+            SimulationTracePo po = Objects.requireNonNull(inv.getArgument(0, SimulationTracePo.class));
+            po.setId(100L);
+            return po;
+        });
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
+
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(9L)
+                .userId(1L)
+                .status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10)
+                .createdAt(LocalDateTime.now())
+                .build();
+        when(simulationTaskRepository.findById(9L)).thenReturn(Optional.of(task));
+
+        service.simulateAsync(1L, 9L, singleDevice(), List.of(), 10, false, 3, false);
+
+        assertEquals(200, readResultCode(fakeFile));
+    }
+
+    @Test
+    @SuppressWarnings("null")
+    void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(10L)
+                .userId(1L)
+                .status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10)
+                .createdAt(LocalDateTime.now())
+                .build();
+        when(simulationTaskRepository.findById(10L)).thenReturn(Optional.of(task));
+        cancelledTaskIds().add(10L);
+
+        service.simulateAsync(1L, 10L, singleDevice(), List.of(), 10, false, 3, false);
+
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
     // ==================== simulate (public) tests ====================
@@ -154,16 +290,60 @@ class SimulationServiceImplTest {
         assertEquals(0, result.getSteps());
     }
 
+    @Test
+    void simulate_executorRejected_throwsServiceUnavailable() {
+        syncSimulationExecutor.shutdown();
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
+        assertTrue(ex.getMessage().contains("busy"));
+    }
+
+    @Test
+    void simulate_timeout_returnsTimedOutAndPurgesQueuedTask() {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(50L);
+        Future<?> blocker = syncSimulationExecutor.submit(() -> {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        SimulationResultDto result = service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false);
+
+        assertTrue(result.getStates().isEmpty());
+        assertEquals(0, result.getSteps());
+        assertEquals(10, result.getRequestedSteps());
+        assertTrue(result.getLogs().stream().anyMatch(log -> log.contains("timed out")));
+
+        ThreadPoolExecutor nativeExecutor = syncSimulationExecutor.getThreadPoolExecutor();
+        assertNotNull(nativeExecutor);
+        assertEquals(0, nativeExecutor.getQueue().size());
+        blocker.cancel(true);
+    }
+
+    @Test
+    void simulate_smvGenerationError_rethrowsSmvGenerationException() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenThrow(SmvGenerationException.ambiguousDeviceReference("Light", List.of("light_1", "light_2")));
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
+        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
+    }
+
     // ==================== simulateAndSave tests ====================
 
     @Test
+    @SuppressWarnings("null")
     void simulateAndSave_success_savesPoAndReturnsDto() throws Exception {
         // Arrange: make simulate() produce a valid result via doSimulate
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
-        File fakeFile = File.createTempFile("test", ".smv");
-        fakeFile.deleteOnExit();
+        File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean()))
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
                 .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
@@ -173,8 +353,10 @@ class SimulationServiceImplTest {
 
         SimulationTraceDto expectedDto = SimulationTraceDto.builder()
                 .id(1L).steps(1).requestedSteps(5).build();
-        when(simulationTraceRepository.save(any())).thenAnswer(inv -> {
-            SimulationTracePo po = inv.getArgument(0);
+        AtomicReference<SimulationTracePo> savedPoRef = new AtomicReference<>();
+        when(simulationTraceRepository.save(any(SimulationTracePo.class))).thenAnswer(inv -> {
+            SimulationTracePo po = Objects.requireNonNull(inv.getArgument(0, SimulationTracePo.class));
+            savedPoRef.set(po);
             po.setId(1L);
             return po;
         });
@@ -189,9 +371,8 @@ class SimulationServiceImplTest {
 
         // Assert
         assertEquals(expectedDto, result);
-        ArgumentCaptor<SimulationTracePo> captor = ArgumentCaptor.forClass(SimulationTracePo.class);
-        verify(simulationTraceRepository).save(captor.capture());
-        SimulationTracePo savedPo = captor.getValue();
+        SimulationTracePo savedPo = Objects.requireNonNull(savedPoRef.get());
+        verify(simulationTraceRepository).save(savedPo);
         assertEquals(1L, savedPo.getUserId());
         assertEquals(5, savedPo.getRequestedSteps());
         assertEquals(1, savedPo.getSteps());
@@ -253,7 +434,7 @@ class SimulationServiceImplTest {
 
         service.deleteSimulation(1L, 5L);
 
-        verify(simulationTraceRepository).delete(po);
+        verify(simulationTraceRepository).delete(Objects.requireNonNull(po));
     }
 
     @Test

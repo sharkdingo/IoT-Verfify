@@ -66,7 +66,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       ├── ChatServiceImpl.java
 │       ├── DeviceTemplateServiceImpl.java
 │       ├── NodeServiceImpl.java
-│       ├── RedisTokenBlacklistService.java
+│       ├── RedisTokenBlacklistService.java  # Redis 黑名单（SHA-256 key、fail-open、限流日志）
 │       ├── UserServiceImpl.java
 │       ├── VerificationServiceImpl.java   # 验证业务逻辑（同步/异步）
 │       └── SimulationServiceImpl.java     # 模拟业务逻辑（执行 + 持久化）
@@ -127,6 +127,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── simulation/
 │   │   ├── SimulationRequestDto.java      # 模拟请求
 │   │   ├── SimulationResultDto.java       # 模拟结果（不落库）
+│   │   ├── SimulationTaskDto.java         # 模拟异步任务状态
 │   │   ├── SimulationTraceDto.java        # 模拟轨迹详情（持久化）
 │   │   └── SimulationTraceSummaryDto.java # 模拟轨迹摘要（列表用）
 │   ├── verification/
@@ -150,6 +151,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── SpecificationPo.java
 │   ├── TracePo.java                       # 验证反例轨迹
 │   ├── VerificationTaskPo.java            # 异步验证任务
+│   ├── SimulationTaskPo.java              # 异步模拟任务（simulation_task 表）
 │   └── SimulationTracePo.java             # 模拟轨迹（simulation_trace 表）
 ├── repository/                            # JPA Repository
 │   ├── UserRepository.java
@@ -161,9 +163,10 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── SpecificationRepository.java
 │   ├── TraceRepository.java
 │   ├── VerificationTaskRepository.java
+│   ├── SimulationTaskRepository.java
 │   └── SimulationTraceRepository.java
 ├── security/                              # 安全模块
-│   ├── SecurityConfig.java                # Spring Security 配置
+│   ├── SecurityConfig.java                # Spring Security + CORS 配置
 │   ├── JwtAuthenticationFilter.java       # JWT 过滤器
 │   ├── CurrentUser.java                   # @CurrentUser 注解
 │   ├── CurrentUserArgumentResolver.java   # 用户 ID 参数解析
@@ -181,6 +184,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       ├── SpecificationMapper.java
 │       ├── TraceMapper.java
 │       ├── VerificationTaskMapper.java
+│       ├── SimulationTaskMapper.java
 │       └── SimulationTraceMapper.java
 ├── exception/                             # 异常体系
 │   ├── BaseException.java                 # 基类
@@ -193,8 +197,9 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   └── ServiceUnavailableException.java
 └── configure/
     ├── NusmvConfig.java                   # NuSMV 路径/超时配置
+    ├── ThreadPoolConfig.java              # 线程池参数绑定与校验（thread-pool.*）
     ├── ThreadConfig.java                  # 线程池配置
-    └── WebConfig.java                     # Web 配置（CORS 等）
+    └── WebConfig.java                     # Web MVC 配置（@CurrentUser 参数解析）
 ```
 
 ---
@@ -222,7 +227,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 1. `DeviceSmvDataFactory.buildDeviceSmvMap()` — 构建设备数据映射
 2. `SmvModelValidator.validate()` — P1-P5 前置校验
 3. 按顺序拼接 SMV 文本：RuleComment → DeviceModule → MainModule → Specification
-4. 写入临时文件 `model.smv`
+4. 写入临时目录下的 `model.smv`（验证: `nusmv_verify_*`，模拟: `nusmv_sim_*`）
 5. 返回 `GenerateResult`（文件 + deviceSmvMap，后者供 trace 解析复用）
 
 额外校验：当 `enablePrivacy=false` 时，检查 specs 中是否包含 `targetType="privacy"` 条件，有则抛异常。
@@ -238,14 +243,20 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 2. `extractModes()` — 解析模式列表
 3. `extractStatesAndTrust()` — 解析 WorkingStates，构建 `modeStates` 映射和 trust 默认值
 4. `parseCurrentModeStates()` — 将用户传入的 `state` 映射到各模式的初始状态
-5. `extractVariables()` — 分离内部变量 (`IsInside=true`) 和环境变量 (`IsInside=false`)
+5. 读取 `InternalVariables`，并通过 `extractEnvVariables()` 提取环境变量 (`IsInside=false`)
 6. `extractSignalVars()` — 从 Transitions 和 APIs 中提取信号变量
 7. `extractContents()` — 解析内容（如手机照片）及其隐私属性
 8. 合并用户运行时输入（variableValues, instanceVariableTrust, instanceVariablePrivacy）
 
+模板来源与生命周期（重要）：
+- 验证/模拟运行时只从当前用户的模板表读取（`DeviceTemplateService.findTemplateByName(userId, templateName)`），不直接读取 `resources` 目录。
+- 默认模板来自 `src/main/resources/deviceTemplate/*.json`，在用户注册后自动入库；也可通过 `POST /api/board/templates/reload` 重置（先删除该用户现有模板，再导入默认模板）。
+- 若请求中的 `templateName` 在该用户模板中不存在，生成阶段抛出 `SmvGenerationException`（`multipleDevicesFailed`）。
+
 静态工具方法：
 - `cleanStateName(raw)` — 移除分号和空格
-- `findDeviceSmvData(name, map)` — 按 varName 或 templateName 查找
+- `findDeviceSmvData(name, map)` — 兼容查找（先按 varName，再按 templateName）
+- `findDeviceSmvDataStrict(name, map)` — 严格查找；当 templateName 匹配到多个实例时抛出 `SmvGenerationException`（`AMBIGUOUS_DEVICE_REFERENCE`）
 - `toVarName(deviceId)` — 转为安全变量名
 - `findApi(manifest, actionName)` — 按名称查找 API 定义
 
@@ -298,7 +309,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - 设备实例：`thermostat_1: Thermostat_thermostat1;`
    - 环境变量：`a_temperature: 15..39;`（攻击模式下仅上界扩展，公式 `expansion = range/5 * intensity/50`）
 3. `ASSIGN` — 状态转换逻辑（按顺序）
-   - `appendStateTransitions()` — 规则驱动 + 模板 Transition 驱动的状态转换
+   - `appendStateTransitions()` — 规则驱动 + 模板 Transition 驱动的状态转换（攻击模式下非传感器设备增加最高优先级 `is_attack=TRUE: {所有合法状态}` 劫持分支）
    - `appendEnvTransitions()` — 环境变量 `next()` 转换（含 NaturalChangeRate、设备影响率、边界检查）
    - `appendApiSignalTransitions()` — API 信号变量（基于状态变化检测）
    - `appendTransitionSignalTransitions()` — 模板 Transition 信号变量
@@ -307,7 +318,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - `appendContentPrivacyTransitions()` — IsChangeable=true 的 content 隐私转换（规则命中时设为 `private`，否则自保持）
    - `appendVariableRateTransitions()` — 受影响变量的变化率
    - `appendExternalVariableAssignments()` — 外部变量镜像环境变量（简单赋值，非 next）
-   - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下范围扩展）
+   - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下传感器 `is_attack=TRUE` 时可跳变到原始范围内任意值）
 
 关键设计：
 - 环境变量使用 `a_` 前缀在 main 模块声明，避免跨设备引用问题
@@ -317,6 +328,8 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 - `PropertyDimension` 枚举合并了 trust 和 privacy 的重复生成逻辑
 - 规则条件中的关系符通过 `normalizeRuleRelation()` 归一化
 - 规则条件采用 fail-closed：当条件无法解析（设备不存在、空属性、未知属性、不支持 relation、空 value、`IN/NOT_IN` 空列表）时，整条规则 guard 会被置为 `FALSE`
+- 规则与内容相关设备引用（`command.deviceName`、`command.contentDevice`、`conditions[].deviceName`）统一使用严格设备解析；templateName 仅在“唯一匹配”时允许回退，歧义时报错而非静默选择
+- 在构建 `next(target.mode)` 的规则条件时，若条件同时读取同一目标设备，则自动降级为当前态读取（`effectiveUseNext=false`），避免产生 `next(x)` 递归定义
 - 当规则条件 `relation != null` 且 `attribute` 指向 API signal 时，会映射为 `device.apiName_a`；仅支持 `=`/`!=`/`IN`/`NOT_IN`，且 value 必须为 `TRUE`/`FALSE`（大小写不敏感）
 - 当规则条件 `relation == null` 且 `attribute` 指向 `signal=true` 的 API 时，兼容生成 `(device.apiName_a=TRUE | mode=endState)` 形式条件
 
@@ -335,7 +348,9 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 攻击预算约束统一放在 `main` 模块的 `INVAR intensity <= N` 中，规格本身不注入 intensity 条件。
 
-无效条件（如找不到设备）抛出 `InvalidConditionException`，生成 `CTLSPEC FALSE` 占位。
+规格构建的异常策略：
+- 一般无效条件（如 relation/key/targetType 不合法）抛 `InvalidConditionException`，并降级生成 `CTLSPEC FALSE -- invalid spec: ...` 占位
+- 设备引用歧义（`AMBIGUOUS_DEVICE_REFERENCE`）直接抛 `SmvGenerationException`，不会降级为占位规格
 
 ### 4.7 NusmvExecutor — 执行器
 
@@ -346,10 +361,14 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 核心逻辑：
 - 构建命令：`NuSMV [extraArgs] model.smv`（支持 `command-prefix` 包装）
 - 超时控制：从环境变量 `NUSMV_TIMEOUT_MS` 读取，默认由 `NusmvConfig` 配置
+- 全局并发：`Semaphore` 限流（`nusmv.max-concurrent`），验证与模拟共享 NuSMV 进程并发上限
 - 输出解析：逐行匹配 `-- specification ... is true/false`
 - 反例提取：false spec 后的文本直到下一个 spec 结果为 counterexample
 - 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed + counterexample）
 - 交互模拟：`executeInteractiveSimulation()` 通过 `-int` 执行 `go -> pick_state -r -> simulate -r -k N -> show_traces -> quit`，并过滤 `NuSMV >` 提示符
+- 排障产物：执行器会在 `model.smv` 同目录写出 `output.txt`；验证/模拟在生成 `model.smv` 且流程产出结果对象时会写 `result.json`。
+- `result.json` 外层 `code/message` 与结果语义对齐，不固定为 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志含 `timed out` 时 `504`，其余失败 `500`。
+- 说明：若请求在生成 `model.smv` 之前就失败（例如输入前置校验失败）不会产生 `result.json`；异步取消若发生在结果对象产出前，也可能只保留 `model.smv` 而没有 `result.json`。
 
 ### 4.8 SmvTraceParser — 反例解析
 
@@ -359,11 +378,11 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 - 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
 - `device.var = value` → 匹配到对应 `DeviceSmvData` 的变量/状态/信任/隐私
-- `a_varName = value` → 环境变量
+- `a_varName = value` 及其他裸变量（如 `intensity = value`）→ 环境/全局变量
 - 自动补全 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
 - `trust_` 前缀按类型分流：状态级进入 `trustPrivacy[]`（布尔 trust），变量级写入 `variables[].trust`
 - `privacy_` 前缀进入 `privacies[]`（不再混入 `trustPrivacy[]`）
-- 过滤内部控制变量：`is_attack`、`*_rate`、`*_a`
+- 过滤内部控制变量：`*_rate`、`*_a`；`is_attack` 保留输出，供前端展示反例路径中哪些设备被攻击
 - 增量解析：NuSMV 只输出变化项，解析器通过 `previousModeValuesByDevice` 追踪上一状态
 - `finalizeModeStates()` — 用临时 `__mode__*` 变量补全未变化模式，并回填最终 `state/mode`
 
@@ -375,7 +394,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 | 校验 | 方法 | 说明 |
 |------|------|------|
-| P1 | `validateTriggerAttributes()` | Transition.Trigger.Attribute 必须是合法属性名 |
+| P1 | `validateTriggerAttributes()` | Trigger.Attribute 合法性 + Trigger.Relation 归一化后合法性（`=`/`!=`/`>`/`>=`/`<`/`<=`） |
 | P2 | `validateStartEndStates()` | 多模式 EndState 分号段数 = 模式数 |
 | P3 | `validateEnvVarConflicts()` | 同名环境变量跨设备范围一致 |
 | P5 | `validateTrustPrivacyConsistency()` | 同 (mode, state) 的 trust/privacy 值一致 |
@@ -427,10 +446,20 @@ public enum PropertyDimension {
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库） |
+| `POST` | `/api/verify/simulate/async` | 异步模拟，返回 `taskId` |
+| `GET` | `/api/verify/simulations/tasks/{id}` | 模拟任务状态 |
+| `GET` | `/api/verify/simulations/tasks/{id}/progress` | 模拟任务进度 (0-100) |
+| `POST` | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟任务 |
 | `POST` | `/api/verify/simulations` | 执行模拟并持久化 |
 | `GET` | `/api/verify/simulations` | 用户所有模拟记录（摘要） |
 | `GET` | `/api/verify/simulations/{id}` | 单条模拟记录（详情） |
 | `DELETE` | `/api/verify/simulations/{id}` | 删除模拟记录 |
+
+说明：
+- 当 syncSimulationExecutor 或 syncVerificationExecutor 饱和时，同步接口会返回 503 Service Unavailable。
+- 当同步链路中的 SMV 生成阶段抛出 `SmvGenerationException` 时，会原样透传到全局异常处理，响应中保留 `errorCategory`（如 `AMBIGUOUS_DEVICE_REFERENCE`、`ILLEGAL_TRIGGER_RELATION`）。
+- sync-* 线程池采用小队列（默认 16）以减少长队列导致的排队超时。
+- 同步超时后会执行 `future.cancel(true)` 并调用线程池 `purge()`，尽快清理已取消的排队任务。
 
 ### 其他端点
 
@@ -527,6 +556,26 @@ public enum PropertyDimension {
 }
 ```
 
+### 模拟任务状态 (SimulationTaskDto)
+
+用于 `POST /api/verify/simulate/async` 创建的异步任务查询接口：
+
+```json
+{
+  "id": 101,
+  "status": "RUNNING",
+  "createdAt": "2026-02-24T09:00:00",
+  "startedAt": "2026-02-24T09:00:01",
+  "completedAt": null,
+  "processingTimeMs": null,
+  "requestedSteps": 20,
+  "steps": null,
+  "simulationTraceId": null,
+  "checkLogs": ["Task started", "Executing simulation"],
+  "errorMessage": null
+}
+```
+
 ---
 
 ## 7. 配置与运行
@@ -535,16 +584,64 @@ public enum PropertyDimension {
 
 - JDK 17+
 - MySQL 8.0+
-- Redis 7.0+
+- Redis 7.0+（仅用于 JWT 黑名单；不可用时 fail-open 降级——登录/验证等流程不受阻，但登出撤销语义会失效：黑名单写入/查询失败时已登出的 token 仍可继续使用直至过期）
 - NuSMV 2.x (已测试 2.5–2.7，需配置路径)
+- `commons-pool2`（Lettuce 连接池，已在 pom.xml 中声明）
+
+### 模板前置条件（重要）
+
+- 后端验证/模拟链路依赖“用户模板表”中的 `DeviceManifest` 数据。
+- 新用户注册后会自动导入默认模板；历史用户可调用 `POST /api/board/templates/reload` 重置（删除现有模板后重建默认模板）。
+- 在调用 `/api/verify*` 或 `/api/verify/simulate*` 前，应确保请求中的每个 `templateName` 都能在当前用户模板列表中匹配。
+- 规则/规格中的设备引用建议使用 `varName`；若使用 `templateName` 且在本次请求中匹配到多个实例，将抛出 `AMBIGUOUS_DEVICE_REFERENCE`。
 
 ### 关键配置 (application.yaml)
 
 ```yaml
+spring.data.redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  password: ${REDIS_PASSWORD:}
+  database: ${REDIS_DATABASE:0}
+  timeout: 3000ms
+  lettuce:
+    pool:
+      max-active: 16
+      max-idle: 8
+      min-idle: 2
+      max-wait: 2000ms
 nusmv:
-  path: /usr/local/bin/NuSMV    # NuSMV 可执行文件路径
+  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}  # NuSMV 可执行文件路径
   command-prefix: ""             # 可选：命令前缀（如 docker exec ...）
   timeout-ms: 120000              # 执行超时（毫秒）
+  max-concurrent: 6               # NuSMV 全局并发上限（验证+模拟共享）
+  acquire-permit-timeout-ms: 10000 # 获取执行许可的等待时长（毫秒）
+thread-pool:
+  chat:
+    core-pool-size: 10
+    max-pool-size: 50
+    queue-capacity: 200
+    await-termination-seconds: 30
+  verification-task:
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
+    await-termination-seconds: 60
+  sync-verification:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 16
+    await-termination-seconds: 30
+  sync-simulation:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 16
+    await-termination-seconds: 30
+  simulation-task:
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
+    await-termination-seconds: 60
 ```
 
 ### 构建与运行
@@ -552,7 +649,7 @@ nusmv:
 ```bash
 cd backend
 mvn clean package -DskipTests
-java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
+java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 ```
 
 ---
@@ -573,6 +670,8 @@ java -jar target/Iot_Verify-0.0.1-SNAPSHOT.jar
 | 隐私维度 | Done | `enablePrivacy` + `PropertyDimension` |
 | 随机模拟 | Done | `SimulationServiceImpl` + `NusmvExecutor.executeInteractiveSimulation()` |
 | 模拟结果持久化 | Done | `SimulationTraceRepository` + `SimulationController` |
+| 模拟异步任务 | Done | `SimulationTaskPo/Repository` + `/api/verify/simulate/async` + `/api/verify/simulations/tasks/*` |
+| 线程池统一配置 | Done | `ThreadPoolConfig` + `ThreadConfig` |
 | 输入校验强化 | Done | `SmvDeviceModuleBuilder.validateInternalInitValue()` + `SmvMainModuleBuilder.resolveEnvVarInitValues()` / `validateEnvVarInitValue()` + `SmvSpecificationBuilder.buildVariableCondition()` / `validateApiSignalExists()` / `validateApiBooleanRelation()` + `SpecConditionDto @Pattern` |
 
 ---

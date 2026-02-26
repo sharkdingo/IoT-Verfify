@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
 import cn.edu.nju.Iot_Verify.util.JwtUtil;
 import cn.edu.nju.Iot_Verify.util.mapper.UserMapper;
+import io.jsonwebtoken.JwtException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -69,8 +70,13 @@ public class AuthServiceImpl implements AuthService {
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
-            long expirationSeconds = jwtUtil.getExpirationSeconds(token);
-            tokenBlacklistService.blacklist(token, expirationSeconds);
+            try {
+                long expirationSeconds = jwtUtil.getExpirationSeconds(token);
+                tokenBlacklistService.blacklist(token, expirationSeconds);
+            } catch (JwtException e) {
+                // token 已过期或无效，无需加黑名单，登出仍视为成功
+                log.warn("Logout skipped blacklist: token expired or invalid", e);
+            }
         }
     }
 }

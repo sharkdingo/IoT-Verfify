@@ -32,7 +32,7 @@ public class TraceStateDto {
     private List<TraceTrustPrivacyDto> trustPrivacies;
 
     /**
-     * Environment variables in this state, for example a_temperature.
+     * Environment and global variables in this state, e.g. a_temperature, intensity.
      */
     @Valid
     private List<TraceVariableDto> envVariables;

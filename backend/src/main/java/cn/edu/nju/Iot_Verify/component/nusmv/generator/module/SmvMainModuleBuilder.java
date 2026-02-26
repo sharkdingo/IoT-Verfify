@@ -26,21 +26,21 @@ public class SmvMainModuleBuilder {
 
         // 参数验证
         if (devices == null) {
-            log.error("SmvMainModuleBuilder.build: devices 参数不能为 null");
-            throw new IllegalArgumentException("devices 参数不能为 null");
+            log.error("SmvMainModuleBuilder.build: devices 参数不能为null");
+            throw new IllegalArgumentException("devices 参数不能为null");
         }
         if (deviceSmvMap == null) {
-            log.error("SmvMainModuleBuilder.build: deviceSmvMap 参数不能为 null");
-            throw new IllegalArgumentException("deviceSmvMap 参数不能为 null");
+            log.error("SmvMainModuleBuilder.build: deviceSmvMap 参数不能为null");
+            throw new IllegalArgumentException("deviceSmvMap 参数不能为null");
         }
 
         StringBuilder content = new StringBuilder();
 
         content.append("\nMODULE main");
 
-        // intensity 是冻结变量（与 MEDIC 一致）：值由各设备 is_attack 之和决定，验证过程中不变
-        // 只要 isAttack=true 就声明 intensity，并用 INVAR 约束上限
-        // intensity=0 时 INVAR intensity<=0 强制所有 is_attack=FALSE，语义闭合
+        // intensity 是冻结变量（与MEDIC 一致）：值由各设备is_attack 之和决定，验证过程中不变
+        // 只要 isAttack=true 就声明intensity，并用INVAR 约束上限
+        // intensity=0 时INVAR intensity<=0 强制所有is_attack=FALSE，语义闭合
         if (isAttack) {
             content.append("\nFROZENVAR");
             content.append("\n\tintensity: 0..50;");
@@ -95,7 +95,7 @@ public class SmvMainModuleBuilder {
                         content.append("0..100;");
                     }
                 }
-                // 记录每个设备提供的初始值（校验范围），用于检测同名 env var 的冲突输入
+                // 记录每个设备提供的初始值（校验范围），用于检测同名env var 的冲突输入
                 String userInit = smv.getVariableValues().get(varName);
                 if (userInit != null && !userInit.isBlank()) {
                     String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack, intensity);
@@ -112,7 +112,7 @@ public class SmvMainModuleBuilder {
 
         content.append("\nASSIGN");
 
-        // 生成环境变量的 init()（使用用户指定的初始值）
+        // 生成环境变量的init()（使用用户指定的初始值）
         for (Map.Entry<String, String> entry : envVarInitValues.entrySet()) {
             content.append("\n\tinit(a_").append(entry.getKey()).append(") := ")
                    .append(entry.getValue()).append(";");
@@ -153,7 +153,7 @@ public class SmvMainModuleBuilder {
     /**
      * 为所有设备的 IsInside=false 变量生成简单赋值（镜像环境变量）。
      * 例如：thermostat.temperature := a_temperature;
-     * 不限于传感器设备——非传感器设备（如 Thermostat）的外部变量也需要连接到环境变量。
+     * 不限于传感器设备——非传感器设备（如Thermostat）的外部变量也需要连接到环境变量。
      */
     private void appendExternalVariableAssignments(StringBuilder content,
                                                    List<DeviceVerificationDto> devices,
@@ -175,30 +175,42 @@ public class SmvMainModuleBuilder {
         }
     }
 
+    private Map<String, List<RuleDto>> groupRulesByResolvedTarget(List<RuleDto> rules,
+                                                                   Map<String, DeviceSmvData> deviceSmvMap) {
+        Map<String, List<RuleDto>> rulesByTarget = new LinkedHashMap<>();
+        if (rules == null) {
+            return rulesByTarget;
+        }
+        for (RuleDto rule : rules) {
+            if (rule == null || rule.getCommand() == null) {
+                continue;
+            }
+            String requestedTarget = rule.getCommand().getDeviceName();
+            if (requestedTarget == null || requestedTarget.isBlank()) {
+                continue;
+            }
+            DeviceSmvData targetSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(requestedTarget, deviceSmvMap);
+            if (targetSmv == null) {
+                throw SmvGenerationException.deviceNotFound(requestedTarget);
+            }
+            rulesByTarget.computeIfAbsent(targetSmv.getVarName(), k -> new ArrayList<>()).add(rule);
+        }
+        return rulesByTarget;
+    }
+
     private void appendStateTransitions(StringBuilder content,
                                        List<DeviceVerificationDto> devices,
                                        List<RuleDto> rules,
                                        Map<String, DeviceSmvData> deviceSmvMap,
                                        boolean isAttack) {
-        
-        Map<String, List<RuleDto>> rulesByTarget = new LinkedHashMap<>();
-        if (rules != null) {
-            for (RuleDto rule : rules) {
-                if (rule == null || rule.getCommand() == null) continue;
-                String targetDevice = rule.getCommand().getDeviceName();
-                rulesByTarget.computeIfAbsent(targetDevice, k -> new ArrayList<>()).add(rule);
-            }
-        }
+        Map<String, List<RuleDto>> rulesByTarget = groupRulesByResolvedTarget(rules, deviceSmvMap);
 
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv == null || smv.getModes() == null) continue;
 
             String varName = smv.getVarName();
-            List<RuleDto> deviceRules = rulesByTarget.get(device.getVarName());
-            if (deviceRules == null) {
-                deviceRules = rulesByTarget.get(smv.getTemplateName());
-            }
+            List<RuleDto> deviceRules = rulesByTarget.get(varName);
 
             if (!smv.getModes().isEmpty()) {
                 for (int modeIdx = 0; modeIdx < smv.getModes().size(); modeIdx++) {
@@ -208,6 +220,12 @@ public class SmvMainModuleBuilder {
 
                     content.append("\n\tnext(").append(varName).append(".").append(mode).append(") :=\n");
                     content.append("\tcase\n");
+
+                    // 攻击模式下，被攻击的执行器可被劫持到任意合法状态（最高优先级）
+                    if (isAttack && !smv.isSensor()) {
+                        content.append("\t\t").append(varName).append(".is_attack=TRUE: {")
+                               .append(String.join(", ", modeStates)).append("};\n");
+                    }
 
                     if (deviceRules != null) {
                         for (RuleDto rule : deviceRules) {
@@ -225,7 +243,7 @@ public class SmvMainModuleBuilder {
                             String startState = getStateForMode(matchedApi.getStartState(), modeIdx);
 
                             content.append("\t\t");
-                            appendRuleConditions(content, rule, deviceSmvMap, true);
+                            appendRuleConditions(content, rule, deviceSmvMap, true, varName);
 
                             if (startState != null && !startState.isEmpty()) {
                                 content.append(" & ").append(varName).append(".").append(mode).append("=").append(startState);
@@ -249,6 +267,8 @@ public class SmvMainModuleBuilder {
                             if (trigger != null) {
                                 // M4 修复：trigger value 需要去空格
                                 String triggerValue = trigger.getValue() != null ? trigger.getValue().replace(" ", "") : "";
+                                String triggerRelation = normalizeTriggerRelationOrThrow(
+                                        smv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
                                 String startState = getStateForMode(trans.getStartState(), modeIdx);
 
                                 content.append("\t\t");
@@ -257,7 +277,7 @@ public class SmvMainModuleBuilder {
                                 }
                                 content.append(varName).append(".")
                                        .append(trigger.getAttribute())
-                                       .append(trigger.getRelation())
+                                       .append(triggerRelation)
                                        .append(triggerValue).append(": ").append(endState).append(";\n");
                             }
                         }
@@ -271,6 +291,11 @@ public class SmvMainModuleBuilder {
     }
 
     private void appendRuleConditions(StringBuilder content, RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap, boolean useNext) {
+        appendRuleConditions(content, rule, deviceSmvMap, useNext, null);
+    }
+
+    private void appendRuleConditions(StringBuilder content, RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap,
+                                      boolean useNext, String transitionTargetVarName) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
             content.append("TRUE");
             return;
@@ -285,7 +310,7 @@ public class SmvMainModuleBuilder {
                 return;
             }
 
-            String part = buildSingleCondition(condition, deviceSmvMap, useNext);
+            String part = buildSingleCondition(condition, deviceSmvMap, useNext, transitionTargetVarName);
             if (part != null && !part.isEmpty()) {
                 parts.add(part);
             } else {
@@ -306,9 +331,11 @@ public class SmvMainModuleBuilder {
         }
     }
 
-    private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap, boolean useNext) {
+
+    private String buildSingleCondition(RuleDto.Condition condition, Map<String, DeviceSmvData> deviceSmvMap,
+                                        boolean useNext, String transitionTargetVarName) {
         String deviceId = condition.getDeviceName();
-        DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvData(deviceId, deviceSmvMap);
+        DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(deviceId, deviceSmvMap);
 
         if (condSmv == null) {
             log.warn("Rule condition references unknown device '{}' and cannot be resolved", deviceId);
@@ -316,6 +343,11 @@ public class SmvMainModuleBuilder {
         }
 
         String varName = condSmv.getVarName();
+        boolean effectiveUseNext = useNext;
+        if (useNext && transitionTargetVarName != null && transitionTargetVarName.equals(varName)) {
+            // Avoid recursively defined next(target.*) when target rules read target state/vars.
+            effectiveUseNext = false;
+        }
         String attr = condition.getAttribute();
         if (attr == null || attr.isBlank()) {
             log.warn("Rule condition has null/blank attribute for device '{}' and cannot be resolved", deviceId);
@@ -323,13 +355,11 @@ public class SmvMainModuleBuilder {
         }
 
         if (condition.getRelation() != null) {
-            // relation 非空时 value 也必须非空，否则无法生成有效条件
             if (condition.getValue() == null || condition.getValue().isBlank()) {
                 log.warn("Rule condition has relation '{}' but null/blank value for device '{}' and cannot be resolved",
                         condition.getRelation(), deviceId);
                 return null;
             }
-            // M1/M2: 当 attribute="state" 时，解析为实际的 mode 变量名
             String normalizedRel = normalizeRuleRelation(condition.getRelation());
             if (!isSupportedRuleRelation(normalizedRel)) {
                 log.warn("Rule condition has unsupported relation '{}' (normalized '{}') for device '{}'",
@@ -342,61 +372,8 @@ public class SmvMainModuleBuilder {
                         normalizedRel, deviceId);
                 return null;
             }
-            if ("state".equals(attr) && condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-                String value = condition.getValue();
-                // IN/NOT_IN: 拆分值列表，逐个匹配 mode state
-                List<String> valueParts = splitRuleValues(value);
-                List<String> matchedExprs = new ArrayList<>();
-                boolean hasUnresolvedValue = false;
-                for (String singleVal : valueParts) {
-                    String cleanValue = DeviceSmvDataFactory.cleanStateName(singleVal);
-                    boolean matchedCurrentValue = false;
-                    for (String mode : condSmv.getModes()) {
-                        List<String> modeStateList = condSmv.getModeStates().get(mode);
-                        if (modeStateList != null) {
-                            for (String ms : modeStateList) {
-                                String suffix = ms.startsWith(mode + "_") ? ms.substring(mode.length() + 1) : ms;
-                                if (suffix.equals(cleanValue) || ms.equals(cleanValue)) {
-                                    matchedCurrentValue = true;
-                                    // 根据 useNext 决定是否使用 next() 包装
-                                    String stateExpr = varName + "." + mode + "=" + ms;
-                                    if (useNext) {
-                                        stateExpr = "next(" + stateExpr + ")";
-                                    }
-                                    // 对于 IN/NOT_IN，每个值单独用 = 或 != 匹配
-                                    if ("in".equals(normalizedRel)) {
-                                        matchedExprs.add(stateExpr);
-                                    } else if ("not in".equals(normalizedRel)) {
-                                        matchedExprs.add(useNext ? "!(next(" + varName + "." + mode + "=" + ms + "))" : varName + "." + mode + "!=" + ms);
-                                    } else {
-                                        matchedExprs.add(stateExpr);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (!matchedCurrentValue) {
-                        hasUnresolvedValue = true;
-                    }
-                }
-                if (hasUnresolvedValue) {
-                    log.warn("Rule state condition value '{}' on device '{}' cannot be resolved to any legal state",
-                            condition.getValue(), deviceId);
-                    return null;
-                }
-                if (!matchedExprs.isEmpty()) {
-                    // IN: 任一匹配即可 (|)；NOT_IN: 全部不匹配 (&)；其他: 单值用原表达式
-                    if ("in".equals(normalizedRel)) {
-                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" | ", matchedExprs) + ")";
-                    } else if ("not in".equals(normalizedRel)) {
-                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" & ", matchedExprs) + ")";
-                    } else {
-                        return matchedExprs.size() == 1 ? matchedExprs.get(0) : "(" + String.join(" | ", matchedExprs) + ")";
-                    }
-                }
-                log.warn("Rule state condition on device '{}' produced no resolvable expression", deviceId);
-                return null;
+            if ("state".equals(attr)) {
+                return buildRuleStateCondition(condition, condSmv, normalizedRel, effectiveUseNext);
             }
 
             boolean isModeAttr = condSmv.getModes() != null && condSmv.getModes().contains(attr);
@@ -430,8 +407,6 @@ public class SmvMainModuleBuilder {
             if (rhsValue != null && isModeAttr) {
                 rhsValue = cleanRuleValueByRelation(normalizedRel, rhsValue);
             }
-            // BUG 1 fix: 枚举型 InternalVariable 的值也需要去空格，
-            // 因为 SmvDeviceModuleBuilder 声明时已做 replace(" ", "")
             if (rhsValue != null && internalVar != null
                     && internalVar.getValues() != null && !internalVar.getValues().isEmpty()) {
                 rhsValue = rhsValue.replace(" ", "");
@@ -449,9 +424,8 @@ public class SmvMainModuleBuilder {
                         deviceId, attr);
                 return null;
             }
-            // 构建左边的属性表达式，根据 useNext 决定是否使用 next()
             String lhsExpr = varName + "." + lhsAttr;
-            if (useNext) {
+            if (effectiveUseNext) {
                 lhsExpr = "next(" + lhsExpr + ")";
             }
             String expr = buildRuleRelationExpr(lhsExpr, normalizedRel, rhsValue);
@@ -462,47 +436,213 @@ public class SmvMainModuleBuilder {
             return expr;
         }
 
-        // API signal condition
         DeviceManifest manifest = condSmv.getManifest();
         if (manifest == null || manifest.getApis() == null) return null;
 
         for (DeviceManifest.API api : manifest.getApis()) {
-            if (api.getSignal() != null && api.getSignal()
-                    && api.getName().equals(condition.getAttribute())) {
-                String endState = api.getEndState();
-                if (endState == null) break;
+            if (!Boolean.TRUE.equals(api.getSignal()) || !api.getName().equals(condition.getAttribute())) {
+                continue;
+            }
 
-                String apiSignal = DeviceSmvDataFactory.formatApiSignalName(api.getName());
-                String apiSignalExpr = apiSignal != null
-                        ? varName + "." + apiSignal + "=TRUE"
-                        : null;
+            String apiSignal = DeviceSmvDataFactory.formatApiSignalName(api.getName());
+            String apiSignalExpr = null;
+            if (apiSignal != null) {
+                String apiSignalLhs = varName + "." + apiSignal;
+                if (effectiveUseNext) {
+                    apiSignalLhs = "next(" + apiSignalLhs + ")";
+                }
+                apiSignalExpr = apiSignalLhs + "=TRUE";
+            }
 
-                if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-                    int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
-                    if (modeIdx >= 0 && modeIdx < condSmv.getModes().size()) {
-                        String mode = condSmv.getModes().get(modeIdx);
-                        String cleanEndState = getStateForMode(endState, modeIdx);
-                        if (cleanEndState == null || cleanEndState.isEmpty()) break;
-                        String stateExpr = varName + "." + mode + "=" + cleanEndState;
+            String endState = api.getEndState();
+            if (endState != null && condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
+                int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
+                if (modeIdx >= 0 && modeIdx < condSmv.getModes().size()) {
+                    String mode = condSmv.getModes().get(modeIdx);
+                    String cleanEndState = getStateForMode(endState, modeIdx);
+                    if (cleanEndState != null && !cleanEndState.isEmpty()) {
+                        String stateLhs = varName + "." + mode;
+                        if (effectiveUseNext) {
+                            stateLhs = "next(" + stateLhs + ")";
+                        }
+                        String stateExpr = stateLhs + "=" + cleanEndState;
                         return apiSignalExpr != null
                                 ? "(" + apiSignalExpr + " | " + stateExpr + ")"
                                 : stateExpr;
                     }
-                } else {
-                    // 无模式 fallback
-                    String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
-                    String stateVar = (condSmv.getModes() != null && condSmv.getModes().size() == 1) ? condSmv.getModes().get(0) : "state";
-                    String stateExpr = varName + "." + stateVar + "=" + cleanEndState;
-                    return apiSignalExpr != null
-                            ? "(" + apiSignalExpr + " | " + stateExpr + ")"
-                            : stateExpr;
                 }
-                break;
             }
+
+            if (apiSignalExpr != null) {
+                return apiSignalExpr;
+            }
+            break;
         }
         log.warn("Rule condition: attribute '{}' on device '{}' did not match any mode, variable, or API signal",
                 condition.getAttribute(), deviceId);
         return null;
+    }
+private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvData condSmv,
+                                           String normalizedRel, boolean useNext) {
+        String deviceId = condition.getDeviceName();
+        if (condSmv.getModes() == null || condSmv.getModes().isEmpty()) {
+            log.warn("Rule state condition references no-mode device '{}' and cannot be resolved", deviceId);
+            return null;
+        }
+        if (!"=".equals(normalizedRel)
+                && !"!=".equals(normalizedRel)
+                && !"in".equals(normalizedRel)
+                && !"not in".equals(normalizedRel)) {
+            log.warn("Rule state condition relation '{}' is not supported for device '{}'", normalizedRel, deviceId);
+            return null;
+        }
+
+        List<String> rawCandidates = splitStateRuleCandidates(condition.getValue(), normalizedRel, condSmv);
+        if (rawCandidates.isEmpty()) {
+            log.warn("Rule state condition has empty candidate set on device '{}'", deviceId);
+            return null;
+        }
+
+        List<String> tupleExprs = new ArrayList<>();
+        for (String rawCandidate : rawCandidates) {
+            Map<String, String> modeStateMap = resolveStateTupleCandidate(condSmv, rawCandidate);
+            if (modeStateMap == null || modeStateMap.isEmpty()) {
+                log.warn("Rule state condition value '{}' on device '{}' cannot be resolved to a legal mode tuple",
+                        rawCandidate, deviceId);
+                return null;
+            }
+            String tupleExpr = buildStateTupleExpr(condSmv.getVarName(), condSmv, modeStateMap, useNext);
+            if (tupleExpr == null || tupleExpr.isBlank()) {
+                log.warn("Rule state condition tuple '{}' on device '{}' produced no expression", rawCandidate, deviceId);
+                return null;
+            }
+            tupleExprs.add(tupleExpr);
+        }
+
+        if ("=".equals(normalizedRel)) {
+            if (tupleExprs.size() != 1) {
+                log.warn("Rule state '=' condition on device '{}' resolved to multiple candidates: {}", deviceId, rawCandidates);
+                return null;
+            }
+            return tupleExprs.get(0);
+        }
+        if ("!=".equals(normalizedRel)) {
+            if (tupleExprs.size() != 1) {
+                log.warn("Rule state '!=' condition on device '{}' resolved to multiple candidates: {}", deviceId, rawCandidates);
+                return null;
+            }
+            return "!(" + tupleExprs.get(0) + ")";
+        }
+        if ("in".equals(normalizedRel)) {
+            return tupleExprs.size() == 1 ? tupleExprs.get(0) : "(" + String.join(" | ", tupleExprs) + ")";
+        }
+
+        List<String> negated = new ArrayList<>();
+        for (String tupleExpr : tupleExprs) {
+            negated.add("!(" + tupleExpr + ")");
+        }
+        return negated.size() == 1 ? negated.get(0) : "(" + String.join(" & ", negated) + ")";
+    }
+
+    private List<String> splitStateRuleCandidates(String value, String normalizedRel, DeviceSmvData condSmv) {
+        if (value == null) {
+            return List.of();
+        }
+        if ("in".equals(normalizedRel) || "not in".equals(normalizedRel)) {
+            String splitRegex = (condSmv.getModes() != null && condSmv.getModes().size() > 1) ? "[,|]" : "[,;|]";
+            String[] parts = value.split(splitRegex);
+            List<String> result = new ArrayList<>();
+            for (String part : parts) {
+                String trimmed = part.trim();
+                if (!trimmed.isEmpty()) {
+                    result.add(trimmed);
+                }
+            }
+            return result;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? List.of() : List.of(trimmed);
+    }
+
+    private Map<String, String> resolveStateTupleCandidate(DeviceSmvData condSmv, String rawCandidate) {
+        if (condSmv == null || condSmv.getModes() == null || condSmv.getModes().isEmpty()
+                || rawCandidate == null || rawCandidate.isBlank()) {
+            return null;
+        }
+
+        List<String> modes = condSmv.getModes();
+        String candidate = rawCandidate.trim();
+
+        if (candidate.contains(";")) {
+            String[] segments = candidate.split(";", -1);
+            if (segments.length != modes.size()) {
+                return null;
+            }
+            Map<String, String> tuple = new LinkedHashMap<>();
+            for (int i = 0; i < modes.size(); i++) {
+                String cleanSeg = DeviceSmvDataFactory.cleanStateName(segments[i]);
+                if (cleanSeg == null || cleanSeg.isBlank()) {
+                    continue;
+                }
+                String mode = modes.get(i);
+                List<String> legalStates = condSmv.getModeStates().get(mode);
+                if (legalStates == null || !legalStates.contains(cleanSeg)) {
+                    return null;
+                }
+                tuple.put(mode, cleanSeg);
+            }
+            return tuple.isEmpty() ? null : tuple;
+        }
+
+        String cleanState = DeviceSmvDataFactory.cleanStateName(candidate);
+        if (cleanState == null || cleanState.isBlank()) {
+            return null;
+        }
+
+        if (modes.size() == 1) {
+            String mode = modes.get(0);
+            List<String> legalStates = condSmv.getModeStates().get(mode);
+            if (legalStates == null || !legalStates.contains(cleanState)) {
+                return null;
+            }
+            Map<String, String> tuple = new LinkedHashMap<>();
+            tuple.put(mode, cleanState);
+            return tuple;
+        }
+
+        List<String> matchedModes = new ArrayList<>();
+        for (String mode : modes) {
+            List<String> legalStates = condSmv.getModeStates().get(mode);
+            if (legalStates != null && legalStates.contains(cleanState)) {
+                matchedModes.add(mode);
+            }
+        }
+        if (matchedModes.size() != 1) {
+            return null;
+        }
+        Map<String, String> tuple = new LinkedHashMap<>();
+        tuple.put(matchedModes.get(0), cleanState);
+        return tuple;
+    }
+
+    private String buildStateTupleExpr(String varName, DeviceSmvData condSmv,
+                                       Map<String, String> modeStateMap, boolean useNext) {
+        List<String> parts = new ArrayList<>();
+        for (String mode : condSmv.getModes()) {
+            String state = modeStateMap.get(mode);
+            if (state == null || state.isBlank()) {
+                continue;
+            }
+            String lhs = varName + "." + mode;
+            if (useNext) {
+                lhs = "next(" + lhs + ")";
+            }
+            parts.add(lhs + "=" + state);
+        }
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return parts.size() == 1 ? parts.get(0) : "(" + String.join(" & ", parts) + ")";
     }
 
     private void appendEnvTransitions(StringBuilder content,
@@ -549,7 +689,9 @@ public class SmvMainModuleBuilder {
                                                 "attribute=" + trigger.getAttribute() + ", relation=" + trigger.getRelation()
                                                         + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
                                     }
-                                    // P4: 若 trigger.attribute 本身是 env var，直接用 a_<attr>
+                                    // P4: 若trigger.attribute 本身是env var，直接用 a_<attr>
+                                    String triggerRelation = normalizeTriggerRelationOrThrow(
+                                            transSmv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
                                     String triggerRef;
                                     if (transSmv.getEnvVariables().containsKey(trigger.getAttribute())) {
                                         triggerRef = "a_" + trigger.getAttribute();
@@ -557,7 +699,7 @@ public class SmvMainModuleBuilder {
                                         triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
                                     }
                                     content.append("\t\t");
-                                    // P1-1 修复：增加 startState 约束
+                                    // P1-1 修复：增加startState 约束
                                     if (trans.getStartState() != null && transSmv.getModes() != null && !transSmv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < transSmv.getModes().size(); mi++) {
                                             String ss = getStateForMode(trans.getStartState(), mi);
@@ -568,7 +710,7 @@ public class SmvMainModuleBuilder {
                                         }
                                     }
                                     content.append(triggerRef).append(" ")
-                                           .append(trigger.getRelation()).append(" ")
+                                           .append(triggerRelation).append(" ")
                                            .append(trigger.getValue().replace(" ", "")).append(": ").append(assignment.getValue().replace(" ", "")).append(";\n");
                                 }
                             }
@@ -577,14 +719,14 @@ public class SmvMainModuleBuilder {
                 }
 
                 if (var.getValues() != null && !var.getValues().isEmpty()) {
-                    // 枚举型环境变量：非确定性选择所有可能值（与 sample.smv 一致）
+                    // 枚举型环境变量：非确定性选择所有可能值（与sample.smv 一致）
                     List<String> cleanValues = new ArrayList<>();
                     for (String v : var.getValues()) {
                         cleanValues.add(v.replace(" ", ""));
                     }
                     content.append("\t\tTRUE: {").append(String.join(", ", cleanValues)).append("};\n");
                 } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
-                    // 数值型环境变量：参照 sample.smv 生成带设备影响率的边界检查
+                    // 数值型环境变量：参照sample.smv 生成带设备影响率的边界检查
                     appendNumericEnvTransition(content, smvVarName, var, varName, devices, deviceSmvMap);
                 } else {
                     content.append("\t\tTRUE: ").append(smvVarName).append(";\n");
@@ -596,8 +738,8 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 生成数值型环境变量的 next() 转换，参照 sample.smv 格式：
-     * 包含设备影响率（如 airconditioner.temperature_rate）和 NaturalChangeRate
+     * 生成数值型环境变量的next() 转换，参照sample.smv 格式：
+     * 包含设备影响率（如airconditioner.temperature_rate）和 NaturalChangeRate
      */
     private void appendNumericEnvTransition(StringBuilder content, String smvVarName,
                                             DeviceManifest.InternalVariable var, String varName,
@@ -613,8 +755,8 @@ public class SmvMainModuleBuilder {
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
 
         if (rateExpr != null) {
-            // 有设备影响率：生成 sample.smv 风格
-            // 上边界: a_var=upper-(rate): {toint(a_var)-1+rate, a_var+rate}
+            // 有设备影响率：生成sample.smv 风格
+            // 上边界 a_var=upper-(rate): {toint(a_var)-1+rate, a_var+rate}
             content.append("\t\t").append(smvVarName).append("=").append(upper)
                    .append("-(").append(rateExpr).append("): {toint(").append(smvVarName)
                    .append(")-1+").append(rateExpr).append(", ").append(smvVarName)
@@ -624,12 +766,12 @@ public class SmvMainModuleBuilder {
             content.append("\t\t").append(smvVarName).append(">").append(upper)
                    .append("-(").append(rateExpr).append("): {").append(upper).append("};\n");
 
-            // 下边界: a_var=lower-(rate): {a_var+rate, a_var+1+rate}
+            // 下边界 a_var=lower-(rate): {a_var+rate, a_var+1+rate}
             content.append("\t\t").append(smvVarName).append("=").append(lower)
                    .append("-(").append(rateExpr).append("): {").append(smvVarName).append("+")
                    .append(rateExpr).append(", ").append(smvVarName).append("+1+").append(rateExpr).append("};\n");
 
-            // 低于下边界: a_var<lower-(rate): {lower}
+            // 低于下边界 a_var<lower-(rate): {lower}
             content.append("\t\t").append(smvVarName).append("<").append(lower)
                    .append("-(").append(rateExpr).append("): {").append(lower).append("};\n");
 
@@ -685,9 +827,9 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 查找所有影响指定变量的设备的 rate 表达式
-     * 例如：对于 temperature，如果 air_conditioner 的 impactedVariables 包含 temperature，
-     * 则返回 "air_conditioner.temperature_rate"
+     * 查找所有影响指定变量的设备的rate 表达式
+     * 例如：对于temperature，如果air_conditioner 的impactedVariables 包含 temperature）
+     * 则返回"air_conditioner.temperature_rate"
      */
     private String findImpactRateExpression(String varName, List<DeviceVerificationDto> devices,
                                             Map<String, DeviceSmvData> deviceSmvMap) {
@@ -735,7 +877,7 @@ public class SmvMainModuleBuilder {
                         String cleanStartState = startState != null ? getStateForMode(startState, modeIdx) : "";
                         if (cleanEndState == null || cleanEndState.isEmpty()) continue;
                         if (cleanStartState == null) cleanStartState = "";
-                        
+
                         if (cleanStartState.isEmpty()) {
                             content.append("\t\t").append(varName).append(".").append(mode).append("!=")
                                    .append(cleanEndState).append(" & next(").append(varName).append(".").append(mode)
@@ -746,18 +888,23 @@ public class SmvMainModuleBuilder {
                                    .append(")=").append(cleanEndState).append(": TRUE;\n");
                         }
                     }
-                } else {
-                    // 无模式 fallback
-                    String stateVar = (smv.getModes() != null && smv.getModes().size() == 1) ? smv.getModes().get(0) : "state";
+                } else if (smv.getModes() != null && smv.getModes().size() == 1) {
+                    String stateVar = smv.getModes().get(0);
                     String cleanEnd = DeviceSmvDataFactory.cleanStateName(endState);
                     String cleanStart = (startState != null) ? DeviceSmvDataFactory.cleanStateName(startState) : "";
-                    if (cleanStart.isEmpty()) {
+                    if (cleanEnd == null || cleanEnd.isEmpty()) {
+                        log.warn("API signal '{}' on device '{}' has empty endState and cannot derive transition pulse",
+                                api.getName(), varName);
+                    } else if (cleanStart.isEmpty()) {
                         content.append("\t\t").append(varName).append(".").append(stateVar).append("!=").append(cleanEnd)
                                .append(" & next(").append(varName).append(".").append(stateVar).append(")=").append(cleanEnd).append(": TRUE;\n");
                     } else {
                         content.append("\t\t").append(varName).append(".").append(stateVar).append("=").append(cleanStart)
                                .append(" & next(").append(varName).append(".").append(stateVar).append(")=").append(cleanEnd).append(": TRUE;\n");
                     }
+                } else {
+                    log.warn("API signal '{}' on no-mode device '{}' cannot derive state-based pulse; defaulting to FALSE",
+                            api.getName(), varName);
                 }
 
                 content.append("\t\tTRUE: FALSE;\n");
@@ -767,8 +914,8 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 为 transition signal（非 API signal）生成 next() 转换。
-     * 当设备从 startState 转换到 endState 时 signal=TRUE，否则 FALSE。
+     * 为transition signal（非 API signal）生成next() 转换。
+     * 当设备从 startState 转换到endState 时signal=TRUE，否则FALSE。
      */
     private void appendTransitionSignalTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
@@ -821,21 +968,14 @@ public class SmvMainModuleBuilder {
                                            boolean isAttack,
                                            PropertyDimension dim) {
 
-        Map<String, List<RuleDto>> rulesByTarget = new LinkedHashMap<>();
-        if (rules != null) {
-            for (RuleDto rule : rules) {
-                if (rule == null || rule.getCommand() == null) continue;
-                rulesByTarget.computeIfAbsent(rule.getCommand().getDeviceName(), k -> new ArrayList<>()).add(rule);
-            }
-        }
+        Map<String, List<RuleDto>> rulesByTarget = groupRulesByResolvedTarget(rules, deviceSmvMap);
 
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv == null || smv.isSensor()) continue;
 
             String varName = smv.getVarName();
-            List<RuleDto> deviceRules = rulesByTarget.get(device.getVarName());
-            if (deviceRules == null) deviceRules = rulesByTarget.get(smv.getTemplateName());
+            List<RuleDto> deviceRules = rulesByTarget.get(varName);
 
             if (smv.getModes() == null || smv.getModes().isEmpty()) continue;
 
@@ -867,7 +1007,7 @@ public class SmvMainModuleBuilder {
                                 appendRuleConditions(content, rule, deviceSmvMap, false);
                                 content.append(" & (");
                                 appendRulePropertyConditions(content, rule, deviceSmvMap, dim);
-                                // content 隐私传播：规则携带 contentDevice.content 时追加 content privacy 条件
+                                // content 隐私传播：规则携带contentDevice.content 时追加content privacy 条件
                                 if (dim == PropertyDimension.PRIVACY) {
                                     String contentCond = buildContentPrivacyCondition(rule, deviceSmvMap);
                                     if (contentCond != null) {
@@ -893,8 +1033,8 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 为 actuator 设备的变量级 trust/privacy 生成 next() 转换（自保持）。
-     * 这些变量在 SmvDeviceModuleBuilder 中声明为 VAR，必须有 next() 否则 NuSMV 视为非确定性。
+     * 为actuator 设备的变量级 trust/privacy 生成 next() 转换（自保持）。
+     * 这些变量在SmvDeviceModuleBuilder 中声明为 VAR，必须有 next() 否则 NuSMV 视为非确定性。
      */
     private void appendVariablePropertyTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
@@ -923,14 +1063,14 @@ public class SmvMainModuleBuilder {
         List<String> parts = new ArrayList<>();
         for (RuleDto.Condition condition : rule.getConditions()) {
             if (condition == null || condition.getDeviceName() == null) continue;
-            DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvData(condition.getDeviceName(), deviceSmvMap);
+            DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(condition.getDeviceName(), deviceSmvMap);
             if (condSmv == null || condSmv.getManifest() == null) continue;
 
             String part = buildPropertyConditionPart(condition, condSmv, condSmv.getVarName(), condSmv.getManifest(), dim);
             if (part != null && !part.isEmpty()) parts.add(part);
         }
 
-        // C2 修复：所有条件源都可信时才传播 trusted，用 & 而非 |
+        // C2 修复：所有条件源都可信时才传播trusted，用 & 而非 |
         content.append(parts.isEmpty() ? "TRUE" : String.join(" & ", parts));
     }
 
@@ -971,11 +1111,11 @@ public class SmvMainModuleBuilder {
             if ("=".equals(normalizeRuleRelation(condition.getRelation())) && condition.getValue() != null) {
                 String stateValue = condition.getValue().replace(" ", "");
                 if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-                    // 先检查 attribute 是否是 mode 名
+                    // 先检查attribute 是否是mode 名
                     if (condSmv.getModes().contains(condition.getAttribute())) {
                         return condVarName + "." + dim.prefix + condition.getAttribute() + "_" + stateValue + "=" + dim.activeValue;
                     }
-                    // M2 修复：多模式设备 value 含分号时，解析为各 mode 的状态
+                    // M2 修复：多模式设备 value 含分号时，解析为各mode 的状态
                     if (stateValue.contains(";") && condSmv.getModes().size() > 1) {
                         String[] parts = stateValue.split(";");
                         List<String> propParts = new ArrayList<>();
@@ -989,7 +1129,7 @@ public class SmvMainModuleBuilder {
                             return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
                         }
                     }
-                    // 否则按 value 在哪个 mode 的状态列表中查找
+                    // 否则按value 在哪个mode 的状态列表中查找
                     for (String mode : condSmv.getModes()) {
                         List<String> modeStates = condSmv.getModeStates().get(mode);
                         if (modeStates != null && modeStates.contains(stateValue)) {
@@ -1006,8 +1146,8 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 当规则命令携带 contentDevice.content 时，生成 content 隐私条件。
-     * 例如规则 "THEN Facebook.post(MobilePhone.photo)" → "mobilephone.privacy_photo=private"
+     * 当规则命令携带contentDevice.content 时，生成 content 隐私条件。
+     * 例如规则 "THEN Facebook.post(MobilePhone.photo)" →"mobilephone.privacy_photo=private"
      */
     private String buildContentPrivacyCondition(RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap) {
         if (rule.getCommand() == null) return null;
@@ -1015,8 +1155,13 @@ public class SmvMainModuleBuilder {
         String contentName = rule.getCommand().getContent();
         if (contentDevice == null || contentDevice.isBlank() || contentName == null || contentName.isBlank()) return null;
 
-        DeviceSmvData contentSmv = DeviceSmvDataFactory.findDeviceSmvData(contentDevice, deviceSmvMap);
-        if (contentSmv == null) return null;
+        DeviceSmvData contentSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(contentDevice, deviceSmvMap);
+        if (contentSmv == null) {
+            throw SmvGenerationException.deviceNotFound(contentDevice);
+        }
+        if (contentSmv.getContents() == null) {
+            return null;
+        }
 
         // 验证 content 确实存在于该设备
         for (DeviceSmvData.ContentInfo ci : contentSmv.getContents()) {
@@ -1028,8 +1173,8 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 为 IsChangeable=true 的 content 生成 next() 转换。
-     * 当规则命令引用了该 content（如 THEN Facebook.post(MobilePhone.photo)）时，
+     * 为IsChangeable=true 的content 生成 next() 转换。
+     * 当规则命令引用了该content（如 THEN Facebook.post(MobilePhone.photo)）时，
      * 规则触发会将 content 隐私设为 private；否则自保持。
      */
     private void appendContentPrivacyTransitions(StringBuilder content,
@@ -1048,7 +1193,7 @@ public class SmvMainModuleBuilder {
 
                 // 收集所有引用此 content 的规则
                 List<RuleDto> matchingRules = findRulesReferencingContent(
-                        rules, device.getVarName(), smv.getTemplateName(), ci.getName());
+                        rules, device.getVarName(), ci.getName(), deviceSmvMap);
 
                 if (matchingRules.isEmpty()) {
                     // 无规则引用此 content，纯自保持
@@ -1069,11 +1214,12 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 查找所有 command.contentDevice 匹配指定设备且 command.content 匹配指定 content 名称的规则。
+     * 查找所有command.contentDevice 匹配指定设备且command.content 匹配指定 content 名称的规则。
      */
     private List<RuleDto> findRulesReferencingContent(List<RuleDto> rules,
-                                                       String deviceVarName, String templateName,
-                                                       String contentName) {
+                                                       String deviceVarName,
+                                                       String contentName,
+                                                       Map<String, DeviceSmvData> deviceSmvMap) {
         List<RuleDto> result = new ArrayList<>();
         if (rules == null) return result;
         for (RuleDto rule : rules) {
@@ -1081,7 +1227,12 @@ public class SmvMainModuleBuilder {
             String cd = rule.getCommand().getContentDevice();
             String cn = rule.getCommand().getContent();
             if (cn == null || !cn.equals(contentName)) continue;
-            if (cd != null && (cd.equals(deviceVarName) || cd.equals(templateName))) {
+            if (cd == null || cd.isBlank()) continue;
+            DeviceSmvData contentSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(cd, deviceSmvMap);
+            if (contentSmv == null) {
+                throw SmvGenerationException.deviceNotFound(cd);
+            }
+            if (deviceVarName.equals(contentSmv.getVarName())) {
                 result.add(rule);
             }
         }
@@ -1195,7 +1346,7 @@ public class SmvMainModuleBuilder {
                                                         + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
                                     }
                                     content.append("\t\t");
-                                    // P1-1 修复：增加 startState 约束
+                                    // P1-1 修复：增加startState 约束
                                     if (trans.getStartState() != null && smv.getModes() != null && !smv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < smv.getModes().size(); mi++) {
                                             String ss = getStateForMode(trans.getStartState(), mi);
@@ -1206,6 +1357,8 @@ public class SmvMainModuleBuilder {
                                         }
                                     }
                                     // Keep trigger reference resolution consistent with appendEnvTransitions.
+                                    String triggerRelation = normalizeTriggerRelationOrThrow(
+                                            smv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
                                     String triggerRef;
                                     if (smv.getEnvVariables().containsKey(trigger.getAttribute())) {
                                         triggerRef = "a_" + trigger.getAttribute();
@@ -1213,7 +1366,7 @@ public class SmvMainModuleBuilder {
                                         triggerRef = varName + "." + trigger.getAttribute();
                                     }
                                     content.append(triggerRef).append(" ")
-                                           .append(trigger.getRelation()).append(" ")
+                                           .append(triggerRelation).append(" ")
                                            .append(trigger.getValue().replace(" ", "")).append(": ").append(assignment.getValue().replace(" ", "")).append(";\n");
                                 }
                             }
@@ -1282,7 +1435,7 @@ public class SmvMainModuleBuilder {
                     rateSet.append("}");
                     content.append("\t\tTRUE: ").append(rateSet).append(";\n");
                 } else {
-                    // 枚举型变量：检查 Dynamics.Value 生成状态依赖赋值
+                    // 枚举型变量：检查Dynamics.Value 生成状态依赖赋值
                     if (smv.getManifest().getWorkingStates() != null) {
                         for (DeviceManifest.WorkingState state : smv.getManifest().getWorkingStates()) {
                             if (state.getDynamics() == null) continue;
@@ -1317,7 +1470,7 @@ public class SmvMainModuleBuilder {
 
     /**
      * 从分号分隔的多模式状态字符串中提取指定模式索引的状态值。
-     * 例如 "locked;off" 在 modeIndex=0 时返回 "locked"，modeIndex=1 时返回 "off"。
+     * 例如 "locked;off" 在modeIndex=0 时返回"locked"，modeIndex=1 时返回"off"。
      */
     private String getStateForMode(String multiModeState, int modeIndex) {
         if (multiModeState == null) return null;
@@ -1336,7 +1489,7 @@ public class SmvMainModuleBuilder {
 
     /**
      * 解析 NaturalChangeRate 字符串为 [lowerRate, upperRate]。
-     * 格式：单值 "3" 或范围 "[-1,2]"。
+     * 格式：单值"3" 或范围"[-1,2]"。
      * 返回 int[2]，[0]=lowerRate, [1]=upperRate。
      */
     private int[] parseNaturalChangeRate(String ncr, String contextName) {
@@ -1421,7 +1574,7 @@ public class SmvMainModuleBuilder {
                 return null;
             }
         }
-        // 无枚举/无边界定义时，变量在 main 中以 0..100 声明，初值也应保持同范围整数
+        // 无枚举无边界定义时，变量在 main 中以 0..100 声明，初值也应保持同范围整数
         try {
             int value = Integer.parseInt(userInit.trim());
             if (value < 0) {
@@ -1443,6 +1596,39 @@ public class SmvMainModuleBuilder {
     /**
      * 将前端关系符归一化为 NuSMV 运算符。
      */
+    private String normalizeTriggerRelationOrThrow(String deviceName, String context, String rawRelation) {
+        String normalized = normalizeTriggerRelation(rawRelation);
+        if (!isSupportedTriggerRelation(normalized)) {
+            throw SmvGenerationException.illegalTriggerRelation(
+                    deviceName, context, rawRelation,
+                    List.of("=", "!=", ">", ">=", "<", "<="));
+        }
+        return normalized;
+    }
+
+    private static String normalizeTriggerRelation(String relation) {
+        if (relation == null) return null;
+        String normalized = relation.trim();
+        return switch (normalized.toUpperCase()) {
+            case "EQ", "==" -> "=";
+            case "NEQ", "!=" -> "!=";
+            case "GT" -> ">";
+            case "GTE" -> ">=";
+            case "LT" -> "<";
+            case "LTE" -> "<=";
+            default -> normalized;
+        };
+    }
+
+    private static boolean isSupportedTriggerRelation(String relation) {
+        return "=".equals(relation)
+                || "!=".equals(relation)
+                || ">".equals(relation)
+                || ">=".equals(relation)
+                || "<".equals(relation)
+                || "<=".equals(relation);
+    }
+
     private static String normalizeRuleRelation(String relation) {
         if (relation == null) return "=";
         String normalized = relation.trim();
@@ -1471,7 +1657,7 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 将 IN/NOT_IN 展开为 NuSMV 的 (x=a | x=b) 或 (x!=a & x!=b)。
+     * 将IN/NOT_IN 展开为NuSMV 的(x=a | x=b) 成(x!=a & x!=b)。
      * 非集合运算符直接返回 left + relation + value。
      */
     private static String buildRuleRelationExpr(String left, String relation, String value) {
@@ -1505,7 +1691,7 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 按 ,;| 拆分值列表（用于 IN/NOT_IN），单值时返回包含原值的单元素列表。
+     * 持,;| 拆分值列表（用于 IN/NOT_IN），单值时返回包含原值的单元素列表。
      */
     private static List<String> splitRuleValues(String value) {
         if (value == null) return List.of();
@@ -1521,7 +1707,7 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 对 mode 状态值做 cleanStateName，IN/NOT_IN 时逐个清理再用逗号拼接。
+     * 对mode 状态值做 cleanStateName，IN/NOT_IN 时逐个清理再用逗号拼接。
      */
     private static String cleanRuleValueByRelation(String normalizedRelation, String value) {
         if (value == null) return null;

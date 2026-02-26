@@ -27,4 +27,14 @@ public class NusmvConfig {
      * 默认 120000ms (2分钟)
      */
     private long timeoutMs = 120000;
+
+    /**
+     * NuSMV process global concurrency cap shared by verification/simulation.
+     */
+    private int maxConcurrent = 6;
+
+    /**
+     * Timeout for waiting NuSMV execution permit (ms).
+     */
+    private long acquirePermitTimeoutMs = 10000;
 }

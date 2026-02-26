@@ -9,6 +9,8 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,6 +27,7 @@ public class NusmvExecutor {
 
     private static final String TIMEOUT_ENV_KEY = "NUSMV_TIMEOUT_MS";
     private static final int PROCESS_DESTROY_TIMEOUT_SECONDS = 5;
+    private static final long READER_JOIN_TIMEOUT_MS = 5000;
 
     // NuSMV spec result patterns
     private static final Pattern SPEC_TRUE_PATTERN = Pattern.compile(
@@ -32,11 +35,18 @@ public class NusmvExecutor {
     private static final Pattern SPEC_FALSE_PATTERN = Pattern.compile(
             "-- specification (.+?) is false", Pattern.CASE_INSENSITIVE);
 
+    private volatile Semaphore executionSemaphore;
+
     // ==================== 批处理验证 ====================
 
     public NusmvResult execute(File smvFile) throws InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
+        }
+
+        boolean permitAcquired = acquireExecutionPermit();
+        if (!permitAcquired) {
+            return NusmvResult.busy("NuSMV execution is busy, please retry later");
         }
 
         List<String> command = buildCommand(smvFile, List.of());
@@ -62,7 +72,7 @@ public class NusmvExecutor {
                 } catch (IOException e) {
                     log.warn("Error reading NuSMV output: {}", e.getMessage());
                 }
-            });
+            }, "nusmv-batch-output");
             outputThread.start();
 
             boolean finished = process.waitFor(timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -74,12 +84,14 @@ public class NusmvExecutor {
                     log.error("Failed to destroy NuSMV process");
                 }
                 // 进程销毁后流会关闭，等待输出线程结束
-                outputThread.join();
+                reclaimReaderThread(outputThread, process.getInputStream(), "merged-output");
                 return NusmvResult.error("NuSMV execution timed out after " + timeout + "ms");
             }
 
             // 进程已正常结束，流一定会关闭，无需超时限制
-            outputThread.join();
+            if (!waitReaderThreadCompletion(outputThread, process.getInputStream(), "merged-output")) {
+                return NusmvResult.error("NuSMV output reader did not finish in time");
+            }
 
             int exitCode = process.exitValue();
             String output = outputBuilder.toString();
@@ -106,6 +118,8 @@ public class NusmvExecutor {
                 process.destroyForcibly();
             }
             throw e;
+        } finally {
+            releaseExecutionPermit();
         }
     }
 
@@ -186,6 +200,31 @@ public class NusmvExecutor {
         return nusmvConfig.getTimeoutMs();
     }
 
+    private boolean acquireExecutionPermit() throws InterruptedException {
+        long timeoutMs = Math.max(0, nusmvConfig.getAcquirePermitTimeoutMs());
+        return executionSemaphore().tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void releaseExecutionPermit() {
+        Semaphore semaphore = executionSemaphore;
+        if (semaphore != null) {
+            semaphore.release();
+        }
+    }
+
+    private Semaphore executionSemaphore() {
+        if (executionSemaphore == null) {
+            synchronized (this) {
+                if (executionSemaphore == null) {
+                    int maxConcurrent = Math.max(1, nusmvConfig.getMaxConcurrent());
+                    executionSemaphore = new Semaphore(maxConcurrent, true);
+                    log.info("NuSMV global concurrency cap initialized: {}", maxConcurrent);
+                }
+            }
+        }
+        return executionSemaphore;
+    }
+
     // ==================== 交互式模拟 ====================
 
     /** NuSMV 交互模式提示符，需要从输出中过滤 */
@@ -200,6 +239,11 @@ public class NusmvExecutor {
     public SimulationOutput executeInteractiveSimulation(File smvFile, int steps) throws InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
             return SimulationOutput.error("NuSMV model file does not exist or is null");
+        }
+
+        boolean permitAcquired = acquireExecutionPermit();
+        if (!permitAcquired) {
+            return SimulationOutput.busy("NuSMV simulation is busy, please retry later");
         }
 
         List<String> command = buildCommand(smvFile, List.of("-int"));
@@ -264,8 +308,11 @@ public class NusmvExecutor {
                 return SimulationOutput.error("NuSMV simulation timed out after " + timeout + "ms");
             }
 
-            stdoutThread.join();
-            stderrThread.join();
+            boolean stdoutReady = waitReaderThreadCompletion(stdoutThread, process.getInputStream(), "stdout");
+            boolean stderrReady = waitReaderThreadCompletion(stderrThread, process.getErrorStream(), "stderr");
+            if (!stdoutReady || !stderrReady) {
+                return SimulationOutput.error("NuSMV simulation output reader did not finish in time");
+            }
 
             String rawOutput = stdoutBuilder.toString();
             String stderrOutput = stderrBuilder.toString();
@@ -315,6 +362,8 @@ public class NusmvExecutor {
                 process.destroyForcibly();
             }
             throw e;
+        } finally {
+            releaseExecutionPermit();
         }
     }
 
@@ -322,6 +371,16 @@ public class NusmvExecutor {
      * 带超时的线程回收：先 join(5s)，若仍存活则 interrupt + 关流 + 短暂重试，
      * 避免"主线程不卡但后台线程静默泄漏"。
      */
+    private boolean waitReaderThreadCompletion(Thread thread, InputStream stream, String label) throws InterruptedException {
+        thread.join(READER_JOIN_TIMEOUT_MS);
+        if (!thread.isAlive()) {
+            return true;
+        }
+        log.warn("NuSMV {} reader thread did not finish in {}ms, reclaiming", label, READER_JOIN_TIMEOUT_MS);
+        reclaimReaderThread(thread, stream, label);
+        return !thread.isAlive();
+    }
+
     private void reclaimReaderThread(Thread thread, InputStream stream, String label) {
         try {
             thread.join(5000);
@@ -368,26 +427,33 @@ public class NusmvExecutor {
         private final String rawOutput;
         private final boolean success;
         private final String errorMessage;
+        private final boolean busy;
 
-        private SimulationOutput(String traceText, String rawOutput, boolean success, String errorMessage) {
+        private SimulationOutput(String traceText, String rawOutput, boolean success, String errorMessage, boolean busy) {
             this.traceText = traceText;
             this.rawOutput = rawOutput;
             this.success = success;
             this.errorMessage = errorMessage;
+            this.busy = busy;
         }
 
         public static SimulationOutput success(String traceText, String rawOutput) {
-            return new SimulationOutput(traceText, rawOutput, true, null);
+            return new SimulationOutput(traceText, rawOutput, true, null, false);
         }
 
         public static SimulationOutput error(String errorMessage) {
-            return new SimulationOutput(null, null, false, errorMessage);
+            return new SimulationOutput(null, null, false, errorMessage, false);
+        }
+
+        public static SimulationOutput busy(String errorMessage) {
+            return new SimulationOutput(null, null, false, errorMessage, true);
         }
 
         public String getTraceText() { return traceText; }
         public String getRawOutput() { return rawOutput; }
         public boolean isSuccess() { return success; }
         public String getErrorMessage() { return errorMessage; }
+        public boolean isBusy() { return busy; }
     }
 
     /**
@@ -496,27 +562,34 @@ public class NusmvExecutor {
         private final boolean success;
         private final String errorMessage;
         private final List<SpecCheckResult> specResults;
+        private final boolean busy;
 
         private NusmvResult(String output, boolean success, String errorMessage,
-                            List<SpecCheckResult> specResults) {
+                            List<SpecCheckResult> specResults, boolean busy) {
             this.output = output;
             this.success = success;
             this.errorMessage = errorMessage;
             this.specResults = specResults != null ? specResults : List.of();
+            this.busy = busy;
         }
 
         public static NusmvResult success(String output, List<SpecCheckResult> specResults) {
-            return new NusmvResult(output, true, null, specResults);
+            return new NusmvResult(output, true, null, specResults, false);
         }
 
         public static NusmvResult error(String errorMessage) {
-            return new NusmvResult(null, false, errorMessage, null);
+            return new NusmvResult(null, false, errorMessage, null, false);
+        }
+
+        public static NusmvResult busy(String errorMessage) {
+            return new NusmvResult(null, false, errorMessage, null, true);
         }
 
         public String getOutput() { return output; }
         public boolean isSuccess() { return success; }
         public String getErrorMessage() { return errorMessage; }
         public List<SpecCheckResult> getSpecResults() { return specResults; }
+        public boolean isBusy() { return busy; }
 
         public boolean hasAnyViolation() {
             return specResults.stream().anyMatch(r -> !r.isPassed());
