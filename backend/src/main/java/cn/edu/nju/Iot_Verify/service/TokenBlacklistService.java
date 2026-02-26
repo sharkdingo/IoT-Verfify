@@ -2,11 +2,8 @@ package cn.edu.nju.Iot_Verify.service;
 
 /**
  * Token黑名单服务接口
- * 
- * 用于登出后使Token失效，支持内存和Redis两种实现
- * 
- * 未来添加Redis后，实现类改为:
- * {@code @Service public class RedisTokenBlacklistService implements TokenBlacklistService}
+ *
+ * 用于登出后使Token失效，当前由 Redis 实现（RedisTokenBlacklistService）
  */
 public interface TokenBlacklistService {
 

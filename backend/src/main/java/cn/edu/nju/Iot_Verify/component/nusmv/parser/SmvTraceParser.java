@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceTrustPrivacyDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -19,6 +20,7 @@ import java.util.regex.Pattern;
  * SMV Trace parser.
  * Parse NuSMV counterexample output into TraceStateDto list.
  */
+@Slf4j
 @Component
 public class SmvTraceParser {
 
@@ -31,7 +33,7 @@ public class SmvTraceParser {
     private static final Pattern VAR_PATTERN =
             Pattern.compile("(\\w+)\\.(\\w+)\\s*=\\s*(\\S+)");
     private static final Pattern ENV_VAR_PATTERN =
-            Pattern.compile("^(a_\\w+)\\s*=\\s*(\\S+)$");
+            Pattern.compile("^(\\w+)\\s*=\\s*(\\S+)$");
 
     public List<TraceStateDto> parseCounterexampleStates(String counterexample,
                                                          Map<String, DeviceSmvData> deviceSmvMap) {
@@ -119,6 +121,7 @@ public class SmvTraceParser {
         String cleanValue = value.replace(";", "").trim();
         DeviceSmvData smv = findDeviceByIdOrName(deviceSmvMap, deviceId);
         if (smv == null) {
+            log.debug("Unmapped device variable ignored: {}.{} = {}", deviceId, attr, value);
             return;
         }
 
@@ -177,9 +180,6 @@ public class SmvTraceParser {
         if (state == null || name == null || value == null) {
             return;
         }
-        if (!name.startsWith("a_")) {
-            return;
-        }
 
         if (state.getEnvVariables() == null) {
             state.setEnvVariables(new ArrayList<>());
@@ -232,7 +232,8 @@ public class SmvTraceParser {
     }
 
     private boolean isInternalControlVariable(String attr) {
-        return "is_attack".equals(attr) || attr.endsWith("_rate") || attr.endsWith("_a");
+        // is_attack 不再过滤：前端需要知道反例路径中哪些设备被攻击
+        return attr.endsWith("_rate") || attr.endsWith("_a");
     }
 
     private TraceVariableDto findOrCreateVariable(TraceDeviceDto devTrace, String name) {

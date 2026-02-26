@@ -29,7 +29,9 @@
       "Bash(\"D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe\" \"C:/Users/10160/AppData/Local/Temp/nusmv_5446078216569535928/model.smv\")",
       "Read(//tmp/nusmv_14543933679028032401/**)",
       "Read(//tmp/nusmv_14543933679028032401//**)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && head -30 \"\"{}\"\"')",
+      "Bash(git checkout:*)"
     ]
   }
 }

@@ -55,7 +55,7 @@ cn.edu.nju.Iot_Verify/
 ```bash
 cd backend
 mvn compile          # Compile
-mvn spring-boot:run  # Run (requires MySQL + Redis)
+mvn spring-boot:run  # Run (requires MySQL; Redis optional — fail-open for logout revocation)
 mvn test             # Run tests
 ```
 
@@ -65,7 +65,7 @@ Test workflow: `powershell -File test_workflow.ps1` (end-to-end API test, requir
 
 Key config in `src/main/resources/application.yaml`:
 - `spring.datasource.*` — MySQL connection
-- `spring.data.redis.*` — Redis connection (token blacklist)
+- `spring.data.redis.*` — Redis connection (token blacklist: SHA-256 hashed keys, fail-open degradation — logout revocation ineffective when Redis is down (logged-out tokens remain valid until expiry), throttled error logging; requires `commons-pool2` for Lettuce connection pooling)
 - `jwt.secret` / `jwt.expiration` — JWT settings
 - `nusmv.path` — NuSMV executable path (OS-specific)
 - `nusmv.command-prefix` — Optional prefix (e.g. `wsl` on Windows)
@@ -129,16 +129,18 @@ JSON templates in `src/main/resources/deviceTemplate/` define:
 
 Corresponds to MEDIC's `outModule()`. For each unique device template:
 1. `FROZENVAR is_attack: boolean;` (if attack mode)
-2. `FROZENVAR trust_<var>: {trusted, untrusted};` for sensor internal variables
+2. `FROZENVAR trust_<var>: {trusted, untrusted};` for sensor internal variables (sensor trust is inherent — frozen)
 3. `FROZENVAR privacy_<var>: {public, private};` for sensor internal variables (if `enablePrivacy=true`)
-4. `VAR <mode>: {state1, state2, ...};` for each mode
-5. `VAR <api>_a: boolean;` for signal APIs
-6. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges proportionally: `expansion=(upper-lower)/5*intensity/50`)
-7. `VAR <var>_rate: <min..max>;` for impacted variables (derived from `Dynamics.ChangeRate`, fallback `-10..10`)
-8. `VAR trust_<mode>_<state>: {trusted, untrusted};` for non-sensor devices
-9. `VAR privacy_<mode>_<state>: {private, public};` for non-sensor devices (if `enablePrivacy=true`)
-10. `VAR trust_<var>: {trusted, untrusted};` for variable-level trust
-11. `VAR privacy_<var>: {private, public};` for variable-level privacy (if `enablePrivacy=true`)
+4. `FROZENVAR privacy_<content>: {public, private};` for content with `IsChangeable=false` (if `enablePrivacy=true`)
+5. `VAR <mode>: {state1, state2, ...};` for each mode
+6. `VAR <api>_a: boolean;` for signal APIs
+7. `VAR <var>: {values} | lower..upper;` for internal variables (attack mode expands sensor numeric ranges proportionally: `expansion=(upper-lower)/5*intensity/50`)
+8. `VAR <var>_rate: <min..max>;` for impacted variables (derived from `Dynamics.ChangeRate`, fallback `-10..10`)
+9. `VAR trust_<mode>_<state>: {trusted, untrusted};` for non-sensor (actuator) devices — trust propagated via rules, must be VAR
+10. `VAR trust_<var>: {trusted, untrusted};` for non-sensor (actuator) variable-level trust
+11. `VAR privacy_<mode>_<state>: {private, public};` for non-sensor (actuator) devices (if `enablePrivacy=true`)
+12. `VAR privacy_<var>: {private, public};` for non-sensor (actuator) variable-level privacy (if `enablePrivacy=true`)
+13. `VAR privacy_<content>: {public, private};` for content with `IsChangeable=true` (if `enablePrivacy=true`)
 
 ### Main MODULE Generation (SmvMainModuleBuilder)
 

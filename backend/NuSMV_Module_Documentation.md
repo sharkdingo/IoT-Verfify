@@ -184,7 +184,7 @@
 
 | targetType | SMV 变量映射 | 示例 |
 |------------|-------------|------|
-| `state` | `device.{mode}_{stateName}` | `thermostat_1.ThermostatMode = cool` |
+| `state` | `device.{mode} = stateName` | `thermostat_1.ThermostatMode = cool` |
 | `variable` | `device.varName` 或 `a_varName`（环境变量） | `thermostat_1.temperature > 30` |
 | `api` | `device.{apiName}_a` | `fan_1.fanAuto_a = FALSE`（仅支持 `=`/`!=`/`IN`/`NOT_IN`，值必须为 `TRUE`/`FALSE`） |
 | `trust` | `device.trust_{mode}_{state}` | `thermostat_1.trust_ThermostatMode_cool = untrusted` |
@@ -412,8 +412,10 @@ VAR
 **主模块 — 隐私传播规则：**
 ```smv
 -- 规则触发时，隐私从源设备传播到目标设备
+-- guard 使用完整的规则条件（appendRuleConditions），而非简化的 API 信号
+-- 例：规则 "IF condition THEN camera.takePhoto(MobilePhone.photo)"
 next(camera_1.privacy_photo) := case
-    camera_1.takePhoto_a = TRUE : private;   -- API 触发时设为 private
+    <规则条件>: private;                       -- 规则触发时设为 private
     TRUE : camera_1.privacy_photo;           -- 自保持
 esac;
 ```
@@ -450,7 +452,7 @@ esac;
 用户规则: IF thermostat_1.temperature > 30 THEN fan_1.fanAuto
 ```
 
-生成的 SMV（假设 fanAuto API: startState=off, endState=auto, signal=true）：
+生成的 SMV（假设 fanAuto API: startState=off, endState=auto, signal=true；以下示例假设 `isAttack=false`，攻击模式下会额外追加 `& fan_1.is_attack=FALSE` 条件）：
 ```smv
 -- 1. 状态转换（由规则条件直接驱动，API 的 EndState 决定目标状态）
 --    guard = 规则条件 + API startState 约束
@@ -497,7 +499,7 @@ esac;
 
 | 序号 | 方法名 | 生成内容 | 说明 |
 |------|--------|---------|------|
-| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | 规则驱动的状态转换 + 模板 Transition 驱动的状态转换 |
+| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | 规则驱动的状态转换 + 模板 Transition 驱动的状态转换。攻击模式下非传感器设备增加最高优先级分支 `is_attack=TRUE: {所有合法状态}`，模拟执行器被劫持 |
 | 2 | `appendEnvTransitions()` | `next(a_varName)` | 环境变量的 next() 转换，含 NaturalChangeRate、设备影响率、边界检查。Transition trigger 引用环境变量时使用 `a_<attr>`（仅检查当前设备的 env var，避免跨设备同名冲突） |
 | 3 | `appendApiSignalTransitions()` | `next(device.apiName_a)` | API 信号变量，基于状态变化检测（`current!=end & next(mode)=end`） |
 | 4 | `appendTransitionSignalTransitions()` | `next(device.transName_t)` | 模板 Transition 信号变量，基于状态变化检测 |
@@ -508,7 +510,7 @@ esac;
 | 9 | `appendContentPrivacyTransitions()` | `next(device.privacy_contentName)` | IsChangeable=true 的 content 隐私转换：当规则命令引用该 content 时（如 `THEN Facebook.post(MobilePhone.photo)`），规则触发将 content 隐私设为 `private`；否则自保持 |
 | 10 | `appendVariableRateTransitions()` | `next(device.varName_rate)` | 受影响变量的变化率，由设备 WorkingState.Dynamics 决定。`_rate` 范围根据模板中实际 ChangeRate 值动态计算（无 Dynamics 时 fallback 为 -10..10） |
 | 11 | `appendExternalVariableAssignments()` | `device.varName := a_varName` | 外部变量（IsInside=false）镜像环境变量（简单赋值，非 next）。注意：代码中此方法在 `appendVariableRateTransitions` 之后调用 |
-| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换，攻击模式下范围扩展。Transition trigger 引用同样使用当前设备 env var 检查 |
+| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换；攻击模式下生成 `is_attack=TRUE: lower..upper` 分支（使用模板原始范围，不含扩展）。Transition trigger 引用同样使用当前设备 env var 检查 |
 
 环境变量 `next()` 转换示例（数值型，有设备影响率）：
 ```smv
@@ -527,6 +529,7 @@ esac;
 
 1. **VAR 声明范围扩展**（`SmvDeviceModuleBuilder.appendInternalVariables`）：仅对传感器设备的数值型内部变量，公式与环境变量相同 `expansion = range/5 * intensity/50`，仅扩展上界。
 2. **next() 攻击分支**（`SmvMainModuleBuilder.appendInternalVariableTransitions`）：当 `isAttack=true` 且设备为传感器时，生成 `device.is_attack=TRUE: lower..upper` 分支，使用模板原始范围（不含扩展），允许攻击者将变量设为任意合法值。
+3. **执行器状态劫持**（`SmvMainModuleBuilder.appendStateTransitions`）：当 `isAttack=true` 且设备为非传感器（执行器）时，在 `next(device.ModeVar)` 的 case 中生成最高优先级分支 `device.is_attack=TRUE: {所有合法状态}`，允许攻击者将执行器劫持到任意合法状态。该分支优先于规则和模板 Transition，因此被攻击的执行器会绕过正常转换逻辑。由此产生的状态跳变也会触发 API 信号脉冲（`appendApiSignalTransitions` 检测到 `next(mode)=endState`），这是预期行为——被劫持的设备可以产生任意信号。
 
 ---
 
@@ -597,9 +600,10 @@ VAR
 	a_temperature: 15..39;
 ASSIGN
 	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
-	-- 状态转换（规则条件直接驱动 + API startState 约束）
+	-- 状态转换（攻击劫持优先 + 规则条件驱动 + API startState 约束）
 	next(fan_1.FanMode) := case
-		thermostat_1.temperature > 30 & fan_1.FanMode=off : auto;
+		fan_1.is_attack=TRUE: {auto, manual, off};
+		thermostat_1.temperature > 30 & fan_1.is_attack=FALSE & fan_1.FanMode=off : auto;
 		TRUE : fan_1.FanMode;
 	esac;
 	-- API 信号（基于状态变化检测）
@@ -610,8 +614,8 @@ ASSIGN
 	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查）
 	next(a_temperature) :=
 	case
-		a_temperature>=35: a_temperature;
-		a_temperature<=15: a_temperature;
+		a_temperature>=35: {a_temperature-1, a_temperature};   -- 上边界：禁止继续上升，允许下降和保持
+		a_temperature<=15: {a_temperature, a_temperature+1};   -- 下边界：禁止继续下降，允许上升和保持
 		TRUE: {a_temperature-1, a_temperature, a_temperature+1};
 	esac;
 	-- 信任传播
@@ -790,6 +794,8 @@ Spec 构建的 fail-closed 策略：
 
 ### NuSMV 原始反例格式
 
+以下示例与 section 6 的 `isAttack=true, intensity=50, enablePrivacy=true` 场景一致。
+
 ```
 -- specification AG (...) is false
 -- as demonstrated by the following execution sequence
@@ -798,14 +804,26 @@ Trace Type: Counterexample
   -> State: 1.1 <-
     thermostat_1.ThermostatMode = cool
     thermostat_1.temperature = 22
+    thermostat_1.is_attack = FALSE
+    thermostat_1.trust_temperature = trusted
+    thermostat_1.privacy_temperature = public
+    thermostat_1.trust_ThermostatMode_cool = trusted
+    thermostat_1.privacy_ThermostatMode_cool = public
     fan_1.FanMode = off
+    fan_1.is_attack = TRUE
+    fan_1.fanAuto_a = FALSE
     fan_1.trust_FanMode_auto = trusted
+    fan_1.trust_FanMode_off = trusted
+    fan_1.privacy_FanMode_auto = public
+    fan_1.privacy_FanMode_off = public
+    intensity = 1
     a_temperature = 35
   -> State: 1.2 <-
     thermostat_1.temperature = 35
     fan_1.fanAuto_a = TRUE
   -> State: 1.3 <-
     fan_1.FanMode = auto
+    fan_1.fanAuto_a = FALSE
     fan_1.trust_FanMode_auto = untrusted
 ```
 
@@ -813,11 +831,19 @@ Trace Type: Counterexample
 
 > **注意：** `TraceDeviceDto` 中 `state` 为当前状态值，`mode` 为状态机名称。
 > 旧字段 `newState` 已移除，统一使用 `state` + `mode`。反序列化历史 JSON 时通过 `@JsonAlias("newState")` 自动映射。
+>
+> **过滤规则：** `*_rate` 和 `*_a` 变量被过滤不进入输出；`is_attack` 保留输出。
+> `trust_` 前缀分流：匹配 `mode_state` 格式的写入 `trustPrivacy[]`（布尔），其余写入 `variables[].trust`（字符串）。
+> `privacy_` 前缀统一写入 `privacies[]`。裸变量（`intensity`、`a_*`）写入 `envVariables[]`。
 
 ```json
 [
   {
     "stateIndex": 1,
+    "envVariables": [
+      { "name": "intensity", "value": "1" },
+      { "name": "a_temperature", "value": "35" }
+    ],
     "devices": [
       {
         "deviceId": "thermostat_1",
@@ -826,12 +852,14 @@ Trace Type: Counterexample
         "state": "cool",
         "mode": "ThermostatMode",
         "variables": [
-          { "name": "temperature", "value": "22", "trust": "trusted" }
+          { "name": "temperature", "value": "22", "trust": "trusted" },
+          { "name": "is_attack", "value": "FALSE" }
         ],
         "trustPrivacy": [
           { "name": "ThermostatMode_cool", "trust": true }
         ],
         "privacies": [
+          { "name": "temperature", "privacy": "public" },
           { "name": "ThermostatMode_cool", "privacy": "public" }
         ]
       },
@@ -841,19 +869,56 @@ Trace Type: Counterexample
         "templateName": "Fan",
         "state": "off",
         "mode": "FanMode",
-        "variables": [],
+        "variables": [
+          { "name": "is_attack", "value": "TRUE" }
+        ],
         "trustPrivacy": [
-          { "name": "FanMode_auto", "trust": true }
+          { "name": "FanMode_auto", "trust": true },
+          { "name": "FanMode_off", "trust": true }
         ],
         "privacies": [
-          { "name": "FanMode_auto", "privacy": "public" }
+          { "name": "FanMode_auto", "privacy": "public" },
+          { "name": "FanMode_off", "privacy": "public" }
         ]
       }
     ]
   },
   {
     "stateIndex": 2,
-    "devices": [ ... ]
+    "devices": [
+      {
+        "deviceId": "thermostat_1",
+        "deviceLabel": "thermostat_1",
+        "templateName": "Thermostat",
+        "state": "cool",
+        "mode": "ThermostatMode",
+        "variables": [
+          { "name": "temperature", "value": "35" }
+        ]
+      },
+      {
+        "deviceId": "fan_1",
+        "deviceLabel": "fan_1",
+        "templateName": "Fan",
+        "state": "off",
+        "mode": "FanMode"
+      }
+    ]
+  },
+  {
+    "stateIndex": 3,
+    "devices": [
+      {
+        "deviceId": "fan_1",
+        "deviceLabel": "fan_1",
+        "templateName": "Fan",
+        "state": "auto",
+        "mode": "FanMode",
+        "trustPrivacy": [
+          { "name": "FanMode_auto", "trust": false }
+        ]
+      }
+    ]
   }
 ]
 ```
@@ -862,12 +927,12 @@ Trace Type: Counterexample
 
 - 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
 - `device.var = value` 格式匹配设备内部变量
-- `a_varName = value` 格式匹配环境变量
+- `a_varName = value` 及其他裸变量（如 `intensity = value`）匹配环境/全局变量
 - 自动填充 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
 - 状态名通过 `DeviceSmvData.states` 反向匹配
 - `trust_` 前缀分流：状态级写入 `trustPrivacy[]`（`trust` 为布尔），变量级写入 `variables[].trust`
 - `privacy_` 前缀写入 `privacies[]`（条目名去掉前缀）
-- 内部控制变量 `is_attack`、`*_rate`、`*_a` 会被忽略，不进入输出
+- 内部控制变量 `*_rate`、`*_a` 会被忽略，不进入输出；`is_attack` 保留输出，供前端展示反例路径中哪些设备被攻击
 - 多模式设备先用临时 `__mode__*` 变量收集，再在 `finalizeModeStates()` 阶段回填最终 `state/mode`
 - 增量解析：只输出变化的变量（NuSMV 只打印变化项）
 
@@ -1023,5 +1088,5 @@ Trace Type: Counterexample
 
 仍需依赖的运行前提：
 
-- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。
+- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。Redis 仅用于 JWT 黑名单（SHA-256 key），不可用时 fail-open 降级（不阻塞登录/验证流程，但登出撤销语义失效——已登出 token 仍可使用直至过期）；需 `commons-pool2` 启用 Lettuce 连接池。
 - 当前用户模板已初始化且与前端请求中的 `templateName` 一致。

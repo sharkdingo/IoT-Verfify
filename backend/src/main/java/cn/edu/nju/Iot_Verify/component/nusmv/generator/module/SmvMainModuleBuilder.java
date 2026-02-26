@@ -26,21 +26,21 @@ public class SmvMainModuleBuilder {
 
         // 参数验证
         if (devices == null) {
-            log.error("SmvMainModuleBuilder.build: devices 参数不能�?null");
-            throw new IllegalArgumentException("devices 参数不能�?null");
+            log.error("SmvMainModuleBuilder.build: devices 参数不能为null");
+            throw new IllegalArgumentException("devices 参数不能为null");
         }
         if (deviceSmvMap == null) {
-            log.error("SmvMainModuleBuilder.build: deviceSmvMap 参数不能�?null");
-            throw new IllegalArgumentException("deviceSmvMap 参数不能�?null");
+            log.error("SmvMainModuleBuilder.build: deviceSmvMap 参数不能为null");
+            throw new IllegalArgumentException("deviceSmvMap 参数不能为null");
         }
 
         StringBuilder content = new StringBuilder();
 
         content.append("\nMODULE main");
 
-        // intensity 是冻结变量（�?MEDIC 一致）：值由各设�?is_attack 之和决定，验证过程中不变
-        // 只要 isAttack=true 就声�?intensity，并�?INVAR 约束上限
-        // intensity=0 �?INVAR intensity<=0 强制所�?is_attack=FALSE，语义闭�?
+        // intensity 是冻结变量（与MEDIC 一致）：值由各设备is_attack 之和决定，验证过程中不变
+        // 只要 isAttack=true 就声明intensity，并用INVAR 约束上限
+        // intensity=0 时INVAR intensity<=0 强制所有is_attack=FALSE，语义闭合
         if (isAttack) {
             content.append("\nFROZENVAR");
             content.append("\n\tintensity: 0..50;");
@@ -59,7 +59,7 @@ public class SmvMainModuleBuilder {
         }
 
         Set<String> declaredEnvVars = new HashSet<>();
-        // 收集环境变量的用户初始值来源（varName -> deviceVarName -> validatedInit�?
+        // 收集环境变量的用户初始值来源（varName -> deviceVarName -> validatedInit）
         Map<String, Map<String, String>> envVarInitSources = new LinkedHashMap<>();
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
@@ -82,8 +82,8 @@ public class SmvMainModuleBuilder {
                     } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
                         int lower = var.getLowerBound();
                         int upper = var.getUpperBound();
-                        // 攻击模式下扩大环境变量范围，模拟传感器数据篡�?
-                        // 扩展量与 intensity 成正�?
+                        // 攻击模式下扩大环境变量范围，模拟传感器数据篡改
+                        // 扩展量与 intensity 成正比
                         if (isAttack) {
                             int range = upper - lower;
                             int expansion = (int)(range / 5.0 * intensity / 50.0);
@@ -95,7 +95,7 @@ public class SmvMainModuleBuilder {
                         content.append("0..100;");
                     }
                 }
-                // 记录每个设备提供的初始值（校验范围），用于检测同�?env var 的冲突输�?
+                // 记录每个设备提供的初始值（校验范围），用于检测同名env var 的冲突输入
                 String userInit = smv.getVariableValues().get(varName);
                 if (userInit != null && !userInit.isBlank()) {
                     String validatedInit = validateEnvVarInitValue(varName, userInit, var, isAttack, intensity);
@@ -112,7 +112,7 @@ public class SmvMainModuleBuilder {
 
         content.append("\nASSIGN");
 
-        // 生成环境变量�?init()（使用用户指定的初始值）
+        // 生成环境变量的init()（使用用户指定的初始值）
         for (Map.Entry<String, String> entry : envVarInitValues.entrySet()) {
             content.append("\n\tinit(a_").append(entry.getKey()).append(") := ")
                    .append(entry.getValue()).append(";");
@@ -151,9 +151,9 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 为所有设备的 IsInside=false 变量生成简单赋值（镜像环境变量）�?
+     * 为所有设备的 IsInside=false 变量生成简单赋值（镜像环境变量）。
      * 例如：thermostat.temperature := a_temperature;
-     * 不限于传感器设备——非传感器设备（�?Thermostat）的外部变量也需要连接到环境变量�?
+     * 不限于传感器设备——非传感器设备（如Thermostat）的外部变量也需要连接到环境变量。
      */
     private void appendExternalVariableAssignments(StringBuilder content,
                                                    List<DeviceVerificationDto> devices,
@@ -220,6 +220,12 @@ public class SmvMainModuleBuilder {
 
                     content.append("\n\tnext(").append(varName).append(".").append(mode).append(") :=\n");
                     content.append("\tcase\n");
+
+                    // 攻击模式下，被攻击的执行器可被劫持到任意合法状态（最高优先级）
+                    if (isAttack && !smv.isSensor()) {
+                        content.append("\t\t").append(varName).append(".is_attack=TRUE: {")
+                               .append(String.join(", ", modeStates)).append("};\n");
+                    }
 
                     if (deviceRules != null) {
                         for (RuleDto rule : deviceRules) {
@@ -683,7 +689,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                                 "attribute=" + trigger.getAttribute() + ", relation=" + trigger.getRelation()
                                                         + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
                                     }
-                                    // P4: �?trigger.attribute 本身�?env var，直接用 a_<attr>
+                                    // P4: 若trigger.attribute 本身是env var，直接用 a_<attr>
                                     String triggerRelation = normalizeTriggerRelationOrThrow(
                                             transSmv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
                                     String triggerRef;
@@ -693,7 +699,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                         triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
                                     }
                                     content.append("\t\t");
-                                    // P1-1 修复：增�?startState 约束
+                                    // P1-1 修复：增加startState 约束
                                     if (trans.getStartState() != null && transSmv.getModes() != null && !transSmv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < transSmv.getModes().size(); mi++) {
                                             String ss = getStateForMode(trans.getStartState(), mi);
@@ -713,14 +719,14 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 }
 
                 if (var.getValues() != null && !var.getValues().isEmpty()) {
-                    // 枚举型环境变量：非确定性选择所有可能值（�?sample.smv 一致）
+                    // 枚举型环境变量：非确定性选择所有可能值（与sample.smv 一致）
                     List<String> cleanValues = new ArrayList<>();
                     for (String v : var.getValues()) {
                         cleanValues.add(v.replace(" ", ""));
                     }
                     content.append("\t\tTRUE: {").append(String.join(", ", cleanValues)).append("};\n");
                 } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
-                    // 数值型环境变量：参�?sample.smv 生成带设备影响率的边界检�?
+                    // 数值型环境变量：参照sample.smv 生成带设备影响率的边界检查
                     appendNumericEnvTransition(content, smvVarName, var, varName, devices, deviceSmvMap);
                 } else {
                     content.append("\t\tTRUE: ").append(smvVarName).append(";\n");
@@ -732,8 +738,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 生成数值型环境变量�?next() 转换，参�?sample.smv 格式�?
-     * 包含设备影响率（�?airconditioner.temperature_rate）和 NaturalChangeRate
+     * 生成数值型环境变量的next() 转换，参照sample.smv 格式：
+     * 包含设备影响率（如airconditioner.temperature_rate）和 NaturalChangeRate
      */
     private void appendNumericEnvTransition(StringBuilder content, String smvVarName,
                                             DeviceManifest.InternalVariable var, String varName,
@@ -749,8 +755,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
 
         if (rateExpr != null) {
-            // 有设备影响率：生�?sample.smv 风格
-            // 上边�? a_var=upper-(rate): {toint(a_var)-1+rate, a_var+rate}
+            // 有设备影响率：生成sample.smv 风格
+            // 上边界 a_var=upper-(rate): {toint(a_var)-1+rate, a_var+rate}
             content.append("\t\t").append(smvVarName).append("=").append(upper)
                    .append("-(").append(rateExpr).append("): {toint(").append(smvVarName)
                    .append(")-1+").append(rateExpr).append(", ").append(smvVarName)
@@ -760,12 +766,12 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             content.append("\t\t").append(smvVarName).append(">").append(upper)
                    .append("-(").append(rateExpr).append("): {").append(upper).append("};\n");
 
-            // 下边�? a_var=lower-(rate): {a_var+rate, a_var+1+rate}
+            // 下边界 a_var=lower-(rate): {a_var+rate, a_var+1+rate}
             content.append("\t\t").append(smvVarName).append("=").append(lower)
                    .append("-(").append(rateExpr).append("): {").append(smvVarName).append("+")
                    .append(rateExpr).append(", ").append(smvVarName).append("+1+").append(rateExpr).append("};\n");
 
-            // 低于下边�? a_var<lower-(rate): {lower}
+            // 低于下边界 a_var<lower-(rate): {lower}
             content.append("\t\t").append(smvVarName).append("<").append(lower)
                    .append("-(").append(rateExpr).append("): {").append(lower).append("};\n");
 
@@ -782,9 +788,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             content.append("\t\tTRUE: ").append(rateSet).append(";\n");
         } else {
             // 无设备影响率：简单的 NaturalChangeRate 变化
-            // 边界条件：允许变量朝远离边界的方向变化，但阻止越�?
+            // 边界条件：允许变量朝远离边界的方向变化，但阻止越界
             if (upperRate > 0) {
-                // 上边界：禁止继续上升，但允许下降和保�?
+                // 上边界：禁止继续上升，但允许下降和保持
                 StringBuilder upperSet = new StringBuilder("{");
                 if (lowerRate < 0) {
                     upperSet.append(formatArithmeticExpr(smvVarName, lowerRate)).append(", ");
@@ -794,7 +800,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                        .append(": ").append(upperSet).append(";\n");
             }
             if (lowerRate < 0) {
-                // 下边界：禁止继续下降，但允许上升和保�?
+                // 下边界：禁止继续下降，但允许上升和保持
                 StringBuilder lowerSet = new StringBuilder("{").append(smvVarName);
                 if (upperRate > 0) {
                     lowerSet.append(", ").append(formatArithmeticExpr(smvVarName, upperRate));
@@ -821,9 +827,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 查找所有影响指定变量的设备�?rate 表达�?
-     * 例如：对�?temperature，如�?air_conditioner �?impactedVariables 包含 temperature�?
-     * 则返�?"air_conditioner.temperature_rate"
+     * 查找所有影响指定变量的设备的rate 表达式
+     * 例如：对于temperature，如果air_conditioner 的impactedVariables 包含 temperature）
+     * 则返回"air_conditioner.temperature_rate"
      */
     private String findImpactRateExpression(String varName, List<DeviceVerificationDto> devices,
                                             Map<String, DeviceSmvData> deviceSmvMap) {
@@ -836,7 +842,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             }
         }
         if (rateExprs.isEmpty()) return null;
-        // 多个设备影响同一变量时，用加法组�?
+        // 多个设备影响同一变量时，用加法组合
         return String.join("+", rateExprs);
     }
 
@@ -908,8 +914,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?transition signal（非 API signal）生�?next() 转换�?
-     * 当设备从 startState 转换�?endState �?signal=TRUE，否�?FALSE�?
+     * 为transition signal（非 API signal）生成next() 转换。
+     * 当设备从 startState 转换到endState 时signal=TRUE，否则FALSE。
      */
     private void appendTransitionSignalTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
@@ -1001,7 +1007,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                 appendRuleConditions(content, rule, deviceSmvMap, false);
                                 content.append(" & (");
                                 appendRulePropertyConditions(content, rule, deviceSmvMap, dim);
-                                // content 隐私传播：规则携�?contentDevice.content 时追�?content privacy 条件
+                                // content 隐私传播：规则携带contentDevice.content 时追加content privacy 条件
                                 if (dim == PropertyDimension.PRIVACY) {
                                     String contentCond = buildContentPrivacyCondition(rule, deviceSmvMap);
                                     if (contentCond != null) {
@@ -1027,8 +1033,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?actuator 设备的变量级 trust/privacy 生成 next() 转换（自保持）�?
-     * 这些变量�?SmvDeviceModuleBuilder 中声明为 VAR，必须有 next() 否则 NuSMV 视为非确定性�?
+     * 为actuator 设备的变量级 trust/privacy 生成 next() 转换（自保持）。
+     * 这些变量在SmvDeviceModuleBuilder 中声明为 VAR，必须有 next() 否则 NuSMV 视为非确定性。
      */
     private void appendVariablePropertyTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
@@ -1064,7 +1070,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             if (part != null && !part.isEmpty()) parts.add(part);
         }
 
-        // C2 修复：所有条件源都可信时才传�?trusted，用 & 而非 |
+        // C2 修复：所有条件源都可信时才传播trusted，用 & 而非 |
         content.append(parts.isEmpty() ? "TRUE" : String.join(" & ", parts));
     }
 
@@ -1105,11 +1111,11 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             if ("=".equals(normalizeRuleRelation(condition.getRelation())) && condition.getValue() != null) {
                 String stateValue = condition.getValue().replace(" ", "");
                 if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-                    // 先检�?attribute 是否�?mode �?
+                    // 先检查attribute 是否是mode 名
                     if (condSmv.getModes().contains(condition.getAttribute())) {
                         return condVarName + "." + dim.prefix + condition.getAttribute() + "_" + stateValue + "=" + dim.activeValue;
                     }
-                    // M2 修复：多模式设备 value 含分号时，解析为�?mode 的状�?
+                    // M2 修复：多模式设备 value 含分号时，解析为各mode 的状态
                     if (stateValue.contains(";") && condSmv.getModes().size() > 1) {
                         String[] parts = stateValue.split(";");
                         List<String> propParts = new ArrayList<>();
@@ -1123,7 +1129,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                             return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
                         }
                     }
-                    // 否则�?value 在哪�?mode 的状态列表中查找
+                    // 否则按value 在哪个mode 的状态列表中查找
                     for (String mode : condSmv.getModes()) {
                         List<String> modeStates = condSmv.getModeStates().get(mode);
                         if (modeStates != null && modeStates.contains(stateValue)) {
@@ -1140,8 +1146,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 当规则命令携�?contentDevice.content 时，生成 content 隐私条件�?
-     * 例如规则 "THEN Facebook.post(MobilePhone.photo)" �?"mobilephone.privacy_photo=private"
+     * 当规则命令携带contentDevice.content 时，生成 content 隐私条件。
+     * 例如规则 "THEN Facebook.post(MobilePhone.photo)" →"mobilephone.privacy_photo=private"
      */
     private String buildContentPrivacyCondition(RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap) {
         if (rule.getCommand() == null) return null;
@@ -1167,9 +1173,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?IsChangeable=true �?content 生成 next() 转换�?
-     * 当规则命令引用了�?content（如 THEN Facebook.post(MobilePhone.photo)）时�?
-     * 规则触发会将 content 隐私设为 private；否则自保持�?
+     * 为IsChangeable=true 的content 生成 next() 转换。
+     * 当规则命令引用了该content（如 THEN Facebook.post(MobilePhone.photo)）时，
+     * 规则触发会将 content 隐私设为 private；否则自保持。
      */
     private void appendContentPrivacyTransitions(StringBuilder content,
                                                   List<DeviceVerificationDto> devices,
@@ -1185,12 +1191,12 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
                 String propVar = varName + ".privacy_" + ci.getName();
 
-                // 收集所有引用此 content 的规�?
+                // 收集所有引用此 content 的规则
                 List<RuleDto> matchingRules = findRulesReferencingContent(
                         rules, device.getVarName(), ci.getName(), deviceSmvMap);
 
                 if (matchingRules.isEmpty()) {
-                    // 无规则引用此 content，纯自保�?
+                    // 无规则引用此 content，纯自保持
                     content.append("\n\tnext(").append(propVar).append(") := ").append(propVar).append(";");
                 } else {
                     content.append("\n\tnext(").append(propVar).append(") :=\n");
@@ -1208,7 +1214,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 查找所�?command.contentDevice 匹配指定设备�?command.content 匹配指定 content 名称的规则�?
+     * 查找所有command.contentDevice 匹配指定设备且command.content 匹配指定 content 名称的规则。
      */
     private List<RuleDto> findRulesReferencingContent(List<RuleDto> rules,
                                                        String deviceVarName,
@@ -1340,7 +1346,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                                         + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
                                     }
                                     content.append("\t\t");
-                                    // P1-1 修复：增�?startState 约束
+                                    // P1-1 修复：增加startState 约束
                                     if (trans.getStartState() != null && smv.getModes() != null && !smv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < smv.getModes().size(); mi++) {
                                             String ss = getStateForMode(trans.getStartState(), mi);
@@ -1382,7 +1388,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     // 边界检查：防止溢出 NuSMV 范围
                     if (var.getUpperBound() != null && (upperNcr > 0 || !impactedRate.isEmpty())) {
                         if (impactedRate.isEmpty()) {
-                            // 无设备影响率：允许下降和保持，禁止上�?
+                            // 无设备影响率：允许下降和保持，禁止上升
                             StringBuilder upperSet = new StringBuilder("{");
                             if (lowerNcr < 0) {
                                 upperSet.append(formatArithmeticExpr(varRef, lowerNcr)).append(", ");
@@ -1397,7 +1403,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     }
                     if (var.getLowerBound() != null && (lowerNcr < 0 || !impactedRate.isEmpty())) {
                         if (impactedRate.isEmpty()) {
-                            // 无设备影响率：允许上升和保持，禁止下�?
+                            // 无设备影响率：允许上升和保持，禁止下降
                             StringBuilder lowerSet = new StringBuilder("{").append(varRef);
                             if (upperNcr > 0) {
                                 lowerSet.append(", ").append(formatArithmeticExpr(varRef, upperNcr));
@@ -1429,7 +1435,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     rateSet.append("}");
                     content.append("\t\tTRUE: ").append(rateSet).append(";\n");
                 } else {
-                    // 枚举型变量：检�?Dynamics.Value 生成状态依赖赋�?
+                    // 枚举型变量：检查Dynamics.Value 生成状态依赖赋值
                     if (smv.getManifest().getWorkingStates() != null) {
                         for (DeviceManifest.WorkingState state : smv.getManifest().getWorkingStates()) {
                             if (state.getDynamics() == null) continue;
@@ -1463,8 +1469,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 从分号分隔的多模式状态字符串中提取指定模式索引的状态值�?
-     * 例如 "locked;off" �?modeIndex=0 时返�?"locked"，modeIndex=1 时返�?"off"�?
+     * 从分号分隔的多模式状态字符串中提取指定模式索引的状态值。
+     * 例如 "locked;off" 在modeIndex=0 时返回"locked"，modeIndex=1 时返回"off"。
      */
     private String getStateForMode(String multiModeState, int modeIndex) {
         if (multiModeState == null) return null;
@@ -1482,9 +1488,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 解析 NaturalChangeRate 字符串为 [lowerRate, upperRate]�?
-     * 格式：单�?"3" 或范�?"[-1,2]"�?
-     * 返回 int[2]，[0]=lowerRate, [1]=upperRate�?
+     * 解析 NaturalChangeRate 字符串为 [lowerRate, upperRate]。
+     * 格式：单值"3" 或范围"[-1,2]"。
+     * 返回 int[2]，[0]=lowerRate, [1]=upperRate。
      */
     private int[] parseNaturalChangeRate(String ncr, String contextName) {
         int lowerRate = 0, upperRate = 0;
@@ -1529,9 +1535,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 校验环境变量初始值是否在声明范围内�?
-     * 对于数值型变量，超出范围时 clamp 到边界并记录警告�?
-     * 对于枚举型变量，检查值是否在枚举列表中�?
+     * 校验环境变量初始值是否在声明范围内。
+     * 对于数值型变量，超出范围时 clamp 到边界并记录警告。
+     * 对于枚举型变量，检查值是否在枚举列表中。
      */
     private String validateEnvVarInitValue(String varName, String userInit,
                                            DeviceManifest.InternalVariable var, boolean isAttack, int intensity) {
@@ -1568,7 +1574,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 return null;
             }
         }
-        // 无枚�?无边界定义时，变量在 main 中以 0..100 声明，初值也应保持同范围整数
+        // 无枚举无边界定义时，变量在 main 中以 0..100 声明，初值也应保持同范围整数
         try {
             int value = Integer.parseInt(userInit.trim());
             if (value < 0) {
@@ -1588,7 +1594,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 将前端关系符归一化为 NuSMV 运算符�?
+     * 将前端关系符归一化为 NuSMV 运算符。
      */
     private String normalizeTriggerRelationOrThrow(String deviceName, String context, String rawRelation) {
         String normalized = normalizeTriggerRelation(rawRelation);
@@ -1651,8 +1657,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?IN/NOT_IN 展开�?NuSMV �?(x=a | x=b) �?(x!=a & x!=b)�?
-     * 非集合运算符直接返回 left + relation + value�?
+     * 将IN/NOT_IN 展开为NuSMV 的(x=a | x=b) 成(x!=a & x!=b)。
+     * 非集合运算符直接返回 left + relation + value。
      */
     private static String buildRuleRelationExpr(String left, String relation, String value) {
         if ("in".equals(relation) || "not in".equals(relation)) {
@@ -1685,7 +1691,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?,;| 拆分值列表（用于 IN/NOT_IN），单值时返回包含原值的单元素列表�?
+     * 持,;| 拆分值列表（用于 IN/NOT_IN），单值时返回包含原值的单元素列表。
      */
     private static List<String> splitRuleValues(String value) {
         if (value == null) return List.of();
@@ -1701,7 +1707,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * �?mode 状态值做 cleanStateName，IN/NOT_IN 时逐个清理再用逗号拼接�?
+     * 对mode 状态值做 cleanStateName，IN/NOT_IN 时逐个清理再用逗号拼接。
      */
     private static String cleanRuleValueByRelation(String normalizedRelation, String value) {
         if (value == null) return null;

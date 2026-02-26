@@ -66,7 +66,7 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       ├── ChatServiceImpl.java
 │       ├── DeviceTemplateServiceImpl.java
 │       ├── NodeServiceImpl.java
-│       ├── RedisTokenBlacklistService.java
+│       ├── RedisTokenBlacklistService.java  # Redis 黑名单（SHA-256 key、fail-open、限流日志）
 │       ├── UserServiceImpl.java
 │       ├── VerificationServiceImpl.java   # 验证业务逻辑（同步/异步）
 │       └── SimulationServiceImpl.java     # 模拟业务逻辑（执行 + 持久化）
@@ -309,7 +309,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - 设备实例：`thermostat_1: Thermostat_thermostat1;`
    - 环境变量：`a_temperature: 15..39;`（攻击模式下仅上界扩展，公式 `expansion = range/5 * intensity/50`）
 3. `ASSIGN` — 状态转换逻辑（按顺序）
-   - `appendStateTransitions()` — 规则驱动 + 模板 Transition 驱动的状态转换
+   - `appendStateTransitions()` — 规则驱动 + 模板 Transition 驱动的状态转换（攻击模式下非传感器设备增加最高优先级 `is_attack=TRUE: {所有合法状态}` 劫持分支）
    - `appendEnvTransitions()` — 环境变量 `next()` 转换（含 NaturalChangeRate、设备影响率、边界检查）
    - `appendApiSignalTransitions()` — API 信号变量（基于状态变化检测）
    - `appendTransitionSignalTransitions()` — 模板 Transition 信号变量
@@ -318,7 +318,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
    - `appendContentPrivacyTransitions()` — IsChangeable=true 的 content 隐私转换（规则命中时设为 `private`，否则自保持）
    - `appendVariableRateTransitions()` — 受影响变量的变化率
    - `appendExternalVariableAssignments()` — 外部变量镜像环境变量（简单赋值，非 next）
-   - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下范围扩展）
+   - `appendInternalVariableTransitions()` — 内部变量 `next()` 转换（攻击模式下传感器 `is_attack=TRUE` 时可跳变到原始范围内任意值）
 
 关键设计：
 - 环境变量使用 `a_` 前缀在 main 模块声明，避免跨设备引用问题
@@ -378,11 +378,11 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 - 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
 - `device.var = value` → 匹配到对应 `DeviceSmvData` 的变量/状态/信任/隐私
-- `a_varName = value` → 环境变量
+- `a_varName = value` 及其他裸变量（如 `intensity = value`）→ 环境/全局变量
 - 自动补全 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
 - `trust_` 前缀按类型分流：状态级进入 `trustPrivacy[]`（布尔 trust），变量级写入 `variables[].trust`
 - `privacy_` 前缀进入 `privacies[]`（不再混入 `trustPrivacy[]`）
-- 过滤内部控制变量：`is_attack`、`*_rate`、`*_a`
+- 过滤内部控制变量：`*_rate`、`*_a`；`is_attack` 保留输出，供前端展示反例路径中哪些设备被攻击
 - 增量解析：NuSMV 只输出变化项，解析器通过 `previousModeValuesByDevice` 追踪上一状态
 - `finalizeModeStates()` — 用临时 `__mode__*` 变量补全未变化模式，并回填最终 `state/mode`
 
@@ -584,8 +584,9 @@ public enum PropertyDimension {
 
 - JDK 17+
 - MySQL 8.0+
-- Redis 7.0+
+- Redis 7.0+（仅用于 JWT 黑名单；不可用时 fail-open 降级——登录/验证等流程不受阻，但登出撤销语义会失效：黑名单写入/查询失败时已登出的 token 仍可继续使用直至过期）
 - NuSMV 2.x (已测试 2.5–2.7，需配置路径)
+- `commons-pool2`（Lettuce 连接池，已在 pom.xml 中声明）
 
 ### 模板前置条件（重要）
 
@@ -597,6 +598,18 @@ public enum PropertyDimension {
 ### 关键配置 (application.yaml)
 
 ```yaml
+spring.data.redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  password: ${REDIS_PASSWORD:}
+  database: ${REDIS_DATABASE:0}
+  timeout: 3000ms
+  lettuce:
+    pool:
+      max-active: 16
+      max-idle: 8
+      min-idle: 2
+      max-wait: 2000ms
 nusmv:
   path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}  # NuSMV 可执行文件路径
   command-prefix: ""             # 可选：命令前缀（如 docker exec ...）

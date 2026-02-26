@@ -589,6 +589,251 @@ class SmvGeneratorFixesTest {
         assertTrue(result.contains(".is_attack=FALSE"), "Safety spec should still include is_attack guard");
     }
 
+    // ======================== P8b: is_attack=TRUE 劫持分支回归 ========================
+
+    @Test
+    @DisplayName("P8b: actuator with isAttack=true generates hijack branch with all legal states")
+    void attackMode_actuator_generatesHijackBranch() {
+        DeviceManifest actuatorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").startState("off").endState("on").build()))
+                .build();
+        DeviceSmvData actuator = buildSmvData(
+                "light_1", "Light",
+                List.of("Mode"),
+                Map.of("Mode", List.of("off", "on")),
+                List.of(), actuatorManifest);
+        actuator.setSensor(false);
+        actuator.setInstanceStateTrust("trusted");
+        actuator.getCurrentModeStates().put("Mode", "off");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("light_1", actuator);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("light_1");
+        dto.setTemplateName("Light");
+        dto.setState("off");
+
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
+
+        assertTrue(smv.contains("light_1.is_attack=TRUE: {off, on};"),
+                "Hijack branch should list all legal states for actuator, got:\n" + smv);
+    }
+
+    @Test
+    @DisplayName("P8b: sensor with isAttack=true does NOT generate hijack branch")
+    void attackMode_sensor_noHijackBranch() {
+        DeviceSmvData sensor = buildSensorSmvForIntensity("ts_1", 0, 100);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ts_1", sensor);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ts_1");
+        dto.setTemplateName("Sensor");
+        dto.setState("on");
+
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
+
+        assertFalse(smv.contains("ts_1.is_attack=TRUE"),
+                "Sensor should not have hijack branch, got:\n" + smv);
+    }
+
+    @Test
+    @DisplayName("P8b: actuator hijack branch has highest priority (appears before rule transitions)")
+    void attackMode_actuator_hijackBranchPrecedesRules() {
+        DeviceManifest actuatorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("locked").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("unlocked").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("unlock").startState("locked").endState("unlocked").build()))
+                .build();
+        DeviceSmvData lock = buildSmvData(
+                "lock_1", "Lock",
+                List.of("Mode"),
+                Map.of("Mode", List.of("locked", "unlocked")),
+                List.of(), actuatorManifest);
+        lock.setSensor(false);
+        lock.setInstanceStateTrust("trusted");
+        lock.getCurrentModeStates().put("Mode", "locked");
+
+        DeviceManifest sensorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(numericVar("temperature", true, 0, 100)))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData sensor = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(numericVar("temperature", true, 0, 100)), sensorManifest);
+        sensor.setSensor(true);
+        sensor.setInstanceStateTrust("trusted");
+        sensor.getCurrentModeStates().put("Mode", "on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("lock_1", lock);
+        map.put("sensor_1", sensor);
+
+        DeviceVerificationDto lockDto = new DeviceVerificationDto();
+        lockDto.setVarName("lock_1");
+        lockDto.setTemplateName("Lock");
+        lockDto.setState("locked");
+
+        DeviceVerificationDto sensorDto = new DeviceVerificationDto();
+        sensorDto.setVarName("sensor_1");
+        sensorDto.setTemplateName("Sensor");
+        sensorDto.setState("on");
+
+        RuleDto.Condition cond = new RuleDto.Condition();
+        cond.setDeviceName("sensor_1");
+        cond.setAttribute("temperature");
+        cond.setRelation(">");
+        cond.setValue("30");
+
+        RuleDto.Command cmd = new RuleDto.Command();
+        cmd.setDeviceName("lock_1");
+        cmd.setAction("unlock");
+
+        RuleDto rule = new RuleDto();
+        rule.setConditions(List.of(cond));
+        rule.setCommand(cmd);
+
+        String smv = mainBuilder.build(1L, List.of(lockDto, sensorDto), List.of(rule), map, true, 10, false);
+
+        String transitionBlock = "next(lock_1.Mode)";
+        int blockStart = smv.indexOf(transitionBlock);
+        assertTrue(blockStart >= 0, "next(lock_1.Mode) transition block must exist, got:\n" + smv);
+
+        int esacIdx = smv.indexOf("esac;", blockStart);
+        assertTrue(esacIdx > blockStart, "case...esac must close lock_1 transition block, got:\n" + smv);
+        String block = smv.substring(blockStart, esacIdx);
+        int hijackIdx = block.indexOf("lock_1.is_attack=TRUE: {locked, unlocked};");
+        int ruleIdx = block.indexOf("lock_1.is_attack=FALSE");
+        assertTrue(hijackIdx >= 0, "Hijack branch must exist in lock_1 transition block, got:\n" + block);
+        assertTrue(ruleIdx >= 0, "Rule with is_attack=FALSE guard must exist in lock_1 transition block, got:\n" + block);
+        assertTrue(hijackIdx < ruleIdx,
+                "Hijack branch must appear before rule transitions (higher priority) within lock_1 block, got:\n" + block);
+    }
+
+    @Test
+    @DisplayName("P8b: multi-mode actuator hijack branch lists per-mode legal states")
+    void attackMode_multiModeActuator_hijackBranchPerMode() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("auto;high").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("manual;low").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("setAuto").endState("auto;high").build()))
+                .build();
+        DeviceSmvData hvac = buildSmvData(
+                "hvac_1", "HVAC",
+                List.of("Mode", "FanMode"),
+                Map.of("Mode", List.of("auto", "manual"), "FanMode", List.of("high", "low")),
+                List.of(), manifest);
+        hvac.setSensor(false);
+        hvac.setInstanceStateTrust("trusted");
+        hvac.getCurrentModeStates().put("Mode", "auto");
+        hvac.getCurrentModeStates().put("FanMode", "high");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("hvac_1", hvac);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("hvac_1");
+        dto.setTemplateName("HVAC");
+        dto.setState("auto;high");
+
+        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 5, false);
+
+        assertTrue(smv.contains("hvac_1.is_attack=TRUE: {auto, manual};"),
+                "Mode hijack branch should list Mode states, got:\n" + smv);
+        assertTrue(smv.contains("hvac_1.is_attack=TRUE: {high, low};"),
+                "FanMode hijack branch should list FanMode states, got:\n" + smv);
+    }
+
+    @Test
+    @DisplayName("P8b: isAttack=false does NOT generate hijack branch for actuator")
+    void noAttackMode_actuator_noHijackBranch() {
+        DeviceManifest sensorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(numericVar("temperature", true, 0, 100)))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData sensor = buildSmvData(
+                "sensor_1", "Sensor",
+                List.of("Mode"),
+                Map.of("Mode", List.of("on")),
+                List.of(numericVar("temperature", true, 0, 100)), sensorManifest);
+        sensor.setSensor(true);
+        sensor.setInstanceStateTrust("trusted");
+        sensor.getCurrentModeStates().put("Mode", "on");
+
+        DeviceManifest actuatorManifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").startState("off").endState("on").build()))
+                .build();
+        DeviceSmvData actuator = buildSmvData(
+                "light_1", "Light",
+                List.of("Mode"),
+                Map.of("Mode", List.of("off", "on")),
+                List.of(), actuatorManifest);
+        actuator.setSensor(false);
+        actuator.setInstanceStateTrust("trusted");
+        actuator.getCurrentModeStates().put("Mode", "off");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("sensor_1", sensor);
+        map.put("light_1", actuator);
+
+        DeviceVerificationDto sensorDto = new DeviceVerificationDto();
+        sensorDto.setVarName("sensor_1");
+        sensorDto.setTemplateName("Sensor");
+        sensorDto.setState("on");
+
+        DeviceVerificationDto lightDto = new DeviceVerificationDto();
+        lightDto.setVarName("light_1");
+        lightDto.setTemplateName("Light");
+        lightDto.setState("off");
+
+        RuleDto.Condition cond = new RuleDto.Condition();
+        cond.setDeviceName("sensor_1");
+        cond.setAttribute("temperature");
+        cond.setRelation(">");
+        cond.setValue("30");
+
+        RuleDto.Command cmd = new RuleDto.Command();
+        cmd.setDeviceName("light_1");
+        cmd.setAction("turnOn");
+
+        RuleDto rule = new RuleDto();
+        rule.setConditions(List.of(cond));
+        rule.setCommand(cmd);
+
+        String smv = mainBuilder.build(1L, List.of(sensorDto, lightDto), List.of(rule), map, false, 0, false);
+
+        assertTrue(smv.contains("sensor_1.temperature>30") && smv.contains("light_1.Mode=off: on;"),
+                "Rule-generated transition (temperature>30 -> turnOn) must be present, got:\n" + smv);
+        assertFalse(smv.contains("is_attack=TRUE"),
+                "Non-attack mode should not have hijack branch, got:\n" + smv);
+        assertFalse(smv.contains("is_attack=FALSE"),
+                "Non-attack mode should not have is_attack guard on rules, got:\n" + smv);
+    }
+
     // ======================== P9: 范围扩展按 intensity 缩放 ========================
 
     @Test
@@ -709,9 +954,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("unknown_state");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertNull(expr, "Unresolvable multi-mode state condition should fail-closed");
     }
@@ -739,9 +984,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertNull(expr, "Blank attribute should fail-closed");
     }
@@ -771,9 +1016,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("30");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertEquals("sensor_1.temperature=30", expr);
     }
@@ -803,9 +1048,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" , ; | ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertNull(expr, "Empty IN list should fail-closed");
     }
@@ -835,9 +1080,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("1");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertNull(expr, "Unknown attribute should fail-closed");
     }
@@ -869,9 +1114,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" true ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertEquals("fan_1.fanAuto_a=TRUE", expr);
     }
@@ -903,9 +1148,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertNull(expr, "API signal relation value should be boolean");
     }
@@ -935,9 +1180,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
 
         assertEquals("(fan_1.fanAuto_a=TRUE | fan_1.FanMode=auto)", expr);
     }
@@ -967,9 +1212,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
 
         assertEquals("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto)", expr);
     }
@@ -998,9 +1243,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("powerOn");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
 
         assertEquals("next(plug_1.powerOn_a)=TRUE", expr);
     }
@@ -1093,9 +1338,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("auto;on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
 
         assertEquals("(next(thermostat_1.Mode)=auto & next(thermostat_1.FanMode)=on)", expr);
     }

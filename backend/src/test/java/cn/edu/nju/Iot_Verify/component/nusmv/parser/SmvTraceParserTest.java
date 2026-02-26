@@ -18,7 +18,7 @@ class SmvTraceParserTest {
     private final SmvTraceParser parser = new SmvTraceParser();
 
     @Test
-    void parseCounterexample_parsesModeTrustPrivacyEnvAndFiltersInternalVars() {
+    void parseCounterexample_parsesModeTrustPrivacyEnvAndRetainsIsAttack() {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setVarName("air_conditioner_1");
         smv.setTemplateName("Air Conditioner");
@@ -40,6 +40,7 @@ class SmvTraceParserTest {
                   air_conditioner_1.cool_a = TRUE
                   air_conditioner_1.privacy_photo = private
                   a_temperature = 25
+                  intensity = 1
                 -> State: 1.2 <-
                   air_conditioner_1.HvacMode = heat
                   a_temperature = 24
@@ -61,7 +62,9 @@ class SmvTraceParserTest {
         assertEquals("25", temp.getValue());
         assertEquals("untrusted", temp.getTrust());
         assertNull(findVariable(d1, "temperature_rate"));
-        assertNull(findVariable(d1, "is_attack"));
+        TraceVariableDto attack = findVariable(d1, "is_attack");
+        assertNotNull(attack);
+        assertEquals("FALSE", attack.getValue());
         assertNull(findVariable(d1, "cool_a"));
 
         TraceTrustPrivacyDto trust = findTrust(d1, "HvacMode_cool");
@@ -73,6 +76,7 @@ class SmvTraceParserTest {
         assertEquals("private", privacy.getPrivacy());
 
         assertEquals("25", findEnvValue(s1, "a_temperature"));
+        assertEquals("1", findEnvValue(s1, "intensity"));
         assertEquals("24", findEnvValue(states.get(1), "a_temperature"));
         assertEquals("heat", states.get(1).getDevices().get(0).getState());
     }
