@@ -359,7 +359,7 @@ public class DeviceSmvDataFactory {
         return findDeviceSmvDataInternal(deviceName, deviceSmvMap, false);
     }
 
-    /** 涓ユ牸妯″紡锛歴emplateName 鍥為€€鍛戒腑澶氫釜瀹炰緥鏃舵姏閿欙紝閬垮厤闈欓粯缁戝畾閿欒璁惧銆?*/
+    /** 严格模式：templateName 回退命中多个实例时抛错，避免静默绑定错误设备 */
     public static DeviceSmvData findDeviceSmvDataStrict(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
         return findDeviceSmvDataInternal(deviceName, deviceSmvMap, true);
     }
