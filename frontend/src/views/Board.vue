@@ -1726,6 +1726,8 @@ const handleVerify = async () => {
       intensity: 3
     }
 
+    console.log('Verification Request JSON:', JSON.stringify(req, null, 2))
+
     const result = await boardApi.verify(req)
     verificationResult.value = result
 
@@ -1858,6 +1860,8 @@ const handleSimulate = async (simConfig: {
       intensity: simConfig.intensity,
       enablePrivacy: simConfig.enablePrivacy
     }
+
+    console.log('Simulation Request JSON:', JSON.stringify(req, null, 2))
 
     const result = await simulationApi.simulate(req)
     

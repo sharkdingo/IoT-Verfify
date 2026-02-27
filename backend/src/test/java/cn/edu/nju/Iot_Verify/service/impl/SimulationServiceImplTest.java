@@ -118,6 +118,12 @@ class SimulationServiceImplTest {
         return node.path("code").asInt();
     }
 
+    private JsonNode readRequestJson(File smvFile) throws Exception {
+        File jsonFile = new File(smvFile.getParentFile(), "request.json");
+        assertTrue(jsonFile.exists());
+        return new ObjectMapper().readTree(jsonFile);
+    }
+
     @SuppressWarnings("unchecked")
     private Set<Long> cancelledTaskIds() throws Exception {
         Field f = SimulationServiceImpl.class.getDeclaredField("cancelledTasks");
@@ -218,6 +224,10 @@ class SimulationServiceImplTest {
         assertEquals(3, result.getSteps());
         assertEquals(10, result.getRequestedSteps());
         assertEquals(200, readResultCode(fakeFile));
+        JsonNode request = readRequestJson(fakeFile);
+        assertEquals(10, request.path("steps").asInt());
+        assertFalse(request.path("attack").asBoolean());
+        assertEquals(3, request.path("intensity").asInt());
     }
 
     @Test

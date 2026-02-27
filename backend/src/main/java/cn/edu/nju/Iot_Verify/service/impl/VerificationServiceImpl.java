@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
@@ -22,6 +23,7 @@ import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
@@ -174,6 +176,7 @@ public class VerificationServiceImpl implements VerificationService {
         File smvFile = null;
         Map<String, DeviceSmvData> deviceSmvMap = null;
         VerificationResultDto finalResult = null;
+        String requestJson = buildRequestSnapshot(devices, rules, specs, isAttack, intensity, enablePrivacy);
 
         try {
             checkLogs.add("Generating NuSMV model...");
@@ -187,6 +190,7 @@ public class VerificationServiceImpl implements VerificationService {
                 return finalResult;
             }
             checkLogs.add("Model generated: " + smvFile.getAbsolutePath());
+            saveRequestJson(smvFile, requestJson);
 
             checkLogs.add("Executing NuSMV verification...");
             NusmvResult result = nusmvExecutor.execute(smvFile);
@@ -244,6 +248,34 @@ public class VerificationServiceImpl implements VerificationService {
         } catch (IOException e) {
             log.warn("Failed to save result JSON: {}", e.getMessage());
         }
+    }
+
+    private void saveRequestJson(File smvFile, String requestJson) {
+        if (smvFile == null || smvFile.getParentFile() == null || requestJson == null || requestJson.isBlank()) return;
+        try {
+            File jsonFile = new File(smvFile.getParentFile(), "request.json");
+            objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(jsonFile, objectMapper.readTree(requestJson));
+            log.info("Verification request JSON saved to: {}", jsonFile.getAbsolutePath());
+        } catch (IOException e) {
+            log.warn("Failed to save verification request JSON: {}", e.getMessage());
+        }
+    }
+
+    private String buildRequestSnapshot(List<DeviceVerificationDto> devices,
+                                        List<RuleDto> rules,
+                                        List<SpecificationDto> specs,
+                                        boolean isAttack,
+                                        int intensity,
+                                        boolean enablePrivacy) {
+        VerificationRequestDto request = new VerificationRequestDto();
+        request.setDevices(devices);
+        request.setRules(rules != null ? rules : List.of());
+        request.setSpecs(specs != null ? specs : List.of());
+        request.setAttack(isAttack);
+        request.setIntensity(intensity);
+        request.setEnablePrivacy(enablePrivacy);
+        return JsonUtils.toJson(request);
     }
 
     private Result<VerificationResultDto> wrapResultForDebugFile(VerificationResultDto verificationResult) {
@@ -321,6 +353,7 @@ public class VerificationServiceImpl implements VerificationService {
                             boolean isAttack, int intensity,
                             boolean enablePrivacy) {
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
+        String requestJson = buildRequestSnapshot(devices, safeRules, specs, isAttack, intensity, enablePrivacy);
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
         runningTasks.put(taskId, Thread.currentThread());
@@ -375,6 +408,7 @@ public class VerificationServiceImpl implements VerificationService {
                 finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
+            saveRequestJson(smvFile, requestJson);
 
 
             updateTaskProgress(taskId, 50, "Executing NuSMV");

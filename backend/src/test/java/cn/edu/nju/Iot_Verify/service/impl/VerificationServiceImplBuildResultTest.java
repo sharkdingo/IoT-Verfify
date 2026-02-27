@@ -124,6 +124,12 @@ class VerificationServiceImplBuildResultTest {
         return node.path("code").asInt();
     }
 
+    private JsonNode readRequestJson(File smvFile) throws Exception {
+        File jsonFile = new File(smvFile.getParentFile(), "request.json");
+        assertTrue(jsonFile.exists());
+        return new ObjectMapper().readTree(jsonFile);
+    }
+
     @SuppressWarnings("unchecked")
     private Set<Long> cancelledTaskIds() throws Exception {
         Field f = VerificationServiceImpl.class.getDeclaredField("cancelledTasks");
@@ -257,6 +263,10 @@ class VerificationServiceImplBuildResultTest {
                         false, 0, false));
         assertTrue(ex.getMessage().contains("busy"));
         assertEquals(503, readResultCode(smv));
+        JsonNode request = readRequestJson(smv);
+        assertFalse(request.path("attack").asBoolean());
+        assertEquals(0, request.path("intensity").asInt());
+        assertEquals(1, request.path("specs").size());
     }
 
     @Test
@@ -295,6 +305,10 @@ class VerificationServiceImplBuildResultTest {
                 false, 0, false);
 
         assertEquals(200, readResultCode(smv));
+        JsonNode request = readRequestJson(smv);
+        assertFalse(request.path("attack").asBoolean());
+        assertEquals(0, request.path("intensity").asInt());
+        assertEquals(1, request.path("specs").size());
     }
 
     @Test

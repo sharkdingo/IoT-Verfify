@@ -53,7 +53,7 @@
   │     │     ├─ SmvDeviceModuleBuilder.build()             // 每设备 → MODULE 定义
   │     │     ├─ SmvMainModuleBuilder.build()               // main MODULE + ASSIGN
   │     │     └─ SmvSpecificationBuilder.build()            // specs → CTLSPEC / LTLSPEC
-  │     │     → 输出: model.smv 文件
+  │     │     → 输出: model.smv 文件（后续同目录写 request.json）
   │     │
   │     ├─ [2] nusmvExecutor.execute(smvFile)
   │     │     → 调用 NuSMV 进程，逐 spec 解析 true/false + counterexample
@@ -1033,7 +1033,7 @@ Trace Type: Counterexample
   ├─ SimulationServiceImpl.doSimulate()
   │     │
   │     ├─ [1] smvGenerator.generate(..., specs=空列表)
-  │     │     → 生成不含 CTLSPEC/LTLSPEC 的 model.smv
+  │     │     → 生成不含 CTLSPEC/LTLSPEC 的 model.smv（后续同目录写 request.json）
   │     │
   │     ├─ [2] nusmvExecutor.executeInteractiveSimulation(smvFile, steps)
   │     │     → 以 -int 模式启动 NuSMV，执行:
@@ -1092,10 +1092,10 @@ Trace Type: Counterexample
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
 | 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
 | 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
-| 调试产物 | `NusmvExecutor` 会将原始输出写到 `output.txt`；验证/模拟在已生成 `model.smv` 且流程产出结果对象时会写 `result.json`（与 `model.smv` 同目录） |
+| 调试产物 | 验证/模拟在生成 `model.smv` 后会先在同目录写 `request.json`（请求快照）；`NusmvExecutor` 会将原始输出写到 `output.txt`；流程产出结果对象时会写 `result.json` |
 | `result.json` 语义 | `result.json` 外层 `code/message` 不固定 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志命中 `timed out` 时 `504`，其余失败 `500` |
-| 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `result.json` |
-| 取消边界说明 | 异步任务在结果对象产出前被取消时，可能不写 `result.json`（例如验证异步在生成 `model.smv` 后、执行前被取消） |
+| 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `request.json/result.json` |
+| 取消边界说明 | 异步任务在结果对象产出前被取消时，可能不写 `result.json`；若已生成 `model.smv`，通常已写入 `request.json`（例如验证异步在生成后、执行前被取消） |
 | 临时文件策略 | 当前实现会保留 `model.smv` 临时文件用于排障（不在 finally 中删除） |
 
 ---
@@ -1136,7 +1136,7 @@ Trace Type: Counterexample
 4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
 5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度、同步/异步统一错误语义。
 6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。
-7. **可观测性闭环**：`model.smv` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
+7. **可观测性闭环**：`model.smv` / `request.json` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
 
 仍需依赖的运行前提：
 

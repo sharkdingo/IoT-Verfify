@@ -366,9 +366,9 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 - 反例提取：false spec 后的文本直到下一个 spec 结果为 counterexample
 - 返回 `NusmvResult`，包含 `List<SpecCheckResult>`（每个 spec 的 passed + counterexample）
 - 交互模拟：`executeInteractiveSimulation()` 通过 `-int` 执行 `go -> pick_state -r -> simulate -r -k N -> show_traces -> quit`，并过滤 `NuSMV >` 提示符
-- 排障产物：执行器会在 `model.smv` 同目录写出 `output.txt`；验证/模拟在生成 `model.smv` 且流程产出结果对象时会写 `result.json`。
+- 排障产物：验证/模拟在生成 `model.smv` 后会先在同目录写 `request.json`（本次请求快照）；执行器会写 `output.txt`；流程产出结果对象时会写 `result.json`。
 - `result.json` 外层 `code/message` 与结果语义对齐，不固定为 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志含 `timed out` 时 `504`，其余失败 `500`。
-- 说明：若请求在生成 `model.smv` 之前就失败（例如输入前置校验失败）不会产生 `result.json`；异步取消若发生在结果对象产出前，也可能只保留 `model.smv` 而没有 `result.json`。
+- 说明：若请求在生成 `model.smv` 之前就失败（例如输入前置校验失败），不会产生 `request.json/result.json`；异步取消若发生在结果对象产出前，可能保留 `request.json` 但没有 `result.json`。
 
 ### 4.8 SmvTraceParser — 反例解析
 

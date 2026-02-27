@@ -338,6 +338,7 @@ public class SimulationServiceImpl implements SimulationService {
         List<String> logs = new ArrayList<>();
         File smvFile = null;
         SimulationResultDto finalResult = null;
+        String requestJson = buildRequestSnapshot(devices, rules, steps, isAttack, intensity, enablePrivacy);
 
         try {
             logs.add("Generating NuSMV model (simulation mode)...");
@@ -353,6 +354,7 @@ public class SimulationServiceImpl implements SimulationService {
                 return finalResult;
             }
             logs.add("Model generated: " + smvFile.getAbsolutePath());
+            saveRequestJson(smvFile, requestJson);
 
             logs.add("Executing NuSMV interactive simulation (" + steps + " steps)...");
             SimulationOutput simOutput = nusmvExecutor.executeInteractiveSimulation(smvFile, steps);
@@ -545,6 +547,18 @@ public class SimulationServiceImpl implements SimulationService {
             log.info("Simulation result JSON saved to: {}", jsonFile.getAbsolutePath());
         } catch (IOException e) {
             log.warn("Failed to save simulation result JSON: {}", e.getMessage());
+        }
+    }
+
+    private void saveRequestJson(File smvFile, String requestJson) {
+        if (smvFile == null || smvFile.getParentFile() == null || requestJson == null || requestJson.isBlank()) return;
+        try {
+            File jsonFile = new File(smvFile.getParentFile(), "request.json");
+            objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(jsonFile, objectMapper.readTree(requestJson));
+            log.info("Simulation request JSON saved to: {}", jsonFile.getAbsolutePath());
+        } catch (IOException e) {
+            log.warn("Failed to save simulation request JSON: {}", e.getMessage());
         }
     }
 

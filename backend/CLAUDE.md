@@ -96,6 +96,7 @@ Key config in `src/main/resources/application.yaml`:
 - Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
 - Chat completion (`/api/chat/completions`) throws `ServiceUnavailableException(503)` when `chatExecutor` is saturated.
 - Sync request timeout path uses `future.cancel(true)` and `ThreadPoolExecutor.purge()` to reduce cancelled-task buildup in queue.
+- Debug artifacts in temp dir: `request.json` is saved right after `model.smv` generation (verify/sim); `output.txt` is NuSMV raw output; `result.json` is saved when a result object is produced.
 
 ## NuSMV Verification Flow
 
@@ -109,9 +110,12 @@ VerificationRequestDto (devices, rules, specs, isAttack, intensity, enablePrivac
     → SmvMainModuleBuilder.build(..., enablePrivacy) — main MODULE (instances, ASSIGN, transitions)
     → SmvSpecificationBuilder.build(...) — CTLSPEC / LTLSPEC
     → Write .smv file to temp dir
+  → Save request snapshot to `request.json` in same temp dir (after model generation)
   → NusmvExecutor.execute(smvFile) → NusmvResult (per-spec pass/fail + counterexample)
+    → Save NuSMV raw output to `output.txt` in same temp dir
   → SmvTraceParser.parseCounterexampleStates() — parse trace into TraceStateDto list
   → VerificationResultDto (safe, traces, specResults, checkLogs, nusmvOutput)
+  → Save wrapped response to `result.json` when result object exists
 ```
 
 ## SMV Generation Details (vs MEDIC-test)
