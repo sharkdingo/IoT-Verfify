@@ -3,6 +3,8 @@ package cn.edu.nju.Iot_Verify.dto.verification;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -46,6 +48,7 @@ public class VerificationRequestDto {
      * 是否启用攻击模式
      * 参考 MEDIC-test SMVGeneration.java 中的 isAttack 标志
      */
+    @JsonProperty("isAttack")
     private boolean isAttack = false;
     
     /**
@@ -70,4 +73,15 @@ public class VerificationRequestDto {
      * 默认关闭以提升验证性能。
      */
     private boolean enablePrivacy = false;
+
+    // 阻止 Lombok 生成的 isAttack()/setAttack() 被 Jackson 序列化
+    @JsonIgnore
+    public boolean isAttack() {
+        return isAttack;
+    }
+
+    @JsonIgnore
+    public void setAttack(boolean attack) {
+        this.isAttack = attack;
+    }
 }

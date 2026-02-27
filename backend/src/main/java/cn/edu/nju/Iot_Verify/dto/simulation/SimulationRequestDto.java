@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.dto.simulation;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -30,10 +32,22 @@ public class SimulationRequestDto {
     @Min(1) @Max(100)
     private int steps = 10;
 
+    @JsonProperty("isAttack")
     private boolean isAttack = false;
 
     @Min(0) @Max(50)
     private int intensity = 3;
 
     private boolean enablePrivacy = false;
+
+    // 阻止 Lombok 生成的 isAttack()/setAttack() 被 Jackson 序列化
+    @JsonIgnore
+    public boolean isAttack() {
+        return isAttack;
+    }
+
+    @JsonIgnore
+    public void setAttack(boolean attack) {
+        this.isAttack = attack;
+    }
 }
