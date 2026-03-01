@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, computed } from 'vue'
+import { reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
@@ -155,6 +155,33 @@ const canAddSource = computed(() => {
   }
   // API 类型只需要选择设备和 API
   return true
+})
+
+// 判断是否可以自动添加源（变量类型需要 condition 和 value 都填写完）
+const canAutoAddSource = computed(() => {
+  if (!canAddSource.value) {
+    return false
+  }
+  // 变量类型需要 condition 和 value 都填写完才能自动添加
+  if (currentSource.itemType === 'variable') {
+    return currentSource.relation && currentSource.value
+  }
+  // API 类型可以直接添加
+  return true
+})
+
+// 自动添加源：按回车键或失去焦点时触发
+const tryAutoAddSource = () => {
+  if (canAutoAddSource.value) {
+    addSource()
+  }
+}
+
+// 监听 API 选择变化，自动添加（对于 API 类型）
+watch(() => currentSource.fromApi, (newVal) => {
+  if (newVal && currentSource.itemType === 'api' && canAddSource.value) {
+    addSource()
+  }
 })
 
 // Rule preview
@@ -468,6 +495,8 @@ const formatApiLabel = (api: string) => {
                 placeholder="Enter value"
                 class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-400"
                 :disabled="!currentSource.relation"
+                @keydown.enter="tryAutoAddSource"
+                @blur="tryAutoAddSource"
               />
             </div>
           </div>

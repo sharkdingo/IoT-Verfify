@@ -2081,6 +2081,7 @@ const closeResultDialog = () => {
       @delete-rule="deleteRule"
       @delete-spec="deleteSpecification"
       @device-click="onDeviceListClick"
+      @open-rule-builder="openRuleBuilder"
     />
 
     <!-- Canvas Area -->

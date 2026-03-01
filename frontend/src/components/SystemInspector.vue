@@ -28,7 +28,7 @@ const emit = defineEmits<{
   'delete-device': [deviceId: string]
   'delete-rule': [ruleId: string]
   'delete-spec': [specId: string]
-  'add-rule': []
+  'open-rule-builder': []
   'device-click': [deviceId: string]
   'toggle-rule': [ruleId: string, enabled: boolean]
 }>()
@@ -221,7 +221,7 @@ const handleDeleteRule = (ruleId: string) => {
 }
 
 const handleAddRule = () => {
-  emit('add-rule')
+  emit('open-rule-builder')
 }
 
 const handleDeviceClick = (deviceId: string) => {
