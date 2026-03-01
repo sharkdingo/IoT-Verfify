@@ -2,11 +2,10 @@
 /* =================================================================================
  * 1. Imports & Setup
  * ================================================================================= */
-import {ref, reactive, computed, onMounted, onBeforeUnmount, watch} from 'vue'
+import {ref, reactive, computed, onMounted, onBeforeUnmount} from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 // Icons
-import { Edit, Platform, Close } from '@element-plus/icons-vue'
 
 // Types
 import type {DeviceDialogMeta, DeviceTemplate} from '../types/device'
@@ -14,19 +13,15 @@ import type { CanvasPan } from '../types/canvas'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
-import type { SpecCondition, Specification, SpecTemplate, SpecTemplateId } from '../types/spec'
+import type { SpecCondition, Specification } from '../types/spec'
 // Panel types removed
 
 // Utils
-import {getDeviceIconPath, getNodeIcon} from '../utils/device'
+import {getNodeIcon} from '../utils/device'
 import { getUniqueLabel } from '../utils/canvas/nodeCreate'
 import {
-  getSpecMode,
-  validateAndCleanConditions,
-  isSameSpecification,
   isSpecRelatedToNode,
-  removeSpecsForNode,
-  updateSpecsForNodeRename
+  removeSpecsForNode
 } from '../utils/spec'
 import { getLinkPoints } from '../utils/rule'
 import { cacheManifestForNode, getCachedManifestForNode, hydrateManifestCacheForNodes } from '@/utils/templateCache'
@@ -60,7 +55,6 @@ const { t } = useI18n()
 const NODE_GRID_COLS = 4
 const NODE_SPACING_X = 160
 const NODE_SPACING_Y = 120
-const NODE_START_Y = 140
 
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2
@@ -98,7 +92,6 @@ const allEdges = computed(() => {
   return [...edges.value, ...internalVariableEdges.value]
 })
 const specifications = ref<Specification[]>([])
-const specTemplates = ref<SpecTemplate[]>(defaultSpecTemplates)
 
 
 const draggingTplName = ref<string | null>(null)
@@ -751,7 +744,7 @@ const saveSpecsToServer = async () => {
     console.log('[Board] Saving specs to server:', specsToSave)
     await boardApi.saveSpecs(specsToSave)
   }
-  catch (e) {
+  catch (e: any) {
     console.error('[Board] Save specs failed:', e)
     // 打印更详细的错误信息
     if (e.response) {
@@ -763,9 +756,6 @@ const saveSpecsToServer = async () => {
 }
 
 const ruleBuilderVisible = ref(false)
-
-// Default device templates - now loaded from backend
-const defaultDeviceTemplates = ref<DeviceTemplate[]>([])
 
 const refreshDeviceTemplates = async () => {
   try {
@@ -848,7 +838,7 @@ onMounted(async () => {
     }
     return template || null
   }
-  hydrateManifestCacheForNodes(nodes.value, deviceTemplates.value as any, resolveTemplateForHydration as any)
+  hydrateManifestCacheForNodes(nodes.value, resolveTemplateForHydration as any)
 
   // Load Layout (only canvas)
   try {
@@ -913,23 +903,7 @@ const isInternalVariableEdgeById = (edgeId: string): boolean => {
   return edge?.itemType === 'variable' && edge?.relation === 'contains'
 }
 
-// Convert Tailwind bg- class to actual color value for SVG
-const getCanvasMapColorValue = (nodeId: string): string => {
-  // 内部变量连线使用灰色
-  if (nodeId.startsWith('edge_') || isInternalVariableEdgeById(nodeId)) {
-    return '#94a3b8' // 灰色
-  }
-  
-  const colorIndex = getCanvasMapColorIndex(nodeId)
-  // Map to actual color values that match the Tailwind colors
-  const colorValues = [
-    '#2563EB', '#059669', '#C026D3', '#dc2626',
-    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
-  ]
-  return colorValues[colorIndex] || colorValues[0]
-}
-
-const getCanvasMapSize = (nodeId: string): string => {
+const getCanvasMapSize = (): string => {
   // All nodes use the same size for consistency
   return 'size-2'
 }
@@ -976,7 +950,7 @@ const canvasMapData = computed(() => {
       id: node.id,
       x: Math.max(0, Math.min(mapWidth - 8, nodeX)), // Keep within bounds
       y: Math.max(0, Math.min(mapHeight - 8, nodeY)),
-      size: getCanvasMapSize(node.id),
+      size: getCanvasMapSize(),
       color: getCanvasMapColor(node.id)
     }
   })
@@ -1089,14 +1063,13 @@ const openRuleBuilder = () => {
 
 const handleAddSpec = async (data: { 
   templateId: string, 
-  templateType: string,
   devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, 
   formula: string,
   aConditions: SpecCondition[],
   ifConditions: SpecCondition[],
   thenConditions: SpecCondition[]
 }) => {
-  const { templateId, templateType, devices, formula, aConditions, ifConditions, thenConditions } = data
+  const { templateId, devices, formula, aConditions, ifConditions, thenConditions } = data
 
   // Create specification with LTL formula
   const specId = 'spec_' + Date.now()
@@ -1121,7 +1094,7 @@ const handleAddSpec = async (data: {
   await saveSpecsToServer()
 }
 
-const handleDeleteTemplate = async (templateId: string) => {
+const handleDeleteTemplate = async () => {
   // Template deletion is handled in ControlCenter component
   // Just refresh the templates list after deletion
   await refreshDeviceTemplates()
@@ -1225,11 +1198,115 @@ const simulationForm = reactive({
   steps: 10,
   isAttack: false,
   intensity: 3,
-  enablePrivacy: false
+  enablePrivacy: false,
+  isAsync: false
+})
+
+// Verification form state (similar to simulation)
+const verificationForm = reactive({
+  isAttack: false,
+  intensity: 3,
+  enablePrivacy: false,
+  isAsync: false
+})
+
+// 异步验证任务状态
+const asyncVerificationTask = ref<{
+  taskId: number | null
+  progress: number
+  status: string
+}>({
+  taskId: null,
+  progress: 0,
+  status: 'Initializing...'
+})
+
+// 历史验证 Traces
+const verificationTraces = ref<any[]>([])
+const showVerificationTracesPanel = ref(false)
+
+const loadVerificationTraces = async () => {
+  try {
+    const traces = await boardApi.getVerificationTraces()
+    verificationTraces.value = traces || []
+  } catch (e: any) {
+    console.error('Failed to load verification traces:', e)
+    ElMessage.error({ message: 'Failed to load verification traces', type: 'error' })
+  }
+}
+
+const deleteVerificationTrace = async (traceId: number) => {
+  try {
+    await boardApi.deleteVerificationTrace(traceId)
+    verificationTraces.value = verificationTraces.value.filter(t => t.id !== traceId)
+    ElMessage.success({ message: 'Trace deleted', type: 'success' })
+  } catch (e: any) {
+    console.error('Failed to delete trace:', e)
+    ElMessage.error({ message: 'Failed to delete trace', type: 'error' })
+  }
+}
+
+const selectAndPlayVerificationTrace = async (traceId: number) => {
+  try {
+    const trace = await boardApi.getVerificationTrace(traceId)
+    savedTraces.value = [trace]
+    traceAnimationState.value = {
+      visible: true,
+      selectedTraceIndex: 0,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    showVerificationTracesPanel.value = false
+    
+    const traceData = trace
+    if (traceData?.states?.length > 0) {
+      highlightedTrace.value = {
+        states: traceData.states,
+        currentStateIndex: 0,
+        devices: traceData.states[0]?.devices || []
+      }
+    }
+  } catch (e: any) {
+    console.error('Failed to load trace:', e)
+    ElMessage.error({ message: 'Failed to load trace', type: 'error' })
+  }
+}
+
+// Floating panel visibility state
+const showVerificationPanel = ref(false)
+
+// 异步模拟任务状态
+const asyncSimulationTask = ref<{
+  taskId: number | null
+  progress: number
+  status: string
+}>({
+  taskId: null,
+  progress: 0,
+  status: ''
 })
 
 // Floating panel visibility state
 const showSimulationPanel = ref(false)
+
+// 面板互斥切换函数
+const togglePanel = (panel: 'simulation' | 'verification') => {
+  if (panel === 'simulation') {
+    if (showSimulationPanel.value) {
+      showSimulationPanel.value = false
+    } else {
+      showSimulationPanel.value = true
+      showVerificationPanel.value = false
+    }
+  } else {
+    if (showVerificationPanel.value) {
+      showVerificationPanel.value = false
+    } else {
+      showVerificationPanel.value = true
+      showSimulationPanel.value = false
+    }
+  }
+}
 
 // 模拟时间轴动画状态
 const simulationAnimationState = ref({
@@ -1255,6 +1332,9 @@ const traceAnimationState = ref({
 // 独立保存的 traces 数据（用于对话框关闭后）
 const savedTraces = ref<any[]>([])
 
+// 动画互斥锁 - 防止同时打开两个动画
+const isAnimationLocked = ref(false)
+
 let playInterval: ReturnType<typeof setInterval> | null = null
 
 // 当前选中的 trace
@@ -1266,47 +1346,23 @@ const currentTrace = computed(() => {
   return verificationResult.value?.traces?.[traceAnimationState.value.selectedTraceIndex] || null
 })
 
-// 当前状态
-const currentState = computed(() => {
-  if (!currentTrace.value?.states) return null
-  return currentTrace.value.states[traceAnimationState.value.selectedStateIndex] || null
-})
-
 // 所有状态数量
 const totalStates = computed(() => {
   return currentTrace.value?.states?.length || 0
 })
 
-// 打开反例路径动画
-const openTraceAnimation = () => {
-  if (verificationResult.value?.traces?.length > 0) {
-    // 保存 traces 数据到独立变量
-    savedTraces.value = [...verificationResult.value.traces]
-    
-    // 关闭验证结果对话框
-    closeResultDialog()
-    
-    // 打开反例路径动画
-    traceAnimationState.value = {
-      visible: true,
-      selectedTraceIndex: 0,
-      selectedStateIndex: 0,
-      isPlaying: false
-    }
-    // 高亮第一个状态 - 添加防御性检查确保 currentTrace 不为 null
-    const trace = currentTrace.value
-    if (trace) {
-      highlightedTrace.value = {
-        ...trace,
-        selectedStateIndex: traceAnimationState.value.selectedStateIndex
-      }
-    }
-  }
-}
-
 // 选择并播放指定索引的反例路径动画
 const selectAndPlayTrace = (traceIndex: number) => {
+  // 互斥检查：如果模拟动画正在显示，则不允许打开反例路径动画
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    return
+  }
+  
   if (verificationResult.value?.traces?.length > 0 && traceIndex < verificationResult.value.traces.length) {
+    // 设置互斥锁
+    isAnimationLocked.value = true
+    
     // 保存 traces 数据到独立变量
     savedTraces.value = [...verificationResult.value.traces]
     
@@ -1337,21 +1393,11 @@ const closeTraceAnimation = () => {
   stopTraceAnimation()
   traceAnimationState.value.visible = false
   highlightedTrace.value = null
+  // 重置互斥锁
+  isAnimationLocked.value = false
 }
 
 // 选择违规规约
-const selectTrace = (index: number) => {
-  traceAnimationState.value.selectedTraceIndex = index
-  traceAnimationState.value.selectedStateIndex = 0
-  const trace = currentTrace.value
-  if (trace) {
-    highlightedTrace.value = {
-      ...trace,
-      selectedStateIndex: traceAnimationState.value.selectedStateIndex
-    }
-  }
-}
-
 // 跳转到指定状态
 const goToState = (index: number) => {
   traceAnimationState.value.selectedStateIndex = index
@@ -1402,23 +1448,6 @@ const stopTraceAnimation = () => {
     clearInterval(playInterval)
     playInterval = null
   }
-}
-
-// 获取设备状态颜色
-const getStateColor = (state: string): string => {
-  const stateColors: Record<string, string> = {
-    'heat': 'bg-red-500',
-    'cool': 'bg-blue-500',
-    'off': 'bg-gray-400',
-    'on': 'bg-green-500',
-    'auto': 'bg-purple-500',
-    'dry': 'bg-yellow-500',
-    'fanOnly': 'bg-cyan-500',
-    'heatClean': 'bg-orange-500',
-    'dryClean': 'bg-amber-500',
-    'coolClean': 'bg-sky-500'
-  }
-  return stateColors[state?.toLowerCase()] || 'bg-slate-500'
 }
 
 // 格式化规约为易读格式
@@ -1484,15 +1513,20 @@ const handleHighlightTrace = (trace: any) => {
 }
 
 // 清除高亮
-const clearHighlight = () => {
-  highlightedTrace.value = null
-}
-
 // ==== Simulation Timeline Animation Logic ====
 
 // 打开模拟时间轴动画
 const openSimulationTimeline = () => {
+  // 互斥检查：如果反例路径动画正在显示，则不允许打开模拟动画
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    return
+  }
+  
   if (simulationResult.value?.states?.length > 0) {
+    // 设置互斥锁
+    isAnimationLocked.value = true
+    
     // 保存模拟 states 数据到独立变量
     savedSimulationStates.value = [...simulationResult.value.states]
     
@@ -1519,66 +1553,26 @@ const closeSimulationTimeline = () => {
   stopSimulationAnimation()
   simulationAnimationState.value.visible = false
   highlightedTrace.value = null
+  // 重置互斥锁
+  isAnimationLocked.value = false
+}
+
+// 处理 SimulationTimeline 组件的关闭事件
+const handleSimulationTimelineClose = (visible: boolean) => {
+  if (!visible) {
+    closeSimulationTimeline()
+  }
 }
 
 // 跳转到指定状态
-const goToSimulationState = (index: number) => {
-  simulationAnimationState.value.selectedStateIndex = index
-  highlightedTrace.value = {
-    states: savedSimulationStates.value,
-    selectedStateIndex: index
-  }
-}
-
 // 播放/停止模拟动画
-const toggleSimulationAnimation = () => {
-  if (simulationAnimationState.value.isPlaying) {
-    stopSimulationAnimation()
-  } else {
-    startSimulationAnimation()
-  }
-}
-
 let simulationPlayInterval: ReturnType<typeof setInterval> | null = null
-
-const startSimulationAnimation = () => {
-  if (simulationAnimationState.value.isPlaying) return
-  
-  simulationAnimationState.value.isPlaying = true
-  simulationPlayInterval = setInterval(() => {
-    const states = savedSimulationStates.value
-    if (!states || states.length === 0) {
-      stopSimulationAnimation()
-      return
-    }
-    if (simulationAnimationState.value.selectedStateIndex < states.length - 1) {
-      simulationAnimationState.value.selectedStateIndex++
-      highlightedTrace.value = {
-        states: savedSimulationStates.value,
-        selectedStateIndex: simulationAnimationState.value.selectedStateIndex
-      }
-    } else {
-      // 到达最后一个状态时停止播放，不循环
-      stopSimulationAnimation()
-    }
-  }, 1500)
-}
 
 const stopSimulationAnimation = () => {
   simulationAnimationState.value.isPlaying = false
   if (simulationPlayInterval) {
     clearInterval(simulationPlayInterval)
     simulationPlayInterval = null
-  }
-}
-
-// 高亮模拟状态
-const handleHighlightSimulationState = (state: any) => {
-  if (state) {
-    highlightedTrace.value = {
-      states: savedSimulationStates.value,
-      selectedStateIndex: simulationAnimationState.value.selectedStateIndex
-    }
   }
 }
 
@@ -1722,12 +1716,70 @@ const handleVerify = async () => {
       devices,
       rules: normalizedRulesData,
       specs,
-      isAttack: false,
-      intensity: 3
+      isAttack: verificationForm.isAttack,
+      intensity: verificationForm.intensity,
+      enablePrivacy: verificationForm.enablePrivacy
     }
 
     console.log('Verification Request JSON:', JSON.stringify(req, null, 2))
 
+    // Handle async or sync verification
+    if (verificationForm.isAsync) {
+      // Async verification
+      asyncVerificationTask.value = { taskId: null, progress: 0, status: 'Initializing...' }
+      
+      // Start async verification
+      const taskId = await boardApi.verifyAsync(req)
+      asyncVerificationTask.value.taskId = taskId
+      asyncVerificationTask.value.status = 'Running verification...'
+      
+      // Poll for progress and result
+      const pollInterval = setInterval(async () => {
+        try {
+          const progress = await boardApi.getTaskProgress(taskId)
+          asyncVerificationTask.value.progress = progress
+          
+          const task = await boardApi.getTask(taskId)
+          asyncVerificationTask.value.status = `Status: ${task.status}`
+          
+          if (task.status === 'COMPLETED') {
+            clearInterval(pollInterval)
+            isVerifying.value = false
+            
+            if (task.isSafe) {
+              verificationResult.value = { safe: true, traces: [], specResults: [], checkLogs: task.checkLogs || [], nusmvOutput: task.nusmvOutput || '' }
+              ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
+            } else {
+              // Get traces for failed verification
+              const traces = await boardApi.getVerificationTraces()
+              verificationResult.value = { 
+                safe: false, 
+                traces: traces.slice(0, task.violatedSpecCount || 1), 
+                specResults: [], 
+                checkLogs: task.checkLogs || [], 
+                nusmvOutput: task.nusmvOutput || '' 
+              }
+              ElMessage.warning({ message: `Verification failed: Found ${task.violatedSpecCount || 0} violations`, type: 'warning' })
+            }
+            showVerificationPanel.value = false
+          } else if (task.status === 'FAILED' || task.status === 'CANCELLED') {
+            clearInterval(pollInterval)
+            isVerifying.value = false
+            verificationError.value = task.errorMessage || 'Verification failed'
+            ElMessage.error({ message: verificationError.value, type: 'error' })
+          }
+        } catch (e: any) {
+          clearInterval(pollInterval)
+          isVerifying.value = false
+          verificationError.value = e.message || 'Failed to get verification progress'
+          ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
+        }
+      }, 1000)
+      
+      return
+    }
+
+    // Sync verification (original logic)
     const result = await boardApi.verify(req)
     verificationResult.value = result
 
@@ -1746,11 +1798,22 @@ const handleVerify = async () => {
   }
 }
 
+// Run simulation with proper panel handling
+const runSimulation = async () => {
+  // For async mode, don't close panel to show progress
+  // For sync mode, close panel after completion
+  await handleSimulate({ ...simulationForm })
+  if (!simulationForm.isAsync) {
+    showSimulationPanel.value = false
+  }
+}
+
 const handleSimulate = async (simConfig: {
   steps: number
   isAttack: boolean
   intensity: number
   enablePrivacy: boolean
+  isAsync: boolean
 }) => {
   if (nodes.value.length === 0) {
     ElMessage.warning({ message: 'No devices to simulate', type: 'warning' })
@@ -1760,6 +1823,11 @@ const handleSimulate = async (simConfig: {
   isSimulating.value = true
   simulationError.value = null
   simulationResult.value = null
+
+  // 重置异步任务状态
+  if (simConfig.isAsync) {
+    asyncSimulationTask.value = { taskId: null, progress: 0, status: 'Initializing...' }
+  }
 
   try {
     // 使用与验证相同的设备数据转换逻辑
@@ -1860,10 +1928,23 @@ const handleSimulate = async (simConfig: {
       intensity: simConfig.intensity,
       enablePrivacy: simConfig.enablePrivacy
     }
+    
+    console.log('Simulation request:', { ...req, isAttack: req.isAttack, intensity: req.intensity })
 
-    console.log('Simulation Request JSON:', JSON.stringify(req, null, 2))
+    let result: any
 
-    const result = await simulationApi.simulate(req)
+    if (simConfig.isAsync) {
+      // 异步模拟：创建任务并轮询进度
+      const taskId = await simulationApi.simulateAsync(req)
+      asyncSimulationTask.value.taskId = taskId
+      asyncSimulationTask.value.status = 'Task created, waiting...'
+
+      // 轮询任务进度
+      result = await pollAsyncSimulation(taskId)
+    } else {
+      // 同步模拟
+      result = await simulationApi.simulate(req)
+    }
     
     // 直接打开时间轴动画，不显示结果对话框
     if (result.states && result.states.length > 0) {
@@ -1904,6 +1985,64 @@ const handleSimulate = async (simConfig: {
   } finally {
     isSimulating.value = false
   }
+}
+
+// 轮询异步模拟任务
+const pollAsyncSimulation = async (taskId: number): Promise<any> => {
+  const maxPollCount = 120  // 最多轮询 2 分钟 (120 * 1000ms)
+  const pollInterval = 1000  // 每秒轮询一次
+  let pollCount = 0
+
+  while (pollCount < maxPollCount) {
+    try {
+      // 获取任务进度
+      const progress = await simulationApi.getTaskProgress(taskId)
+      asyncSimulationTask.value.progress = progress
+
+      // 获取任务状态
+      const task = await simulationApi.getTask(taskId)
+      asyncSimulationTask.value.status = task.status
+
+      // 根据任务状态处理
+      if (task.status === 'COMPLETED') {
+        // 任务完成，获取模拟结果
+        if (task.simulationTraceId) {
+          const trace = await simulationApi.getSimulation(task.simulationTraceId)
+          return {
+            states: trace.states,
+            steps: trace.steps,
+            requestedSteps: trace.requestedSteps,
+            logs: trace.logs || [],
+            nusmvOutput: trace.nusmvOutput
+          }
+        }
+        return { states: [], steps: 0, requestedSteps: 0, logs: ['Task completed but no trace found'] }
+      } else if (task.status === 'FAILED') {
+        // 任务失败
+        const errorMsg = task.errorMessage || 'Async simulation failed'
+        throw new Error(errorMsg)
+      } else if (task.status === 'CANCELLED') {
+        // 任务被取消
+        throw new Error('Simulation task was cancelled')
+      }
+
+      // 等待一段时间后继续轮询
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+      pollCount++
+
+    } catch (error: any) {
+      if (error.message === 'Simulation task was cancelled') {
+        throw error
+      }
+      console.error('Poll error:', error)
+      // 继续轮询，即使出现错误
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+      pollCount++
+    }
+  }
+
+  // 超出最大轮询次数
+  throw new Error('Simulation timeout - please check task status manually')
 }
 
 // ==== Results Dialog ====
@@ -1972,72 +2111,257 @@ const closeResultDialog = () => {
     </div>
 
     <!-- Floating Action Buttons - Left of System Inspector -->
-    <div class="fixed top-20 right-[285px] z-40 flex flex-col gap-3">
+    <div class="fixed top-20 right-[310px] z-40 flex flex-col gap-3">
       <!-- Simulation Button (Circle) -->
-      <button
-        @click="showSimulationPanel = !showSimulationPanel"
-        class="w-12 h-12 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center group"
-        title="Simulation"
-      >
-        <span class="material-symbols-outlined text-xl">play_circle</span>
-        <!-- Tooltip -->
-        <span class="absolute right-full mr-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none">
-          Simulation
-        </span>
-      </button>
+      <div class="relative group">
+        <!-- Pulse animation when active -->
+        <div 
+          v-if="simulationAnimationState.visible"
+          class="absolute inset-0 rounded-full bg-indigo-400 animate-ping opacity-75"
+        ></div>
+        <button
+          @click="togglePanel('simulation')"
+          :disabled="traceAnimationState.visible || simulationAnimationState.visible"
+          :class="[
+            'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            (traceAnimationState.visible || simulationAnimationState.visible) 
+              ? 'bg-indigo-300 cursor-not-allowed disabled:hover:scale-100' 
+              : 'bg-indigo-500 hover:bg-indigo-600'
+          ]"
+          title="Simulation"
+        >
+          <span class="material-symbols-outlined text-xl">play_circle</span>
+          <!-- Active indicator badge -->
+          <span v-if="simulationAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+          <!-- Tooltip -->
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ simulationAnimationState.visible ? 'Simulation Running' : 'Simulation' }}
+            <span v-if="simulationAnimationState.visible" class="ml-1 text-indigo-300">(Active)</span>
+          </span>
+        </button>
+      </div>
 
       <!-- Verify Button (Circle) -->
-      <button
-        @click="handleVerify"
-        :disabled="isVerifying"
-        class="w-12 h-12 rounded-full bg-green-500 hover:bg-green-600 disabled:bg-green-400 text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center group disabled:cursor-not-allowed disabled:hover:scale-100"
-        title="Start Verification"
-      >
-        <template v-if="isVerifying">
-          <span class="material-symbols-outlined text-xl animate-spin">sync</span>
-        </template>
-        <template v-else>
-          <span class="material-symbols-outlined text-xl">verified_user</span>
-        </template>
-        <!-- Tooltip -->
-        <span class="absolute right-full mr-3 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none">
-          Start Verification
-        </span>
-      </button>
+      <div class="relative group">
+        <!-- Pulse animation when active -->
+        <div 
+          v-if="traceAnimationState.visible"
+          class="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-75"
+        ></div>
+        <button
+          @click="togglePanel('verification')"
+          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible"
+          :class="[
+            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible)
+              ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
+              : 'bg-green-500 hover:bg-green-600'
+          ]"
+          title="Verification Settings"
+        >
+          <span v-if="isVerifying" class="material-symbols-outlined text-xl animate-spin">sync</span>
+          <span v-else class="material-symbols-outlined text-xl">verified_user</span>
+          <!-- Active indicator badge -->
+          <span v-if="traceAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+          <!-- Tooltip -->
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ isVerifying ? 'Verifying...' : 'Verification Settings' }}
+            <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">(Active)</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Verification Panel -->
+    <div 
+      v-if="showVerificationPanel"
+      class="fixed top-20 right-[375px] z-30 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+    >
+      <!-- Verification Header with gradient -->
+      <div class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-green-500 to-emerald-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
+        <div class="relative flex items-center justify-between p-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-green-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-xl">verified_user</span>
+            </div>
+            <div>
+              <h3 class="text-black font-bold text-base">Verification</h3>
+              <p class="text-green-900/80 text-xs">Configure and run verification</p>
+            </div>
+          </div>
+          <button 
+            @click="showVerificationPanel = false"
+            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+      <!-- Verification Options -->
+      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-green-50/30">
+        <!-- Attack Mode -->
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Attack Mode
+            </label>
+          </div>
+          <button
+            @click="verificationForm.isAttack = !verificationForm.isAttack"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="verificationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
+          >
+            <span
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: verificationForm.isAttack ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
+            />
+          </button>
+        </div>
+
+        <!-- Intensity (visible when attack is enabled) -->
+        <div v-if="verificationForm.isAttack" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
+          <label class="block text-[10px] font-bold text-red-700 uppercase tracking-wide mb-2">
+            Attack Intensity: <span class="text-red-500">{{ verificationForm.intensity }}</span>
+          </label>
+          <input
+            v-model.number="verificationForm.intensity"
+            type="range"
+            min="0"
+            max="50"
+            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+          />
+          <div class="flex justify-between text-[10px] text-red-400 mt-1">
+            <span>Weak</span>
+            <span>Strong</span>
+          </div>
+        </div>
+
+        <!-- Privacy Analysis -->
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Privacy Analysis
+            </label>
+          </div>
+          <button
+            @click="verificationForm.enablePrivacy = !verificationForm.enablePrivacy"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="verificationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
+          >
+            <span
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: verificationForm.enablePrivacy ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
+            />
+          </button>
+        </div>
+
+        <!-- Async Mode -->
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Async Mode
+            </label>
+          </div>
+          <button
+            @click="verificationForm.isAsync = !verificationForm.isAsync"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="verificationForm.isAsync ? 'bg-blue-500' : 'bg-slate-300'"
+          >
+            <span
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: verificationForm.isAsync ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
+            />
+          </button>
+        </div>
+
+        <!-- Async Progress (visible when async verification is running) -->
+        <div v-if="isVerifying && asyncVerificationTask.taskId" class="space-y-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-green-600 font-medium">{{ asyncVerificationTask.status }}</span>
+            <span class="text-green-600 font-bold">{{ asyncVerificationTask.progress }}%</span>
+          </div>
+          <div class="w-full h-2 bg-green-200 rounded-full overflow-hidden">
+            <div 
+              class="h-full bg-green-500 transition-all duration-500 ease-out"
+              :style="{ width: `${asyncVerificationTask.progress}%` }"
+            />
+          </div>
+        </div>
+
+        <!-- Run Verification Button -->
+        <button
+          @click="handleVerify(); if (!verificationForm.isAsync) showVerificationPanel = false"
+          :disabled="isVerifying"
+          class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
+        >
+          <template v-if="isVerifying">
+            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+            Verifying...
+          </template>
+          <template v-else>
+            <span class="material-symbols-outlined text-sm">play_arrow</span>
+            Run
+          </template>
+        </button>
+      </div>
     </div>
 
     <!-- Simulation Panel (Appears when clicking simulation button) -->
     <div 
       v-if="showSimulationPanel"
-      class="fixed top-20 right-[370px] z-30 w-72 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden"
+      class="fixed top-20 right-[375px] z-30 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
     >
-      <!-- Simulation Header -->
-      <div class="flex items-center justify-between p-3 bg-indigo-500">
-        <div class="flex items-center gap-2">
-          <div class="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-            <span class="material-symbols-outlined text-white text-lg">play_circle</span>
+      <!-- Simulation Header with gradient -->
+      <div class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-indigo-500 to-violet-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
+        <div class="relative flex items-center justify-between p-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-blue-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-xl">play_circle</span>
+            </div>
+            <div>
+              <span class="text-sm font-bold text-black">Simulation</span>
+              <p class="text-indigo-900/80 text-xs">Configure simulation</p>
+            </div>
           </div>
-          <div>
-            <span class="text-sm font-bold text-white">Simulation</span>
-            <p class="text-xs text-indigo-200">Config</p>
-          </div>
+          <button 
+            @click="showSimulationPanel = false"
+            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
         </div>
-        <button 
-          @click="showSimulationPanel = false"
-          class="text-white/80 hover:text-white"
-        >
-          <span class="material-symbols-outlined">close</span>
-        </button>
       </div>
-
       <!-- Simulation Content -->
-      <div class="p-3 space-y-3 bg-indigo-50">
+      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-indigo-50/30">
         <!-- Steps -->
-        <div>
-          <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-1">
-            Simulation Steps
+        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-2">
+            Simulation Steps: <span class="text-indigo-600">{{ simulationForm.steps }}</span>
           </label>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-indigo-300">fast_rewind</span>
             <input
               v-model.number="simulationForm.steps"
               type="range"
@@ -2045,77 +2369,127 @@ const closeResultDialog = () => {
               max="100"
               class="flex-1 h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
             />
-            <span class="w-10 text-xs font-bold text-indigo-800 text-center bg-white rounded px-2 py-1 border border-indigo-200">
-              {{ simulationForm.steps }}
-            </span>
+            <span class="material-symbols-outlined text-indigo-300">fast_forward</span>
           </div>
         </div>
 
         <!-- Attack Mode -->
-        <div class="flex items-center justify-between">
-          <label class="text-xs font-bold text-indigo-700 uppercase tracking-wide">
-            Attack
-          </label>
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Attack Mode
+            </label>
+          </div>
           <button
             @click="simulationForm.isAttack = !simulationForm.isAttack"
-            :class="[
-              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-              simulationForm.isAttack ? 'bg-red-500' : 'bg-indigo-300'
-            ]"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="simulationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
           >
             <span
-              :class="[
-                'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                simulationForm.isAttack ? 'translate-x-6' : 'translate-x-1'
-              ]"
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: simulationForm.isAttack ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
             />
           </button>
         </div>
 
         <!-- Intensity (visible when attack is enabled) -->
-        <div v-if="simulationForm.isAttack">
-          <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-1">
-            Intensity: {{ simulationForm.intensity }}
+        <div v-if="simulationForm.isAttack" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
+          <label class="block text-[10px] font-bold text-red-700 uppercase tracking-wide mb-2">
+            Attack Intensity: <span class="text-red-500">{{ simulationForm.intensity }}</span>
           </label>
           <input
             v-model.number="simulationForm.intensity"
             type="range"
             min="0"
             max="50"
-            class="w-full h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
           />
+          <div class="flex justify-between text-[10px] text-red-400 mt-1">
+            <span>Weak</span>
+            <span>Strong</span>
+          </div>
         </div>
 
         <!-- Privacy Analysis -->
-        <div class="flex items-center justify-between">
-          <label class="text-xs font-bold text-indigo-700 uppercase tracking-wide">
-            Privacy
-          </label>
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Privacy Analysis
+            </label>
+          </div>
           <button
             @click="simulationForm.enablePrivacy = !simulationForm.enablePrivacy"
-            :class="[
-              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-              simulationForm.enablePrivacy ? 'bg-purple-500' : 'bg-indigo-300'
-            ]"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="simulationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
           >
             <span
-              :class="[
-                'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                simulationForm.enablePrivacy ? 'translate-x-6' : 'translate-x-1'
-              ]"
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: simulationForm.enablePrivacy ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
             />
           </button>
         </div>
 
+        <!-- Async Mode -->
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              Async Mode
+            </label>
+          </div>
+          <button
+            @click="simulationForm.isAsync = !simulationForm.isAsync"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            :class="simulationForm.isAsync ? 'bg-blue-500' : 'bg-slate-300'"
+          >
+            <span
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{ 
+                transform: simulationForm.isAsync ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
+            />
+          </button>
+        </div>
+
+        <!-- Async Progress (visible when async simulation is running) -->
+        <div v-if="isSimulating && asyncSimulationTask.taskId" class="space-y-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-indigo-700 font-medium">Progress</span>
+            <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
+          </div>
+          <div class="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
+            <div 
+              class="h-full bg-green-500 transition-all duration-300"
+              :style="{ width: `${asyncSimulationTask.progress}%` }"
+            ></div>
+          </div>
+          <div class="text-xs text-indigo-500 text-center">{{ asyncSimulationTask.status }}</div>
+        </div>
+
         <!-- Simulate Button -->
         <button
-          @click="handleSimulate({ ...simulationForm }); showSimulationPanel = false"
-          :disabled="isSimulating"
+          @click="runSimulation"
+          :disabled="isSimulating || traceAnimationState.visible || simulationAnimationState.visible"
           class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
           <template v-if="isSimulating">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            Running...
+            {{ simulationForm.isAsync ? 'Running Async...' : 'Running...' }}
           </template>
           <template v-else>
             <span class="material-symbols-outlined text-sm">play_arrow</span>
@@ -2324,30 +2698,40 @@ const closeResultDialog = () => {
   </div>
 
   <!-- Simulation Result Dialog -->
-  <div v-if="simulationResult || simulationError" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="simulationResult = null; simulationError = null">
-    <div class="bg-white rounded-xl p-6 w-[700px] max-w-[90vw] shadow-2xl max-h-[85vh] flex flex-col" @click.stop>
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-            <span class="material-symbols-outlined text-indigo-600 text-xl">play_circle</span>
+  <div v-if="simulationResult || simulationError" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" @click="simulationResult = null; simulationError = null">
+    <div class="bg-white rounded-2xl w-[750px] max-w-[95vw] shadow-2xl max-h-[90vh] flex flex-col border border-slate-200/60" @click.stop>
+      <!-- Header with gradient -->
+      <div class="relative overflow-hidden rounded-t-2xl">
+        <div class="bg-gradient-to-r from-indigo-500 to-violet-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-20"></div>
+        <div class="relative flex items-center justify-between p-5">
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-2xl">play_circle</span>
+            </div>
+            <div>
+              <h3 class="text-xl font-bold text-white">Simulation Result</h3>
+              <p class="text-indigo-200/80 text-sm" v-if="simulationResult">
+                {{ simulationResult.steps || 0 }} states from {{ simulationResult.requestedSteps || 0 }} steps
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 class="text-lg font-semibold text-slate-800">Simulation Result</h3>
-            <p class="text-xs text-slate-500" v-if="simulationResult">
-              {{ simulationResult.steps || 0 }} states generated from {{ simulationResult.requestedSteps || 0 }} requested steps
-            </p>
+          <button @click="simulationResult = null; simulationError = null" class="w-9 h-9 flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/20 transition-all">
+            <span class="material-symbols-outlined text-xl">close</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="simulationError" class="p-6">
+        <div class="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <div class="flex items-center gap-2 text-red-600">
+            <span class="material-symbols-outlined">error</span>
+            <span class="font-medium">{{ simulationError }}</span>
           </div>
         </div>
-        <button @click="simulationResult = null; simulationError = null" class="text-slate-400 hover:text-slate-600">
-          <span class="material-symbols-outlined">close</span>
-        </button>
       </div>
 
-      <div v-if="simulationError" class="text-red-600 mb-4 p-4 bg-red-50 rounded-lg">
-        {{ simulationError }}
-      </div>
-
-      <div v-else-if="simulationResult" class="flex-1 overflow-hidden flex flex-col">
+      <div v-else-if="simulationResult" class="flex-1 overflow-hidden flex flex-col p-6 pt-4">
         <!-- Logs -->
         <div class="mb-4">
           <h4 class="text-sm font-bold text-slate-700 mb-2">Execution Logs</h4>
@@ -2404,10 +2788,17 @@ const closeResultDialog = () => {
         <button
           v-if="simulationResult && simulationResult.states && simulationResult.states.length > 0"
           @click="openSimulationTimeline"
-          class="px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+          :disabled="traceAnimationState.visible"
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2',
+            traceAnimationState.visible 
+              ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+              : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white'
+          ]"
         >
           <span class="material-symbols-outlined text-lg">play_circle</span>
           View Timeline
+          <span v-if="traceAnimationState.visible" class="text-xs ml-1">(Active)</span>
         </button>
         <button
           @click="simulationResult = null; simulationError = null"
@@ -2420,32 +2811,102 @@ const closeResultDialog = () => {
   </div>
 
   <!-- Verification Result Dialog -->
-  <div v-if="showResultDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="closeResultDialog">
-    <div class="bg-white rounded-xl p-6 w-[600px] max-w-[90vw] shadow-2xl max-h-[80vh] flex flex-col" @click.stop>
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-slate-800">Verification Result</h3>
-        <button @click="closeResultDialog" class="text-slate-400 hover:text-slate-600">
-          <span class="material-symbols-outlined">close</span>
-        </button>
+  <div v-if="showResultDialog" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" @click="closeResultDialog">
+    <div class="bg-white rounded-2xl w-[650px] max-w-[95vw] shadow-2xl max-h-[85vh] flex flex-col border border-slate-200" @click.stop>
+      <!-- Header -->
+      <div class="relative overflow-hidden rounded-t-2xl border-b" :class="verificationResult?.safe ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'">
+        <div class="relative flex items-center justify-between p-5">
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm" :class="verificationResult?.safe ? 'bg-green-100' : 'bg-red-100'">
+              <span class="material-symbols-outlined text-2xl" :class="verificationResult?.safe ? 'text-green-600' : 'text-red-600'">
+                {{ verificationResult?.safe ? 'check_circle' : 'error' }}
+              </span>
+            </div>
+            <div>
+              <h3 class="text-xl font-bold text-slate-800">Verification Result</h3>
+              <p class="text-sm text-slate-600">{{ verificationResult?.safe ? 'All specifications passed' : 'Violations detected' }}</p>
+            </div>
+          </div>
+          <button @click="closeResultDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
+            <span class="material-symbols-outlined text-xl">close</span>
+          </button>
+        </div>
       </div>
 
-      <div v-if="verificationError" class="text-red-600 mb-4">
-        {{ verificationError }}
-      </div>
+      <div class="p-6 flex-1 overflow-y-auto">
+        <div v-if="verificationError" class="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <div class="flex items-center gap-2 text-red-600">
+            <span class="material-symbols-outlined">error</span>
+            <span class="font-medium">{{ verificationError }}</span>
+          </div>
+        </div>
 
-      <div v-else-if="verificationResult" class="flex-1 overflow-y-auto">
-        <div class="mb-4 p-4 rounded-lg" :class="verificationResult.safe ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'">
-          <div class="flex items-center gap-2">
-            <span class="material-symbols-outlined" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
-              {{ verificationResult.safe ? 'check_circle' : 'error' }}
-            </span>
-            <span class="font-bold" :class="verificationResult.safe ? 'text-green-800' : 'text-red-800'">
-              {{ verificationResult.safe ? 'System is Safe' : 'System is Unsafe' }}
-            </span>
+        <div v-else-if="verificationResult" class="space-y-4">
+          <!-- Status Card -->
+          <div class="p-5 rounded-xl" :class="verificationResult.safe ? 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200' : 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200'">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="verificationResult.safe ? 'bg-green-100' : 'bg-red-100'">
+                <span class="material-symbols-outlined" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
+                  {{ verificationResult.safe ? 'verified' : 'warning' }}
+                </span>
+              </div>
+              <div>
+                <span class="text-lg font-bold" :class="verificationResult.safe ? 'text-green-800' : 'text-red-800'">
+                  {{ verificationResult.safe ? 'System is Safe' : 'System is Unsafe' }}
+                </span>
+                <p class="text-sm" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
+                  {{ verificationResult.safe ? 'All specifications passed verification' : `Found ${verificationResult.traces?.length || 0} violation(s)` }}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
         <div v-if="!verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
+          <!-- Historical Verification Traces -->
+          <div class="mb-4">
+            <button 
+              @click="loadVerificationTraces(); showVerificationTracesPanel = !showVerificationTracesPanel"
+              class="flex items-center gap-2 text-sm font-bold text-green-700 hover:text-green-800 mb-2"
+            >
+              <span class="material-symbols-outlined text-lg">
+                {{ showVerificationTracesPanel ? 'expand_less' : 'history' }}
+              </span>
+              Historical Verification Traces ({{ verificationTraces.length }})
+            </button>
+            
+            <div v-if="showVerificationTracesPanel" class="bg-green-50 border border-green-200 rounded-lg p-3 max-h-48 overflow-y-auto">
+              <div v-if="verificationTraces.length === 0" class="text-sm text-slate-500 text-center py-4">
+                No historical traces found
+              </div>
+              <div v-else class="space-y-2">
+                <div v-for="trace in verificationTraces" :key="trace.id" class="border border-green-200 rounded p-2 bg-white hover:bg-green-50">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-xs font-bold text-green-700">Trace #{{ trace.id }}</div>
+                      <div class="text-xs text-slate-500">Spec: {{ trace.violatedSpecId }} | States: {{ trace.states?.length || 0 }}</div>
+                      <div class="text-xs text-slate-400">{{ new Date(trace.createdAt).toLocaleString() }}</div>
+                    </div>
+                    <div class="flex gap-1">
+                      <button
+                        @click="selectAndPlayVerificationTrace(trace.id)"
+                        class="px-2 py-1 bg-green-500 hover:bg-green-600 text-black rounded text-xs"
+                      >
+                        View
+                      </button>
+                      <button
+                        @click="deleteVerificationTrace(trace.id)"
+                        class="px-2 py-1 bg-red-400 hover:bg-red-500 text-black rounded text-xs"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <h4 class="text-sm font-bold text-slate-700 mb-2">Violations ({{ verificationResult.traces.length }})</h4>
           <div class="space-y-2">
             <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
@@ -2453,10 +2914,17 @@ const closeResultDialog = () => {
                 <div class="text-xs font-bold text-red-600">Violation #{{ Number(i) + 1 }}</div>
                 <button
                   @click="selectAndPlayTrace(Number(i))"
-                  class="px-2 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
+                  :disabled="simulationAnimationState.visible"
+                  :class="[
+                    'px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1',
+                    simulationAnimationState.visible 
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                      : 'bg-red-500 hover:bg-red-600 text-white'
+                  ]"
                 >
                   <span class="material-symbols-outlined text-xs">play_arrow</span>
                   View Trace
+                  <span v-if="simulationAnimationState.visible" class="text-[10px]">(Active)</span>
                 </button>
               </div>
               <div class="text-xs font-bold text-slate-600 mb-1">Spec: {{ trace.violatedSpecId }}</div>
@@ -2471,14 +2939,7 @@ const closeResultDialog = () => {
         </div>
       </div>
 
-      <div class="mt-4 flex justify-end">
-        <button
-          @click="closeResultDialog"
-          class="px-4 py-2 text-sm font-medium text-white bg-slate-600 rounded hover:bg-slate-700"
-        >
-          Close
-        </button>
-      </div>
+      
     </div>
   </div>
 
@@ -2495,7 +2956,7 @@ const closeResultDialog = () => {
     v-if="traceAnimationState.visible && currentTrace"
     class="fixed left-2/3 -translate-x-1/2 bottom-8 z-40"
   >
-    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-4 w-[600px] max-h-[70vh] overflow-y-auto">
+    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-5 w-[600px] max-w-[90vw] max-h-[70vh] overflow-y-auto">
       
       <!-- Violation Info - Only show at violation point -->
       <div 
@@ -2516,58 +2977,86 @@ const closeResultDialog = () => {
 
       <!-- Timeline -->
       <div class="mb-3">
-        <div class="flex items-center justify-between mb-2">
-          <div class="flex items-center gap-2">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2 flex-wrap">
             <span class="text-sm font-bold text-slate-700">State Sequence</span>
             <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
+            <!-- Verification Info -->
+            <span v-if="verificationForm.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
+              <span class="material-symbols-outlined text-[10px]">warning</span>
+              Attack
+            </span>
+            <span v-if="verificationForm.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
+              Intensity: {{ verificationForm.intensity }}
+            </span>
+            <span class="px-2 py-0.5 bg-blue-100 text-blue-600 text-xs rounded-full">
+              <span class="material-symbols-outlined text-[10px]">security</span>
+              security
+            </span>
           </div>
-          <button
-            @click="toggleTraceAnimation"
-            class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
-            :class="traceAnimationState.isPlaying 
-              ? 'bg-red-500 text-white' 
-              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
-          >
-            <span class="material-symbols-outlined text-sm">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
-            {{ traceAnimationState.isPlaying ? 'Stop' : 'Play' }}
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              @click="toggleTraceAnimation"
+              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+              :class="traceAnimationState.isPlaying 
+                ? 'bg-red-500 text-white' 
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+            >
+              <span class="material-symbols-outlined text-sm">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
+              {{ traceAnimationState.isPlaying ? 'Stop' : 'Play' }}
+            </button>
+            <button
+              @click="closeTraceAnimation"
+              class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+              title="Close"
+            >
+              <span class="material-symbols-outlined text-slate-500">close</span>
+            </button>
+          </div>
         </div>
         
-        <!-- Timeline bar -->
-        <div class="relative h-8 px-2">
-          <div class="absolute top-1/2 left-2 right-2 h-2 bg-slate-200 rounded"></div>
-          <!-- 红色横线 - 只在非最后一个状态时显示 -->
+        <!-- Timeline bar with horizontal scroll support -->
+        <div class="overflow-x-auto scrollbar-thin py-2">
           <div 
-            v-if="traceAnimationState.selectedStateIndex < totalStates - 1"
-            class="absolute top-1/2 h-2 bg-red-500 rounded transition-all duration-300"
-            :style="{ 
-              left: totalStates > 1 ? `${(traceAnimationState.selectedStateIndex / (totalStates - 1)) * 100}%` : '0%',
-              width: totalStates > 1 ? `${(1 / (totalStates - 1)) * 100}%` : '100%',
-              transform: 'translateY(-50%)'
-            }"
-          ></div>
-          
-          <!-- State nodes -->
-          <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
-            <button
-              v-for="(_, index) in currentTrace.states || []"
-              :key="index"
-              @click="goToState(Number(index))"
-              class="w-6 h-6 rounded-full border-3 transition-all flex items-center justify-center relative z-10"
-              :class="Number(index) === traceAnimationState.selectedStateIndex 
-                ? 'bg-red-500 border-red-500 scale-125 shadow-lg' 
-                : Number(index) < traceAnimationState.selectedStateIndex 
-                  ? 'bg-green-500 border-green-500' 
-                  : 'bg-white border-slate-300 hover:border-red-300'"
-            >
-              <span 
-                v-if="Number(index) === traceAnimationState.selectedStateIndex" 
-                class="text-white text-[8px] font-bold"
-              >★</span>
-              <span v-else class="text-slate-500 text-[6px] font-medium">{{ Number(index) + 1 }}</span>
-            </button>
+            class="relative h-14"
+            :style="{ width: (currentTrace?.states?.length || 0) > 15 ? 'max-content' : '100%', minWidth: (currentTrace?.states?.length || 0) > 15 ? `${Math.max((currentTrace?.states?.length || 0) * 38, 500)}px` : '100%' }"
+          >
+            <!-- Progress line background -->
+            <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
+            <!-- Red progress bar - only show when not at last state -->
+            <div 
+              v-if="traceAnimationState.selectedStateIndex > 0"
+              class="absolute top-1/2 h-3 bg-red-500 rounded transition-all duration-300 -translate-y-1/2"
+              :style="{ 
+                left: '8px',
+                width: totalStates > 1 
+                  ? `${(traceAnimationState.selectedStateIndex / (totalStates - 1)) * (100 - 16)}%`
+                  : '0%'
+              }"
+            ></div>
+            
+            <!-- State nodes -->
+            <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
+              <button
+                v-for="(_, index) in currentTrace.states || []"
+                :key="index"
+                @click="goToState(Number(index))"
+                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0"
+                :class="Number(index) === traceAnimationState.selectedStateIndex 
+                  ? 'bg-red-500 border-red-500 scale-125 shadow-lg' 
+                  : Number(index) < traceAnimationState.selectedStateIndex 
+                    ? 'bg-green-500 border-green-500' 
+                    : 'bg-white border-slate-300 hover:border-red-300'"
+              >
+                <span 
+                  v-if="Number(index) === traceAnimationState.selectedStateIndex" 
+                  class="text-white text-[8px] font-bold"
+                >★</span>
+                <span v-else class="text-slate-500 text-[6px] font-medium">{{ Number(index) + 1 }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2578,7 +3067,7 @@ const closeResultDialog = () => {
   <SimulationTimeline
     :visible="simulationAnimationState.visible"
     :states="savedSimulationStates"
-    @update:visible="simulationAnimationState.visible = $event"
+    @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"
   />
 </template>

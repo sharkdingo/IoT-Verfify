@@ -5,7 +5,6 @@ import {useI18n} from 'vue-i18n'
 import type {DeviceManifest} from '../types/device'
 import type {DeviceEdge} from '../types/edge'
 import type {Specification, SpecCondition} from '../types/spec'
-import {buildSpecText} from "../utils/spec"
 import {specTemplateDetails} from '../assets/config/specTemplates'
 
 const props = defineProps<{
@@ -196,12 +195,6 @@ const apis = computed(() => {
   }))
 })
 
-// 生成设备ID（用于显示）
-const deviceId = computed(() => {
-  // 这里可以根据实际需求生成设备ID
-  return Math.floor(Math.random() * 10000000) + 1000000
-})
-
 // 获取设备图标
 const getDeviceIcon = (deviceName: string) => {
   const name = deviceName.toLowerCase()
@@ -357,46 +350,38 @@ const deviceSpecs = computed(() => {
     .map(spec => {
       // 使用templateLabel或根据templateId映射
       let specType = spec.templateLabel || 'Unknown'
-      let specTypeColor = 'slate'
       
-      // 根据templateId设置颜色和类型
+      // 根据templateId设置类型
       switch (spec.templateId) {
         case 'safety':
         case '1':
           specType = spec.templateLabel || 'Safety'
-          specTypeColor = 'red'
           break
         case 'liveness':
         case '2':
           specType = spec.templateLabel || 'Liveness'
-          specTypeColor = 'blue'
           break
         case 'fairness':
         case '3':
           specType = spec.templateLabel || 'Fairness'
-          specTypeColor = 'green'
           break
         case 'always':
         case '4':
           specType = spec.templateLabel || 'Always'
-          specTypeColor = 'purple'
           break
         case 'eventually':
         case '5':
           specType = spec.templateLabel || 'Eventually'
-          specTypeColor = 'indigo'
           break
         case 'never':
         case '6':
           specType = spec.templateLabel || 'Never'
-          specTypeColor = 'orange'
           break
         case 'immediate':
         case 'response':
         case 'persistence':
         case '7':
           specType = spec.templateLabel || 'Response'
-          specTypeColor = 'teal'
           break
       }
 

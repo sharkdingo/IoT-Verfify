@@ -47,6 +47,46 @@ const deviceForm = reactive({
   id: 'AUTO'
 })
 
+// Template search and filter
+const templateSearchQuery = ref('')
+const templateFilterType = ref('all')
+
+// Get unique device types from templates for filter
+const templateTypes = computed(() => {
+  const types = new Set<string>()
+  props.deviceTemplates.forEach((t: any) => {
+    const name = t.manifest?.Name || t.name
+    // Extract category from name (e.g., "Air Conditioner" -> "Air Conditioner")
+    if (name) types.add(name)
+  })
+  return ['all', ...Array.from(types)]
+})
+
+// Filtered templates based on search and type
+const filteredTemplates = computed(() => {
+  let templates = props.deviceTemplates
+
+  // Filter by search query
+  if (templateSearchQuery.value.trim()) {
+    const query = templateSearchQuery.value.toLowerCase()
+    templates = templates.filter((t: any) => {
+      const name = t.manifest?.Name || t.name
+      const desc = t.manifest?.Description || ''
+      return name.toLowerCase().includes(query) || desc.toLowerCase().includes(query)
+    })
+  }
+
+  // Filter by type (if not 'all')
+  if (templateFilterType.value !== 'all') {
+    templates = templates.filter((t: any) => {
+      const name = t.manifest?.Name || t.name
+      return name === templateFilterType.value
+    })
+  }
+
+  return templates
+})
+
 // Device types - dynamically loaded from backend device templates
 const deviceTypes = computed(() => {
   // Only use templates loaded from backend
@@ -93,14 +133,6 @@ const editingConditionData = reactive<Partial<SpecCondition>>({
 // Dialog states
 const showDeleteConfirmDialog = ref(false)
 const templateToDelete = ref<any>(null)
-
-// Simulation form state
-const simulationForm = reactive({
-  steps: 10,
-  isAttack: false,
-  intensity: 3,
-  enablePrivacy: false
-})
 
 // Get current template details
 const currentTemplateDetail = computed(() => {
@@ -215,7 +247,7 @@ const saveCondition = () => {
   // 因为后端 @NotBlank 要求 value 不能为空
   const finalValue = editingConditionData.targetType === 'api'
     ? 'TRUE'
-    : editingConditionData.value
+    : (editingConditionData.value || '')
 
   const condition: SpecCondition = {
     id: editingConditionData.id || generateConditionId(),
@@ -1114,93 +1146,117 @@ const exportTemplate = (template: any) => {
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 space-y-3">
           <!-- Import JSON Template Button -->
-          <label class="mb-6 group cursor-pointer relative overflow-hidden rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 hover:border-orange-500 bg-orange-50 dark:bg-slate-800/50 transition-all block">
+          <label class="group cursor-pointer relative overflow-hidden rounded-lg border-2 border-dashed border-orange-300 hover:border-orange-500 bg-orange-50 transition-all block hover:shadow-md">
             <input type="file" accept=".json" class="hidden" @change="handleImportTemplate">
-            <div class="p-4 flex items-center gap-3">
-              <div class="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
-                <span class="material-symbols-outlined text-white text-lg">upload_file</span>
+            <div class="p-3 flex items-center gap-3">
+              <div class="w-9 h-9 bg-orange-400 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-orange-500 transition-colors">
+                <span class="material-symbols-outlined text-white text-base">upload_file</span>
               </div>
-              <div>
-                <div class="text-sm font-bold text-orange-700 dark:text-orange-400">Import JSON Template</div>
-                <p class="text-xs text-orange-600 dark:text-orange-500">Upload a JSON file to create template automatically</p>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-bold text-orange-700">Import JSON Template</div>
+                <p class="text-[10px] text-orange-600 truncate">Upload JSON file to create template</p>
               </div>
             </div>
           </label>
 
-          <!-- Existing Templates List -->
+          <!-- Search and Filter -->
           <div class="space-y-2">
-            <div class="flex items-center gap-2 px-1">
-              <span class="material-symbols-outlined text-slate-400 text-xs">folder</span>
-              <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Existing Templates</h4>
-              <div class="flex-1 h-px bg-slate-200"></div>
+            <!-- Search Input -->
+            <div class="relative">
+              <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">search</span>
+              <input
+                v-model="templateSearchQuery"
+                class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-orange-400 focus:ring-2 focus:ring-orange-100/50 placeholder:text-slate-400 transition-all shadow-sm"
+                placeholder="Search templates..."
+                type="text"
+              />
+              <button
+                v-if="templateSearchQuery"
+                @click="templateSearchQuery = ''"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <span class="material-symbols-outlined text-xs">close</span>
+              </button>
             </div>
-            
-            <div v-if="props.deviceTemplates.length > 0" class="grid grid-cols-1 gap-2">
-              <div v-for="template in props.deviceTemplates" :key="template.id" class="group relative bg-white rounded-lg p-3 border-2 border-slate-200 hover:border-orange-300 hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
-                <!-- 装饰 -->
-                <div class="absolute top-0 right-0 w-16 h-16 bg-orange-100 rounded-full -translate-y-1/2 translate-x-1/2 opacity-50 group-hover:opacity-70 transition-opacity"></div>
-                
-                <div class="relative flex items-start justify-between mb-2">
-                  <div class="flex items-center gap-2">
-                    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-orange-50 group-hover:bg-orange-100 transition-all shadow-sm overflow-hidden" v-html="getTemplateIcon(template)"></div>
-                    <div>
-                      <h4 class="text-xs font-bold text-slate-800 group-hover:text-orange-600 transition-colors">{{ template.manifest.Name }}</h4>
-                      <p v-if="template.manifest.Description" class="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{{ template.manifest.Description }}</p>
-                    </div>
-                  </div>
-                  <div class="flex gap-1">
-                    <button
-                      @click.stop="openDeleteConfirm(template)"
-                      class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                      title="Delete Template"
-                    >
-                      <span class="material-symbols-outlined text-xs">delete</span>
-                    </button>
-                  </div>
-                </div>
 
-                <!-- Stats Grid -->
-                <div class="grid grid-cols-4 gap-1 mb-2">
-                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
-                    <div class="text-[8px] text-slate-400 uppercase font-bold">Vars</div>
-                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.InternalVariables?.length || 0 }}</div>
-                  </div>
-                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
-                    <div class="text-[8px] text-slate-400 uppercase font-bold">APIs</div>
-                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.APIs?.length || 0 }}</div>
-                  </div>
-                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
-                    <div class="text-[8px] text-slate-400 uppercase font-bold">States</div>
-                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.WorkingStates?.length || 0 }}</div>
-                  </div>
-                  <div class="bg-slate-50 rounded px-1.5 py-1.5 text-center border border-slate-200">
-                    <div class="text-[8px] text-slate-400 uppercase font-bold">Modes</div>
-                    <div class="text-xs font-bold text-slate-700">{{ template.manifest.Modes?.length || 0 }}</div>
+            <!-- Filter Tags -->
+            <!-- Removed: filter by type - not needed for now -->
+          </div>
+
+          <!-- Templates Count -->
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-slate-400 text-xs">folder_open</span>
+              <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Templates</span>
+            </div>
+            <span class="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">
+              {{ filteredTemplates.length }}
+            </span>
+          </div>
+
+          <!-- Templates Grid (2 columns) -->
+          <div v-if="filteredTemplates.length > 0" class="grid grid-cols-2 gap-2">
+            <div
+              v-for="template in filteredTemplates"
+              :key="template.id"
+              class="group relative bg-white rounded-lg p-2 border border-slate-200 hover:border-orange-300 hover:shadow-md transition-all duration-200 cursor-pointer"
+            >
+              <!-- Card Content -->
+              <div class="relative">
+                <div class="flex items-start gap-2">
+                  <div class="w-7 h-7 rounded flex items-center justify-center bg-orange-50 group-hover:bg-orange-100 transition-all shadow-sm overflow-hidden flex-shrink-0" v-html="getTemplateIcon(template)"></div>
+                  <div class="min-w-0 flex-1">
+                    <h4 class="text-xs font-bold text-slate-800 hover:text-orange-600 transition-colors truncate" :title="template.manifest.Name">
+                      {{ template.manifest.Name }}
+                    </h4>
+                    <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-1.5">
+                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.InternalVariables?.length || 0 }} vars</span>
+                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.APIs?.length || 0 }} apis</span>
+                    </div>
                   </div>
                 </div>
 
                 <!-- Actions -->
-                <div class="pt-2 border-t border-slate-100 flex justify-end">
+                <div class="mt-0.5 pt-0.5 border-t border-slate-100 flex justify-end gap-1">
                   <button
-                    @click="exportTemplate(template)"
-                    class="text-[10px] px-3 py-1.5 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors flex items-center gap-1 font-medium"
-                    title="Export Template"
+                    @click.stop="exportTemplate(template)"
+                    class="p-1 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors"
+                    title="Export"
                   >
                     <span class="material-symbols-outlined text-xs">download</span>
-                    Export
+                  </button>
+                  <button
+                    @click.stop="openDeleteConfirm(template)"
+                    class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                    title="Delete"
+                  >
+                    <span class="material-symbols-outlined text-xs">delete</span>
                   </button>
                 </div>
               </div>
             </div>
+          </div>
 
-            <div v-else class="relative overflow-hidden text-center py-6 border-2 border-dashed border-slate-200 rounded-lg bg-slate-50">
-              <div class="relative">
-                <div class="w-12 h-12 mx-auto bg-slate-100 rounded-xl flex items-center justify-center mb-2 shadow-inner">
-                  <span class="material-symbols-outlined text-slate-400 text-2xl">inventory_2</span>
-                </div>
-                <p class="text-xs text-slate-600 mb-0.5 font-medium">No custom templates yet</p>
-                <p class="text-[10px] text-slate-400">Click "Create New Template" to get started.</p>
+          <!-- Empty State -->
+          <div v-else class="relative overflow-hidden text-center py-8 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 via-orange-400 to-orange-300"></div>
+            <div class="relative">
+              <div class="w-14 h-14 mx-auto bg-orange-100 rounded-full flex items-center justify-center mb-3 shadow-inner">
+                <span class="material-symbols-outlined text-orange-400 text-2xl">inventory_2</span>
               </div>
+              <p class="text-xs text-slate-600 mb-1 font-semibold">
+                {{ templateSearchQuery ? 'No matching templates' : 'No templates yet' }}
+              </p>
+              <p class="text-[10px] text-slate-400">
+                {{ templateSearchQuery ? 'Try a different search term' : 'Import a JSON template to get started' }}
+              </p>
+              <button
+                v-if="templateSearchQuery"
+                @click="templateSearchQuery = ''"
+                class="mt-3 px-4 py-1.5 text-[10px] font-semibold text-orange-600 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors"
+              >
+                Clear Search
+              </button>
             </div>
           </div>
         </div>
@@ -1904,4 +1960,5 @@ button:not(:disabled):active {
   }
 }
 </style>
+
 

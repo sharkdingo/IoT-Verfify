@@ -142,12 +142,51 @@
     animation: tracePulse 1.5s ease-in-out infinite;
 }
 
+/* 被攻击的设备节点 - 红色圆圈标记 */
+.iot-board .device-node.device-attacked {
+    animation: none;
+    border-width: 0 !important;
+}
+
+/* 被攻击设备的红色圆圈 - 使用伪元素 */
+.iot-board .device-node.device-attacked::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    right: -6px;
+    bottom: -6px;
+    border: 3px solid #EF4444;
+    border-radius: 50%;
+    animation: attackedCirclePulse 1s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 10;
+}
+
 @keyframes tracePulse {
     0%, 100% {
         box-shadow: var(--iot-node-shadow), 0 0 0 0 var(--trace-glow-color, rgba(239, 68, 68, 0.4));
     }
     50% {
         box-shadow: var(--iot-node-shadow), 0 0 0 3px var(--trace-glow-color, rgba(239, 68, 68, 0));
+    }
+}
+
+@keyframes attackedCirclePulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7), 0 0 10px rgba(239, 68, 68, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 0 4px rgba(239, 68, 68, 0), 0 0 20px rgba(239, 68, 68, 0.8);
+    }
+}
+
+@keyframes attackedPulse {
+    0%, 100% {
+        box-shadow: var(--iot-node-shadow), 0 0 0 0 rgba(239, 68, 68, 0.7), 0 0 15px rgba(239, 68, 68, 0.5);
+    }
+    50% {
+        box-shadow: var(--iot-node-shadow), 0 0 0 4px rgba(239, 68, 68, 0), 0 0 25px rgba(239, 68, 68, 0.8);
     }
 }
 

@@ -69,4 +69,23 @@ export interface SimulationTrace extends SimulationTraceSummary {
   requestJson: string
 }
 
+// 模拟任务状态
+export type SimulationTaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+
+// 模拟任务
+export interface SimulationTask {
+  id: number
+  userId: number
+  status: SimulationTaskStatus
+  requestedSteps: number
+  steps: number
+  errorMessage?: string
+  checkLogs?: string[]
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  processingTimeMs?: number
+  simulationTraceId?: number
+}
+
 

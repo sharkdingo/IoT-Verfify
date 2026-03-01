@@ -33,10 +33,6 @@ const emit = defineEmits<{
   'toggle-rule': [ruleId: string, enabled: boolean]
 }>()
 
-// Computed
-const activeDevicesCount = computed(() => props.devices.length)
-const activeSpecsCount = computed(() => props.specifications.length)
-
 // Convert real device nodes to display format (过滤掉变量节点)
 const displayDevices = computed(() => {
   return props.devices
@@ -216,18 +212,6 @@ const displaySpecs = computed(() => {
 })
 
 // Methods
-const getDeviceIcon = (device: any) => {
-  const icons = {
-    online: 'check_circle',
-    offline: 'cancel'
-  }
-  return icons[device.status as keyof typeof icons] || 'help'
-}
-
-const getDeviceColor = (device: any) => {
-  return device.status === 'online' ? 'bg-online' : 'bg-offline'
-}
-
 const handleDeleteDevice = (deviceId: string) => {
   emit('delete-device', deviceId)
 }
@@ -242,15 +226,6 @@ const handleAddRule = () => {
 
 const handleDeviceClick = (deviceId: string) => {
   emit('device-click', deviceId)
-}
-
-const handleToggleRule = (ruleId: string) => {
-  // Find current rule status and toggle it
-  const rule = displayRules.value.find(r => r.id === ruleId)
-  if (rule) {
-    const newEnabled = !rule.enabled
-    emit('toggle-rule', ruleId, newEnabled)
-  }
 }
 
 const handleDeleteSpec = (specId: string) => {

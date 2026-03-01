@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { defineEmits, defineProps } from 'vue';
-
 const props = defineProps<{
   visible: boolean;
 }>();
@@ -81,6 +79,10 @@ const confirm = () => {
   opacity: 0;
 }
 </style>
+
+
+
+
 
 
 

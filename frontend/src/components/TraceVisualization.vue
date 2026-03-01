@@ -93,6 +93,37 @@ const totalStates = computed(() => {
   return currentTrace.value?.states?.length || 0
 })
 
+// 获取攻击强度
+const intensity = computed(() => {
+  if (!currentState.value?.envVariables) return null
+  const intensityVar = currentState.value.envVariables.find(v => v.name === 'intensity')
+  if (intensityVar) {
+    return parseInt(intensityVar.value, 10)
+  }
+  return null
+})
+
+// 检查当前状态是否有被攻击的设备
+const hasAttackedDevices = computed(() => {
+  if (!currentState.value?.devices) return false
+  return currentState.value.devices.some(device =>
+    device.variables?.some(v => v.name === 'is_attack' && v.value.toUpperCase() === 'TRUE')
+  )
+})
+
+// 获取被攻击的设备列表
+const attackedDevices = computed(() => {
+  if (!currentState.value?.devices) return []
+  return currentState.value.devices.filter(device =>
+    device.variables?.some(v => v.name === 'is_attack' && v.value.toUpperCase() === 'TRUE')
+  )
+})
+
+// 检查特定设备是否被攻击
+const isDeviceAttacked = (device: any): boolean => {
+  return device.variables?.some((v: any) => v.name === 'is_attack' && v.value.toUpperCase() === 'TRUE') || false
+}
+
 // 关闭对话框
 const close = () => {
   emit('update:visible', false)
@@ -297,10 +328,57 @@ onBeforeUnmount(() => {
                   >
                     Violation Point!
                   </span>
+                  <!-- 显示攻击强度 -->
+                  <span v-if="intensity !== null" class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full flex items-center gap-1">
+                    <span class="material-symbols-outlined text-xs">warning</span>
+                    Intensity: {{ intensity }}
+                  </span>
+                  <!-- 显示被攻击设备 -->
+                  <span v-if="hasAttackedDevices" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1 animate-pulse">
+                    <span class="material-symbols-outlined text-xs">security</span>
+                    Attacked!
+                  </span>
                 </div>
                 <span class="text-sm text-slate-500">
                   {{ selectedStateIndex === 0 ? 'Initial State' : selectedStateIndex === totalStates - 1 ? 'Violation State' : 'Intermediate State' }}
                 </span>
+              </div>
+
+              <!-- 环境变量显示 -->
+              <div v-if="currentState.envVariables && currentState.envVariables.length > 0" class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div class="text-xs font-semibold text-amber-600 mb-2 uppercase flex items-center gap-1">
+                  <span class="material-symbols-outlined text-sm">terrain</span>
+                  Environment Variables
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="envVar in currentState.envVariables"
+                    :key="envVar.name"
+                    class="px-3 py-1.5 bg-white border border-amber-200 rounded-lg text-xs flex items-center gap-2"
+                  >
+                    <span class="text-amber-600 font-medium">{{ envVar.name }}:</span>
+                    <span class="font-bold text-slate-800">{{ envVar.value }}</span>
+                  </span>
+                </div>
+              </div>
+
+              <!-- 被攻击设备列表 -->
+              <div v-if="hasAttackedDevices" class="mt-3 p-3 bg-red-50 border border-red-300 rounded-lg">
+                <div class="text-xs font-semibold text-red-600 mb-2 uppercase flex items-center gap-1">
+                  <span class="material-symbols-outlined text-sm">security</span>
+                  Attacked Devices
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="device in attackedDevices"
+                    :key="device.deviceId"
+                    class="px-3 py-1.5 bg-red-100 border border-red-300 rounded-lg text-xs flex items-center gap-2"
+                  >
+                    <span class="material-symbols-outlined text-red-500 text-sm">warning</span>
+                    <span class="font-bold text-red-700">{{ device.deviceLabel }}</span>
+                    <span class="text-red-500">({{ device.templateName }})</span>
+                  </span>
+                </div>
               </div>
 
               <!-- 违反的规约详情 -->
@@ -317,10 +395,18 @@ onBeforeUnmount(() => {
                   v-for="device in currentState.devices"
                   :key="device.deviceId"
                   class="p-4 rounded-lg border-2 transition-all"
-                  :class="selectedStateIndex === totalStates - 1 
-                    ? 'bg-red-50 border-red-300 shadow-md' 
-                    : 'bg-white border-slate-200'"
+                  :class="[
+                    selectedStateIndex === totalStates - 1 
+                      ? 'bg-red-50 border-red-300 shadow-md' 
+                      : 'bg-white border-slate-200',
+                    isDeviceAttacked(device) ? 'border-red-500 bg-red-50 shadow-lg' : ''
+                  ]"
                 >
+                  <!-- 被攻击设备标识 -->
+                  <div v-if="isDeviceAttacked(device)" class="flex items-center gap-1 mb-2 text-red-600 text-xs font-bold uppercase">
+                    <span class="material-symbols-outlined text-sm">warning</span>
+                    Attacked
+                  </div>
                   <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center gap-2">
                       <div class="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center">
@@ -333,7 +419,7 @@ onBeforeUnmount(() => {
                     </div>
                     <span 
                       class="px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-sm"
-                      :class="getStateColor(device.state || device.newState)"
+                      :class="getStateColor((device.state || device.newState) || '')"
                     >
                       {{ device.state || device.newState }}
                     </span>

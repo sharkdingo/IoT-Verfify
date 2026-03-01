@@ -9,7 +9,7 @@ import type { BoardLayoutDto } from '../types/canvas'
 import type { PanelActive } from '../types/panel'
 import type { RuleForm } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
-import type { VerificationRequest, VerificationResult, VerificationTask } from '@/types/verify'
+import type { VerificationRequest, VerificationResult, VerificationTask, Trace } from '@/types/verify'
 
 // 辅助函数：解包Result（后端返回 { code, message, data }）
 const unpack = <T>(response: any): T => {
@@ -220,5 +220,25 @@ export default {
     },
     cancelTask: async (taskId: number): Promise<boolean> => {
         return unpack<boolean>(await api.post(`/verify/tasks/${taskId}/cancel`));
+    },
+
+    // ==== 验证 Trace（反例） ====
+    // 获取用户所有验证 Trace
+    getVerificationTraces: async (): Promise<Trace[]> => {
+        return unpack<Trace[]>(await api.get('/verify/traces'));
+    },
+    // 获取单个 Trace
+    getVerificationTrace: async (id: number): Promise<Trace> => {
+        return unpack<Trace>(await api.get(`/verify/traces/${id}`));
+    },
+    // 删除 Trace
+    deleteVerificationTrace: async (id: number): Promise<void> => {
+        return unpack<void>(await api.delete(`/verify/traces/${id}`));
+    },
+
+    // ==== 异步验证 ====
+    // 发起异步验证
+    verifyAsync: async (req: VerificationRequest): Promise<number> => {
+        return unpack<number>(await api.post('/verify/async', req));
     }
 }

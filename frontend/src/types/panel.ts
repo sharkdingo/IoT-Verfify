@@ -1,8 +1,5 @@
 // src/types/panel.ts
 
-// 引用 CanvasPan，假设它定义在 canvas.ts 中
-import type { CanvasPan } from './canvas'
-
 /* ================== 基础类型定义 ================== */
 
 // PanelKey type removed as all panels are removed

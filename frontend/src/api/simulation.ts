@@ -1,6 +1,6 @@
 // src/api/simulation.ts - Simulation API
 import api from './http'
-import type { SimulationRequest, SimulationResult, SimulationTrace, SimulationTraceSummary } from '@/types/simulation'
+import type { SimulationRequest, SimulationResult, SimulationTrace, SimulationTraceSummary, SimulationTask } from '@/types/simulation'
 
 // 辅助函数：解包Result
 const unpack = <T>(response: any): T => {
@@ -8,9 +8,29 @@ const unpack = <T>(response: any): T => {
 }
 
 export default {
-  // 执行模拟（不保存）
+  // 执行模拟（不保存）- 同步
   simulate: async (req: SimulationRequest): Promise<SimulationResult> => {
     return unpack<SimulationResult>(await api.post('/verify/simulate', req))
+  },
+
+  // 执行异步模拟（不保存，返回任务ID）
+  simulateAsync: async (req: SimulationRequest): Promise<number> => {
+    return unpack<number>(await api.post('/verify/simulate/async', req))
+  },
+
+  // 获取任务状态
+  getTask: async (taskId: number): Promise<SimulationTask> => {
+    return unpack<SimulationTask>(await api.get(`/verify/simulations/tasks/${taskId}`))
+  },
+
+  // 获取任务进度
+  getTaskProgress: async (taskId: number): Promise<number> => {
+    return unpack<number>(await api.get(`/verify/simulations/tasks/${taskId}/progress`))
+  },
+
+  // 取消任务
+  cancelTask: async (taskId: number): Promise<boolean> => {
+    return unpack<boolean>(await api.post(`/verify/simulations/tasks/${taskId}/cancel`))
   },
 
   // 执行模拟并保存到数据库

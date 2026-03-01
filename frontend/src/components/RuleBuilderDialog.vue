@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
-import { GLOBAL_VARIABLES } from '../types/rule'
 
 // Props
 interface Props {
@@ -144,24 +143,6 @@ const filteredSourceItems = computed(() => {
   if (!currentSource.itemType) return []
   return availableSourceApis.value.filter((item: any) => item.type === currentSource.itemType)
 })
-
-// 当前选择的来源类型（API 还是变量）- 兼容旧代码
-const currentSourceItemType = computed(() => {
-  if (!currentSource.fromApi) return null
-  const items = availableSourceApis.value
-  const selected = items.find((item: any) => item.name === currentSource.fromApi)
-  return selected?.type || null
-})
-
-// 判断是否为变量类型
-const isVariableType = (item: any) => {
-  return item.type === 'variable'
-}
-
-// 判断是否为 API 类型
-const isApiType = (item: any) => {
-  return item.type === 'api'
-}
 
 // 判断是否可以添加源（根据选择的项目类型决定是否需要条件/值）
 const canAddSource = computed(() => {
@@ -322,12 +303,6 @@ const getDeviceIcon = (node: DeviceNode) => {
   if (deviceType.includes('home mode') || deviceType.includes('home')) return 'home'
   
   return 'devices_other'
-}
-
-const getApiIcon = (api: string) => {
-  if (api.includes('motion') || api.includes('temperature') || api.includes('humidity')) return 'api'
-  if (api.includes('turn_on') || api.includes('turn_off')) return 'bolt'
-  return 'settings'
 }
 
 const formatApiLabel = (api: string) => {

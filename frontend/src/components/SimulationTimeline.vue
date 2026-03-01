@@ -25,6 +25,24 @@ const totalStates = computed(() => {
   return props.states?.length || 0
 })
 
+// 获取攻击强度
+const intensity = computed(() => {
+  if (!currentState.value?.envVariables) return null
+  const intensityVar = currentState.value.envVariables.find(v => v.name === 'intensity')
+  if (intensityVar) {
+    return parseInt(intensityVar.value, 10)
+  }
+  return null
+})
+
+// 检查当前状态是否有被攻击的设备
+const hasAttackedDevices = computed(() => {
+  if (!currentState.value?.devices) return false
+  return currentState.value.devices.some(device =>
+    device.variables?.some(v => v.name === 'is_attack' && v.value.toUpperCase() === 'TRUE')
+  )
+})
+
 // 关闭
 const close = () => {
   emit('update:visible', false)
@@ -101,17 +119,27 @@ watch(selectedStateIndex, () => {
     v-if="visible"
     class="fixed left-2/3 -translate-x-1/2 bottom-8 z-40"
   >
-    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-4 w-[600px]">
+    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-5 w-[600px] max-w-[90vw]">
       <!-- Timeline -->
       <div>
-        <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center justify-between mb-3 flex-shrink-0">
           <div class="flex items-center gap-2">
             <span class="text-sm font-bold text-slate-700">State Sequence</span>
             <span class="px-2 py-0.5 bg-indigo-100 text-indigo-600 text-xs rounded-full">
               {{ selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
+            <!-- 显示攻击强度 -->
+            <span v-if="intensity !== null" class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">warning</span>
+              Intensity: {{ intensity }}
+            </span>
+            <!-- 显示被攻击设备数量 -->
+            <span v-if="hasAttackedDevices" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1 animate-pulse">
+              <span class="material-symbols-outlined text-xs">security</span>
+              Attacked!
+            </span>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-shrink-0">
             <button
               @click="play"
               class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
@@ -131,39 +159,48 @@ watch(selectedStateIndex, () => {
           </div>
         </div>
         
-        <!-- 时间轴线 -->
-        <div class="relative h-8 px-2">
-          <div class="absolute top-1/2 left-2 right-2 h-2 bg-slate-200 rounded"></div>
-          <!-- 进度条 -->
+        <!-- 时间轴容器：支持横向滚动 -->
+        <div class="overflow-x-auto scrollbar-thin py-2">
+          <!-- 内部容器：根据状态数量动态调整宽度 -->
           <div 
-            v-if="selectedStateIndex < totalStates - 1"
-            class="absolute top-1/2 h-2 bg-indigo-500 rounded transition-all duration-300"
-            :style="{ 
-              left: totalStates > 1 ? `${(selectedStateIndex / (totalStates - 1)) * 100}%` : '0%',
-              width: totalStates > 1 ? `${(1 / (totalStates - 1)) * 100}%` : '100%',
-              transform: 'translateY(-50%)'
-            }"
-          ></div>
-          
-          <!-- 状态节点 -->
-          <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
-            <button
-              v-for="(_, index) in states"
-              :key="index"
-              @click="goToState(index); highlightState()"
-              class="w-6 h-6 rounded-full border-3 transition-all flex items-center justify-center relative z-10"
-              :class="index === selectedStateIndex 
-                ? 'bg-indigo-500 border-indigo-500 scale-125 shadow-lg' 
-                : index < selectedStateIndex 
-                  ? 'bg-green-500 border-green-500' 
-                  : 'bg-white border-slate-300 hover:border-indigo-300'"
-            >
-              <span 
-                v-if="index === selectedStateIndex" 
-                class="text-white text-[8px] font-bold"
-              >★</span>
-              <span v-else class="text-slate-500 text-[6px] font-medium">{{ index + 1 }}</span>
-            </button>
+            class="relative h-14"
+            :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 32, 500)}px` : '100%' }"
+          >
+            <!-- 进度线背景 -->
+            <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
+            
+            <!-- 进度条 -->
+            <div 
+              v-if="selectedStateIndex > 0"
+              class="absolute top-1/2 h-3 bg-indigo-500 rounded transition-all duration-300 -translate-y-1/2"
+              :style="{ 
+                left: '8px',
+                width: totalStates > 1 
+                  ? `${(selectedStateIndex / (totalStates - 1)) * (100 - 16)}%`
+                  : '0%'
+              }"
+            ></div>
+            
+            <!-- 状态节点 -->
+            <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
+              <button
+                v-for="(_, index) in states"
+                :key="index"
+                @click="goToState(index); highlightState()"
+                class="w-6 h-6 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0"
+                :class="index === selectedStateIndex 
+                  ? 'bg-indigo-500 border-indigo-500 scale-125 shadow-lg' 
+                  : index < selectedStateIndex 
+                    ? 'bg-green-500 border-green-500' 
+                    : 'bg-white border-slate-300 hover:border-indigo-300'"
+              >
+                <span 
+                  v-if="index === selectedStateIndex" 
+                  class="text-white text-[8px] font-bold"
+                >★</span>
+                <span v-else class="text-slate-500 text-[6px] font-medium">{{ index + 1 }}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

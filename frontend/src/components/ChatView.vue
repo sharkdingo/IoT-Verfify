@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch, computed } from 'vue';
 import {
-  ArrowsAltOutlined, AudioOutlined, BulbFilled, BulbOutlined,
+  ArrowsAltOutlined, AudioOutlined,
   CloseOutlined, DeleteOutlined,
   MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined,
   ShrinkOutlined, UserOutlined, StopOutlined,
@@ -23,13 +23,8 @@ import java from "@shikijs/langs/java";
 
 import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
 import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
-import { useAuth } from '@/stores/auth';
 
 const emit = defineEmits(['command']);
-
-// 从 auth store 获取当前用户 ID（JWT token 中的 userId）
-const { getUserId } = useAuth();
-const currentUserId = computed(() => getUserId() || 'anonymous');
 
 const loadingRegex = /^正在执行指令[.\s\n]*/;
 const presetTasks = [
@@ -78,7 +73,7 @@ watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
 
-const currentTheme = computed(() => 'light');
+const currentTheme = computed((): 'light' | 'dark' => 'light');
 
 // ================= 文本处理辅助函数 =================
 
@@ -263,6 +258,9 @@ const handleSend = async () => {
   isLoading.value = true;
   abortController.value = new AbortController();
 
+  // 用于跟踪是否收到了任何内容
+  let hasReceivedContent = false;
+
   try {
     let targetSessionId = currentSessionId.value;
     // 自动创建新会话
@@ -276,8 +274,6 @@ const handleSend = async () => {
     // 先插入一条空的 AI 消息占位
     const aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
     scrollToBottom(true);
-
-    let hasReceivedContent = false;
 
     await sendStreamChat(
         targetSessionId,

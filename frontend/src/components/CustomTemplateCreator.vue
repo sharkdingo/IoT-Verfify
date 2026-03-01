@@ -676,7 +676,7 @@ const saveApi = (apiData: any) => {
           </button>
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <div v-for="(mode, idx) in customTemplateForm.modes" :key="idx" class="flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded border border-slate-200 dark:border-slate-600">
+          <div v-for="(_mode, idx) in customTemplateForm.modes" :key="idx" class="flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded border border-slate-200 dark:border-slate-600">
             <input
               v-model="customTemplateForm.modes[idx]"
               class="bg-transparent border-none focus:ring-0 text-xs text-slate-700 dark:text-slate-300 w-20 outline-none"

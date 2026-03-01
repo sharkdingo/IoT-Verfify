@@ -50,7 +50,6 @@ export const cacheManifestForNode = (nodeId: string, manifest: DeviceManifest | 
  */
 export const hydrateManifestCacheForNodes = (
   nodes: Array<{ id: string; templateName?: string }>,
-  templates: Array<{ manifest?: DeviceManifest | null }>,
   resolveTemplateForNode: (node: { id: string; templateName?: string }) => { manifest?: DeviceManifest | null } | null
 ) => {
   if (!nodes?.length) return
@@ -62,6 +61,10 @@ export const hydrateManifestCacheForNodes = (
     if (manifest) cacheManifestForNode(n.id, manifest)
   }
 }
+
+
+
+
 
 
 

@@ -12,7 +12,7 @@ import {
 
 import { getLinkPoints } from '../utils/rule'
 
-import { getNodeIconWithFallback, getDefaultDeviceIcon, getDeviceIconPath, getVariableIconPath } from '../utils/device'
+import { getDefaultDeviceIcon, getDeviceIconPath, getVariableIconPath } from '../utils/device'
 
 import {
   createNodeDragState,
@@ -55,12 +55,6 @@ const getParticleColorByEdge = (edge: DeviceEdge): string => {
     'url(#grad-red)', 'url(#grad-teal)', 'url(#grad-pink)', 'url(#grad-yellow)'
   ]
   return gradients[colorIndex] || gradients[0]
-}
-
-// Legacy function for backward compatibility (used elsewhere)
-const getParticleColor = (index: number): string => {
-  const colors = ['url(#grad-blue)', 'url(#grad-purple)', '#ef4444']
-  return colors[index % colors.length]
 }
 
 const getParticleSize = (index: number): number => {
@@ -270,6 +264,40 @@ const getPreviousState = (node: DeviceNode): string | null => {
     }
   }
   return null
+}
+
+// 检查设备是否被攻击（is_attack = TRUE）
+const isDeviceAttacked = (nodeId: string, nodeLabel: string): boolean => {
+  if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
+    return false
+  }
+
+  const nodeIdLower = nodeId.toLowerCase()
+  const nodeLabelLower = nodeLabel.toLowerCase()
+
+  // 从当前选中状态向前查找，找到设备最近的状态
+  const currentIndex = props.highlightedTrace.selectedStateIndex
+  for (let i = currentIndex; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+
+    const device = state.devices.find(d =>
+      d.deviceId.toLowerCase() === nodeIdLower ||
+      d.deviceLabel.toLowerCase() === nodeLabelLower ||
+      d.deviceId.toLowerCase() === nodeLabelLower ||
+      d.deviceLabel.toLowerCase() === nodeIdLower
+    )
+
+    if (device?.variables) {
+      // 检查 variables 中是否有 is_attack = TRUE
+      const isAttackVar = device.variables.find(v => v.name === 'is_attack')
+      if (isAttackVar && isAttackVar.value.toUpperCase() === 'TRUE') {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 // 获取节点的当前状态
@@ -555,32 +583,6 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
         }
       }
       // 如果当前状态没有该变量，继续向前查找（使用上一个时间点的值）
-    }
-  }
-  
-  return null
-}
-
-// 获取环境变量在反例路径中的值（如 a_temperature, a_airQuality）
-const getTraceEnvVariableValue = (variableName: string): string | null => {
-  if (!isTraceActive.value || !props.highlightedTrace?.states) return null
-  
-  const varNameLower = variableName.toLowerCase()
-  
-  // 从当前选中状态向前查找，找到最近的变量值
-  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
-  for (let i = currentIndex; i >= 0; i--) {
-    const state = props.highlightedTrace.states[i]
-    if (!state?.envVariables) continue
-    
-    const envVar = state.envVariables.find(v => 
-      v.name.toLowerCase() === varNameLower ||
-      v.name.toLowerCase() === `a_${varNameLower}` ||
-      v.name.toLowerCase() === varNameLower.replace('a_', '')
-    )
-    
-    if (envVar) {
-      return envVar.value
     }
   }
   
@@ -942,15 +944,15 @@ onBeforeUnmount(() => {
           :key="node.id + (highlightedTrace?.selectedStateIndex ?? '')"
           :data-node-id="node.id"
           class="device-node"
-          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'node-flip': (getPreviousState(node) && getPreviousState(node) !== getNodeState(node)) || shouldAnimateFlip(node) }]"
+          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'node-flip': (getPreviousState(node) && getPreviousState(node) !== getNodeState(node)) || shouldAnimateFlip(node) }, { 'device-attacked': isDeviceAttacked(node.id, node.label) }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
           backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeBgColor(node.id),
-          borderColor: isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id),
-          ...(isNodeInTrace(node) ? { '--trace-glow-color': isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id) } : {})
+          borderColor: isDeviceAttacked(node.id, node.label) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)),
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id, node.label) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)) } : {})
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.prevent="onNodeContextInternal(node, $event)"
@@ -990,6 +992,15 @@ onBeforeUnmount(() => {
 
         <!-- 普通设备节点：图标+名字+状态 -->
         <div v-else class="device-node-content">
+          <!-- Attack indicator arrow -->
+          <div 
+            v-if="isDeviceAttacked(node.id, node.label)"
+            class="attack-indicator"
+            title="This device is under attack"
+          >
+            <span class="material-symbols-outlined">arrow_downward</span>
+            <span>Attacked</span>
+          </div>
           <!-- 上部分：左边图标，右边名字 -->
           <div class="device-top-row">
             <img
@@ -1039,6 +1050,44 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* Attack indicator - longer arrow with text */
+.attack-indicator {
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+  color: white;
+  padding: 3px 8px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.5);
+  z-index: 20;
+  animation: attackBounce 0.8s ease-in-out infinite;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: bold;
+  gap: 3px;
+  height: auto;
+  width: auto;
+  min-width: 50px;
+}
+
+.attack-indicator .material-symbols-outlined {
+  font-size: 14px;
+}
+
+@keyframes attackBounce {
+  0%, 100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+
 .device-state {
   display: flex;
   align-items: center;

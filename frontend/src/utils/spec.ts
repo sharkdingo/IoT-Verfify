@@ -2,19 +2,11 @@ import type { DeviceNode } from '../types/node'
 import type {
     SpecSide,
     SpecCondition,
-    SpecTargetType,
     SpecTemplateId,
     Specification
 } from '../types/spec'
 import type { DeviceTemplate } from '../types/device'
 
-/* =========================================
- * 小常量：关系运算符选项
- * =======================================*/
-
-const STATE_RELATIONS = ['in', 'not in'] as const
-// 数值型关系
-const NUMERIC_RELATIONS = ['>=', '>', '<=', '<', '==', '!='] as const
 /* =========================================
  * 条件创建 & 模式判断
  * =======================================*/
