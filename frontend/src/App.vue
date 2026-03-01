@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import Header from "./components/Header.vue";
 import ChatView from "./components/ChatView.vue";
-import {ref, computed} from "vue";
+import { ref, computed } from "vue";
 import { useRoute } from "vue-router";
+import type { StreamCommand } from "@/types/chat";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
@@ -10,22 +11,44 @@ const routerViewRef = ref<any>(null);
 const isAuthPage = computed(() => {
   return route.path === '/login' || route.path === '/register';
 });
-const handleSystemCommand = (cmd: any) => {
-  console.log("App收到指令:", cmd);
+
+const invokeViewMethod = async (methodName: string) => {
+  const view = routerViewRef.value;
+  if (!view || typeof view[methodName] !== 'function') {
+    console.warn(`Current view does not support command method: ${methodName}`);
+    return;
+  }
+  await view[methodName]();
+};
+
+const handleSystemCommand = async (cmd: StreamCommand) => {
+  console.log("App received command:", cmd);
 
   if (cmd.type === 'REFRESH_DATA') {
-    // 判断目标是不是 device_list，且当前路由组件是否有 refreshDevices 方法
-    if (cmd.payload?.target === 'device_list') {
-      // 🚀 使用可选链调用，因为当前页面可能不是 Board，或者还没加载完
-      if (routerViewRef.value && typeof routerViewRef.value.refreshDevices === 'function') {
-        routerViewRef.value.refreshDevices();
-      } else {
-        console.warn("当前页面无法响应 refreshDevices 指令");
-      }
+    const target = cmd.payload?.target as string | undefined;
+    if (!target) {
+      return;
     }
+
+    switch (target) {
+      case 'device_list':
+        await invokeViewMethod('refreshDevices');
+        break;
+      case 'rule_list':
+        await invokeViewMethod('refreshRules');
+        break;
+      case 'spec_list':
+        await invokeViewMethod('refreshSpecifications');
+        break;
+      case 'template_list':
+        await invokeViewMethod('refreshDeviceTemplates');
+        break;
+      default:
+        console.warn(`Unsupported REFRESH_DATA target: ${target}`);
+    }
+    return;
   }
 
-  // 处理其他指令...
   if (cmd.type === 'NAVIGATE') {
     // router.push(...)
   }
@@ -52,17 +75,15 @@ const handleSystemCommand = (cmd: any) => {
 
 <style scoped>
 .app-layout {
-  min-height: 100vh;              /* 改为最小高度，允许内容撑开 */
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-/* 头部不参与滚动，高度由内容撑开即可 */
 .app-header {
   flex: 0 0 auto;
 }
 
-/* 页面主内容区 */
 .app-main {
   flex: 1 1 auto;
   display: flex;

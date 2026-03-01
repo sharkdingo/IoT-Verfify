@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -70,18 +72,18 @@ public class AddTemplateTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
             String name = trimToNull(args.path("name").asText(null));
             if (name == null) {
-                return errorJson("Template name is required.");
+                return errorJson("Template name is required.", "VALIDATION_ERROR", 400);
             }
 
             JsonNode manifestNode = args.path("manifest");
             if (manifestNode.isMissingNode() || !manifestNode.isObject()) {
-                return errorJson("Manifest object is required.");
+                return errorJson("Manifest object is required.", "VALIDATION_ERROR", 400);
             }
 
             ObjectMapper tolerantMapper = objectMapper.copy();
@@ -89,10 +91,10 @@ public class AddTemplateTool implements AiTool {
             DeviceTemplateDto.DeviceManifest manifest = tolerantMapper.treeToValue(
                     manifestNode, DeviceTemplateDto.DeviceManifest.class);
             if (manifest == null || manifest.getModes() == null || manifest.getModes().isEmpty()) {
-                return errorJson("Manifest must contain non-empty modes.");
+                return errorJson("Manifest must contain non-empty modes.", "VALIDATION_ERROR", 400);
             }
             if (manifest.getInitState() == null || manifest.getInitState().isBlank()) {
-                return errorJson("Manifest must contain InitState.");
+                return errorJson("Manifest must contain InitState.", "VALIDATION_ERROR", 400);
             }
 
             DeviceTemplateDto dto = new DeviceTemplateDto();
@@ -105,9 +107,13 @@ public class AddTemplateTool implements AiTool {
                     "templateId", saved.getId(),
                     "name", saved.getName()
             ));
+        } catch (BaseException e) {
+            log.warn("add_template business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("add_template failed", e);
-            return errorJson("Failed to add template. Please check manifest format and retry.");
+            return errorJson("Failed to add template. Please check manifest format and retry.",
+                    "INTERNAL_ERROR", 500);
         }
     }
 
@@ -119,15 +125,11 @@ public class AddTemplateTool implements AiTool {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private String errorJson(String message) {
-        return writeJson(Map.of("error", message));
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 
     private String writeJson(Map<String, Object> body) {
-        try {
-            return objectMapper.writeValueAsString(body);
-        } catch (Exception ex) {
-            return "{\"error\":\"Internal JSON serialization error\"}";
-        }
+        return AiToolResponseHelper.success(objectMapper, body, "Template added successfully.");
     }
 }

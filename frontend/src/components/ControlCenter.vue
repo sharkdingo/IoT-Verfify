@@ -51,17 +51,6 @@ const deviceForm = reactive({
 const templateSearchQuery = ref('')
 const templateFilterType = ref('all')
 
-// Get unique device types from templates for filter
-const templateTypes = computed(() => {
-  const types = new Set<string>()
-  props.deviceTemplates.forEach((t: any) => {
-    const name = t.manifest?.Name || t.name
-    // Extract category from name (e.g., "Air Conditioner" -> "Air Conditioner")
-    if (name) types.add(name)
-  })
-  return ['all', ...Array.from(types)]
-})
-
 // Filtered templates based on search and type
 const filteredTemplates = computed(() => {
   let templates = props.deviceTemplates

@@ -1,10 +1,12 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
@@ -62,7 +64,7 @@ public class VerifyModelAsyncTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -75,10 +77,12 @@ public class VerifyModelAsyncTool implements AiTool {
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
 
             if (devices.isEmpty()) {
-                return errorJson("No devices found on the board. Please add devices first.");
+                return errorJson("No devices found on the board. Please add devices first.",
+                        "VALIDATION_ERROR", 400);
             }
             if (specs.isEmpty()) {
-                return errorJson("No specifications found on the board. Please add at least one specification to verify.");
+                return errorJson("No specifications found on the board. Please add at least one specification to verify.",
+                        "VALIDATION_ERROR", 400);
             }
 
             Long taskId = verificationService.createTask(userId);
@@ -86,18 +90,23 @@ public class VerifyModelAsyncTool implements AiTool {
                 verificationService.verifyAsync(userId, taskId, devices, rules, specs, isAttack, intensity, enablePrivacy);
             } catch (TaskRejectedException e) {
                 verificationService.failTaskById(taskId, "Server busy, please try again later");
-                return errorJson("Verification task queue is full. Please retry later.");
+                return errorJson("Verification task queue is full. Please retry later.",
+                        "SERVICE_UNAVAILABLE", 503);
             }
 
-            return objectMapper.writeValueAsString(Map.of(
+            return successJson(Map.of(
                     "message", "Verification task started.",
                     "taskId", taskId,
-                    "status", "PENDING",
+                    "taskStatus", "PENDING",
                     "progress", 0
-            ));
+            ), "Verification task started.");
+        } catch (BaseException e) {
+            log.warn("verify_model_async business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("verify_model_async failed", e);
-            return errorJson("Failed to start verification task: " + e.getMessage());
+            return errorJson("Failed to start verification task: " + e.getMessage(),
+                    "INTERNAL_ERROR", 500);
         }
     }
 
@@ -105,11 +114,15 @@ public class VerifyModelAsyncTool implements AiTool {
         return list == null ? List.of() : list;
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return errorJson(message, errorCode, status, Map.of());
+    }
+
+    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

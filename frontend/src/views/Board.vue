@@ -1181,6 +1181,7 @@ defineExpose({
   refreshDevices,
   refreshRules,
   refreshSpecifications,
+  refreshDeviceTemplates,
 })
 
 // ==== Verification Logic ====

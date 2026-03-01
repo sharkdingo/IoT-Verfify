@@ -1,9 +1,11 @@
 package cn.edu.nju.Iot_Verify.component.aitool.board;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -55,7 +57,7 @@ public class BoardOverviewTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
@@ -118,9 +120,12 @@ public class BoardOverviewTool implements AiTool {
             overview.put("specs", specSummaries);
 
             return objectMapper.writeValueAsString(overview);
+        } catch (BaseException e) {
+            log.warn("board_overview business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("board_overview failed", e);
-            return errorJson("Failed to get board overview. Please retry.");
+            return errorJson("Failed to get board overview. Please retry.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -132,11 +137,7 @@ public class BoardOverviewTool implements AiTool {
         return value == null ? "" : value;
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception ex) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

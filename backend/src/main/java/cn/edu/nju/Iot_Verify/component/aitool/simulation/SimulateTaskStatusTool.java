@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -52,16 +54,16 @@ public class SimulateTaskStatusTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
             if (!args.has("taskId") || !args.path("taskId").canConvertToLong()) {
-                return errorJson("'taskId' is required.");
+                return errorJson("'taskId' is required.", "VALIDATION_ERROR", 400);
             }
             long taskId = args.path("taskId").asLong();
             if (taskId <= 0) {
-                return errorJson("'taskId' must be positive.");
+                return errorJson("'taskId' must be positive.", "VALIDATION_ERROR", 400);
             }
 
             SimulationTaskDto task = simulationService.getTask(userId, taskId);
@@ -72,17 +74,21 @@ public class SimulateTaskStatusTool implements AiTool {
                     "progress", progress,
                     "task", task
             ));
+        } catch (BaseException e) {
+            log.warn("simulate_task_status business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("simulate_task_status failed", e);
-            return errorJson("Failed to query simulation task: " + e.getMessage());
+            return errorJson("Failed to query simulation task: " + e.getMessage(),
+                    "INTERNAL_ERROR", 500);
         }
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return errorJson(message, errorCode, status, Map.of());
+    }
+
+    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
     }
 }

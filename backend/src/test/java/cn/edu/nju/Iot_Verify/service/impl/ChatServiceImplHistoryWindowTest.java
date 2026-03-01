@@ -102,4 +102,24 @@ class ChatServiceImplHistoryWindowTest {
         assertEquals(2, history.size());
         assertTrue(history.stream().noneMatch(m -> "tool".equalsIgnoreCase(m.getRole())));
     }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void getSmartHistory_shouldKeepLatestMessageEvenWhenOverCharLimit() throws Exception {
+        ChatMessagePo oversizedUser = new ChatMessagePo();
+        oversizedUser.setRole("user");
+        oversizedUser.setContent("x".repeat(4500));
+
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s3"))
+                .thenReturn(List.of(oversizedUser));
+
+        Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
+        method.setAccessible(true);
+
+        List<ChatMessagePo> history = (List<ChatMessagePo>) method.invoke(service, "s3", 4000);
+
+        assertEquals(1, history.size());
+        assertEquals("user", history.get(0).getRole());
+        assertEquals(4500, history.get(0).getContent().length());
+    }
 }

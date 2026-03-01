@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -68,12 +69,17 @@ public class ArkAiClient {
     }
 
     public void streamChat(List<ChatMessage> messages, Consumer<String> onNext) {
+        streamChat(messages, onNext, () -> false);
+    }
+
+    public void streamChat(List<ChatMessage> messages, Consumer<String> onNext, BooleanSupplier shouldStop) {
         ChatCompletionRequest request = ChatCompletionRequest.builder()
                 .model(modelId)
                 .messages(messages)
                 .build();
 
         arkService.streamChatCompletion(request)
+                .takeWhile(chunk -> !shouldStop.getAsBoolean())
                 .doOnError(e -> log.error("Stream chat error", e))
                 .blockingForEach(choice -> {
                     if (choice.getChoices().isEmpty()) {

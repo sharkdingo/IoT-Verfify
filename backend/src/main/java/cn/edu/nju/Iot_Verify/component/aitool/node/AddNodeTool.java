@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
@@ -76,13 +78,13 @@ public class AddNodeTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
             String templateName = args.path("templateName").asText("").trim();
             if (templateName.isEmpty()) {
-                return errorJson("Template name is required.");
+                return errorJson("Template name is required.", "VALIDATION_ERROR", 400);
             }
 
             String label = args.has("label") ? trimToNull(args.path("label").asText(null)) : null;
@@ -97,9 +99,12 @@ public class AddNodeTool implements AiTool {
             String raw = nodeService.addNode(userId, templateName, label, x, y, state, w, h);
             return normalizeResult(raw);
 
+        } catch (BaseException e) {
+            log.warn("add_device business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("add_device failed", e);
-            return errorJson("Add device failed. Please retry.");
+            return errorJson("Add device failed. Please retry.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -111,9 +116,9 @@ public class AddNodeTool implements AiTool {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private String normalizeResult(String raw) throws Exception {
+    private String normalizeResult(String raw) {
         if (raw == null || raw.isBlank()) {
-            return objectMapper.writeValueAsString(Map.of("message", "Device operation completed."));
+            return AiToolResponseHelper.success(objectMapper, "Device operation completed.");
         }
 
         try {
@@ -126,14 +131,10 @@ public class AddNodeTool implements AiTool {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", raw);
-        return objectMapper.writeValueAsString(body);
+        return AiToolResponseHelper.success(objectMapper, body, raw);
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception ex) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

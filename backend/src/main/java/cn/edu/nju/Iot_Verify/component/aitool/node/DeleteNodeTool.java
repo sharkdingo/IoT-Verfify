@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
@@ -60,7 +62,7 @@ public class DeleteNodeTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -68,7 +70,8 @@ public class DeleteNodeTool implements AiTool {
             String id = trimToNull(args.path("id").asText(null));
             String identifier = label != null ? label : id;
             if (identifier == null) {
-                return errorJson("Missing device identifier. Provide 'label' or 'id'.");
+                return errorJson("Missing device identifier. Provide 'label' or 'id'.",
+                        "VALIDATION_ERROR", 400);
             }
 
             String resolvedLabel = resolveNodeLabel(userId, identifier);
@@ -77,9 +80,12 @@ public class DeleteNodeTool implements AiTool {
             log.info("Executing delete_device, identifier={}, resolvedLabel={}", identifier, targetLabel);
             String raw = nodeService.deleteNode(userId, targetLabel);
             return normalizeResult(raw);
+        } catch (BaseException e) {
+            log.warn("delete_device business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("delete_device failed", e);
-            return errorJson("Delete device failed. Please retry.");
+            return errorJson("Delete device failed. Please retry.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -117,9 +123,9 @@ public class DeleteNodeTool implements AiTool {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private String normalizeResult(String raw) throws Exception {
+    private String normalizeResult(String raw) {
         if (raw == null || raw.isBlank()) {
-            return objectMapper.writeValueAsString(Map.of("message", "Device delete operation completed."));
+            return AiToolResponseHelper.success(objectMapper, "Device delete operation completed.");
         }
         try {
             JsonNode root = objectMapper.readTree(raw);
@@ -130,14 +136,10 @@ public class DeleteNodeTool implements AiTool {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", raw);
-        return objectMapper.writeValueAsString(body);
+        return AiToolResponseHelper.success(objectMapper, body, raw);
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception ex) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

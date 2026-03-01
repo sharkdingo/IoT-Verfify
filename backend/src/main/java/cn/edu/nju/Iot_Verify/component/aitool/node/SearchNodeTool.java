@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -57,7 +59,7 @@ public class SearchNodeTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -65,9 +67,12 @@ public class SearchNodeTool implements AiTool {
             log.info("Executing search_devices, keyword: {}", keyword);
             String raw = nodeService.searchNodes(userId, keyword);
             return normalizeResult(raw);
+        } catch (BaseException e) {
+            log.warn("search_devices business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("search_devices failed", e);
-            return errorJson("Search devices failed. Please retry.");
+            return errorJson("Search devices failed. Please retry.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -96,11 +101,7 @@ public class SearchNodeTool implements AiTool {
         return objectMapper.writeValueAsString(body);
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception ex) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

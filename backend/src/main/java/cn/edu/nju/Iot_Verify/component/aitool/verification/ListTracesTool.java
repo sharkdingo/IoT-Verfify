@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -50,12 +52,15 @@ public class ListTracesTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             List<TraceDto> traces = verificationService.getUserTraces(userId);
             if (traces.isEmpty()) {
-                return "{\"message\": \"No verification traces found. Traces are created when verification detects property violations.\", \"count\": 0}";
+                return objectMapper.writeValueAsString(Map.of(
+                        "message", "No verification traces found. Traces are created when verification detects property violations.",
+                        "count", 0
+                ));
             }
 
             List<Map<String, Object>> summaries = traces.stream().map(t -> {
@@ -71,9 +76,16 @@ public class ListTracesTool implements AiTool {
                     "count", traces.size(),
                     "traces", summaries
             ));
+        } catch (BaseException e) {
+            log.warn("list_traces business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("list_traces failed", e);
-            return "{\"error\": \"Failed to list traces: " + e.getMessage() + "\"}";
+            return errorJson("Failed to list traces.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

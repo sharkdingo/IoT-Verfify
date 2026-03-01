@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +19,7 @@ public class AiToolManager {
 
     // Spring 会自动注入所有实现了 AiTool 接口的 Bean (例如 AddNodeTool)
     private final List<AiTool> allTools;
+    private final ObjectMapper objectMapper;
 
     // 缓存 Map：ToolName -> AiTool 实例
     private Map<String, AiTool> toolMap;
@@ -44,10 +46,14 @@ public class AiToolManager {
         AiTool tool = toolMap.get(functionName);
         if (tool == null) {
             log.warn("AI 尝试调用不存在的工具: {}", functionName);
-            return "{\"error\": \"Unknown function: " + functionName + "\"}";
+            return errorJson("Unknown function: " + functionName, "TOOL_NOT_FOUND", 404);
         }
 
         log.info("开始执行 AI 工具: {}", functionName);
         return tool.execute(argsJson);
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

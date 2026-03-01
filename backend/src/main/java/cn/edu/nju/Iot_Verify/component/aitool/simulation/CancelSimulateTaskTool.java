@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -51,35 +53,39 @@ public class CancelSimulateTaskTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
             if (!args.has("taskId") || !args.path("taskId").canConvertToLong()) {
-                return errorJson("'taskId' is required.");
+                return errorJson("'taskId' is required.", "VALIDATION_ERROR", 400);
             }
             long taskId = args.path("taskId").asLong();
             if (taskId <= 0) {
-                return errorJson("'taskId' must be positive.");
+                return errorJson("'taskId' must be positive.", "VALIDATION_ERROR", 400);
             }
 
             boolean cancelled = simulationService.cancelTask(userId, taskId);
-            return objectMapper.writeValueAsString(Map.of(
+            return successJson(Map.of(
                     "taskId", taskId,
                     "cancelled", cancelled,
                     "message", cancelled ? "Simulation task cancelled." : "Task is not cancellable or not found."
-            ));
+            ), "Simulation task cancellation completed.");
+        } catch (BaseException e) {
+            log.warn("cancel_simulate_task business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("cancel_simulate_task failed", e);
-            return errorJson("Failed to cancel simulation task: " + e.getMessage());
+            return errorJson("Failed to cancel simulation task: " + e.getMessage(),
+                    "INTERNAL_ERROR", 500);
         }
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

@@ -1,11 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
-
+import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
@@ -18,7 +21,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -78,7 +85,7 @@ public class SimulateModelTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -87,16 +94,17 @@ public class SimulateModelTool implements AiTool {
             int intensity = args.path("intensity").asInt(3);
             boolean enablePrivacy = args.path("enablePrivacy").asBoolean(false);
 
-            // 限制步数范围
+            // Clamp numeric ranges to avoid extreme execution parameters.
             steps = Math.max(1, Math.min(100, steps));
             intensity = Math.max(0, Math.min(50, intensity));
 
-            // 自动从画板读取数据
+            // Load board data directly from current workspace state.
             List<DeviceVerificationDto> devices = boardDataHelper.getDevicesForVerification(userId);
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
 
             if (devices.isEmpty()) {
-                return "{\"error\": \"No devices found on the board. Please add devices first.\"}";
+                return errorJson("No devices found on the board. Please add devices first.",
+                        "VALIDATION_ERROR", 400);
             }
 
             log.info("Executing simulate_model: {} devices, {} rules, {} steps, attack={}, intensity={}, privacy={}",
@@ -105,19 +113,18 @@ public class SimulateModelTool implements AiTool {
             SimulationResultDto result = simulationService.simulate(
                     userId, devices, rules, steps, isAttack, intensity, enablePrivacy);
 
-            // 构建摘要结果
+            // Build a compact summary for chat output.
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("requestedSteps", result.getRequestedSteps());
             summary.put("actualSteps", result.getSteps());
             summary.put("stateCount", result.getStates() != null ? result.getStates().size() : 0);
 
-            // 提供状态变化概览（初始状态 + 最终状态）
+            // Include state transition overview (initial/final, and all for short traces).
             if (result.getStates() != null && !result.getStates().isEmpty()) {
                 summary.put("initialState", result.getStates().get(0));
                 if (result.getStates().size() > 1) {
                     summary.put("finalState", result.getStates().get(result.getStates().size() - 1));
                 }
-                // 如果步数不多，返回全部状态
                 if (result.getStates().size() <= 11) {
                     summary.put("allStates", result.getStates());
                 }
@@ -127,14 +134,38 @@ public class SimulateModelTool implements AiTool {
                 summary.put("logs", result.getLogs());
             }
 
-            return objectMapper.writeValueAsString(summary);
+            return successJson(summary, "Simulation completed.");
+        } catch (ServiceUnavailableException e) {
+            log.warn("simulate_model busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
+        } catch (SmvGenerationException e) {
+            log.warn("simulate_model generation failed [{}]: {}", e.getErrorCategory(), e.getMessage());
+            return errorJson(e.getMessage(),
+                    "SMV_GENERATION_ERROR",
+                    500,
+                    Map.of("errorCategory", e.getErrorCategory()));
+        } catch (BaseException e) {
+            log.warn("simulate_model business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("simulate_model failed", e);
-            return "{\"error\": \"Simulation failed: " + e.getMessage() + "\"}";
+            return errorJson("Simulation failed.", "INTERNAL_ERROR", 500);
         }
     }
 
     private <T> List<T> safeList(List<T> list) {
         return list == null ? List.of() : list;
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return errorJson(message, errorCode, status, Map.of());
+    }
+
+    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

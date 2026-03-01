@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
@@ -94,6 +95,10 @@ public class ChatServiceImpl implements ChatService {
 
         UserContextHolder.setUserId(userId);
         StringBuilder finalAnswer = new StringBuilder();
+        AtomicBoolean isDisconnect = new AtomicBoolean(false);
+        emitter.onCompletion(() -> isDisconnect.set(true));
+        emitter.onTimeout(() -> isDisconnect.set(true));
+        emitter.onError(ex -> isDisconnect.set(true));
 
         try {
             saveSimpleMsg(sessionId, "user", content);
@@ -105,7 +110,12 @@ public class ChatServiceImpl implements ChatService {
 
             List<ChatTool> tools = aiToolManager.getAllToolDefinitions();
             Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
-            ToolLoopResult loopResult = executeToolLoop(sessionId, sdkMessages, tools, commandSet, emitter);
+            ToolLoopResult loopResult = executeToolLoop(sessionId, sdkMessages, tools, commandSet, emitter, isDisconnect);
+
+            if (isDisconnect.get()) {
+                log.info("Client disconnected during tool loop, stopping chat processing");
+                return;
+            }
 
             if (!commandSet.isEmpty()) {
                 sendFrontendCommands(emitter, commandSet);
@@ -116,13 +126,14 @@ public class ChatServiceImpl implements ChatService {
                     finalAnswer.append(loopResult.text());
                 }
             } else {
-                streamAssistantReply(sdkMessages, finalAnswer, emitter);
+                streamAssistantReply(sdkMessages, finalAnswer, emitter, isDisconnect);
             }
 
             if (finalAnswer.isEmpty() && loopResult.hadToolCalls()) {
                 String fallbackText = "Operation completed. Please check the latest board data.";
-                sendSseChunk(emitter, fallbackText);
-                finalAnswer.append(fallbackText);
+                if (sendSseChunk(emitter, fallbackText)) {
+                    finalAnswer.append(fallbackText);
+                }
             }
 
             if (!finalAnswer.isEmpty()) {
@@ -185,10 +196,15 @@ public class ChatServiceImpl implements ChatService {
                                            List<ChatMessage> sdkMessages,
                                            List<ChatTool> tools,
                                            Set<StreamResponseDto.CommandDto> commandSet,
-                                           SseEmitter emitter) {
+                                           SseEmitter emitter,
+                                           AtomicBoolean isDisconnect) {
         boolean hadToolCalls = false;
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            if (isDisconnect.get()) {
+                log.info("Client disconnected, stopping tool loop");
+                return new ToolLoopResult("", hadToolCalls);
+            }
             ChatCompletionResult result = arkAiClient.checkIntent(sdkMessages, tools);
             if (result.getChoices() == null || result.getChoices().isEmpty()) {
                 return new ToolLoopResult("", hadToolCalls);
@@ -211,9 +227,17 @@ public class ChatServiceImpl implements ChatService {
             hadToolCalls = true;
             saveAiToolCallRequest(sessionId, toolCalls);
             sdkMessages.add(aiMsg);
-            sendSseChunk(emitter, "Executing command...\n");
+            if (!sendSseChunk(emitter, "Executing command...\n")) {
+                log.info("SSE connection interrupted before tool execution");
+                isDisconnect.set(true);
+                return new ToolLoopResult("", hadToolCalls);
+            }
 
             for (ChatToolCall toolCall : toolCalls) {
+                if (isDisconnect.get()) {
+                    log.info("Client disconnected, stopping remaining tool calls");
+                    return new ToolLoopResult("", hadToolCalls);
+                }
                 String toolCallId = toolCall != null && toolCall.getId() != null ? toolCall.getId() : "";
                 String functionName = "";
                 String argsJson = "{}";
@@ -228,10 +252,12 @@ public class ChatServiceImpl implements ChatService {
 
                 String toolResult;
                 if (functionName.isBlank()) {
-                    toolResult = jsonError("Invalid tool call: missing function name.");
+                    toolResult = jsonError("Invalid tool call: missing function name.", "VALIDATION_ERROR", 400);
                 } else {
-                    collectRefreshCommand(functionName, commandSet);
                     toolResult = aiToolManager.execute(functionName, argsJson);
+                    if (isToolExecutionSuccessful(toolResult)) {
+                        collectRefreshCommand(functionName, commandSet);
+                    }
                 }
 
                 saveToolExecutionResult(sessionId, toolCallId, toolResult);
@@ -247,8 +273,10 @@ public class ChatServiceImpl implements ChatService {
         return new ToolLoopResult("", hadToolCalls);
     }
 
-    private void streamAssistantReply(List<ChatMessage> sdkMessages, StringBuilder finalAnswer, SseEmitter emitter) {
-        AtomicBoolean isDisconnect = new AtomicBoolean(false);
+    private void streamAssistantReply(List<ChatMessage> sdkMessages,
+                                      StringBuilder finalAnswer,
+                                      SseEmitter emitter,
+                                      AtomicBoolean isDisconnect) {
         arkAiClient.streamChat(sdkMessages, delta -> {
             if (isDisconnect.get()) {
                 return;
@@ -263,7 +291,23 @@ public class ChatServiceImpl implements ChatService {
                 log.info("SSE connection interrupted, stopping AI response");
                 isDisconnect.set(true);
             }
-        });
+        }, isDisconnect::get);
+    }
+
+    private boolean isToolExecutionSuccessful(String toolResult) {
+        if (toolResult == null || toolResult.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(toolResult);
+            if (!root.isObject()) {
+                return false;
+            }
+            String error = root.path("error").asText("");
+            return error == null || error.isBlank();
+        } catch (Exception ignore) {
+            return false;
+        }
     }
 
     private void sendFrontendCommands(SseEmitter emitter, Set<StreamResponseDto.CommandDto> commandSet) {
@@ -292,12 +336,6 @@ public class ChatServiceImpl implements ChatService {
             case "add_template", "delete_template" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "template_list")));
-            case "verify_model", "verify_model_async" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "verification_result")));
-            case "simulate_model", "simulate_model_async" ->
-                    commandSet.add(new StreamResponseDto.CommandDto(
-                            "REFRESH_DATA", Map.of("target", "simulation_result")));
             default -> {
             }
         }
@@ -367,6 +405,13 @@ public class ChatServiceImpl implements ChatService {
                         blockLength += messageLength(allMessages.get(j));
                     }
                     if (currentLength + blockLength > limitCharCount) {
+                        // Always keep the newest coherent tool-call block,
+                        // otherwise the next completion may miss required tool context.
+                        if (safeHistory.isEmpty()) {
+                            for (int j = i; j >= assistantIndex; j--) {
+                                safeHistory.addFirst(allMessages.get(j));
+                            }
+                        }
                         break;
                     }
                     for (int j = i; j >= assistantIndex; j--) {
@@ -383,6 +428,10 @@ public class ChatServiceImpl implements ChatService {
 
             int msgLen = messageLength(current);
             if (currentLength + msgLen > limitCharCount) {
+                // Ensure the latest user/assistant message is never dropped from context.
+                if (safeHistory.isEmpty()) {
+                    safeHistory.addFirst(current);
+                }
                 break;
             }
             safeHistory.addFirst(current);
@@ -429,12 +478,8 @@ public class ChatServiceImpl implements ChatService {
         return value == null ? "" : value;
     }
 
-    private String jsonError(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            return "{\"error\":\"" + message + "\"}";
-        }
+    private String jsonError(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 
     private boolean sendSseChunk(SseEmitter emitter, String data) {

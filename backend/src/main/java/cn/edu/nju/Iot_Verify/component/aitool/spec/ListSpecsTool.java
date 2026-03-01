@@ -1,8 +1,10 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -58,7 +60,7 @@ public class ListSpecsTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -72,16 +74,22 @@ public class ListSpecsTool implements AiTool {
             }
 
             if (specs.isEmpty()) {
-                return "{\"message\": \"No specifications found on the board.\", \"count\": 0}";
+                return objectMapper.writeValueAsString(Map.of(
+                        "message", "No specifications found on the board.",
+                        "count", 0
+                ));
             }
 
             return objectMapper.writeValueAsString(Map.of(
                     "count", specs.size(),
                     "specs", specs
             ));
+        } catch (BaseException e) {
+            log.warn("list_specs business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("list_specs failed", e);
-            return "{\"error\": \"Failed to list specs: " + e.getMessage() + "\"}";
+            return errorJson("Failed to list specs.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -125,5 +133,9 @@ public class ListSpecsTool implements AiTool {
 
     private <T> List<T> safeList(List<T> list) {
         return list == null ? List.of() : list;
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

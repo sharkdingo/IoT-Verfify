@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -57,7 +59,7 @@ public class ListRulesTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -71,16 +73,22 @@ public class ListRulesTool implements AiTool {
             }
 
             if (rules.isEmpty()) {
-                return "{\"message\": \"No rules found on the board.\", \"count\": 0}";
+                return objectMapper.writeValueAsString(Map.of(
+                        "message", "No rules found on the board.",
+                        "count", 0
+                ));
             }
 
             return objectMapper.writeValueAsString(Map.of(
                     "count", rules.size(),
                     "rules", rules
             ));
+        } catch (BaseException e) {
+            log.warn("list_rules business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("list_rules failed", e);
-            return "{\"error\": \"Failed to list rules: " + e.getMessage() + "\"}";
+            return errorJson("Failed to list rules.", "INTERNAL_ERROR", 500);
         }
     }
 
@@ -118,5 +126,9 @@ public class ListRulesTool implements AiTool {
 
     private <T> List<T> safeList(List<T> list) {
         return list == null ? List.of() : list;
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

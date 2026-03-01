@@ -1,7 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -15,7 +17,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -99,7 +100,7 @@ public class ManageRuleTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -108,11 +109,16 @@ public class ManageRuleTool implements AiTool {
             return switch (action) {
                 case "add" -> executeAdd(userId, args);
                 case "delete" -> executeDelete(userId, args);
-                default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.");
+                default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.",
+                        "VALIDATION_ERROR", 400);
             };
+        } catch (BaseException e) {
+            log.warn("manage_rule business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("manage_rule failed", e);
-            return errorJson("Rule operation failed. Please check parameters and retry.");
+            return errorJson("Rule operation failed. Please check parameters and retry.",
+                    "INTERNAL_ERROR", 500);
         }
     }
 
@@ -121,10 +127,12 @@ public class ManageRuleTool implements AiTool {
         JsonNode commandNode = args.path("command");
 
         if (conditionsNode.isMissingNode() || !conditionsNode.isArray() || conditionsNode.isEmpty()) {
-            return errorJson("'conditions' array is required for add action.");
+            return errorJson("'conditions' array is required for add action.",
+                    "VALIDATION_ERROR", 400);
         }
         if (commandNode.isMissingNode() || !commandNode.isObject()) {
-            return errorJson("'command' object is required for add action.");
+            return errorJson("'command' object is required for add action.",
+                    "VALIDATION_ERROR", 400);
         }
 
         List<RuleDto.Condition> conditions = new ArrayList<>();
@@ -133,7 +141,8 @@ public class ManageRuleTool implements AiTool {
             String deviceName = trimToNull(cn.path("deviceName").asText(null));
             String attribute = trimToNull(cn.path("attribute").asText(null));
             if (deviceName == null || attribute == null) {
-                return errorJson("Each condition must include non-empty 'deviceName' and 'attribute'. Invalid condition index: " + index);
+                return errorJson("Each condition must include non-empty 'deviceName' and 'attribute'. Invalid condition index: " + index,
+                        "VALIDATION_ERROR", 400);
             }
 
             String relationInput = trimToNull(cn.path("relation").asText(null));
@@ -142,7 +151,8 @@ public class ManageRuleTool implements AiTool {
 
             if (relationInput != null && relation == null) {
                 return errorJson("Unsupported relation '" + relationInput + "' at condition index " + index
-                        + ". Allowed: =, !=, >, <, >=, <=, in, not in.");
+                        + ". Allowed: =, !=, >, <, >=, <=, in, not in.",
+                        "VALIDATION_ERROR", 400);
             }
 
             // Friendly fallback for API-signal shorthand.
@@ -157,13 +167,15 @@ public class ManageRuleTool implements AiTool {
                     value = "TRUE";
                 } else {
                     return errorJson("Condition value is required when relation is '" + relation
-                            + "'. Invalid condition index: " + index);
+                            + "'. Invalid condition index: " + index,
+                            "VALIDATION_ERROR", 400);
                 }
             }
 
             if (("in".equals(relation) || "not in".equals(relation)) && isEmptyValueList(value)) {
                 return errorJson("Condition value list cannot be empty for relation '" + relation
-                        + "'. Invalid condition index: " + index);
+                        + "'. Invalid condition index: " + index,
+                        "VALIDATION_ERROR", 400);
             }
 
             conditions.add(RuleDto.Condition.builder()
@@ -178,7 +190,8 @@ public class ManageRuleTool implements AiTool {
         String commandDeviceName = trimToNull(commandNode.path("deviceName").asText(null));
         String commandAction = trimToNull(commandNode.path("action").asText(null));
         if (commandDeviceName == null || commandAction == null) {
-            return errorJson("Command must include non-empty 'deviceName' and 'action'.");
+            return errorJson("Command must include non-empty 'deviceName' and 'action'.",
+                    "VALIDATION_ERROR", 400);
         }
 
         RuleDto.Command command = RuleDto.Command.builder()
@@ -198,33 +211,36 @@ public class ManageRuleTool implements AiTool {
         existing.add(newRule);
         List<RuleDto> saved = boardStorageService.saveRules(userId, existing);
 
-        return objectMapper.writeValueAsString(Map.of(
+        return successJson(Map.of(
                 "message", "Rule added successfully.",
                 "totalRules", saved.size()
-        ));
+        ), "Rule added successfully.");
     }
 
     private String executeDelete(Long userId, JsonNode args) throws Exception {
         if (!args.has("ruleId") || !args.path("ruleId").canConvertToLong()) {
-            return errorJson("'ruleId' is required for delete action.");
+            return errorJson("'ruleId' is required for delete action.",
+                    "VALIDATION_ERROR", 400);
         }
         long ruleId = args.path("ruleId").asLong();
         if (ruleId <= 0) {
-            return errorJson("'ruleId' must be a positive integer.");
+            return errorJson("'ruleId' must be a positive integer.",
+                    "VALIDATION_ERROR", 400);
         }
 
         List<RuleDto> existing = new ArrayList<>(safeList(boardStorageService.getRules(userId)));
         boolean removed = existing.removeIf(r -> r.getId() != null && r.getId().equals(ruleId));
 
         if (!removed) {
-            return errorJson("Rule with ID " + ruleId + " not found.");
+            return errorJson("Rule with ID " + ruleId + " not found.",
+                    "NOT_FOUND", 404);
         }
 
         List<RuleDto> saved = boardStorageService.saveRules(userId, existing);
-        return objectMapper.writeValueAsString(Map.of(
+        return successJson(Map.of(
                 "message", "Rule deleted successfully.",
                 "totalRules", saved.size()
-        ));
+        ), "Rule deleted successfully.");
     }
 
     private String normalizeRelation(String relation) {
@@ -273,13 +289,11 @@ public class ManageRuleTool implements AiTool {
         return list == null ? List.of() : list;
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            Map<String, Object> fallback = new LinkedHashMap<>();
-            fallback.put("error", message);
-            return fallback.toString();
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

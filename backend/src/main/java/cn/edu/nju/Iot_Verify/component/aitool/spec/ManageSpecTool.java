@@ -1,8 +1,11 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -16,7 +19,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,15 +48,15 @@ public class ManageSpecTool implements AiTool {
         Map<String, Object> conditionItemSchema = Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "deviceId", Map.of("type", "string", "description", "Device node ID on the board"),
-                        "deviceLabel", Map.of("type", "string", "description", "Device display name"),
+                        "deviceId", Map.of("type", "string", "description", "Device node ID on the board (optional when deviceLabel is provided)"),
+                        "deviceLabel", Map.of("type", "string", "description", "Device display name (optional when deviceId is provided)"),
                         "targetType", Map.of("type", "string", "enum", List.of("state", "variable", "api", "trust", "privacy"),
                                 "description", "What to check: state, variable, api signal, trust level, or privacy level"),
                         "key", Map.of("type", "string", "description", "The key to check (e.g. state, variable name, API name)"),
                         "relation", Map.of("type", "string", "description", "Comparison: =, !=, >, <, >=, <=, in, not in"),
                         "value", Map.of("type", "string", "description", "Expected value")
                 ),
-                "required", List.of("deviceId", "targetType", "key")
+                "required", List.of("targetType", "key")
         );
 
         Map<String, Object> props = new HashMap<>();
@@ -108,7 +110,7 @@ public class ManageSpecTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return errorJson("User not logged in");
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -117,21 +119,31 @@ public class ManageSpecTool implements AiTool {
             return switch (action) {
                 case "add" -> executeAdd(userId, args);
                 case "delete" -> executeDelete(userId, args);
-                default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.");
+                default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.",
+                        "VALIDATION_ERROR", 400);
             };
+        } catch (IllegalArgumentException e) {
+            log.warn("manage_spec validation failed: {}", e.getMessage());
+            return errorJson(e.getMessage(), "VALIDATION_ERROR", 400);
+        } catch (BaseException e) {
+            log.warn("manage_spec business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("manage_spec failed", e);
-            return errorJson("Spec operation failed. Please check parameters and retry.");
+            return errorJson("Spec operation failed. Please check parameters and retry.",
+                    "INTERNAL_ERROR", 500);
         }
     }
 
     private String executeAdd(Long userId, JsonNode args) throws Exception {
-        List<SpecConditionDto> aConditions = parseConditions(args.path("aConditions"), "a");
-        List<SpecConditionDto> ifConditions = parseConditions(args.path("ifConditions"), "if");
-        List<SpecConditionDto> thenConditions = parseConditions(args.path("thenConditions"), "then");
+        DeviceLookup deviceLookup = buildDeviceLookup(userId);
+        List<SpecConditionDto> aConditions = parseConditions(args.path("aConditions"), "a", deviceLookup);
+        List<SpecConditionDto> ifConditions = parseConditions(args.path("ifConditions"), "if", deviceLookup);
+        List<SpecConditionDto> thenConditions = parseConditions(args.path("thenConditions"), "then", deviceLookup);
 
         if (aConditions.isEmpty() && ifConditions.isEmpty() && thenConditions.isEmpty()) {
-            return errorJson("At least one valid condition is required in 'aConditions', 'ifConditions', or 'thenConditions'.");
+            return errorJson("At least one valid condition is required in 'aConditions', 'ifConditions', or 'thenConditions'.",
+                    "VALIDATION_ERROR", 400);
         }
 
         String templateId = trimToNull(args.path("templateId").asText(null));
@@ -139,7 +151,8 @@ public class ManageSpecTool implements AiTool {
             templateId = "1";
         }
         if (!TEMPLATE_IDS.contains(templateId)) {
-            return errorJson("Unsupported templateId '" + templateId + "'. Allowed: 1,2,3,4,5,6,7.");
+            return errorJson("Unsupported templateId '" + templateId + "'. Allowed: 1,2,3,4,5,6,7.",
+                    "VALIDATION_ERROR", 400);
         }
         String templateLabel = trimToNull(args.path("templateLabel").asText(null));
         if (templateLabel == null) {
@@ -148,7 +161,7 @@ public class ManageSpecTool implements AiTool {
 
         String templateCheckError = validateTemplateShape(templateId, aConditions, ifConditions, thenConditions);
         if (templateCheckError != null) {
-            return errorJson(templateCheckError);
+            return errorJson(templateCheckError, "VALIDATION_ERROR", 400);
         }
 
         SpecificationDto spec = new SpecificationDto();
@@ -163,33 +176,35 @@ public class ManageSpecTool implements AiTool {
         existing.add(spec);
         List<SpecificationDto> saved = boardStorageService.saveSpecs(userId, existing);
 
-        return objectMapper.writeValueAsString(Map.of(
+        return successJson(Map.of(
                 "message", "Specification added successfully.",
                 "specId", spec.getId(),
                 "totalSpecs", saved.size()
-        ));
+        ), "Specification added successfully.");
     }
 
     private String executeDelete(Long userId, JsonNode args) throws Exception {
         String specId = trimToNull(args.path("specId").asText(null));
         if (specId == null) {
-            return errorJson("'specId' is required for delete action.");
+            return errorJson("'specId' is required for delete action.",
+                    "VALIDATION_ERROR", 400);
         }
 
         List<SpecificationDto> existing = new ArrayList<>(safeList(boardStorageService.getSpecs(userId)));
         boolean removed = existing.removeIf(s -> specId.equals(s.getId()));
         if (!removed) {
-            return errorJson("Specification with ID '" + specId + "' not found.");
+            return errorJson("Specification with ID '" + specId + "' not found.",
+                    "NOT_FOUND", 404);
         }
 
         List<SpecificationDto> saved = boardStorageService.saveSpecs(userId, existing);
-        return objectMapper.writeValueAsString(Map.of(
+        return successJson(Map.of(
                 "message", "Specification deleted successfully.",
                 "totalSpecs", saved.size()
-        ));
+        ), "Specification deleted successfully.");
     }
 
-    private List<SpecConditionDto> parseConditions(JsonNode node, String side) {
+    private List<SpecConditionDto> parseConditions(JsonNode node, String side, DeviceLookup deviceLookup) {
         List<SpecConditionDto> conditions = new ArrayList<>();
         if (node == null || node.isMissingNode() || !node.isArray()) {
             return conditions;
@@ -197,13 +212,46 @@ public class ManageSpecTool implements AiTool {
 
         int index = 0;
         for (JsonNode cn : node) {
-            String deviceId = trimToNull(cn.path("deviceId").asText(null));
+            String inputDeviceId = trimToNull(cn.path("deviceId").asText(null));
+            String inputDeviceLabel = trimToNull(cn.path("deviceLabel").asText(null));
+            String resolvedById = null;
+            String resolvedByLabel = null;
+
+            if (inputDeviceId != null) {
+                resolvedById = resolveDeviceIdById(inputDeviceId, deviceLookup);
+                if (resolvedById == null) {
+                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
+                            + "' cannot resolve deviceId '" + inputDeviceId + "' to an existing device.");
+                }
+            }
+
+            if (inputDeviceLabel != null) {
+                List<String> matchedIds = resolveDeviceIdsByLabel(inputDeviceLabel, deviceLookup);
+                if (matchedIds.isEmpty()) {
+                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
+                            + "' cannot resolve deviceLabel '" + inputDeviceLabel + "' to an existing deviceId.");
+                }
+                if (matchedIds.size() > 1) {
+                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
+                            + "' has ambiguous deviceLabel '" + inputDeviceLabel
+                            + "', matched deviceIds: " + matchedIds + ".");
+                }
+                resolvedByLabel = matchedIds.get(0);
+            }
+
+            String deviceId = resolvedById != null ? resolvedById : resolvedByLabel;
+            if (resolvedById != null && resolvedByLabel != null && !resolvedById.equals(resolvedByLabel)) {
+                throw new IllegalArgumentException("Condition index " + index + " on '" + side
+                        + "' has inconsistent deviceId/deviceLabel: deviceId '" + inputDeviceId
+                        + "' maps to '" + resolvedById + "', but deviceLabel '" + inputDeviceLabel
+                        + "' maps to '" + resolvedByLabel + "'.");
+            }
             String targetType = trimToNull(cn.path("targetType").asText(null));
             String key = trimToNull(cn.path("key").asText(null));
 
             if (deviceId == null || targetType == null || key == null) {
                 throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' must include non-empty deviceId, targetType, and key.");
+                        + "' must include non-empty targetType/key, and either deviceId or resolvable deviceLabel.");
             }
 
             String normalizedTargetType = targetType.toLowerCase(Locale.ROOT);
@@ -255,8 +303,7 @@ public class ManageSpecTool implements AiTool {
             dto.setId(UUID.randomUUID().toString());
             dto.setSide(side);
             dto.setDeviceId(deviceId);
-            String deviceLabel = trimToNull(cn.path("deviceLabel").asText(null));
-            dto.setDeviceLabel(deviceLabel != null ? deviceLabel : deviceId);
+            dto.setDeviceLabel(inputDeviceLabel != null ? inputDeviceLabel : deviceId);
             dto.setTargetType(normalizedTargetType);
             dto.setKey(key);
             dto.setRelation(relation);
@@ -265,6 +312,52 @@ public class ManageSpecTool implements AiTool {
             index++;
         }
         return conditions;
+    }
+
+    private DeviceLookup buildDeviceLookup(Long userId) {
+        Map<String, String> idsByKey = new HashMap<>();
+        Map<String, List<String>> idsByLabelKey = new HashMap<>();
+        for (DeviceNodeDto node : safeList(boardStorageService.getNodes(userId))) {
+            if (node == null) {
+                continue;
+            }
+            String id = trimToNull(node.getId());
+            if (id == null) {
+                continue;
+            }
+            idsByKey.put(normalizeLookupKey(id), id);
+            String label = trimToNull(node.getLabel());
+            if (label != null) {
+                String labelKey = normalizeLookupKey(label);
+                List<String> ids = idsByLabelKey.computeIfAbsent(labelKey, k -> new ArrayList<>());
+                if (!ids.contains(id)) {
+                    ids.add(id);
+                }
+            }
+        }
+        return new DeviceLookup(idsByKey, idsByLabelKey);
+    }
+
+    private String resolveDeviceIdById(String value, DeviceLookup lookup) {
+        if (value == null || lookup == null || lookup.idsByKey().isEmpty()) {
+            return null;
+        }
+        return lookup.idsByKey().get(normalizeLookupKey(value));
+    }
+
+    private List<String> resolveDeviceIdsByLabel(String value, DeviceLookup lookup) {
+        if (value == null || lookup == null || lookup.idsByLabelKey().isEmpty()) {
+            return List.of();
+        }
+        List<String> ids = lookup.idsByLabelKey().get(normalizeLookupKey(value));
+        return ids == null ? List.of() : ids;
+    }
+
+    private String normalizeLookupKey(String value) {
+        return value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private record DeviceLookup(Map<String, String> idsByKey, Map<String, List<String>> idsByLabelKey) {
     }
 
     private String validateTemplateShape(String templateId,
@@ -344,13 +437,11 @@ public class ManageSpecTool implements AiTool {
         return list == null ? List.of() : list;
     }
 
-    private String errorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(Map.of("error", message));
-        } catch (Exception e) {
-            Map<String, Object> fallback = new LinkedHashMap<>();
-            fallback.put("error", message);
-            return fallback.toString();
-        }
+    private String errorJson(String message, String errorCode, int status) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

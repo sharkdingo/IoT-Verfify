@@ -1,12 +1,16 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
@@ -19,7 +23,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -75,7 +84,7 @@ public class VerifyModelTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
             JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
@@ -84,16 +93,18 @@ public class VerifyModelTool implements AiTool {
             boolean enablePrivacy = args.path("enablePrivacy").asBoolean(false);
             intensity = Math.max(0, Math.min(50, intensity));
 
-            // 自动从画板读取数据
+            // Load board data directly from current workspace state.
             List<DeviceVerificationDto> devices = boardDataHelper.getDevicesForVerification(userId);
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
 
             if (devices.isEmpty()) {
-                return "{\"error\": \"No devices found on the board. Please add devices first.\"}";
+                return errorJson("No devices found on the board. Please add devices first.",
+                        "VALIDATION_ERROR", 400);
             }
             if (specs.isEmpty()) {
-                return "{\"error\": \"No specifications found on the board. Please add at least one specification to verify.\"}";
+                return errorJson("No specifications found on the board. Please add at least one specification to verify.",
+                        "VALIDATION_ERROR", 400);
             }
 
             log.info("Executing verify_model: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
@@ -102,7 +113,7 @@ public class VerifyModelTool implements AiTool {
             VerificationResultDto result = verificationService.verify(
                     userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
 
-            // 构建摘要结果
+            // Build a compact summary for chat output.
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("safe", result.isSafe());
             summary.put("specsChecked", specs.size());
@@ -110,7 +121,6 @@ public class VerifyModelTool implements AiTool {
 
             if (!result.isSafe() && result.getTraces() != null) {
                 summary.put("violationCount", result.getTraces().size());
-                // 提供每个违规的简要信息
                 List<Map<String, Object>> traceSummaries = new ArrayList<>();
                 for (TraceDto trace : result.getTraces()) {
                     Map<String, Object> ts = new LinkedHashMap<>();
@@ -126,14 +136,38 @@ public class VerifyModelTool implements AiTool {
                 summary.put("checkLogs", result.getCheckLogs());
             }
 
-            return objectMapper.writeValueAsString(summary);
+            return successJson(summary, "Verification completed.");
+        } catch (ServiceUnavailableException e) {
+            log.warn("verify_model busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
+        } catch (SmvGenerationException e) {
+            log.warn("verify_model generation failed [{}]: {}", e.getErrorCategory(), e.getMessage());
+            return errorJson(e.getMessage(),
+                    "SMV_GENERATION_ERROR",
+                    500,
+                    Map.of("errorCategory", e.getErrorCategory()));
+        } catch (BaseException e) {
+            log.warn("verify_model business error [{}]: {}", e.getCode(), e.getMessage());
+            return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("verify_model failed", e);
-            return "{\"error\": \"Verification failed: " + e.getMessage() + "\"}";
+            return errorJson("Verification failed.", "INTERNAL_ERROR", 500);
         }
     }
 
     private <T> List<T> safeList(List<T> list) {
         return list == null ? List.of() : list;
+    }
+
+    private String errorJson(String message, String errorCode, int status) {
+        return errorJson(message, errorCode, status, Map.of());
+    }
+
+    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
+        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
+    }
+
+    private String successJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

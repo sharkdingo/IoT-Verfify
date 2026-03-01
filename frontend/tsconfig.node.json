@@ -8,19 +8,17 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "composite": true,
     "declaration": true,
-    "noEmit": false, // Changed from true to false
+    "noEmit": false,
     "tsBuildInfoFile": "./.tsbuildinfo", // Moved and renamed from the previous location
 
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
