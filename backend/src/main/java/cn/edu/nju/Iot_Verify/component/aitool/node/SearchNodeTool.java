@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
@@ -56,16 +57,50 @@ public class SearchNodeTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in");
             }
 
-            JsonNode args = objectMapper.readTree(argsJson);
-            String keyword = args.path("keyword").asText("");
+            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            String keyword = args.path("keyword").asText("").trim();
             log.info("Executing search_devices, keyword: {}", keyword);
-            return nodeService.searchNodes(userId, keyword);
+            String raw = nodeService.searchNodes(userId, keyword);
+            return normalizeResult(raw);
         } catch (Exception e) {
             log.error("search_devices failed", e);
-            return "{\"error\": \"Search failed: " + e.getMessage() + "\"}";
+            return errorJson("Search devices failed. Please retry.");
+        }
+    }
+
+    private String normalizeResult(String raw) throws Exception {
+        if (raw == null || raw.isBlank()) {
+            return objectMapper.writeValueAsString(Map.of("count", 0, "devices", Collections.emptyList()));
+        }
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            if (root.isArray()) {
+                return objectMapper.writeValueAsString(Map.of(
+                        "count", root.size(),
+                        "devices", root
+                ));
+            }
+            if (root.isObject()) {
+                return raw;
+            }
+        } catch (Exception ignore) {
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("message", raw);
+        body.put("count", 0);
+        body.put("devices", Collections.emptyList());
+        return objectMapper.writeValueAsString(body);
+    }
+
+    private String errorJson(String message) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("error", message));
+        } catch (Exception ex) {
+            return "{\"error\":\"" + message + "\"}";
         }
     }
 }

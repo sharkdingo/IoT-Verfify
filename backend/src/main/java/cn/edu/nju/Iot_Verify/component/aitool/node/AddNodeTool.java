@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
@@ -75,25 +76,64 @@ public class AddNodeTool implements AiTool {
         try {
             Long userId = UserContextHolder.getUserId();
             if (userId == null) {
-                return "{\"error\": \"User not logged in\"}";
+                return errorJson("User not logged in");
             }
 
-            JsonNode args = objectMapper.readTree(argsJson);
-            String templateName = args.path("templateName").asText();
-            String label = args.has("label") ? args.path("label").asText() : null;
+            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            String templateName = args.path("templateName").asText("").trim();
+            if (templateName.isEmpty()) {
+                return errorJson("Template name is required.");
+            }
+
+            String label = args.has("label") ? trimToNull(args.path("label").asText(null)) : null;
             Double x = args.has("x") ? args.path("x").asDouble() : null;
             Double y = args.has("y") ? args.path("y").asDouble() : null;
             Integer w = args.has("w") ? args.path("w").asInt() : null;
             Integer h = args.has("h") ? args.path("h").asInt() : null;
-            String state = args.has("state") ? args.path("state").asText() : null;
+            String state = args.has("state") ? trimToNull(args.path("state").asText(null)) : null;
 
             log.info("Executing add_device: {}", label);
 
-            return nodeService.addNode(userId, templateName, label, x, y, state, w, h);
+            String raw = nodeService.addNode(userId, templateName, label, x, y, state, w, h);
+            return normalizeResult(raw);
 
         } catch (Exception e) {
             log.error("add_device failed", e);
-            return "{\"error\": \"Add failed: " + e.getMessage() + "\"}";
+            return errorJson("Add device failed. Please retry.");
+        }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeResult(String raw) throws Exception {
+        if (raw == null || raw.isBlank()) {
+            return objectMapper.writeValueAsString(Map.of("message", "Device operation completed."));
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            if (root.isObject()) {
+                return raw;
+            }
+        } catch (Exception ignore) {
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("message", raw);
+        return objectMapper.writeValueAsString(body);
+    }
+
+    private String errorJson(String message) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("error", message));
+        } catch (Exception ex) {
+            return "{\"error\":\"" + message + "\"}";
         }
     }
 }
