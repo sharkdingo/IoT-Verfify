@@ -27,7 +27,7 @@ volcengine:
   ark:
     api-key: ${VOLCENGINE_API_KEY:your_api_key_here}
     model-id: ${VOLCENGINE_MODEL_ID:ep-20251125202752-bhwbw}
-    base-url: ${VOLCENGINE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+    base-url: ${VOLCENGINE_BASE_URL:https://ark.cn-beijing.volces.com}
 
 jwt:
   secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}
