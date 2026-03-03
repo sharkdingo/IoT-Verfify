@@ -34,6 +34,20 @@ class DeviceNodeRepositoryTest {
         assertTrue(result.stream().allMatch(n -> n.getUserId().equals(1L)));
     }
 
+    @Test
+    void save_shouldAllowSameNodeIdAcrossDifferentUsers() {
+        repository.save(node("shared-node", 1L, "Smart Light", "Kitchen Lamp"));
+        repository.save(node("shared-node", 2L, "Smart Lock", "Door Lock"));
+
+        List<DeviceNodePo> user1 = repository.findByUserId(1L);
+        List<DeviceNodePo> user2 = repository.findByUserId(2L);
+
+        assertEquals(1, user1.size());
+        assertEquals(1, user2.size());
+        assertEquals("shared-node", user1.get(0).getId());
+        assertEquals("shared-node", user2.get(0).getId());
+    }
+
     private DeviceNodePo node(String id, Long userId, String templateName, String label) {
         return DeviceNodePo.builder()
                 .id(id)

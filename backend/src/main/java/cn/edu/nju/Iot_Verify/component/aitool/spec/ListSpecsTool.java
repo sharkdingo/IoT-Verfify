@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -63,7 +64,12 @@ public class ListSpecsTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             String keyword = args.path("keyword").asText("").trim().toLowerCase(Locale.ROOT);
 
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
@@ -84,6 +90,9 @@ public class ListSpecsTool implements AiTool {
                     "count", specs.size(),
                     "specs", specs
             ));
+        } catch (ServiceUnavailableException e) {
+            log.warn("list_specs busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("list_specs business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());

@@ -1,17 +1,21 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -28,6 +32,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -44,6 +50,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
     private final DeviceTemplateService deviceTemplateService;
+    private final SmvGenerator smvGenerator;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;
     private final DeviceNodeMapper deviceNodeMapper;
@@ -222,6 +229,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return dto;
     }
 
+    @Transactional
     @Override
     public BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout) {
         boolean inDocked = false;
@@ -297,6 +305,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return dto;
     }
 
+    @Transactional
     @Override
     public BoardActiveDto saveActive(Long userId, BoardActiveDto active) {
         BoardActivePo existing = activeRepo.findByUserId(userId).orElse(null);
@@ -350,6 +359,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         final String canonicalName = rawName;
         safeDto.setName(canonicalName);
         safeDto.getManifest().setName(canonicalName);
+        validateTemplateManifestForNuSmv(canonicalName, safeDto.getManifest());
 
         boolean duplicated = deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(userId, canonicalName);
         if (duplicated) {
@@ -366,10 +376,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         DeviceTemplatePo saved;
         try {
-            saved = deviceTemplateRepo.save(Objects.requireNonNull(po, "template to save must not be null"));
+            saved = deviceTemplateRepo.saveAndFlush(Objects.requireNonNull(po, "template to save must not be null"));
         } catch (DataIntegrityViolationException e) {
             throw ConflictException.duplicateTemplate(canonicalName);
         }
+        runTemplateNuSmvPrecheck(userId, canonicalName, safeDto.getManifest());
 
         DeviceTemplateDto result = new DeviceTemplateDto();
         result.setId(saved.getId().toString());
@@ -398,6 +409,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         deviceTemplateRepo.delete(po);
     }
 
+    @Transactional
     @Override
     public int reloadDeviceTemplates(Long userId) {
         // 删除用户现有的所有模板
@@ -409,5 +421,112 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
         // 重新初始化默认模板
         return deviceTemplateService.initDefaultTemplates(userId);
+    }
+
+    private static final java.util.regex.Pattern SAFE_SMV_TOKEN =
+            java.util.regex.Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
+
+    private void validateTemplateManifestForNuSmv(String templateName, DeviceManifest manifest) {
+        // No-mode devices (pure sensors like Weather, Clock, Temperature Sensor) have
+        // empty Modes/InitState/WorkingStates — this is a legal form, skip validation.
+        boolean hasModes = manifest.getModes() != null && !manifest.getModes().isEmpty();
+        boolean hasInitState = manifest.getInitState() != null && !manifest.getInitState().isBlank();
+        boolean hasWorkingStates = manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
+
+        if (!hasModes && !hasInitState && !hasWorkingStates) {
+            return; // no-mode device template — nothing to validate
+        }
+
+        // If any mode-related field is present, all three must be present
+        if (!hasModes) {
+            throw new BadRequestException("Template '" + templateName + "' must contain non-empty Modes.");
+        }
+        if (!hasInitState) {
+            throw new BadRequestException("Template '" + templateName + "' must contain InitState.");
+        }
+        if (!hasWorkingStates) {
+            throw new BadRequestException("Template '" + templateName + "' must contain non-empty WorkingStates.");
+        }
+
+        // Validate mode names are legal NuSMV identifiers (after stripping spaces)
+        for (String mode : manifest.getModes()) {
+            String cleaned = mode == null ? "" : mode.replace(" ", "");
+            if (!SAFE_SMV_TOKEN.matcher(cleaned).matches()) {
+                throw new BadRequestException(
+                        "Template '" + templateName + "': mode name '" + mode
+                                + "' contains invalid characters. Only letters, digits and underscores are allowed.");
+            }
+        }
+
+        // Validate working-state names are legal NuSMV identifiers
+        for (DeviceManifest.WorkingState ws : manifest.getWorkingStates()) {
+            if (ws.getName() == null) continue;
+            // Multi-mode states can be semicolon-separated; validate each segment
+            String[] segments = ws.getName().split(";", -1);
+            for (String seg : segments) {
+                String cleaned = seg.trim().replace(" ", "");
+                if (cleaned.isEmpty()) continue; // empty segment in ";cool" is allowed
+                if (!SAFE_SMV_TOKEN.matcher(cleaned).matches()) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': state name '" + ws.getName()
+                                    + "' contains invalid characters. Only letters, digits and underscores are allowed.");
+                }
+            }
+        }
+    }
+
+    private void runTemplateNuSmvPrecheck(Long userId, String templateName, DeviceManifest manifest) {
+        DeviceVerificationDto probe = new DeviceVerificationDto();
+        probe.setVarName("__template_probe_device__");
+        probe.setTemplateName(templateName);
+        probe.setState(manifest.getInitState());
+
+        SmvGenerator.GenerateResult generated = null;
+        try {
+            generated = smvGenerator.generate(
+                    userId,
+                    List.of(probe),
+                    List.of(),
+                    List.of(),
+                    false,
+                    0,
+                    false,
+                    SmvGenerator.GeneratePurpose.VERIFICATION
+            );
+        } catch (SmvGenerationException e) {
+            if (SmvGenerationException.ErrorCategories.TEMPLATE_LOAD_ERROR.equals(e.getErrorCategory())
+                    || SmvGenerationException.ErrorCategories.MANIFEST_PARSE_ERROR.equals(e.getErrorCategory())
+                    || SmvGenerationException.ErrorCategories.TEMPLATE_NOT_FOUND.equals(e.getErrorCategory())
+                    || SmvGenerationException.ErrorCategories.MULTIPLE_DEVICES_FAILED.equals(e.getErrorCategory())) {
+                throw new InternalServerException(
+                        "NuSMV precheck failed for template '" + templateName + "'.", e);
+            }
+            String reason = (e.getMessage() == null || e.getMessage().isBlank())
+                    ? e.getErrorCategory()
+                    : "[" + e.getErrorCategory() + "] " + e.getMessage();
+            throw new BadRequestException("Template '" + templateName
+                    + "' cannot be used in NuSMV flow: " + reason);
+        } catch (Exception e) {
+            throw new InternalServerException(
+                    "NuSMV precheck failed for template '" + templateName + "'.", e);
+        } finally {
+            cleanupGeneratedSmvFile(generated);
+        }
+    }
+
+    private void cleanupGeneratedSmvFile(SmvGenerator.GenerateResult generated) {
+        if (generated == null || generated.smvFile() == null) {
+            return;
+        }
+        Path smvPath = generated.smvFile().toPath();
+        try {
+            Files.deleteIfExists(smvPath);
+            Path parent = smvPath.getParent();
+            if (parent != null) {
+                Files.deleteIfExists(parent);
+            }
+        } catch (Exception e) {
+            log.debug("Failed to cleanup template precheck file: {}", smvPath, e);
+        }
     }
 }

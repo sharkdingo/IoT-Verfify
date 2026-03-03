@@ -367,4 +367,102 @@ class VerificationServiceImplBuildResultTest {
         spec.setThenConditions(List.of());
         return spec;
     }
+
+    // ==================== terminal-state progress tests ====================
+
+    @Test
+    void cleanupStaleTasks_setsProgressTo100() throws Exception {
+        VerificationTaskPo running = VerificationTaskPo.builder()
+                .id(50L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
+                .createdAt(LocalDateTime.now()).build();
+        VerificationTaskPo pending = VerificationTaskPo.builder()
+                .id(51L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+
+        when(taskRepository.findByStatusIn(
+                List.of(VerificationTaskPo.TaskStatus.RUNNING, VerificationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(List.of(running, pending));
+        when(taskRepository.save(any(VerificationTaskPo.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // @PostConstruct is not invoked by plain constructor — call via reflection
+        VerificationServiceImpl freshService = new VerificationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                taskRepository, traceRepository, traceMapper,
+                specificationMapper, verificationTaskMapper, new ObjectMapper(),
+                syncVerificationExecutor);
+        Method cleanup = VerificationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
+        cleanup.setAccessible(true);
+        cleanup.invoke(freshService);
+
+        assertEquals(VerificationTaskPo.TaskStatus.FAILED, running.getStatus());
+        assertEquals(100, running.getProgress());
+        assertNotNull(running.getCompletedAt());
+
+        assertEquals(VerificationTaskPo.TaskStatus.FAILED, pending.getStatus());
+        assertEquals(100, pending.getProgress());
+        assertNotNull(pending.getCompletedAt());
+    }
+
+    @Test
+    void cancelTask_pendingTask_setsProgressTo100() {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(60L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+
+        when(taskRepository.findByIdAndUserId(60L, 1L))
+                .thenReturn(Optional.of(task));
+        when(taskRepository.save(any(VerificationTaskPo.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        boolean result = service.cancelTask(1L, 60L);
+
+        assertTrue(result);
+        assertEquals(VerificationTaskPo.TaskStatus.CANCELLED, task.getStatus());
+        assertEquals(100, task.getProgress());
+        assertNotNull(task.getCompletedAt());
+    }
+
+    @Test
+    void completeTask_skipsWhenAlreadyCancelledInDb() throws Exception {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(70L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
+                .startedAt(LocalDateTime.now()).createdAt(LocalDateTime.now()).build();
+
+        // Another instance already wrote CANCELLED to DB
+        VerificationTaskPo cancelledInDb = VerificationTaskPo.builder()
+                .id(70L).status(VerificationTaskPo.TaskStatus.CANCELLED).build();
+        when(taskRepository.findById(70L))
+                .thenReturn(Optional.of(cancelledInDb));
+
+        Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
+                "completeTask", VerificationTaskPo.class, boolean.class, int.class,
+                List.class, String.class);
+        completeTask.setAccessible(true);
+        completeTask.invoke(service, task, true, 0, List.of("done"), "");
+
+        // Guard must prevent overwrite — save never called, status stays RUNNING
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        assertEquals(VerificationTaskPo.TaskStatus.RUNNING, task.getStatus());
+    }
+
+    @Test
+    void failTask_skipsWhenAlreadyCancelledInDb() throws Exception {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(71L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
+                .startedAt(LocalDateTime.now()).createdAt(LocalDateTime.now()).build();
+
+        VerificationTaskPo cancelledInDb = VerificationTaskPo.builder()
+                .id(71L).status(VerificationTaskPo.TaskStatus.CANCELLED).build();
+        when(taskRepository.findById(71L))
+                .thenReturn(Optional.of(cancelledInDb));
+
+        Method failTask = VerificationServiceImpl.class.getDeclaredMethod(
+                "failTask", VerificationTaskPo.class, String.class);
+        failTask.setAccessible(true);
+        failTask.invoke(service, task, "some error");
+
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        assertEquals(VerificationTaskPo.TaskStatus.RUNNING, task.getStatus());
+    }
 }

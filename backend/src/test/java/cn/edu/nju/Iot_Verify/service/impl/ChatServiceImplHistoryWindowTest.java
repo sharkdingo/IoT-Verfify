@@ -2,7 +2,9 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
+import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
@@ -15,9 +17,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -121,5 +125,84 @@ class ChatServiceImplHistoryWindowTest {
         assertEquals(1, history.size());
         assertEquals("user", history.get(0).getRole());
         assertEquals(4500, history.get(0).getContent().length());
+    }
+
+    @Test
+    void getHistory_shouldHideInternalToolMessagesFromFrontend() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s4");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("s4", 1L)).thenReturn(Optional.of(session));
+
+        ChatMessagePo userMsg = new ChatMessagePo();
+        userMsg.setRole("user");
+        userMsg.setContent("turn on the light");
+
+        ChatMessagePo assistantToolCall = new ChatMessagePo();
+        assistantToolCall.setRole("assistant");
+        assistantToolCall.setContent("{\"type\":\"tool_calls\",\"toolCalls\":[]}");
+
+        ChatMessagePo toolResult = new ChatMessagePo();
+        toolResult.setRole("tool");
+        toolResult.setContent("{\"type\":\"tool_result\",\"toolCallId\":\"tc_1\",\"result\":\"ok\"}");
+
+        ChatMessagePo assistantFallback = new ChatMessagePo();
+        assistantFallback.setRole("assistant");
+        assistantFallback.setContent("Calling tool...");
+
+        ChatMessagePo assistantReply = new ChatMessagePo();
+        assistantReply.setRole("assistant");
+        assistantReply.setContent("Done. The light is on.");
+
+        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("s4"))
+                .thenReturn(List.of(userMsg, assistantToolCall, toolResult, assistantFallback, assistantReply));
+        when(chatMapper.toChatMessageDtoList(anyList()))
+                .thenReturn(List.of(new ChatMessageResponseDto(), new ChatMessageResponseDto()));
+
+        List<ChatMessageResponseDto> history = service.getHistory(1L, "s4");
+
+        assertEquals(2, history.size());
+        org.mockito.ArgumentCaptor<List<ChatMessagePo>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(chatMapper).toChatMessageDtoList(captor.capture());
+        List<ChatMessagePo> visible = captor.getValue();
+        assertEquals(2, visible.size());
+        assertEquals("user", visible.get(0).getRole());
+        assertEquals("assistant", visible.get(1).getRole());
+        assertTrue(visible.stream().noneMatch(m -> "tool".equalsIgnoreCase(m.getRole())));
+    }
+
+    @Test
+    void getHistory_shouldKeepNormalAssistantMessageCallingToolWhenNotAdjacentToToolBlock() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s5");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("s5", 1L)).thenReturn(Optional.of(session));
+
+        ChatMessagePo userMsg = new ChatMessagePo();
+        userMsg.setRole("user");
+        userMsg.setContent("say exactly Calling tool...");
+
+        ChatMessagePo assistantLiteral = new ChatMessagePo();
+        assistantLiteral.setRole("assistant");
+        assistantLiteral.setContent("Calling tool...");
+
+        ChatMessagePo assistantReply = new ChatMessagePo();
+        assistantReply.setRole("assistant");
+        assistantReply.setContent("Done.");
+
+        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("s5"))
+                .thenReturn(List.of(userMsg, assistantLiteral, assistantReply));
+        when(chatMapper.toChatMessageDtoList(anyList()))
+                .thenReturn(List.of(new ChatMessageResponseDto(), new ChatMessageResponseDto(), new ChatMessageResponseDto()));
+
+        List<ChatMessageResponseDto> history = service.getHistory(1L, "s5");
+
+        assertEquals(3, history.size());
+        org.mockito.ArgumentCaptor<List<ChatMessagePo>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(chatMapper).toChatMessageDtoList(captor.capture());
+        List<ChatMessagePo> visible = captor.getValue();
+        assertEquals(3, visible.size());
+        assertEquals("assistant", visible.get(1).getRole());
+        assertEquals("Calling tool...", visible.get(1).getContent());
     }
 }

@@ -74,6 +74,26 @@ class SmvGeneratorFixesTest {
         return smv;
     }
 
+    @Test
+    @DisplayName("Builder input: main module builder null devices throws categorized exception")
+    void mainBuilder_nullDevices_throwsCategorizedException() {
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L, null, List.of(), Map.of(), false, 0, false));
+        assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("SmvMainModuleBuilder"));
+        assertTrue(ex.getMessage().contains("devices"));
+    }
+
+    @Test
+    @DisplayName("Builder input: device module builder null data throws categorized exception")
+    void deviceBuilder_nullSmv_throwsCategorizedException() {
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> deviceBuilder.build(null, false, 0, false));
+        assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("SmvDeviceModuleBuilder"));
+        assertTrue(ex.getMessage().contains("smv"));
+    }
+
     // ======================== P1: Trigger.Attribute 合法性 ========================
 
     @Test
@@ -1947,5 +1967,429 @@ class SmvGeneratorFixesTest {
                 "Safety spec should inject trust_temperature, got:\n" + result);
         assertFalse(result.contains("sensor_1.trust_a_temperature"),
                 "Safety spec should never reference trust_a_temperature");
+    }
+
+    // ======================== P4-chain: 全空分段回归 ========================
+
+    @Test
+    @DisplayName("P4-chain: workingState name ';' (all empty segments) produces no guardless CASE branch — numeric rate path")
+    void allEmptySegments_numericRate_noGuardlessBranch() {
+        DeviceManifest.InternalVariable temp = numericVar("temperature", false, 0, 50);
+        temp.setNaturalChangeRate("1");
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power", "Speed"))
+                .internalVariables(List.of(temp))
+                .impactedVariables(List.of("temperature"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name(";")  // all segments empty
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("5").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder()
+                                .name("on;fast")
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("3").build()))
+                                .build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("t1").startState(";").endState("on;fast").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "TestDev",
+                List.of("Power", "Speed"),
+                Map.of("Power", List.of("on"), "Speed", List.of("fast")),
+                List.of(temp), manifest);
+        smv.getImpactedVariables().add("temperature");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("dev_1");
+        dto.setTemplateName("TestDev");
+        dto.setState("on;fast");
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+
+        // The all-empty state should NOT produce a guardless ": 5;" line
+        assertFalse(result.matches("(?s).*\\t\\t:\\s*5;.*"),
+                "All-empty-segment state should not emit guardless ': 5;' branch, got:\n" + result);
+        // The valid state "on;fast" should still produce its guarded branch
+        assertTrue(result.contains(": 3;"),
+                "Valid state 'on;fast' should produce its ': 3;' rate branch, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P4-chain: workingState name ';' (all empty segments) produces no guardless CASE branch — enum value path")
+    void allEmptySegments_enumValue_noGuardlessBranch() {
+        DeviceManifest.InternalVariable status = DeviceManifest.InternalVariable.builder()
+                .name("status").isInside(true).values(List.of("idle", "active", "error")).build();
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power", "Speed"))
+                .internalVariables(List.of(status))
+                .impactedVariables(List.of("status"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name(";")  // all segments empty
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("status").value("error").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder()
+                                .name("on;fast")
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("status").value("active").build()))
+                                .build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("t1").startState(";").endState("on;fast").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_2", "TestDev2",
+                List.of("Power", "Speed"),
+                Map.of("Power", List.of("on"), "Speed", List.of("fast")),
+                List.of(status), manifest);
+        smv.getImpactedVariables().add("status");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_2", smv);
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("dev_2");
+        dto.setTemplateName("TestDev2");
+        dto.setState("on;fast");
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+
+        // The all-empty state should NOT produce a guardless ": error;" line
+        assertFalse(result.matches("(?s).*\\t\\t:\\s*error;.*"),
+                "All-empty-segment state should not emit guardless ': error;' branch, got:\n" + result);
+        // The valid state "on;fast" should still produce its guarded branch
+        assertTrue(result.contains(": active;"),
+                "Valid state 'on;fast' should produce its ': active;' value branch, got:\n" + result);
+    }
+
+    // ======================== Trust/privacy normalization regression ========================
+
+    @Test
+    @DisplayName("Normalization: padded trust/privacy values are trimmed and lowercased in SMV output")
+    void paddedTrustPrivacy_normalizedInOutput() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").privacy("public").build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("untrusted").privacy("private").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("toggle").startState("on").endState("off").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("ac_1", "AC",
+                List.of("Mode"), Map.of("Mode", List.of("on", "off")),
+                List.of(), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        // Simulate padded instance trust/privacy from DTO
+        smv.setInstanceStateTrust(" Trusted ");
+        smv.getInstanceVariablePrivacy().put("Mode_on", " Public ");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ac_1", smv);
+
+        // Validation should pass (padded values accepted)
+        assertDoesNotThrow(() -> validator.validate(map));
+
+        // Build device module and verify lowercase output
+        String deviceModule = deviceBuilder.build(smv, false, 0, true);
+        // All trust/privacy init values in SMV must be lowercase enum literals
+        assertFalse(deviceModule.contains("Trusted"), "SMV must not contain 'Trusted' (uppercase), got:\n" + deviceModule);
+        assertFalse(deviceModule.contains("Public"), "SMV must not contain 'Public' (uppercase), got:\n" + deviceModule);
+        assertTrue(deviceModule.contains("trusted"), "SMV should contain lowercase 'trusted'");
+        assertTrue(deviceModule.contains("public"), "SMV should contain lowercase 'public'");
+    }
+
+    @Test
+    @DisplayName("Normalization: case-variant trust on same mode_state is NOT flagged as conflict")
+    void caseVariantTrust_noConflict() {
+        // Two workingStates for the same mode_state "Mode_on" with different-case trust: "Trusted" vs "trusted"
+        // After normalization, both become "trusted" — should NOT throw trust/privacy conflict
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "Lock"))
+                .internalVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on;locked").trust("Trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on;unlocked").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("lock").startState("on;unlocked").endState("on;locked").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("lock_1", "SmartLock",
+                List.of("Mode", "Lock"),
+                Map.of("Mode", List.of("on"), "Lock", List.of("locked", "unlocked")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("lock_1", smv);
+
+        // Both have Mode_on trust = "Trusted"/"trusted" — after normalize both are "trusted", no conflict
+        assertDoesNotThrow(() -> validator.validate(map),
+                "Case-variant trust values ('Trusted' vs 'trusted') should not cause a conflict");
+    }
+
+    @Test
+    @DisplayName("A10: numeric env next() candidates are clamped and keep attack range consistent")
+    void numericEnvTransition_attackRangeAndCandidatesClamped() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
+        temperature.setNaturalChangeRate("[-2,3]");
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .impactedVariables(List.of("temperature"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("on")
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature")
+                                        .changeRate("5")
+                                        .build()))
+                                .build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("setOn")
+                        .startState("on")
+                        .endState("on")
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("ac_1", "AC",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(temperature), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getEnvVariables().put("temperature", temperature);
+        smv.getImpactedVariables().add("temperature");
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ac_1");
+        dto.setTemplateName("AC");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ac_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 50, false);
+
+        // Attack mode expands declared env range from 15..35 to 15..39.
+        assertTrue(result.contains("a_temperature: 15..39;"),
+                "Declaration range should match attack expansion, got:\n" + result);
+        // Candidate expressions must be clamped into the same declared range.
+        assertTrue(result.contains("max(15, min(39, a_temperature+ac_1.temperature_rate))"),
+                "Base candidate should be clamped to 15..39, got:\n" + result);
+        assertTrue(result.contains("TRUE: {max(15, min(39, a_temperature - 2+ac_1.temperature_rate)), max(15, min(39, a_temperature+ac_1.temperature_rate)), max(15, min(39, a_temperature + 3+ac_1.temperature_rate))}"),
+                "TRUE branch should clamp all three candidates, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("SmvBoundsUtils: resolveEffectiveUpperBound single-point definition")
+    void smvBoundsUtils_resolveEffectiveUpperBound() {
+        // Non-attack: upper unchanged
+        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, false, 50));
+        // Attack intensity=50: expansion = (20/5.0 * 50/50.0) = 4 → 35+4=39
+        assertEquals(39, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 50));
+        // Attack intensity=0: no expansion
+        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 0));
+        // Attack intensity=100: expansion = (20/5.0 * 100/50.0) = 8 → 35+8=43
+        assertEquals(43, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 100));
+    }
+
+    @Test
+    @DisplayName("A10-boundary: extreme NCR boundary branch candidates are clamped")
+    void numericEnvTransition_extremeNcr_boundaryBranchesClamped() {
+        // NCR=[-30,30] on range 15..35 — boundary candidates would overflow without clamp
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
+        temperature.setNaturalChangeRate("[-30,30]");
+
+        // Device that does NOT impact temperature (no dynamics for temperature)
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("on")
+                                .trust("trusted")
+                                .build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn")
+                        .startState("on")
+                        .endState("on")
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "DEV",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(temperature), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getEnvVariables().put("temperature", temperature);
+        // No impactedVariables → no rate expression → exercises no-rate boundary branches
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("dev_1");
+        dto.setTemplateName("DEV");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+
+        // Upper boundary branch: a_temperature>=35: {clamp(a_temperature - 30), a_temperature}
+        // Without clamp, 35-30=5 which is below lower bound 15
+        assertTrue(result.contains("a_temperature>=35: {max(15, min(35, a_temperature - 30)), a_temperature}"),
+                "Upper boundary branch should clamp lowerNcr candidate within >=upper guard, got:\n" + result);
+
+        // Lower boundary branch: a_temperature<=15: {a_temperature, clamp(a_temperature + 30)}
+        // Without clamp, 15+30=45 which is above upper bound 35
+        assertTrue(result.contains("a_temperature<=15: {a_temperature, max(15, min(35, a_temperature + 30))}"),
+                "Lower boundary branch should clamp upperNcr candidate within <=lower guard, got:\n" + result);
+
+        // TRUE branch should also be clamped
+        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 30)), max(15, min(35, a_temperature)), max(15, min(35, a_temperature + 30))}"),
+                "TRUE branch should clamp all three candidates, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("A10-boundary: WITH-rate extreme NCR boundary branches are clamped")
+    void numericEnvTransition_withRate_extremeNcr_boundaryBranchesClamped() {
+        // NCR=[-30,30] on range 15..35, WITH a device that impacts temperature
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 15, 35);
+        temperature.setNaturalChangeRate("[-30,30]");
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .impactedVariables(List.of("temperature"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("on")
+                                .trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature")
+                                        .changeRate("5")
+                                        .build()))
+                                .build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("setOn")
+                        .startState("on")
+                        .endState("on")
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("ac_1", "AC",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(temperature), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getEnvVariables().put("temperature", temperature);
+        smv.getImpactedVariables().add("temperature");
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("ac_1");
+        dto.setTemplateName("AC");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("ac_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+
+        // WITH-rate =upper boundary: candidates are clamped
+        assertTrue(result.contains("a_temperature=35-(ac_1.temperature_rate): {"
+                        + "max(15, min(35, toint(a_temperature)-1+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature+ac_1.temperature_rate))}"),
+                "=upper boundary should clamp both candidates, got:\n" + result);
+
+        // WITH-rate >upper boundary: constant {35}, no overflow possible
+        assertTrue(result.contains("a_temperature>35-(ac_1.temperature_rate): {35}"),
+                ">upper boundary should emit constant upper, got:\n" + result);
+
+        // WITH-rate =lower boundary: candidates are clamped
+        assertTrue(result.contains("a_temperature=15-(ac_1.temperature_rate): {"
+                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature+1+ac_1.temperature_rate))}"),
+                "=lower boundary should clamp both candidates, got:\n" + result);
+
+        // WITH-rate <lower boundary: constant {15}
+        assertTrue(result.contains("a_temperature<15-(ac_1.temperature_rate): {15}"),
+                "<lower boundary should emit constant lower, got:\n" + result);
+
+        // TRUE branch: all three NCR+rate candidates clamped
+        assertTrue(result.contains("TRUE: {"
+                        + "max(15, min(35, a_temperature - 30+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature+ac_1.temperature_rate)), "
+                        + "max(15, min(35, a_temperature + 30+ac_1.temperature_rate))}"),
+                "TRUE branch should clamp all three candidates, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("A10-internal: internal variable boundary branches are clamped with extreme NCR")
+    void internalVariable_extremeNcr_boundaryBranchesClamped() {
+        // Internal variable "power" 0..10 with NCR=[-8,8], no impacted rate
+        DeviceManifest.InternalVariable power = numericVar("power", true, 0, 10);
+        power.setNaturalChangeRate("[-8,8]");
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(power))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("on")
+                                .trust("trusted")
+                                .build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn")
+                        .startState("on")
+                        .endState("on")
+                        .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "DEV",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(power), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("dev_1");
+        dto.setTemplateName("DEV");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
+
+        // Upper boundary: dev_1.power>=10: {clamp(dev_1.power - 8), dev_1.power}
+        // Without clamp, 10-8=2 is fine, but this verifies the clamp wrapper is present
+        assertTrue(result.contains("dev_1.power>=10: {max(0, min(10, dev_1.power - 8)), dev_1.power}"),
+                "Internal var upper boundary should clamp lowerNcr candidate, got:\n" + result);
+
+        // Lower boundary: dev_1.power<=0: {dev_1.power, clamp(dev_1.power + 8)}
+        // Without clamp, 0+8=8 is fine, but verifies the clamp wrapper is present
+        assertTrue(result.contains("dev_1.power<=0: {dev_1.power, max(0, min(10, dev_1.power + 8))}"),
+                "Internal var lower boundary should clamp upperNcr candidate, got:\n" + result);
+
+        // TRUE branch: all three candidates clamped
+        assertTrue(result.contains("TRUE: {max(0, min(10, dev_1.power - 8)), max(0, min(10, dev_1.power)), max(0, min(10, dev_1.power + 8))}"),
+                "Internal var TRUE branch should clamp all three candidates, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("SmvBoundsUtils: edge cases — range=0 and negative intensity")
+    void smvBoundsUtils_edgeCases() {
+        // range=0 (lower==upper): no expansion regardless of intensity
+        assertEquals(10, SmvBoundsUtils.resolveEffectiveUpperBound(10, 10, true, 50));
+        // Negative intensity clamped to 0: no expansion
+        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, -100));
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
 import jakarta.persistence.EntityNotFoundException;
+import java.util.Map;
 
 @Slf4j
 @RestControllerAdvice
@@ -74,11 +75,16 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(SmvGenerationException.class)
-    public ResponseEntity<Result<Void>> handleSmvGenerationException(SmvGenerationException e) {
+    public ResponseEntity<Result<Map<String, Object>>> handleSmvGenerationException(SmvGenerationException e) {
         log.error("SMV generation error [{}]: {}", e.getErrorCategory(), e.getMessage(), e);
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "[" + e.getErrorCategory() + "] " + e.getMessage()
+        );
+        result.setData(Map.of("errorCategory", e.getErrorCategory()));
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error("[" + e.getErrorCategory() + "] " + e.getMessage()));
+                .body(result);
     }
 
     @ExceptionHandler(InternalServerException.class)

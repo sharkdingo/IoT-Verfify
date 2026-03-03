@@ -3,13 +3,18 @@ package cn.edu.nju.Iot_Verify.po;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import java.time.LocalDateTime;
 
 @Data
 @Entity
-@Table(name = "chat_session")
+@Table(name = "chat_session", indexes = {
+        @Index(name = "idx_chat_session_user_id", columnList = "user_id")
+})
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class ChatSessionPo {
     @Id
+    @EqualsAndHashCode.Include
     private String id; // UUID
 
     @Column(name = "user_id", nullable = false)

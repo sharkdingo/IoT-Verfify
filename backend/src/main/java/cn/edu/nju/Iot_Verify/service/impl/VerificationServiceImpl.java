@@ -104,6 +104,7 @@ public class VerificationServiceImpl implements VerificationService {
             String msg = "Server restarted while task was in progress";
             for (VerificationTaskPo task : staleTasks) {
                 task.setStatus(VerificationTaskPo.TaskStatus.FAILED);
+                task.setProgress(100);
                 task.setCompletedAt(LocalDateTime.now());
                 task.setIsSafe(false);
                 task.setErrorMessage(msg);
@@ -376,6 +377,7 @@ public class VerificationServiceImpl implements VerificationService {
 
             task.setStatus(VerificationTaskPo.TaskStatus.RUNNING);
             task.setStartedAt(LocalDateTime.now());
+            task.setProgress(0);
             writeCheckLogs(task, List.of("Task started"));
             taskRepository.save(task);
 
@@ -502,6 +504,7 @@ public class VerificationServiceImpl implements VerificationService {
         } else {
             // Task not started yet (still PENDING in queue); update DB status directly.
             task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
+            task.setProgress(100);
             task.setCompletedAt(LocalDateTime.now());
             taskRepository.save(task);
         }
@@ -511,7 +514,13 @@ public class VerificationServiceImpl implements VerificationService {
 
     @Override
     public void updateTaskProgress(Long taskId, int progress, String message) {
-        taskProgress.put(taskId, Math.min(100, Math.max(0, progress)));
+        int clamped = Math.min(100, Math.max(0, progress));
+        taskProgress.put(taskId, clamped);
+        // Persist to DB for cross-instance visibility
+        taskRepository.findById(taskId).ifPresent(task -> {
+            task.setProgress(clamped);
+            taskRepository.save(task);
+        });
         log.debug("Task {} progress: {}% - {}", taskId, progress, message);
     }
 
@@ -520,10 +529,16 @@ public class VerificationServiceImpl implements VerificationService {
         // Validate task ownership.
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
+        // Prefer in-memory value (active task on this instance)
         Integer progress = taskProgress.get(taskId);
         if (progress != null) {
             return progress;
         }
+        // Fall back to DB column (task running on another instance or after restart)
+        if (task.getProgress() != null) {
+            return task.getProgress();
+        }
+        // Final fallback: infer from terminal status
         if (task.getStatus() == VerificationTaskPo.TaskStatus.COMPLETED
                 || task.getStatus() == VerificationTaskPo.TaskStatus.FAILED
                 || task.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED) {
@@ -670,8 +685,15 @@ public class VerificationServiceImpl implements VerificationService {
     private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
                               List<String> checkLogs, String nusmvOutput) {
         try {
+            if (isTaskCancelledInDb(task.getId())) {
+                // NOTE: check-then-act guard — TOCTOU race of ~microseconds remains;
+                // fully closing it would require a conditional UPDATE or pessimistic lock.
+                log.info("Verification task {} already cancelled (cross-instance), skipping completion", task.getId());
+                return;
+            }
             task.setStatus(VerificationTaskPo.TaskStatus.COMPLETED);
             task.setCompletedAt(LocalDateTime.now());
+            task.setProgress(100);
             task.setIsSafe(isSafe);
             task.setViolatedSpecCount(traceCount);
             if (task.getStartedAt() != null) {
@@ -688,9 +710,19 @@ public class VerificationServiceImpl implements VerificationService {
     }
 
     private void failTask(VerificationTaskPo task, String errorMessage) {
+        if (task == null) {
+            log.warn("failTask called with null task, errorMessage={}", errorMessage);
+            return;
+        }
         try {
+            // Same TOCTOU guard as completeTask — see note there.
+            if (isTaskCancelledInDb(task.getId())) {
+                log.info("Verification task {} already cancelled (cross-instance), skipping fail", task.getId());
+                return;
+            }
             task.setStatus(VerificationTaskPo.TaskStatus.FAILED);
             task.setCompletedAt(LocalDateTime.now());
+            task.setProgress(100);
             task.setIsSafe(false);
             task.setErrorMessage(errorMessage);
             if (task.getStartedAt() != null) {
@@ -704,10 +736,17 @@ public class VerificationServiceImpl implements VerificationService {
         }
     }
 
+    private boolean isTaskCancelledInDb(Long taskId) {
+        return taskRepository.findById(taskId)
+                .map(t -> t.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED)
+                .orElse(false);
+    }
+
     private void handleCancellation(VerificationTaskPo task) {
         log.info("Handling cancellation for task: {}", task.getId());
         task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
         task.setCompletedAt(LocalDateTime.now());
+        task.setProgress(100);
         taskRepository.save(task);
     }
 

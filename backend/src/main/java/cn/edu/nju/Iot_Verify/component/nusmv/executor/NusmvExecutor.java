@@ -237,6 +237,9 @@ public class NusmvExecutor {
      * 流程：go → pick_state -r → simulate -r -k N → show_traces → quit
      */
     public SimulationOutput executeInteractiveSimulation(File smvFile, int steps) throws InterruptedException {
+        if (steps <= 0) {
+            return SimulationOutput.error("Simulation steps must be positive, got: " + steps);
+        }
         if (smvFile == null || !smvFile.exists()) {
             return SimulationOutput.error("NuSMV model file does not exist or is null");
         }
@@ -377,13 +380,19 @@ public class NusmvExecutor {
             return true;
         }
         log.warn("NuSMV {} reader thread did not finish in {}ms, reclaiming", label, READER_JOIN_TIMEOUT_MS);
-        reclaimReaderThread(thread, stream, label);
+        reclaimReaderThread(thread, stream, label, true);
         return !thread.isAlive();
     }
 
     private void reclaimReaderThread(Thread thread, InputStream stream, String label) {
+        reclaimReaderThread(thread, stream, label, false);
+    }
+
+    private void reclaimReaderThread(Thread thread, InputStream stream, String label, boolean skipInitialJoin) {
         try {
-            thread.join(5000);
+            if (!skipInitialJoin) {
+                thread.join(5000);
+            }
             if (thread.isAlive()) {
                 log.warn("NuSMV {} reader thread still alive after join timeout, reclaiming", label);
                 thread.interrupt();

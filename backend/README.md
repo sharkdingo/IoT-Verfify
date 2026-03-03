@@ -71,13 +71,43 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       ├── VerificationServiceImpl.java   # 验证业务逻辑（同步/异步）
 │       └── SimulationServiceImpl.java     # 模拟业务逻辑（执行 + 持久化）
 ├── component/
-│   ├── aitool/                            # AI 工具组件
+│   ├── aitool/                            # AI 工具组件（25 工具，7 类别）
 │   │   ├── AiTool.java                    # 工具接口
 │   │   ├── AiToolManager.java             # 工具管理器
-│   │   └── node/                          # 节点操作工具
-│   │       ├── AddNodeTool.java
-│   │       ├── DeleteNodeTool.java
-│   │       └── SearchNodeTool.java
+│   │   ├── AiToolResponseHelper.java      # 工具响应辅助
+│   │   ├── BoardDataHelper.java           # 画布数据辅助（节点/边/规则/规格聚合）
+│   │   ├── board/                         # 画布工具
+│   │   │   └── BoardOverviewTool.java     # 画布总览（含 edges）
+│   │   ├── node/                          # 节点操作工具
+│   │   │   ├── AddNodeTool.java
+│   │   │   ├── DeleteNodeTool.java
+│   │   │   └── SearchNodeTool.java
+│   │   ├── rule/                          # 规则工具
+│   │   │   ├── ListRulesTool.java
+│   │   │   └── ManageRuleTool.java
+│   │   ├── spec/                          # 规格工具
+│   │   │   ├── ListSpecsTool.java
+│   │   │   └── ManageSpecTool.java
+│   │   ├── template/                      # 模板工具
+│   │   │   ├── AddTemplateTool.java
+│   │   │   ├── DeleteTemplateTool.java
+│   │   │   └── ListTemplatesTool.java
+│   │   ├── simulation/                    # 模拟工具
+│   │   │   ├── SimulateModelTool.java         # 同步模拟
+│   │   │   ├── SimulateModelAsyncTool.java
+│   │   │   ├── SimulateTaskStatusTool.java
+│   │   │   ├── CancelSimulateTaskTool.java
+│   │   │   ├── ListSimulationTracesTool.java   # 列出模拟轨迹
+│   │   │   ├── GetSimulationTraceTool.java     # 获取模拟轨迹详情
+│   │   │   └── DeleteSimulationTraceTool.java  # 删除模拟轨迹
+│   │   └── verification/                  # 验证工具
+│   │       ├── VerifyModelTool.java       # 同步验证
+│   │       ├── VerifyModelAsyncTool.java
+│   │       ├── VerifyTaskStatusTool.java
+│   │       ├── CancelVerifyTaskTool.java
+│   │       ├── ListTracesTool.java        # 列出验证 Traces
+│   │       ├── GetTraceTool.java          # 获取验证 Trace 详情
+│   │       └── DeleteTraceTool.java       # 删除验证 Trace
 │   └── nusmv/                             # ★ NuSMV 核心模块
 │       ├── generator/
 │       │   ├── SmvGenerator.java           # 协调器：组装完整 SMV 文件
@@ -142,7 +172,8 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │       └── TraceTrustPrivacyDto.java      # 反例信任/隐私
 ├── po/                                    # 持久化实体
 │   ├── UserPo.java
-│   ├── DeviceNodePo.java
+│   ├── DeviceNodePo.java                 # @IdClass(DeviceNodeId) — 复合主键 (id, user_id)
+│   ├── DeviceNodeId.java                  # 复合主键类（用户级节点隔离）
 │   ├── DeviceEdgePo.java / DeviceEdgeId.java
 │   ├── DeviceTemplatePo.java
 │   ├── BoardActivePo.java / BoardLayoutPo.java
@@ -150,8 +181,8 @@ src/main/java/cn/edu/nju/Iot_Verify/
 │   ├── RulePo.java
 │   ├── SpecificationPo.java
 │   ├── TracePo.java                       # 验证反例轨迹
-│   ├── VerificationTaskPo.java            # 异步验证任务
-│   ├── SimulationTaskPo.java              # 异步模拟任务（simulation_task 表）
+│   ├── VerificationTaskPo.java            # 异步验证任务（含 progress 列）
+│   ├── SimulationTaskPo.java              # 异步模拟任务（含 progress 列）
 │   └── SimulationTracePo.java             # 模拟轨迹（simulation_trace 表）
 ├── repository/                            # JPA Repository
 │   ├── UserRepository.java
@@ -252,9 +283,12 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 - 验证/模拟运行时只从当前用户的模板表读取（`DeviceTemplateService.findTemplateByName(userId, templateName)`），不直接读取 `resources` 目录。
 - 默认模板来自 `src/main/resources/deviceTemplate/*.json`，在用户注册后自动入库；也可通过 `POST /api/board/templates/reload` 重置（先删除该用户现有模板，再导入默认模板）。
 - 若请求中的 `templateName` 在该用户模板中不存在，生成阶段抛出 `SmvGenerationException`（`multipleDevicesFailed`）。
+- `loadManifest()` 的异常处理：`BaseException` 直接重抛，JSON 解析失败抛 `MANIFEST_PARSE_ERROR`，其他异常抛 `TEMPLATE_LOAD_ERROR`（不再静默返回 null）。
+- 创建自定义模板时（`addDeviceTemplate`），会先做 manifest 校验（模式/状态名 NuSMV 合法性），再执行 NuSMV 预检（probe generate），失败返回 400/500。
 
 静态工具方法：
-- `cleanStateName(raw)` — 移除分号和空格
+- `cleanStateName(raw)` — 移除分号，然后通过 `sanitizeSmvToken()` 清洗（移除空格、非法字符替换为 `_`、数字开头加 `_` 前缀）
+- `sanitizeSmvToken(raw)` — NuSMV 标识符集中清洗函数（模式名/状态名/变量标识）；值归一化场景仍可能在局部使用去空格逻辑
 - `findDeviceSmvData(name, map)` — 兼容查找（先按 varName，再按 templateName）
 - `findDeviceSmvDataStrict(name, map)` — 严格查找；当 templateName 匹配到多个实例时抛出 `SmvGenerationException`（`AMBIGUOUS_DEVICE_REFERENCE`）
 - `toVarName(deviceId)` — 转为安全变量名
@@ -302,7 +336,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 `component/nusmv/generator/module/SmvMainModuleBuilder.java`
 
-生成 `MODULE main`，是最复杂的构建器（~1580 行），包含：
+生成 `MODULE main`，是最复杂的构建器（~1800 行），包含：
 
 1. `FROZENVAR intensity: 0..50` — 仅攻击模式
 2. `VAR` — 设备实例化 + 环境变量声明
@@ -457,7 +491,7 @@ public enum PropertyDimension {
 
 说明：
 - 当 syncSimulationExecutor 或 syncVerificationExecutor 饱和时，同步接口会返回 503 Service Unavailable。
-- 当同步链路中的 SMV 生成阶段抛出 `SmvGenerationException` 时，会原样透传到全局异常处理，响应中保留 `errorCategory`（如 `AMBIGUOUS_DEVICE_REFERENCE`、`ILLEGAL_TRIGGER_RELATION`）。
+- 当同步链路中的 SMV 生成阶段抛出 `SmvGenerationException` 时，会原样透传到全局异常处理，响应 `data.errorCategory` 保留错误类别（如 `AMBIGUOUS_DEVICE_REFERENCE`、`ILLEGAL_TRIGGER_RELATION`），并兼容保留 `[errorCategory] message` 文本格式。
 - sync-* 线程池采用小队列（默认 16）以减少长队列导致的排队超时。
 - 同步超时后会执行 `future.cancel(true)` 并调用线程池 `purge()`，尽快清理已取消的排队任务。
 
@@ -673,6 +707,14 @@ java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 | 模拟异步任务 | Done | `SimulationTaskPo/Repository` + `/api/verify/simulate/async` + `/api/verify/simulations/tasks/*` |
 | 线程池统一配置 | Done | `ThreadPoolConfig` + `ThreadConfig` |
 | 输入校验强化 | Done | `SmvDeviceModuleBuilder.validateInternalInitValue()` + `SmvMainModuleBuilder.resolveEnvVarInitValues()` / `validateEnvVarInitValue()` + `SmvSpecificationBuilder.buildVariableCondition()` / `validateApiSignalExists()` / `validateApiBooleanRelation()` + `SpecConditionDto @Pattern` |
+| NuSMV 标识符清洗 | Done | `DeviceSmvDataFactory.sanitizeSmvToken()` — 集中处理模式名/状态名/变量标识中的空格/非法字符/数字前缀 |
+| 模板 NuSMV 预检 | Done | `BoardStorageServiceImpl.validateTemplateManifestForNuSmv()` + `runTemplateNuSmvPrecheck()` |
+| AI 工具安全强化 | Done | JSON 参数解析 400 错误、`ServiceUnavailableException` 503 错误、内部异常信息不泄露 |
+| AI 工具 Trace 管理 | Done | `GetTraceTool` + `DeleteTraceTool` + `ListSimulationTracesTool` + `GetSimulationTraceTool` + `DeleteSimulationTraceTool` |
+| 进度 DB 持久化 | Done | `VerificationTaskPo.progress` + `SimulationTaskPo.progress` — 跨实例可见，三级回退链 |
+| 跨实例取消安全 | Done | `isTaskCancelledInDb()` guard — `completeTask`/`failTask` 写入前检查 DB 取消状态 |
+| 设备节点用户隔离 | Done | `DeviceNodeId` 复合主键 `(id, user_id)` — 不同用户可拥有同 ID 节点 |
+| 聊天历史过滤 | Done | `ChatServiceImpl.filterFrontendVisibleMessages()` — 前端不显示 tool/tool_calls 消息 |
 
 ---
 

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -29,7 +30,7 @@ public class VerificationTaskMapper {
                 .processingTimeMs(po.getProcessingTimeMs())
                 .isSafe(po.getIsSafe())
                 .violatedSpecCount(po.getViolatedSpecCount())
-                .checkLogs(po.getCheckLogs())
+                .checkLogs(po.getCheckLogs() != null ? po.getCheckLogs() : JsonUtils.fromJsonToStringList(po.getCheckLogsJson()))
                 .errorMessage(po.getErrorMessage())
                 .build();
     }

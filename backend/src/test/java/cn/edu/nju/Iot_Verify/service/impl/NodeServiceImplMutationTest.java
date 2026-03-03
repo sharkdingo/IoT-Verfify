@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 @ExtendWith(MockitoExtension.class)
 class NodeServiceImplMutationTest {
@@ -55,5 +57,16 @@ class NodeServiceImplMutationTest {
                 nodeService.deleteNode(1L, "ghost"));
 
         assertEquals(404, ex.getCode());
+    }
+
+    @Test
+    void addNode_shouldUseUserScopedIdUniquenessCheck() {
+        when(deviceTemplateService.checkTemplateExists(1L, "Light")).thenReturn(true);
+        when(nodeRepo.existsByUserIdAndId(1L, "shared-node")).thenReturn(false);
+
+        nodeService.addNode(1L, "Light", "shared-node", 10.0, 20.0, "On", 100, 80);
+
+        verify(nodeRepo).existsByUserIdAndId(1L, "shared-node");
+        verify(nodeRepo).save(any(DeviceNodePo.class));
     }
 }

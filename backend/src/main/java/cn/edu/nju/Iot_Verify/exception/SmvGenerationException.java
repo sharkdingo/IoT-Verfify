@@ -87,6 +87,24 @@ public class SmvGenerationException extends InternalServerException {
         );
     }
 
+    public static SmvGenerationException invalidBuilderInput(String builderName,
+                                                             String parameterName,
+                                                             String reason) {
+        return new SmvGenerationException(
+                String.format("%s received invalid input '%s': %s",
+                        builderName, parameterName, reason),
+                ErrorCategories.INVALID_BUILDER_INPUT
+        );
+    }
+
+    public static SmvGenerationException templateLoadError(String templateName, Throwable cause) {
+        return new SmvGenerationException(
+                "Failed to load template [" + templateName + "]: " + cause.getMessage(),
+                ErrorCategories.TEMPLATE_LOAD_ERROR,
+                cause
+        );
+    }
+
     // ==================== 模型校验 (P1-P5) ====================
 
     public static SmvGenerationException illegalTriggerAttribute(String device, String transitionOrApi, String attr, Object legalAttrs) {
@@ -177,5 +195,7 @@ public class SmvGenerationException extends InternalServerException {
         public static final String TRUST_PRIVACY_CONFLICT = "TRUST_PRIVACY_CONFLICT";
         public static final String INCOMPLETE_TRIGGER = "INCOMPLETE_TRIGGER";
         public static final String PRIVACY_SPEC_WITHOUT_PRIVACY = "PRIVACY_SPEC_WITHOUT_PRIVACY";
+        public static final String INVALID_BUILDER_INPUT = "INVALID_BUILDER_INPUT";
+        public static final String TEMPLATE_LOAD_ERROR = "TEMPLATE_LOAD_ERROR";
     }
 }

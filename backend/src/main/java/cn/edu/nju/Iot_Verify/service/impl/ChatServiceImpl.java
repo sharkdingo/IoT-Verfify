@@ -76,7 +76,10 @@ public class ChatServiceImpl implements ChatService {
     public List<ChatMessageResponseDto> getHistory(Long userId, String sessionId) {
         sessionRepo.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-        return chatMapper.toChatMessageDtoList(messageRepo.findBySessionIdOrderByCreatedAtAsc(sessionId));
+        List<ChatMessagePo> visibleMessages = filterFrontendVisibleMessages(
+                messageRepo.findBySessionIdOrderByCreatedAtAsc(sessionId)
+        );
+        return chatMapper.toChatMessageDtoList(visibleMessages);
     }
 
     @Override
@@ -102,7 +105,7 @@ public class ChatServiceImpl implements ChatService {
 
         try {
             saveSimpleMsg(sessionId, "user", content);
-            touchSessionTitle(sessionId, content);
+            touchSessionTitle(sessionId, userId, content);
 
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
             List<ChatMessage> sdkMessages = arkAiClient.convertToSdkMessages(historyPO);
@@ -130,7 +133,7 @@ public class ChatServiceImpl implements ChatService {
             }
 
             if (finalAnswer.isEmpty() && loopResult.hadToolCalls()) {
-                String fallbackText = "Operation completed. Please check the latest board data.";
+                String fallbackText = "The operation required too many steps and may be incomplete. Please check the current board state.";
                 if (sendSseChunk(emitter, fallbackText)) {
                     finalAnswer.append(fallbackText);
                 }
@@ -142,14 +145,14 @@ public class ChatServiceImpl implements ChatService {
             emitter.complete();
         } catch (Exception e) {
             log.error("Chat Error", e);
-            sendSseErrorMessage(emitter, "System error: " + e.getMessage());
+            sendSseErrorMessage(emitter, "System error, please try again later.");
         } finally {
             UserContextHolder.clear();
         }
     }
 
-    private void touchSessionTitle(String sessionId, String content) {
-        sessionRepo.findById(Objects.requireNonNull(sessionId, "sessionId must not be null")).ifPresent(s -> {
+    private void touchSessionTitle(String sessionId, Long userId, String content) {
+        sessionRepo.findByIdAndUserId(Objects.requireNonNull(sessionId, "sessionId must not be null"), userId).ifPresent(s -> {
             s.setUpdatedAt(LocalDateTime.now());
             if ("New Chat".equals(s.getTitle()) || s.getTitle().startsWith("Chat ")) {
                 String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;
@@ -180,9 +183,10 @@ public class ChatServiceImpl implements ChatService {
         - Template: list_templates, add_template, delete_template
         - Verification sync: verify_model
         - Verification async: verify_model_async, verify_task_status, cancel_verify_task
+        - Verification traces: list_traces, get_trace, delete_trace
         - Simulation sync: simulate_model
         - Simulation async: simulate_model_async, simulate_task_status, cancel_simulate_task
-        - Traces: list_traces
+        - Simulation traces: list_simulation_traces, get_simulation_trace, delete_simulation_trace
         - Board: board_overview
         """;
 
@@ -227,11 +231,6 @@ public class ChatServiceImpl implements ChatService {
             hadToolCalls = true;
             saveAiToolCallRequest(sessionId, toolCalls);
             sdkMessages.add(aiMsg);
-            if (!sendSseChunk(emitter, "Executing command...\n")) {
-                log.info("SSE connection interrupted before tool execution");
-                isDisconnect.set(true);
-                return new ToolLoopResult("", hadToolCalls);
-            }
 
             for (ChatToolCall toolCall : toolCalls) {
                 if (isDisconnect.get()) {
@@ -360,7 +359,9 @@ public class ChatServiceImpl implements ChatService {
             )));
         } catch (Exception e) {
             log.error("Failed to serialize ToolCalls", e);
-            po.setContent("Calling tool...");
+            // Keep an internal, machine-detectable marker so history filtering
+            // and context reconstruction can still treat this as a tool-call message.
+            po.setContent("{\"type\":\"" + ArkAiClient.TOOL_CALLS_JSON_TYPE + "\",\"toolCalls\":[]}");
         }
         messageRepo.saveAndFlush(po);
     }
@@ -461,6 +462,52 @@ public class ChatServiceImpl implements ChatService {
         } catch (Exception ignore) {
             return false;
         }
+    }
+
+    private boolean isFrontendVisibleMessage(ChatMessagePo msg) {
+        if (msg == null) {
+            return false;
+        }
+        if (isToolMessage(msg) || isAssistantToolCallMessage(msg)) {
+            return false;
+        }
+        return true;
+    }
+
+    private List<ChatMessagePo> filterFrontendVisibleMessages(List<ChatMessagePo> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+
+        List<ChatMessagePo> visible = new ArrayList<>();
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessagePo msg = messages.get(i);
+            if (!isFrontendVisibleMessage(msg)) {
+                continue;
+            }
+            if (isAssistantToolPlaceholderAdjacentToTool(messages, i)) {
+                continue;
+            }
+            visible.add(msg);
+        }
+        return visible;
+    }
+
+    private boolean isAssistantToolPlaceholderAdjacentToTool(List<ChatMessagePo> messages, int index) {
+        if (messages == null || index < 0 || index >= messages.size()) {
+            return false;
+        }
+        ChatMessagePo current = messages.get(index);
+        if (current == null || !"assistant".equalsIgnoreCase(current.getRole())) {
+            return false;
+        }
+        if (!"Calling tool...".equalsIgnoreCase(safeString(current.getContent()).trim())) {
+            return false;
+        }
+
+        ChatMessagePo prev = index > 0 ? messages.get(index - 1) : null;
+        ChatMessagePo next = index + 1 < messages.size() ? messages.get(index + 1) : null;
+        return isToolMessage(prev) || isToolMessage(next);
     }
 
     private int messageLength(ChatMessagePo msg) {

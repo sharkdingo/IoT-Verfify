@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
@@ -508,7 +509,7 @@ public class SmvSpecificationBuilder {
                         String mode = smv.getModes().get(modeIdx);
                         String[] endParts = endState.split(";");
                         String cleanEndState = (modeIdx < endParts.length)
-                                ? endParts[modeIdx].trim().replace(" ", "")
+                                ? DeviceSmvDataFactory.cleanStateName(endParts[modeIdx].trim())
                                 : DeviceSmvDataFactory.cleanStateName(endState);
                         return varName + ".trust_" + mode + "_" + cleanEndState;
                     }
@@ -539,7 +540,7 @@ public class SmvSpecificationBuilder {
         if (normalizedKey.startsWith(prefix)) {
             normalizedKey = normalizedKey.substring(prefix.length());
         }
-        String cleanKey = normalizedKey.replace(" ", "");
+        String cleanKey = DeviceSmvDataFactory.cleanStateName(normalizedKey);
 
         // 1) 完整 mode_state
         if (smv.getModes() != null && smv.getModeStates() != null) {
@@ -662,29 +663,11 @@ public class SmvSpecificationBuilder {
 
     private String normalizeRelation(String relation) {
         if (relation == null) return null;
-        String normalized = relation.trim();
-        return switch (normalized.toUpperCase()) {
-            case "EQ", "==" -> "=";
-            case "NEQ", "!=" -> "!=";
-            case "GT" -> ">";
-            case "GTE" -> ">=";
-            case "LT" -> "<";
-            case "LTE" -> "<=";
-            case "IN" -> "in";
-            case "NOT_IN", "NOT IN" -> "not in";
-            default -> normalized;
-        };
+        return SmvRelationUtils.normalizeRelation(relation);
     }
 
     private boolean isSupportedRelation(String relation) {
-        return "=".equals(relation)
-                || "!=".equals(relation)
-                || ">".equals(relation)
-                || ">=".equals(relation)
-                || "<".equals(relation)
-                || "<=".equals(relation)
-                || "in".equals(relation)
-                || "not in".equals(relation);
+        return SmvRelationUtils.isSupportedRelation(relation);
     }
 
     private boolean isTrueLiteral(String s) {

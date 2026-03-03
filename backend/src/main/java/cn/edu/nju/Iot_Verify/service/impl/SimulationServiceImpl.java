@@ -91,6 +91,7 @@ public class SimulationServiceImpl implements SimulationService {
             String msg = "Server restarted while simulation task was in progress";
             for (SimulationTaskPo task : staleTasks) {
                 task.setStatus(SimulationTaskPo.TaskStatus.FAILED);
+                task.setProgress(100);
                 task.setCompletedAt(LocalDateTime.now());
                 task.setErrorMessage(msg);
                 writeCheckLogs(task, List.of(msg));
@@ -199,6 +200,7 @@ public class SimulationServiceImpl implements SimulationService {
 
             task.setStatus(SimulationTaskPo.TaskStatus.RUNNING);
             task.setStartedAt(LocalDateTime.now());
+            task.setProgress(0);
             writeCheckLogs(task, List.of("Task started"));
             simulationTaskRepository.save(task);
 
@@ -257,10 +259,16 @@ public class SimulationServiceImpl implements SimulationService {
         SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
 
+        // Prefer in-memory value (active task on this instance)
         Integer progress = taskProgress.get(taskId);
         if (progress != null) {
             return progress;
         }
+        // Fall back to DB column (task running on another instance or after restart)
+        if (task.getProgress() != null) {
+            return task.getProgress();
+        }
+        // Final fallback: infer from terminal status
         if (task.getStatus() == SimulationTaskPo.TaskStatus.COMPLETED
                 || task.getStatus() == SimulationTaskPo.TaskStatus.FAILED
                 || task.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED) {
@@ -285,6 +293,7 @@ public class SimulationServiceImpl implements SimulationService {
             taskThread.interrupt();
         } else {
             task.setStatus(SimulationTaskPo.TaskStatus.CANCELLED);
+            task.setProgress(100);
             task.setCompletedAt(LocalDateTime.now());
             simulationTaskRepository.save(task);
         }
@@ -435,8 +444,17 @@ public class SimulationServiceImpl implements SimulationService {
     private void completeTask(SimulationTaskPo task, Long simulationTraceId, int steps, List<String> logs) {
         if (task == null) return;
         try {
+            // Guard against cross-instance cancellation: another instance may have written
+            // CANCELLED to DB while this instance's thread was still executing.
+            // NOTE: This is check-then-act (not atomic). A TOCTOU race of ~microseconds
+            // remains; fully closing it would require a conditional UPDATE or pessimistic lock.
+            if (isTaskCancelledInDb(task.getId())) {
+                log.info("Simulation task {} already cancelled (cross-instance), skipping completion", task.getId());
+                return;
+            }
             task.setStatus(SimulationTaskPo.TaskStatus.COMPLETED);
             task.setCompletedAt(LocalDateTime.now());
+            task.setProgress(100);
             task.setSteps(steps);
             task.setSimulationTraceId(simulationTraceId);
             task.setErrorMessage(null);
@@ -453,8 +471,14 @@ public class SimulationServiceImpl implements SimulationService {
     private void failTask(SimulationTaskPo task, String errorMessage, List<String> logs) {
         if (task == null) return;
         try {
+            // Same TOCTOU guard as completeTask — see note there.
+            if (isTaskCancelledInDb(task.getId())) {
+                log.info("Simulation task {} already cancelled (cross-instance), skipping fail", task.getId());
+                return;
+            }
             task.setStatus(SimulationTaskPo.TaskStatus.FAILED);
             task.setCompletedAt(LocalDateTime.now());
+            task.setProgress(100);
             task.setErrorMessage(errorMessage);
             if (task.getStartedAt() != null) {
                 task.setProcessingTimeMs(java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
@@ -466,14 +490,27 @@ public class SimulationServiceImpl implements SimulationService {
         }
     }
 
+    private boolean isTaskCancelledInDb(Long taskId) {
+        return simulationTaskRepository.findById(taskId)
+                .map(t -> t.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED)
+                .orElse(false);
+    }
+
     private void handleCancellation(SimulationTaskPo task) {
         task.setStatus(SimulationTaskPo.TaskStatus.CANCELLED);
         task.setCompletedAt(LocalDateTime.now());
+        task.setProgress(100);
         simulationTaskRepository.save(task);
     }
 
     private void updateTaskProgress(Long taskId, int progress, String message) {
-        taskProgress.put(taskId, Math.min(100, Math.max(0, progress)));
+        int clamped = Math.min(100, Math.max(0, progress));
+        taskProgress.put(taskId, clamped);
+        // Persist to DB for cross-instance visibility
+        simulationTaskRepository.findById(taskId).ifPresent(task -> {
+            task.setProgress(clamped);
+            simulationTaskRepository.save(task);
+        });
         log.debug("Simulation task {} progress: {}% - {}", taskId, progress, message);
     }
 

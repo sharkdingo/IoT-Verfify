@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -65,7 +66,12 @@ public class ListTemplatesTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             String keyword = args.path("keyword").asText("").trim();
             boolean detail = args.path("detail").asBoolean(false);
 
@@ -107,6 +113,9 @@ public class ListTemplatesTool implements AiTool {
             }).toList();
 
             return objectMapper.writeValueAsString(Map.of("count", summaries.size(), "templates", summaries));
+        } catch (ServiceUnavailableException e) {
+            log.warn("list_templates busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("list_templates business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());

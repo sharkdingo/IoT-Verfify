@@ -6,6 +6,8 @@ import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
@@ -67,7 +69,12 @@ public class SimulateModelAsyncTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             int steps = Math.max(1, Math.min(100, args.path("steps").asInt(10)));
             boolean isAttack = args.path("isAttack").asBoolean(false);
             int intensity = Math.max(0, Math.min(50, args.path("intensity").asInt(3)));
@@ -88,6 +95,9 @@ public class SimulateModelAsyncTool implements AiTool {
                 simulationService.failTaskById(taskId, "Server busy, please try again later");
                 return errorJson("Simulation task queue is full. Please retry later.",
                         "SERVICE_UNAVAILABLE", 503);
+            } catch (Exception e) {
+                simulationService.failTaskById(taskId, "Failed to dispatch: " + e.getMessage());
+                throw e;
             }
 
             return successJson(Map.of(
@@ -97,12 +107,21 @@ public class SimulateModelAsyncTool implements AiTool {
                     "progress", 0,
                     "requestedSteps", steps
             ), "Simulation task started.");
+        } catch (ServiceUnavailableException e) {
+            log.warn("simulate_model_async busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
+        } catch (SmvGenerationException e) {
+            log.warn("simulate_model_async generation failed [{}]: {}", e.getErrorCategory(), e.getMessage());
+            return errorJson(e.getMessage(),
+                    "SMV_GENERATION_ERROR",
+                    500,
+                    Map.of("errorCategory", e.getErrorCategory()));
         } catch (BaseException e) {
             log.warn("simulate_model_async business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("simulate_model_async failed", e);
-            return errorJson("Failed to start simulation task: " + e.getMessage(),
+            return errorJson("Failed to start simulation task.",
                     "INTERNAL_ERROR", 500);
         }
     }

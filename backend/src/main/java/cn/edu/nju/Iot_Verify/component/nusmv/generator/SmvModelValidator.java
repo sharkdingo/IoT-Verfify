@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
@@ -34,6 +35,7 @@ public class SmvModelValidator {
             validateTriggerAttributes(smv);
             validateStartEndStates(smv);
             validateTrustPrivacyConsistency(smv);
+            validatePropertyValues(smv);
         }
         validateEnvVarConflicts(deviceSmvMap);
     }
@@ -126,26 +128,11 @@ public class SmvModelValidator {
     }
 
     private String normalizeTriggerRelation(String relation) {
-        if (relation == null) return null;
-        String normalized = relation.trim();
-        return switch (normalized.toUpperCase()) {
-            case "EQ", "==" -> "=";
-            case "NEQ", "!=" -> "!=";
-            case "GT" -> ">";
-            case "GTE" -> ">=";
-            case "LT" -> "<";
-            case "LTE" -> "<=";
-            default -> normalized;
-        };
+        return SmvRelationUtils.normalizeTriggerRelation(relation);
     }
 
     private boolean isSupportedTriggerRelation(String relation) {
-        return "=".equals(relation)
-                || "!=".equals(relation)
-                || ">".equals(relation)
-                || ">=".equals(relation)
-                || "<".equals(relation)
-                || "<=".equals(relation);
+        return SmvRelationUtils.isSupportedTriggerRelation(relation);
     }
 
     private void validateAssignments(String deviceName, String context, List<DeviceManifest.Assignment> assignments) {
@@ -207,7 +194,7 @@ public class SmvModelValidator {
             }
             if (!smv.getModes().isEmpty()) {
                 String mode = smv.getModes().get(0);
-                String clean = stateStr.replace(" ", "");
+                String clean = DeviceSmvDataFactory.cleanStateName(stateStr);
                 List<String> legal = smv.getModeStates().get(mode);
                 if (legal != null && !legal.isEmpty() && !clean.isEmpty() && !legal.contains(clean)) {
                     throw SmvGenerationException.invalidStateFormat(smv.getVarName(), itemType, itemName, clean,
@@ -221,8 +208,9 @@ public class SmvModelValidator {
                         parts.length + " segments, expected " + modeCount + " (modes=" + smv.getModes() + ")");
             }
             for (int i = 0; i < parts.length; i++) {
-                String seg = parts[i].trim().replace(" ", "");
-                if (seg.isEmpty()) continue;
+                String rawSeg = parts[i].trim();
+                if (rawSeg.isEmpty()) continue;
+                String seg = DeviceSmvDataFactory.cleanStateName(rawSeg);
                 String mode = smv.getModes().get(i);
                 List<String> legal = smv.getModeStates().get(mode);
                 if (legal != null && !legal.isEmpty() && !legal.contains(seg)) {
@@ -305,6 +293,93 @@ public class SmvModelValidator {
         }
     }
 
+    // ==================== P4: trust/privacy 值合法性 ====================
+
+    private static final Set<String> VALID_TRUST_VALUES = Set.of("trusted", "untrusted");
+    private static final Set<String> VALID_PRIVACY_VALUES = Set.of("public", "private");
+
+    private static String normalize(String value) {
+        return DeviceSmvDataFactory.normalizeTrustPrivacy(value);
+    }
+
+    private void validatePropertyValues(DeviceSmvData smv) {
+        // modeStateTrust values
+        for (Map.Entry<String, String> entry : smv.getModeStateTrust().entrySet()) {
+            String val = entry.getValue();
+            if (val != null && !VALID_TRUST_VALUES.contains(normalize(val))) {
+                throw SmvGenerationException.smvGenerationError(
+                        "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                + "': trust value '" + val + "' for key '" + entry.getKey()
+                                + "' is invalid. Expected: " + VALID_TRUST_VALUES);
+            }
+        }
+        // instanceStateTrust
+        if (smv.getInstanceStateTrust() != null
+                && !VALID_TRUST_VALUES.contains(normalize(smv.getInstanceStateTrust()))) {
+            throw SmvGenerationException.smvGenerationError(
+                    "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                            + "': instanceStateTrust '" + smv.getInstanceStateTrust()
+                            + "' is invalid. Expected: " + VALID_TRUST_VALUES);
+        }
+        // instanceVariableTrust values
+        for (Map.Entry<String, String> entry : smv.getInstanceVariableTrust().entrySet()) {
+            String val = entry.getValue();
+            if (val != null && !VALID_TRUST_VALUES.contains(normalize(val))) {
+                throw SmvGenerationException.smvGenerationError(
+                        "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                + "': variable trust '" + val + "' for '" + entry.getKey()
+                                + "' is invalid. Expected: " + VALID_TRUST_VALUES);
+            }
+        }
+        // instanceVariablePrivacy values
+        for (Map.Entry<String, String> entry : smv.getInstanceVariablePrivacy().entrySet()) {
+            String val = entry.getValue();
+            if (val != null && !VALID_PRIVACY_VALUES.contains(normalize(val))) {
+                throw SmvGenerationException.smvGenerationError(
+                        "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                + "': privacy value '" + val + "' for '" + entry.getKey()
+                                + "' is invalid. Expected: " + VALID_PRIVACY_VALUES);
+            }
+        }
+        // content privacy values
+        for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
+            if (ci.getPrivacy() != null && !VALID_PRIVACY_VALUES.contains(normalize(ci.getPrivacy()))) {
+                throw SmvGenerationException.smvGenerationError(
+                        "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                + "': content privacy '" + ci.getPrivacy() + "' for content '" + ci.getName()
+                                + "' is invalid. Expected: " + VALID_PRIVACY_VALUES);
+            }
+        }
+        // manifest variable trust values
+        if (smv.getManifest() != null && smv.getManifest().getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable var : smv.getManifest().getInternalVariables()) {
+                if (var.getTrust() != null && !VALID_TRUST_VALUES.contains(normalize(var.getTrust()))) {
+                    throw SmvGenerationException.smvGenerationError(
+                            "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                    + "': manifest variable trust '" + var.getTrust() + "' for '" + var.getName()
+                                    + "' is invalid. Expected: " + VALID_TRUST_VALUES);
+                }
+                if (var.getPrivacy() != null && !VALID_PRIVACY_VALUES.contains(normalize(var.getPrivacy()))) {
+                    throw SmvGenerationException.smvGenerationError(
+                            "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                    + "': manifest variable privacy '" + var.getPrivacy() + "' for '" + var.getName()
+                                    + "' is invalid. Expected: " + VALID_PRIVACY_VALUES);
+                }
+            }
+        }
+        // manifest workingState privacy values
+        if (smv.getManifest() != null && smv.getManifest().getWorkingStates() != null) {
+            for (DeviceManifest.WorkingState ws : smv.getManifest().getWorkingStates()) {
+                if (ws.getPrivacy() != null && !VALID_PRIVACY_VALUES.contains(normalize(ws.getPrivacy()))) {
+                    throw SmvGenerationException.smvGenerationError(
+                            "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
+                                    + "': workingState privacy '" + ws.getPrivacy() + "' for state '" + ws.getName()
+                                    + "' is invalid. Expected: " + VALID_PRIVACY_VALUES);
+                }
+            }
+        }
+    }
+
     // ==================== P5: trust/privacy 一致性校验 ====================
 
     private void validateTrustPrivacyConsistency(DeviceSmvData smv) {
@@ -319,13 +394,13 @@ public class SmvModelValidator {
             if (ws.getName() == null) continue;
             if (smv.getModes().size() <= 1) {
                 String key = (smv.getModes().isEmpty() ? "" : smv.getModes().get(0) + "_")
-                        + ws.getName().replace(" ", "");
+                        + DeviceSmvDataFactory.cleanStateName(ws.getName());
                 checkConflict(seenTrust, key, ws.getTrust(), smv.getVarName(), "trust");
                 checkConflict(seenPrivacy, key, ws.getPrivacy(), smv.getVarName(), "privacy");
             } else {
                 String[] parts = ws.getName().split(";");
                 for (int i = 0; i < parts.length && i < smv.getModes().size(); i++) {
-                    String key = smv.getModes().get(i) + "_" + parts[i].trim().replace(" ", "");
+                    String key = smv.getModes().get(i) + "_" + DeviceSmvDataFactory.cleanStateName(parts[i].trim());
                     checkConflict(seenTrust, key, ws.getTrust(), smv.getVarName(), "trust");
                     checkConflict(seenPrivacy, key, ws.getPrivacy(), smv.getVarName(), "privacy");
                 }
@@ -336,9 +411,10 @@ public class SmvModelValidator {
     private void checkConflict(Map<String, String> seen, String key, String value,
                                String varName, String dimension) {
         if (value == null) return;
-        String prev = seen.put(key, value);
-        if (prev != null && !prev.equals(value)) {
-            throw SmvGenerationException.trustPrivacyConflict(varName, key, prev, value);
+        String normalized = normalize(value);
+        String prev = seen.put(key, normalized);
+        if (prev != null && !prev.equals(normalized)) {
+            throw SmvGenerationException.trustPrivacyConflict(varName, key, prev, normalized);
         }
     }
 }

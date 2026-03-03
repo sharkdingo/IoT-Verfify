@@ -11,14 +11,17 @@ import lombok.*;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class DeviceEdgePo {
 
     @Id
     @Column(length = 100)
+    @EqualsAndHashCode.Include
     private String id;
 
     @Id
     @Column(name = "user_id", nullable = false)
+    @EqualsAndHashCode.Include
     private Long userId;
 
     @Column(name = "`from`", nullable = false, length = 100)

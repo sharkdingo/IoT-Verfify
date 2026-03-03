@@ -4,7 +4,6 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
-import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,8 +29,6 @@ class NodeToolsErrorTest {
     @Mock
     private NodeService nodeService;
     @Mock
-    private DeviceTemplateService deviceTemplateService;
-    @Mock
     private BoardStorageService boardStorageService;
 
     private ObjectMapper objectMapper;
@@ -49,7 +46,7 @@ class NodeToolsErrorTest {
 
     @Test
     void addNodeTool_whenServiceThrowsBaseException_shouldReturnStructuredError() throws Exception {
-        AddNodeTool tool = new AddNodeTool(nodeService, objectMapper, deviceTemplateService);
+        AddNodeTool tool = new AddNodeTool(nodeService, objectMapper);
         when(nodeService.addNode(1L, "UnknownTemplate", null, null, null, null, null, null))
                 .thenThrow(new BadRequestException("invalid template"));
 
@@ -80,7 +77,7 @@ class NodeToolsErrorTest {
     void addNodeTool_whenResponseSerializationFails_shouldReturnFallbackSuccess() throws Exception {
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
-        AddNodeTool tool = new AddNodeTool(nodeService, failingMapper, deviceTemplateService);
+        AddNodeTool tool = new AddNodeTool(nodeService, failingMapper);
         when(nodeService.addNode(1L, "Air Conditioner", null, null, null, null, null, null))
                 .thenReturn("Created device successfully: ac_1.");
 

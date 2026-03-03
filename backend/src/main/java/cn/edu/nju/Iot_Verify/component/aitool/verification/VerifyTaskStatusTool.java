@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -58,7 +59,12 @@ public class VerifyTaskStatusTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             if (!args.has("taskId") || !args.path("taskId").canConvertToLong()) {
                 return errorJson("'taskId' is required.", "VALIDATION_ERROR", 400);
             }
@@ -75,12 +81,15 @@ public class VerifyTaskStatusTool implements AiTool {
                     "progress", progress,
                     "task", task
             ));
+        } catch (ServiceUnavailableException e) {
+            log.warn("verify_task_status busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("verify_task_status business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
         } catch (Exception e) {
             log.error("verify_task_status failed", e);
-            return errorJson("Failed to query verification task: " + e.getMessage(),
+            return errorJson("Failed to query verification task.",
                     "INTERNAL_ERROR", 500);
         }
     }

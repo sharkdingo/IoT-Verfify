@@ -63,12 +63,16 @@ public class SmvGenerator {
                                    GeneratePurpose purpose) throws Exception {
         // 防御性边界：即使绕过 DTO 校验，也确保 intensity 在 NuSMV 合法范围内
         intensity = Math.max(0, Math.min(50, intensity));
+        if (devices == null || devices.isEmpty()) {
+            throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
+        }
+        List<SpecificationDto> safeSpecs = (specs != null) ? specs : List.of();
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, intensity={}, privacy={}",
-                userId, devices.size(), safeRules.size(), specs.size(), isAttack, intensity, enablePrivacy);
+                userId, devices.size(), safeRules.size(), safeSpecs.size(), isAttack, intensity, enablePrivacy);
 
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
-        String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+        String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, safeSpecs, isAttack, intensity, enablePrivacy);
 
         Path tempDir = Files.createTempDirectory(resolveTempDirPrefix(purpose));
         File smvFile = tempDir.resolve("model.smv").toFile();

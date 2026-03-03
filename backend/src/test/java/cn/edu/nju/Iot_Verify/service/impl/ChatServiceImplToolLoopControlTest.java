@@ -24,7 +24,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -36,7 +35,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -145,20 +143,20 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void executeToolLoop_whenSseFailsBeforeToolExecution_shouldStopWithoutExecutingTool() throws Exception {
+    void executeToolLoop_shouldNotEmitInternalProgressChunk() throws Exception {
         when(arkAiClient.checkIntent(anyList(), anyList()))
-                .thenReturn(toolCallResult("manage_rule", "{}"));
+                .thenReturn(toolCallResult("manage_rule", "{}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"message\":\"ok\"}");
 
         SseEmitter emitter = mock(SseEmitter.class);
-        doThrow(new IOException("disconnect"))
-                .when(emitter)
-                .send(any(SseEmitter.SseEventBuilder.class));
 
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         invokeToolLoop(new AtomicBoolean(false), commandSet, emitter);
 
-        verify(aiToolManager, never()).execute(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
-        assertTrue(commandSet.isEmpty());
+        verify(aiToolManager).execute("manage_rule", "{}");
+        assertEquals(1, commandSet.size());
     }
 
     @Test

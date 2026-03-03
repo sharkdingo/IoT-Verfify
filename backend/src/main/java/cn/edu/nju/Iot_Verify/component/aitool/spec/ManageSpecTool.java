@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -113,7 +114,12 @@ public class ManageSpecTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             String action = args.path("action").asText("").trim().toLowerCase(Locale.ROOT);
 
             return switch (action) {
@@ -125,6 +131,9 @@ public class ManageSpecTool implements AiTool {
         } catch (IllegalArgumentException e) {
             log.warn("manage_spec validation failed: {}", e.getMessage());
             return errorJson(e.getMessage(), "VALIDATION_ERROR", 400);
+        } catch (ServiceUnavailableException e) {
+            log.warn("manage_spec busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("manage_spec business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
@@ -385,7 +394,7 @@ public class ManageSpecTool implements AiTool {
             boolean validA = !aConditions.isEmpty();
             boolean validImplication = !ifConditions.isEmpty() && !thenConditions.isEmpty();
             if (!validA && !validImplication) {
-                return "Template 1 requires non-empty aConditions, or both ifConditions and thenConditions.";
+                return "Template 1 (always): requires non-empty aConditions for AG(A), or both ifConditions and thenConditions for AG(IF→THEN).";
             }
         }
         return null;

@@ -3,9 +3,11 @@ package cn.edu.nju.Iot_Verify.component.aitool.board;
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -46,7 +48,7 @@ public class BoardOverviewTool implements AiTool {
                 "function",
                 new ChatFunction.Builder()
                         .name(getName())
-                        .description("Get an overview of the current board: devices, rules, and specifications summary.")
+                        .description("Get an overview of the current board: devices, edges, rules, and specifications summary.")
                         .parameters(schema)
                         .build()
         );
@@ -61,11 +63,13 @@ public class BoardOverviewTool implements AiTool {
             }
 
             List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+            List<DeviceEdgeDto> edges = safeList(boardStorageService.getEdges(userId));
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
 
             Map<String, Object> overview = new LinkedHashMap<>();
             overview.put("deviceCount", nodes.size());
+            overview.put("edgeCount", edges.size());
             overview.put("ruleCount", rules.size());
             overview.put("specCount", specs.size());
 
@@ -80,6 +84,19 @@ public class BoardOverviewTool implements AiTool {
                 return d;
             }).toList();
             overview.put("devices", deviceSummaries);
+
+            List<Map<String, Object>> edgeSummaries = edges.stream()
+                    .filter(Objects::nonNull)
+                    .map(e -> {
+                        Map<String, Object> es = new LinkedHashMap<>();
+                        es.put("id", e.getId());
+                        es.put("from", e.getFrom());
+                        es.put("to", e.getTo());
+                        es.put("fromLabel", e.getFromLabel());
+                        es.put("toLabel", e.getToLabel());
+                        return es;
+                    }).toList();
+            overview.put("edges", edgeSummaries);
 
             List<Map<String, Object>> ruleSummaries = rules.stream()
                     .filter(Objects::nonNull)
@@ -120,6 +137,9 @@ public class BoardOverviewTool implements AiTool {
             overview.put("specs", specSummaries);
 
             return objectMapper.writeValueAsString(overview);
+        } catch (ServiceUnavailableException e) {
+            log.warn("board_overview busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("board_overview business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());

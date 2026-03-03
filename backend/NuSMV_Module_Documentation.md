@@ -1,17 +1,19 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年2月25日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化
+> **最后更新**: 2026年3月2日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
 > **NuSMV 版本要求**: 本系统仅支持 NuSMV 2.x（已测试 2.5–2.7）。输出解析依赖 NuSMV 标准英文输出格式（`-- specification ... is true/false`、`Trace Type: Simulation`、`NuSMV >` 提示符等）。不兼容 nuXmv 或其他变体。
 >
 > **模板前置条件（重要）**:
-> - 运行时模板来源是“当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
-> - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为“重置模板”：先删除该用户现有模板，再导入默认模板）。
+> - 运行时模板来源是”当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
+> - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为”重置模板”：先删除该用户现有模板，再导入默认模板）。
 > - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
 > - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
+> - 创建自定义模板时会执行 NuSMV 预检（probe generate）：模式名/状态名必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），预检失败返回 400/500。
+> - 模式名、状态名、变量标识统一通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀；值归一化场景仍可能在局部做去空格处理。
 
 ---
 
@@ -76,7 +78,7 @@
 
 异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/verify/simulations/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
 
-同步 `POST /api/verify` 与 `POST /api/verify/simulate` 会透传 `SmvGenerationException`（包含 `errorCategory`），不会统一降级为通用 internal error。
+同步 `POST /api/verify` 与 `POST /api/verify/simulate` 会透传 `SmvGenerationException`（响应 `data.errorCategory` 保留类别，并兼容 `[errorCategory] message` 文本），不会统一降级为通用 internal error。
 
 ---
 
@@ -1086,7 +1088,7 @@ Trace Type: Counterexample
 | 空轨迹检测 | 若 `go` 阶段模型有错误，`show_traces` 无输出，返回带 raw output 的错误 |
 | 超时保护 | 通过 `syncSimulationExecutor`（`thread-pool.sync-simulation.*`）+ `nusmvConfig.timeoutMs * 2` |
 | 过载保护 | 当 `syncSimulationExecutor`（同步模拟）或 `syncVerificationExecutor`（同步验证）饱和时，抛出 `ServiceUnavailableException`，HTTP 返回 `503` |
-| 生成异常透传 | 同步 verify/sim 在 `ExecutionException` 解包和内部执行链路中会透传 `SmvGenerationException`，保留 `errorCategory` |
+| 生成异常透传 | 同步 verify/sim 在 `ExecutionException` 解包和内部执行链路中会透传 `SmvGenerationException`，响应 `data.errorCategory` 保留错误类别（并兼容 `[errorCategory] message`） |
 | 同步队列策略 | `syncVerificationExecutor` / `syncSimulationExecutor` 默认使用小队列（16），减少长队列导致的排队超时 |
 | 取消回收策略 | 同步请求超时 `future.cancel(true)` 后，会调用线程池 `purge()` 以更快清理已取消的排队任务 |
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
@@ -1131,11 +1133,11 @@ Trace Type: Counterexample
 下列链路在当前后端实现中是闭合的：
 
 1. **输入约束闭环**：DTO 校验（`@NotNull/@Pattern/@Min/@Max`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。
-2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。
-3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名必须为合法标识符。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀）；值归一化场景保留局部去空格逻辑。
 4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
-5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度、同步/异步统一错误语义。
-6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。
+5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度（进度持久化到 DB，三级回退链：内存 → DB 列 → 终态推断）、同步/异步统一错误语义。
+6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 写入前检查 DB 取消状态（`isTaskCancelledInDb()` guard）。
 7. **可观测性闭环**：`model.smv` / `request.json` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
 
 仍需依赖的运行前提：

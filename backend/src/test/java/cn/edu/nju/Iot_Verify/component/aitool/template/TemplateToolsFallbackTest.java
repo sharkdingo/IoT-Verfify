@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -79,5 +80,31 @@ class TemplateToolsFallbackTest {
         assertEquals("Template deleted successfully.", json.path("message").asText());
         assertTrue(json.path("warning").asText().contains("serialization degraded"));
         verify(boardStorageService).deleteDeviceTemplate(1L, "tpl_1");
+    }
+
+    @Test
+    void addTemplate_invalidJsonArgs_shouldReturnValidationError() throws Exception {
+        AddTemplateTool tool = new AddTemplateTool(boardStorageService, objectMapper);
+
+        String result = tool.execute("{");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals(400, json.path("status").asInt());
+        assertEquals("Invalid JSON arguments.", json.path("error").asText());
+        verify(boardStorageService, never()).addDeviceTemplate(anyLong(), any(DeviceTemplateDto.class));
+    }
+
+    @Test
+    void listTemplates_invalidJsonArgs_shouldReturnValidationError() throws Exception {
+        ListTemplatesTool tool = new ListTemplatesTool(boardStorageService, objectMapper);
+
+        String result = tool.execute("{");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals(400, json.path("status").asInt());
+        assertEquals("Invalid JSON arguments.", json.path("error").asText());
+        verify(boardStorageService, never()).getDeviceTemplates(anyLong());
     }
 }

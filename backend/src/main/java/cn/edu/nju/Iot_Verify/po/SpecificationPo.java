@@ -5,15 +5,19 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "specification")
+@Table(name = "specification", indexes = {
+        @Index(name = "idx_specification_user_id", columnList = "user_id")
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class SpecificationPo {
 
     @Id
     @Column(length = 100)
+    @EqualsAndHashCode.Include
     private String id;
 
     @Column(name = "user_id", nullable = false)

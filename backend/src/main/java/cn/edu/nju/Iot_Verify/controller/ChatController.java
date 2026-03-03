@@ -50,7 +50,6 @@ public class ChatController {
     public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
-
         try {
             executor.execute(() -> {
                 try {

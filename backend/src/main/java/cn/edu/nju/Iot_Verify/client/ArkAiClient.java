@@ -12,6 +12,7 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import com.volcengine.ark.runtime.service.ArkService;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -57,6 +58,18 @@ public class ArkAiClient {
                 .timeout(Duration.ofMinutes(5))
                 .build();
         log.info("ArkAiClient initialized with Model ID: {}, Base URL: {}", modelId, normalizedBaseUrl);
+    }
+
+    @PreDestroy
+    public void destroy() {
+        if (arkService != null) {
+            try {
+                arkService.shutdownExecutor();
+                log.info("ArkAiClient executor shut down successfully");
+            } catch (Exception e) {
+                log.warn("Error shutting down ArkAiClient executor: {}", e.getMessage());
+            }
+        }
     }
 
     public ChatCompletionResult checkIntent(List<ChatMessage> messages, List<ChatTool> tools) {

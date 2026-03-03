@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
@@ -49,20 +50,20 @@ public class DeviceSmvDataFactory {
             DeviceSmvData smv = new DeviceSmvData();
             smv.setTemplateName(device.getTemplateName());
             smv.setCurrentState(device.getState());
-            smv.setInstanceStateTrust(device.getCurrentStateTrust());
+            smv.setInstanceStateTrust(normalizeTrustPrivacy(device.getCurrentStateTrust()));
 
             if (device.getVariables() != null) {
                 for (VariableStateDto var : device.getVariables()) {
                     if (var.getName() != null && var.getValue() != null)
                         smv.getVariableValues().put(var.getName(), var.getValue());
                     if (var.getName() != null && var.getTrust() != null)
-                        smv.getInstanceVariableTrust().put(var.getName(), var.getTrust());
+                        smv.getInstanceVariableTrust().put(var.getName(), normalizeTrustPrivacy(var.getTrust()));
                 }
             }
             if (device.getPrivacies() != null) {
                 for (PrivacyStateDto p : device.getPrivacies()) {
                     if (p.getName() != null && p.getPrivacy() != null)
-                        smv.getInstanceVariablePrivacy().put(p.getName(), p.getPrivacy());
+                        smv.getInstanceVariablePrivacy().put(p.getName(), normalizeTrustPrivacy(p.getPrivacy()));
                 }
             }
 
@@ -124,9 +125,12 @@ public class DeviceSmvDataFactory {
             DeviceManifest manifest = objectMapper.readValue(po.get().getManifestJson(), DeviceManifest.class);
             cache.put(templateName, manifest);
             return manifest;
+        } catch (BaseException e) {
+            throw e;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw SmvGenerationException.manifestParseError(templateName, e);
         } catch (Exception e) {
-            log.warn("Failed to load template {}: {}", templateName, e.getMessage());
-            return null;
+            throw SmvGenerationException.templateLoadError(templateName, e);
         }
     }
 
@@ -134,8 +138,9 @@ public class DeviceSmvDataFactory {
 
     private void extractModes(DeviceSmvData smv, DeviceManifest manifest) {
         if (manifest.getModes() != null && !manifest.getModes().isEmpty()) {
-            smv.getModes().addAll(manifest.getModes());
-            for (String mode : manifest.getModes()) {
+            for (String rawMode : manifest.getModes()) {
+                String mode = sanitizeSmvToken(rawMode);
+                smv.getModes().add(mode);
                 smv.getModeStates().put(mode, new ArrayList<>());
             }
         }
@@ -147,7 +152,7 @@ public class DeviceSmvDataFactory {
         String initState = manifest.getInitState();
         if (smv.getModes().size() == 1) {
             String singleMode = smv.getModes().get(0);
-            String cleanState = initState.replace(" ", "");
+            String cleanState = sanitizeSmvToken(initState);
             List<String> modeStateList = smv.getModeStates().get(singleMode);
             if (modeStateList != null && modeStateList.contains(cleanState)) {
                 smv.getTemplateInitModeStates().put(singleMode, cleanState);
@@ -156,8 +161,8 @@ public class DeviceSmvDataFactory {
             String[] parts = initState.split(";");
             for (int i = 0; i < parts.length && i < smv.getModes().size(); i++) {
                 String mode = smv.getModes().get(i);
-                String cleanState = parts[i].trim().replace(" ", "");
-                if (cleanState.isEmpty()) continue;
+                String cleanState = sanitizeSmvToken(parts[i].trim());
+                if (cleanState.isEmpty() || cleanState.equals("_")) continue;
                 List<String> modeStateList = smv.getModeStates().get(mode);
                 if (modeStateList != null && modeStateList.contains(cleanState)) {
                     smv.getTemplateInitModeStates().put(mode, cleanState);
@@ -169,18 +174,18 @@ public class DeviceSmvDataFactory {
     private void parseCurrentModeStates(DeviceSmvData smv, DeviceVerificationDto device) {
         if (smv.getModes().isEmpty()) return;
         if (smv.getCurrentState() != null) {
-            String cleanState = smv.getCurrentState().replace(" ", "");
+            String cleanState = sanitizeSmvToken(smv.getCurrentState());
             if (smv.getModes().size() == 1) {
                 String singleMode = smv.getModes().get(0);
                 List<String> modeStateList = smv.getModeStates().get(singleMode);
                 if (modeStateList != null && modeStateList.contains(cleanState))
                     smv.getCurrentModeStates().put(singleMode, cleanState);
             } else {
-                String[] parts = cleanState.split(";");
+                String[] parts = smv.getCurrentState().split(";");
                 for (int i = 0; i < parts.length && i < smv.getModes().size(); i++) {
                     String mode = smv.getModes().get(i);
-                    String part = parts[i].trim();
-                    if (!part.isEmpty()) {
+                    String part = sanitizeSmvToken(parts[i].trim());
+                    if (!part.isEmpty() && !part.equals("_")) {
                         List<String> modeStateList = smv.getModeStates().get(mode);
                         if (modeStateList != null && modeStateList.contains(part))
                             smv.getCurrentModeStates().put(mode, part);
@@ -192,7 +197,7 @@ public class DeviceSmvDataFactory {
             for (VariableStateDto var : device.getVariables()) {
                 if (var.getName() != null && var.getValue() != null) {
                     if (smv.getModes().contains(var.getName())) {
-                        String cleanVal = var.getValue().replace(" ", "");
+                        String cleanVal = sanitizeSmvToken(var.getValue());
                         smv.getCurrentModeStates().put(var.getName(), cleanVal);
                     }
                 }
@@ -205,24 +210,24 @@ public class DeviceSmvDataFactory {
         String singleMode = (smv.getModes().size() == 1) ? smv.getModes().get(0) : null;
         for (DeviceManifest.WorkingState ws : manifest.getWorkingStates()) {
             if (ws.getName() == null) continue;
-            String cleanName = ws.getName().replace(" ", "");
+            String cleanName = sanitizeSmvToken(ws.getName());
             smv.getStates().add(cleanName);
             if (singleMode != null) {
                 List<String> modeStateList = smv.getModeStates().get(singleMode);
                 if (modeStateList != null && !modeStateList.contains(cleanName))
                     modeStateList.add(cleanName);
                 String key = singleMode + "_" + cleanName;
-                if (ws.getTrust() != null) smv.getModeStateTrust().put(key, ws.getTrust());
+                if (ws.getTrust() != null) smv.getModeStateTrust().put(key, normalizeTrustPrivacy(ws.getTrust()));
             } else {
                 String[] parts = ws.getName().split(";");
                 for (int i = 0; i < parts.length && i < smv.getModes().size(); i++) {
                     String mode = smv.getModes().get(i);
-                    String stateName = parts[i].trim().replace(" ", "");
+                    String stateName = sanitizeSmvToken(parts[i].trim());
                     List<String> modeStateList = smv.getModeStates().get(mode);
                     if (modeStateList != null && !modeStateList.contains(stateName))
                         modeStateList.add(stateName);
                     String key = mode + "_" + stateName;
-                    if (ws.getTrust() != null) smv.getModeStateTrust().put(key, ws.getTrust());
+                    if (ws.getTrust() != null) smv.getModeStateTrust().put(key, normalizeTrustPrivacy(ws.getTrust()));
                 }
             }
         }
@@ -270,11 +275,33 @@ public class DeviceSmvDataFactory {
             if (c.getName() == null || c.getName().isBlank()) continue;
             DeviceSmvData.ContentInfo info = new DeviceSmvData.ContentInfo();
             info.setName(c.getName());
-            info.setPrivacy(c.getPrivacy() != null ? c.getPrivacy() : "public");
+            info.setPrivacy(normalizeTrustPrivacy(c.getPrivacy() != null ? c.getPrivacy() : "public"));
             info.setChangeable(c.getIsChangeable() != null && c.getIsChangeable());
             smv.getContents().add(info);
         }
     }
+
+    // ==================== NuSMV 保留字 ====================
+
+    /**
+     * NuSMV reserved words — identifiers matching these (case-insensitive) must be escaped
+     * by prepending '_' to avoid syntax errors in generated SMV models.
+     */
+    private static final Set<String> NUSMV_RESERVED_WORDS = Set.of(
+            "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
+            "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
+            "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",
+            "MIRROR", "INVARSPEC", "COMPUTE",
+            "case", "esac", "next", "init", "self",
+            "TRUE", "FALSE", "boolean", "integer", "word", "signed", "unsigned",
+            "process", "array", "of", "mod", "union", "in", "xor", "xnor",
+            "abs", "max", "min", "count", "toint", "typeof",
+            "swconst", "wordconst", "uwconst", "resize", "extend",
+            "signed_word", "unsigned_word",
+            "EX", "AX", "EF", "AF", "EG", "AG",
+            "E", "F", "O", "G", "H", "X", "Y", "Z", "W", "A", "U", "S", "V", "T",
+            "BU", "EBF", "ABF", "EBG", "ABG"
+    );
 
     // ==================== 工具方法 ====================
 
@@ -323,14 +350,42 @@ public class DeviceSmvDataFactory {
         return cleaned + "_a";
     }
 
+    /**
+     * Defensive sanitization for NuSMV tokens from legacy/bypass data.
+     * Removes spaces, replaces non-alphanumeric/underscore chars with '_',
+     * prepends '_' if starting with digit.
+     */
+    static String sanitizeSmvToken(String raw) {
+        if (raw == null) return null;
+        String s = raw.replace(" ", "").replaceAll("[^a-zA-Z0-9_]", "_");
+        if (s.isEmpty()) return "_";
+        if (Character.isDigit(s.charAt(0))) s = "_" + s;
+        if (NUSMV_RESERVED_WORDS.contains(s)
+                || NUSMV_RESERVED_WORDS.contains(s.toUpperCase())
+                || NUSMV_RESERVED_WORDS.contains(s.toLowerCase())) s = "_" + s;
+        return s;
+    }
+
+    /**
+     * Normalize trust/privacy values to lowercase for NuSMV enum compatibility.
+     * NuSMV enums are defined as {untrusted, trusted} / {private, public} (lowercase).
+     */
+    public static String normalizeTrustPrivacy(String value) {
+        if (value == null) return null;
+        return value.trim().toLowerCase();
+    }
+
     // ==================== 静态工具方法（原 SmvUtils，供 builder 使用） ====================
 
     /** 获取 state 所属的 mode 索引 */
     public static int getModeIndexOfState(DeviceSmvData smv, String state) {
         if (smv == null || smv.getModes() == null || state == null) return -1;
-        // 优先：检查 state 是否包含 mode 名（如 "ThermostatMode_cool"）
+        // 优先：检查 state 是否以 mode 名作为独立词前缀（如 "ThermostatMode_cool"）
+        // 使用精确匹配或 mode+"_" 前缀，避免子串误判（如 mode "on" 误匹配 "offline"）
         for (int i = 0; i < smv.getModes().size(); i++) {
-            if (state.contains(smv.getModes().get(i))) {
+            String mode = smv.getModes().get(i);
+            if (mode == null || mode.isEmpty()) continue;
+            if (state.equals(mode) || state.startsWith(mode + "_")) {
                 return i;
             }
         }
@@ -395,10 +450,10 @@ public class DeviceSmvDataFactory {
         return matches.iterator().next();
     }
 
-    /** 清理状态名：移除分号和空格 */
+    /** 清理状态名：移除分号后进行 NuSMV 标识符清洗 */
     public static String cleanStateName(String raw) {
         if (raw == null) return null;
-        return raw.replace(";", "").replace(" ", "");
+        return sanitizeSmvToken(raw.replace(";", ""));
     }
 
     /** 按名称查找 API 定义 */
@@ -413,6 +468,10 @@ public class DeviceSmvDataFactory {
     /** 将任意设备 ID 转为安全变量名 */
     public static String toVarName(String deviceId) {
         if (deviceId == null) return "device";
-        return deviceId.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+        String s = deviceId.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+        if (s.isEmpty() || s.matches("^_+$")) return "device";
+        if (Character.isDigit(s.charAt(0))) s = "_" + s;
+        if (NUSMV_RESERVED_WORDS.contains(s) || NUSMV_RESERVED_WORDS.contains(s.toUpperCase())) s = "_" + s;
+        return s;
     }
 }

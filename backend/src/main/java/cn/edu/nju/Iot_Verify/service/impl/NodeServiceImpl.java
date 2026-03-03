@@ -19,8 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
 @Service
@@ -118,25 +118,24 @@ public class NodeServiceImpl implements NodeService {
         int height = h != null ? h : DEFAULT_HEIGHT;
 
         String generatedId;
-        if (label != null && !label.equals("null") && !label.isEmpty() && !nodeRepo.existsById(label)) {
+        if (label != null && !label.equals("null") && !label.isEmpty() && !nodeRepo.existsByUserIdAndId(userId, label)) {
             generatedId = label;
         } else {
-            if (label != null && !label.equals("null") && !label.isEmpty() && nodeRepo.existsById(label)) {
+            if (label != null && !label.equals("null") && !label.isEmpty() && nodeRepo.existsByUserIdAndId(userId, label)) {
                 resultMsg.append(String.format(
                         "[System] Requested name '%s' already exists. Auto-generated a new name. ",
                         label));
             }
 
-            Random random = new Random();
             int retryCount = 0;
             do {
-                generatedId = finalTemplate + "_ai_" + random.nextInt(RANDOM_ID_RANGE);
+                generatedId = finalTemplate + "_ai_" + ThreadLocalRandom.current().nextInt(RANDOM_ID_RANGE);
                 retryCount++;
                 if (retryCount > MAX_RETRY_COUNT) {
                     generatedId = finalTemplate + "_ai_" + UUID.randomUUID().toString().substring(0, UUID_SUFFIX_LENGTH);
                     break;
                 }
-            } while (nodeRepo.existsById(generatedId));
+            } while (nodeRepo.existsByUserIdAndId(userId, generatedId));
         }
 
         DeviceNodePo po = DeviceNodePo.builder()

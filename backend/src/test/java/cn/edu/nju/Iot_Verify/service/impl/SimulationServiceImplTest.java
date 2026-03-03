@@ -455,4 +455,102 @@ class SimulationServiceImplTest {
         assertThrows(ResourceNotFoundException.class,
                 () -> service.deleteSimulation(1L, 99L));
     }
+
+    // ==================== terminal-state progress tests ====================
+
+    @Test
+    void cleanupStaleTasks_setsProgressTo100() throws Exception {
+        SimulationTaskPo running = SimulationTaskPo.builder()
+                .id(50L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        SimulationTaskPo pending = SimulationTaskPo.builder()
+                .id(51L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(5).createdAt(LocalDateTime.now()).build();
+
+        when(simulationTaskRepository.findByStatusIn(
+                List.of(SimulationTaskPo.TaskStatus.RUNNING, SimulationTaskPo.TaskStatus.PENDING)))
+                .thenReturn(List.of(running, pending));
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // @PostConstruct is not invoked by plain constructor — call via reflection
+        SimulationServiceImpl freshService = new SimulationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                simulationTraceRepository, simulationTaskRepository,
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(), syncSimulationExecutor);
+        Method cleanup = SimulationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
+        cleanup.setAccessible(true);
+        cleanup.invoke(freshService);
+
+        assertEquals(SimulationTaskPo.TaskStatus.FAILED, running.getStatus());
+        assertEquals(100, running.getProgress());
+        assertNotNull(running.getCompletedAt());
+
+        assertEquals(SimulationTaskPo.TaskStatus.FAILED, pending.getStatus());
+        assertEquals(100, pending.getProgress());
+        assertNotNull(pending.getCompletedAt());
+    }
+
+    @Test
+    void cancelTask_pendingTask_setsProgressTo100() {
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(60L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+
+        when(simulationTaskRepository.findByIdAndUserId(60L, 1L))
+                .thenReturn(Optional.of(task));
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        boolean result = service.cancelTask(1L, 60L);
+
+        assertTrue(result);
+        assertEquals(SimulationTaskPo.TaskStatus.CANCELLED, task.getStatus());
+        assertEquals(100, task.getProgress());
+        assertNotNull(task.getCompletedAt());
+    }
+
+    @Test
+    void completeTask_skipsWhenAlreadyCancelledInDb() throws Exception {
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(70L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).startedAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now()).build();
+
+        // Another instance already wrote CANCELLED to DB
+        SimulationTaskPo cancelledInDb = SimulationTaskPo.builder()
+                .id(70L).status(SimulationTaskPo.TaskStatus.CANCELLED).build();
+        when(simulationTaskRepository.findById(70L))
+                .thenReturn(Optional.of(cancelledInDb));
+
+        Method completeTask = SimulationServiceImpl.class.getDeclaredMethod(
+                "completeTask", SimulationTaskPo.class, Long.class, int.class, List.class);
+        completeTask.setAccessible(true);
+        completeTask.invoke(service, task, 999L, 10, List.of("done"));
+
+        // Guard must prevent overwrite — save never called, status stays RUNNING
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        assertEquals(SimulationTaskPo.TaskStatus.RUNNING, task.getStatus());
+    }
+
+    @Test
+    void failTask_skipsWhenAlreadyCancelledInDb() throws Exception {
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(71L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).startedAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now()).build();
+
+        SimulationTaskPo cancelledInDb = SimulationTaskPo.builder()
+                .id(71L).status(SimulationTaskPo.TaskStatus.CANCELLED).build();
+        when(simulationTaskRepository.findById(71L))
+                .thenReturn(Optional.of(cancelledInDb));
+
+        Method failTask = SimulationServiceImpl.class.getDeclaredMethod(
+                "failTask", SimulationTaskPo.class, String.class, List.class);
+        failTask.setAccessible(true);
+        failTask.invoke(service, task, "some error", List.of("some error"));
+
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        assertEquals(SimulationTaskPo.TaskStatus.RUNNING, task.getStatus());
+    }
 }

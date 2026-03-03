@@ -33,10 +33,10 @@ cn.edu.nju.Iot_Verify/
 │   │   │   └── module/  # SmvDeviceModuleBuilder, SmvMainModuleBuilder, SmvRuleCommentWriter, SmvSpecificationBuilder
 │   │   ├── executor/    # NusmvExecutor (process execution + per-spec parsing)
 │   │   └── parser/      # SmvTraceParser (counterexample → TraceStateDto)
-│   └── aitool/          # AI tool integration (add/delete/search nodes)
+│   └── aitool/          # AI tool integration (25 tools across 7 categories: board, node, rule, simulation, spec, template, verification)
 ├── client/              # ArkAiClient (Volcengine Ark AI SDK wrapper)
 ├── dto/                 # Data transfer objects (by domain: auth, board, chat, device, rule, spec, simulation, trace, verification)
-├── po/                  # JPA entities (14 tables + DeviceEdgeId composite key)
+├── po/                  # JPA entities (14 tables + DeviceEdgeId/DeviceNodeId composite keys; DeviceNodePo uses @IdClass(DeviceNodeId) for user-scoped node isolation)
 ├── repository/          # Spring Data JPA repositories (14)
 ├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
 ├── configure/           # NusmvConfig, ThreadConfig, ThreadPoolConfig, WebConfig
@@ -87,9 +87,19 @@ Key config in `src/main/resources/application.yaml`:
 - JSON serialization: `JsonUtils.toJson()` for objects, `JsonUtils.toJsonOrEmpty()` for lists.
 - Device templates are in `src/main/resources/deviceTemplate/`.
 - `ValidationException` uses HTTP 422 (not 400). Handler and exception code are aligned.
-- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `errorCategory`. Common categories include `TEMPLATE_NOT_FOUND`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `ILLEGAL_TRIGGER_RELATION`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `AMBIGUOUS_DEVICE_REFERENCE`, `TRUST_PRIVACY_CONFLICT`, etc.
+- `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `data.errorCategory` (and keeps `[errorCategory]` prefix in message for compatibility). Common categories include `TEMPLATE_NOT_FOUND`, `TEMPLATE_LOAD_ERROR`, `MANIFEST_PARSE_ERROR`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `ILLEGAL_TRIGGER_RELATION`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `AMBIGUOUS_DEVICE_REFERENCE`, `TRUST_PRIVACY_CONFLICT`, `INVALID_BUILDER_INPUT`, etc.
 - `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
 - Rule/spec device resolution is strict: prefer `varName`, allow `templateName` only when uniquely matched; ambiguous matches throw `AMBIGUOUS_DEVICE_REFERENCE`.
+- NuSMV identifier sanitization is centralized in `DeviceSmvDataFactory.sanitizeSmvToken()` — removes spaces, replaces non-alphanumeric chars with `_`, prepends `_` if digit-prefixed. Mode/state/variable identifiers go through this function; value normalization may still use local whitespace cleanup.
+- Template NuSMV pre-check: `BoardStorageServiceImpl.addDeviceTemplate()` validates the manifest and runs a probe `SmvGenerator.generate()` before saving; failures return 400 (invalid template) or 500 (infrastructure). Temp SMV files are cleaned up in `finally`.
+- `DeviceSmvDataFactory.loadManifest()` throws typed exceptions: `BaseException` re-thrown, JSON parse → `MANIFEST_PARSE_ERROR`, other → `TEMPLATE_LOAD_ERROR` (no longer silently returns null).
+- `getModeIndexOfState()` uses exact-match or `mode + "_"` prefix matching (not `contains()`), preventing false positives like mode "on" matching state "offline".
+- Async task progress is persisted to DB (`VerificationTaskPo.progress`, `SimulationTaskPo.progress`) for cross-instance visibility; fallback chain: in-memory → DB column → terminal status inference.
+- Cross-instance task cancellation safety: `completeTask`/`failTask` check DB for CANCELLED before overwriting (TOCTOU limitation documented).
+- AI tools: JSON argument parse errors return structured 400 `VALIDATION_ERROR`; `ServiceUnavailableException` returns 503; generic exceptions no longer leak `e.getMessage()`.
+- AI tools: async dispatch failure (`VerifyModelAsyncTool`/`SimulateModelAsyncTool`) marks task FAILED before re-throwing; `SmvGenerationException` returns `SMV_GENERATION_ERROR` with `errorCategory`.
+- Chat history (`getHistory`) filters out tool-role messages, assistant tool-call-request messages, and adjacent "Calling tool..." placeholders before returning to frontend.
+- `device_node` table uses composite PK `(id, user_id)` — different users can have nodes with the same ID. Existing databases need manual migration (`sql/manual_migrations/2026-03-02-device-node-composite-pk.sql`).
 - Sync verification/simulation unwrap `ExecutionException` and rethrow `SmvGenerationException` so `errorCategory` is preserved in API responses.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
@@ -192,7 +202,7 @@ Parses NuSMV counterexample output. Supports both formats:
 | Aspect | MEDIC | This Project |
 |--------|-------|-------------|
 | Device source | Pre-loaded JSON templates | User-input DeviceVerificationDto + DB templates |
-| Variable naming | `deviceName.replace(" ","").toLowerCase()` | `DeviceSmvDataFactory.toVarName()` (safe identifier) |
+| Variable naming | `deviceName.replace(" ","").toLowerCase()` | `DeviceSmvDataFactory.toVarName()` (safe identifier); mode/state names cleaned via `sanitizeSmvToken()` |
 | Rule source | Parsed from text file (ifttt.txt) | `RuleDto` from REST API |
 | Spec source | Hard-coded important devices | `SpecificationDto` from REST API |
 | Privacy flag | `now == 3` global flag | `enablePrivacy` request parameter (default false) |
@@ -200,7 +210,7 @@ Parses NuSMV counterexample output. Supports both formats:
 | Trust init | `FROZENVAR` for sensors, `VAR` for actuators | Same pattern |
 | Attack model | `FROZENVAR is_attack` + `intensity: 0..50` | Same + proportional sensor numeric range expansion (`expansion=range/5*intensity/50`) |
 | Env var init validation | None | Clamp to range + enum membership check |
-| getModeIndexOfState | Counts leading semicolons | Multi-strategy: mode name match → semicolon split → state list lookup |
+| getModeIndexOfState | Counts leading semicolons | Multi-strategy: semicolon split → state list lookup → mode name exact/prefix match (no substring `contains()`) |
 
 ## API Endpoints
 

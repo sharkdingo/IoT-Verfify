@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
@@ -16,6 +17,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class SimulationTaskPo {
 
     public enum TaskStatus {
@@ -24,6 +26,7 @@ public class SimulationTaskPo {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(nullable = false)
@@ -57,6 +60,9 @@ public class SimulationTaskPo {
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
+
+    /** 0-100 progress percentage, persisted for multi-instance visibility */
+    private Integer progress;
 
     @PrePersist
     protected void onCreate() {

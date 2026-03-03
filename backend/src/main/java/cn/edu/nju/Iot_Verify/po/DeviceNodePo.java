@@ -8,7 +8,11 @@ import lombok.*;
 @Table(name = "device_node", indexes = {
         @Index(name = "idx_device_node_user_id", columnList = "user_id")
 })
-@Data
+@IdClass(DeviceNodeId.class)
+@Getter
+@Setter
+@ToString
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -16,9 +20,12 @@ public class DeviceNodePo {
 
     @Id
     @Column(length = 100)
+    @EqualsAndHashCode.Include
     private String id;
 
+    @Id
     @Column(name = "user_id", nullable = false)
+    @EqualsAndHashCode.Include
     private Long userId;
 
     @Column(name = "template_name", nullable = false, length = 100)

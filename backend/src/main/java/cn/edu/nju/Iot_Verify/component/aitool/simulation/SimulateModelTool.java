@@ -88,7 +88,12 @@ public class SimulateModelTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             int steps = args.path("steps").asInt(10);
             boolean isAttack = args.path("isAttack").asBoolean(false);
             int intensity = args.path("intensity").asInt(3);

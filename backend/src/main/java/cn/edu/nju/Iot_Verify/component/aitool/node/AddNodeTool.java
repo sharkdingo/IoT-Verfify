@@ -3,8 +3,8 @@ package cn.edu.nju.Iot_Verify.component.aitool.node;
 import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
-import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,7 +27,6 @@ public class AddNodeTool implements AiTool {
 
     private final NodeService nodeService;
     private final ObjectMapper objectMapper;
-    private final DeviceTemplateService deviceTemplateService;
 
     @Override
     public String getName() {
@@ -36,15 +35,9 @@ public class AddNodeTool implements AiTool {
 
     @Override
     public ChatTool getDefinition() {
-        Long userId = UserContextHolder.getUserId();
-        List<String> validTemplates = userId != null
-                ? deviceTemplateService.getAllTemplateNames(userId)
-                : List.of();
-        String templateListStr = String.join(", ", validTemplates);
-
         Map<String, Object> props = new HashMap<>();
 
-        String templateDesc = "Device template type name. System only supports: [" + templateListStr + "]. " +
+        String templateDesc = "Device template type name. Use board_overview tool to see available templates. " +
                 "Map user aliases to standard names. Do not modify template names like Air Purifier to Air_Purifier. " +
                 "If device is semantically unrelated to all templates, pass original name.";
         props.put("templateName", Map.of("type", "string", "description", templateDesc));
@@ -81,7 +74,12 @@ public class AddNodeTool implements AiTool {
                 return errorJson("User not logged in", "UNAUTHORIZED", 401);
             }
 
-            JsonNode args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            JsonNode args;
+            try {
+                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+            } catch (Exception parseEx) {
+                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+            }
             String templateName = args.path("templateName").asText("").trim();
             if (templateName.isEmpty()) {
                 return errorJson("Template name is required.", "VALIDATION_ERROR", 400);
@@ -99,6 +97,9 @@ public class AddNodeTool implements AiTool {
             String raw = nodeService.addNode(userId, templateName, label, x, y, state, w, h);
             return normalizeResult(raw);
 
+        } catch (ServiceUnavailableException e) {
+            log.warn("add_device busy: {}", e.getMessage());
+            return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (BaseException e) {
             log.warn("add_device business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
