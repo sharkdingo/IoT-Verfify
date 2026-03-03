@@ -290,8 +290,14 @@ public class SimulationServiceImpl implements SimulationService {
     public boolean cancelTask(Long userId, Long taskId) {
         SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId).orElse(null);
         if (task == null) return false;
-        if (task.getStatus() != SimulationTaskPo.TaskStatus.RUNNING
-                && task.getStatus() != SimulationTaskPo.TaskStatus.PENDING) {
+
+        int updated = simulationTaskRepository.cancelTaskIfStillActive(
+                taskId,
+                SimulationTaskPo.TaskStatus.CANCELLED,
+                LocalDateTime.now(),
+                List.of(SimulationTaskPo.TaskStatus.PENDING,
+                        SimulationTaskPo.TaskStatus.RUNNING));
+        if (updated == 0) {
             return false;
         }
 
@@ -300,10 +306,7 @@ public class SimulationServiceImpl implements SimulationService {
         if (taskThread != null && taskThread.isAlive()) {
             taskThread.interrupt();
         } else {
-            task.setStatus(SimulationTaskPo.TaskStatus.CANCELLED);
-            task.setProgress(100);
-            task.setCompletedAt(LocalDateTime.now());
-            simulationTaskRepository.save(task);
+            // No local running thread owns this task now; cleanup marker immediately.
             cancelledTasks.remove(taskId);
         }
         return true;
@@ -504,10 +507,16 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     private void handleCancellation(SimulationTaskPo task) {
-        task.setStatus(SimulationTaskPo.TaskStatus.CANCELLED);
-        task.setCompletedAt(LocalDateTime.now());
-        task.setProgress(100);
-        simulationTaskRepository.save(task);
+        log.info("Handling cancellation for simulation task: {}", task.getId());
+        int updated = simulationTaskRepository.cancelTaskIfStillActive(
+                task.getId(),
+                SimulationTaskPo.TaskStatus.CANCELLED,
+                LocalDateTime.now(),
+                List.of(SimulationTaskPo.TaskStatus.PENDING,
+                        SimulationTaskPo.TaskStatus.RUNNING));
+        if (updated == 0) {
+            log.info("Simulation task {} already finished (COMPLETED/FAILED), skipping cancel", task.getId());
+        }
     }
 
     private void updateTaskProgress(Long taskId, int progress, String message) {

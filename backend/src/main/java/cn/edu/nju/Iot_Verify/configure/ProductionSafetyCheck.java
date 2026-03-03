@@ -49,16 +49,16 @@ public class ProductionSafetyCheck {
 
         List<String> violations = new ArrayList<>();
 
-        if (jwtSecret != null && jwtSecret.startsWith(INSECURE_JWT_SECRET_PREFIX)) {
-            violations.add("jwt.secret (JWT_SECRET) is still the insecure default");
+        if (jwtSecret == null || jwtSecret.isBlank() || jwtSecret.startsWith(INSECURE_JWT_SECRET_PREFIX)) {
+            violations.add("jwt.secret (JWT_SECRET) is still the insecure default or empty");
         }
 
         if (INSECURE_DB_PASSWORD.equals(dbPassword)) {
             violations.add("spring.datasource.password (DB_PASSWORD) is still the insecure default");
         }
 
-        if (PLACEHOLDER_ARK_API_KEY.equals(arkApiKey)) {
-            violations.add("volcengine.ark.api-key (VOLCENGINE_API_KEY) is still the placeholder default");
+        if (arkApiKey == null || arkApiKey.isBlank() || PLACEHOLDER_ARK_API_KEY.equals(arkApiKey)) {
+            violations.add("volcengine.ark.api-key (VOLCENGINE_API_KEY) is still the placeholder default or empty");
         }
 
         if (!violations.isEmpty()) {

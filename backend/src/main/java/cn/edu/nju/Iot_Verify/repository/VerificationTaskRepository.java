@@ -81,4 +81,19 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                                @Param("checkLogsJson") String checkLogsJson,
                                @Param("processingTimeMs") Long processingTimeMs,
                                @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus);
+
+    /**
+     * Atomically cancel a task only if it is still PENDING or RUNNING.
+     * Prevents overwriting a legitimately COMPLETED or FAILED status.
+     * Returns 1 if updated, 0 if the task already finished.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.status = :cancelledStatus, "
+         + "t.completedAt = :completedAt, t.progress = 100 "
+         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
+    int cancelTaskIfStillActive(@Param("taskId") Long taskId,
+                                @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus,
+                                @Param("completedAt") LocalDateTime completedAt,
+                                @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
 }

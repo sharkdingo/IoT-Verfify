@@ -25,7 +25,6 @@ public class NusmvExecutor {
 
     private final NusmvConfig nusmvConfig;
 
-    private static final String TIMEOUT_ENV_KEY = "NUSMV_TIMEOUT_MS";
     private static final int PROCESS_DESTROY_TIMEOUT_SECONDS = 5;
     private static final long READER_JOIN_TIMEOUT_MS = 5000;
 
@@ -58,7 +57,7 @@ public class NusmvExecutor {
         Process process = null;
         try {
             process = processBuilder.start();
-            long timeout = getTimeoutFromEnvironment();
+            long timeout = getTimeout();
 
             final Process finalProcess = process;
             StringBuilder outputBuilder = new StringBuilder();
@@ -188,15 +187,7 @@ public class NusmvExecutor {
         return '\'' + value.replace("'", "'\"'\"'") + '\'';
     }
 
-    private long getTimeoutFromEnvironment() {
-        try {
-            String timeoutEnv = System.getenv(TIMEOUT_ENV_KEY);
-            if (timeoutEnv != null && !timeoutEnv.isEmpty()) {
-                return Long.parseLong(timeoutEnv);
-            }
-        } catch (NumberFormatException e) {
-            log.warn("Invalid NUSMV_TIMEOUT_MS value, using config default: {}", nusmvConfig.getTimeoutMs());
-        }
+    private long getTimeout() {
         return nusmvConfig.getTimeoutMs();
     }
 
@@ -259,7 +250,7 @@ public class NusmvExecutor {
         Process process = null;
         try {
             process = processBuilder.start();
-            long timeout = getTimeoutFromEnvironment();
+            long timeout = getTimeout();
 
             final Process fp = process;
             StringBuilder stdoutBuilder = new StringBuilder();

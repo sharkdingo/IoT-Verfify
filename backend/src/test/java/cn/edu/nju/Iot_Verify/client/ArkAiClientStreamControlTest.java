@@ -27,7 +27,7 @@ class ArkAiClientStreamControlTest {
         when(arkService.streamChatCompletion(any(ChatCompletionRequest.class)))
                 .thenReturn(Flowable.just(chunk("A"), chunk("B"), chunk("C")));
 
-        ArkAiClient client = new ArkAiClient();
+        ArkAiClient client = new ArkAiClient(new com.fasterxml.jackson.databind.ObjectMapper());
         ReflectionTestUtils.setField(client, "modelId", "mock-model");
         ReflectionTestUtils.setField(client, "arkService", arkService);
 

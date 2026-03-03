@@ -86,10 +86,10 @@ public class AddNodeTool implements AiTool {
             }
 
             String label = args.has("label") ? trimToNull(args.path("label").asText(null)) : null;
-            Double x = args.has("x") ? args.path("x").asDouble() : null;
-            Double y = args.has("y") ? args.path("y").asDouble() : null;
-            Integer w = args.has("w") ? args.path("w").asInt() : null;
-            Integer h = args.has("h") ? args.path("h").asInt() : null;
+            Double x = parseDoubleOrNull(args, "x");
+            Double y = parseDoubleOrNull(args, "y");
+            Integer w = parseIntOrNull(args, "w");
+            Integer h = parseIntOrNull(args, "h");
             String state = args.has("state") ? trimToNull(args.path("state").asText(null)) : null;
 
             log.info("Executing add_device: {}", label);
@@ -106,6 +106,30 @@ public class AddNodeTool implements AiTool {
         } catch (Exception e) {
             log.error("add_device failed", e);
             return errorJson("Add device failed. Please retry.", "INTERNAL_ERROR", 500);
+        }
+    }
+
+    private Double parseDoubleOrNull(JsonNode args, String field) {
+        if (!args.has(field)) return null;
+        JsonNode node = args.path(field);
+        if (node.isNull() || (!node.isNumber() && node.asText("").isEmpty())) return null;
+        if (node.isNumber()) return node.asDouble();
+        try {
+            return Double.parseDouble(node.asText());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Integer parseIntOrNull(JsonNode args, String field) {
+        if (!args.has(field)) return null;
+        JsonNode node = args.path(field);
+        if (node.isNull() || (!node.isNumber() && node.asText("").isEmpty())) return null;
+        if (node.isNumber()) return node.asInt();
+        try {
+            return Integer.parseInt(node.asText());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

@@ -92,7 +92,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/templates")
-    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @Valid @RequestBody DeviceTemplateDto dto) {
+    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @NotNull @Valid @RequestBody DeviceTemplateDto dto) {
         return Result.success(boardService.addDeviceTemplate(userId, dto));
     }
 

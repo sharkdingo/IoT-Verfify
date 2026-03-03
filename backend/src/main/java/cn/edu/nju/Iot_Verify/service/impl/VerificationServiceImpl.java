@@ -508,8 +508,16 @@ public class VerificationServiceImpl implements VerificationService {
     public boolean cancelTask(Long userId, Long taskId) {
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
         if (task == null) return false;
-        if (task.getStatus() != VerificationTaskPo.TaskStatus.RUNNING &&
-            task.getStatus() != VerificationTaskPo.TaskStatus.PENDING) return false;
+
+        int updated = taskRepository.cancelTaskIfStillActive(
+                taskId,
+                VerificationTaskPo.TaskStatus.CANCELLED,
+                LocalDateTime.now(),
+                List.of(VerificationTaskPo.TaskStatus.PENDING,
+                        VerificationTaskPo.TaskStatus.RUNNING));
+        if (updated == 0) {
+            return false;
+        }
 
         cancelledTasks.add(taskId);
         Thread taskThread = runningTasks.get(taskId);
@@ -517,11 +525,7 @@ public class VerificationServiceImpl implements VerificationService {
             // Task is running; interrupt it and let verifyAsync finally handle final state.
             taskThread.interrupt();
         } else {
-            // Task not started yet (still PENDING in queue); update DB status directly.
-            task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
-            task.setProgress(100);
-            task.setCompletedAt(LocalDateTime.now());
-            taskRepository.save(task);
+            // No local running thread owns this task now; cleanup marker immediately.
             cancelledTasks.remove(taskId);
         }
 
@@ -757,10 +761,15 @@ public class VerificationServiceImpl implements VerificationService {
 
     private void handleCancellation(VerificationTaskPo task) {
         log.info("Handling cancellation for task: {}", task.getId());
-        task.setStatus(VerificationTaskPo.TaskStatus.CANCELLED);
-        task.setCompletedAt(LocalDateTime.now());
-        task.setProgress(100);
-        taskRepository.save(task);
+        int updated = taskRepository.cancelTaskIfStillActive(
+                task.getId(),
+                VerificationTaskPo.TaskStatus.CANCELLED,
+                LocalDateTime.now(),
+                List.of(VerificationTaskPo.TaskStatus.PENDING,
+                        VerificationTaskPo.TaskStatus.RUNNING));
+        if (updated == 0) {
+            log.info("Verification task {} already finished (COMPLETED/FAILED), skipping cancel", task.getId());
+        }
     }
 
     // ==================== Utilities ====================

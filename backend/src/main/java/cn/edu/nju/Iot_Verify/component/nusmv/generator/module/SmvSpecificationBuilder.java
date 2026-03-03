@@ -43,7 +43,10 @@ public class SmvSpecificationBuilder {
 
             // Defense-in-depth: privacy specs should have been caught upstream by SmvGenerator.validateNoPrivacySpecs
             if (!enablePrivacy && hasAnyPrivacyCondition(spec)) {
-                log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream", spec.getId());
+                log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream, skipping", spec.getId());
+                content.append("\n\tCTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false");
+                generatedSpecs++;
+                continue;
             }
 
             try {

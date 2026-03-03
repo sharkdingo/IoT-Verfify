@@ -34,15 +34,19 @@ public class ArkAiClient {
     @Value("${volcengine.ark.model-id}")
     private String modelId;
 
-    @Value("${volcengine.ark.base-url:https://ark.cn-beijing.volces.com}")
+    @Value("${volcengine.ark.base-url}")
     private String baseUrl;
 
-    @Value("${volcengine.ark.timeout-minutes:5}")
+    @Value("${volcengine.ark.timeout-minutes}")
     private int timeoutMinutes;
 
     private ArkService arkService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    public ArkAiClient(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     // legacy serialization format
     public static final String TOOL_CALLS_PREFIX = ":::TOOL_CALLS:::";
@@ -153,37 +157,43 @@ public class ArkAiClient {
     }
 
     private ToolMessageParts parseToolMessage(String content) {
-        try {
-            JsonNode root = objectMapper.readTree(content);
-            if (root.isObject() && TOOL_RESULT_JSON_TYPE.equals(root.path("type").asText(""))) {
-                String toolCallId = root.path("toolCallId").asText("");
-                String result = root.path("result").asText("");
-                return new ToolMessageParts(toolCallId, result);
+        if (content != null && !content.isEmpty() && content.stripLeading().startsWith("{")) {
+            try {
+                JsonNode root = objectMapper.readTree(content);
+                if (root.isObject() && TOOL_RESULT_JSON_TYPE.equals(root.path("type").asText(""))) {
+                    String toolCallId = root.path("toolCallId").asText("");
+                    String result = root.path("result").asText("");
+                    return new ToolMessageParts(toolCallId, result);
+                }
+            } catch (Exception e) {
+                log.debug("Tool message is not structured JSON, falling back to separator parsing", e);
             }
-        } catch (Exception ignore) {
         }
 
-        if (content.contains(TOOL_RESULT_SEPARATOR)) {
+        if (content != null && content.contains(TOOL_RESULT_SEPARATOR)) {
             String[] parts = content.split(TOOL_RESULT_SEPARATOR, 2);
             return new ToolMessageParts(parts[0], parts.length > 1 ? parts[1] : "");
         }
 
-        return new ToolMessageParts("", content);
+        return new ToolMessageParts("", content != null ? content : "");
     }
 
     private List<ChatToolCall> parseAssistantToolCalls(String content) {
-        // new structured JSON
-        try {
-            JsonNode root = objectMapper.readTree(content);
-            if (root.isObject() && TOOL_CALLS_JSON_TYPE.equals(root.path("type").asText("")) && root.has("toolCalls")) {
-                return objectMapper.convertValue(root.path("toolCalls"), new TypeReference<List<ChatToolCall>>() {
-                });
+        // new structured JSON — only attempt parse if content looks like JSON object
+        if (content != null && !content.isEmpty() && content.stripLeading().startsWith("{")) {
+            try {
+                JsonNode root = objectMapper.readTree(content);
+                if (root.isObject() && TOOL_CALLS_JSON_TYPE.equals(root.path("type").asText("")) && root.has("toolCalls")) {
+                    return objectMapper.convertValue(root.path("toolCalls"), new TypeReference<List<ChatToolCall>>() {
+                    });
+                }
+            } catch (Exception e) {
+                log.debug("Assistant content is not structured tool-calls JSON, trying legacy format", e);
             }
-        } catch (Exception ignore) {
         }
 
         // legacy prefixed format
-        if (content.startsWith(TOOL_CALLS_PREFIX)) {
+        if (content != null && content.startsWith(TOOL_CALLS_PREFIX)) {
             try {
                 String json = content.substring(TOOL_CALLS_PREFIX.length());
                 return objectMapper.readValue(json, new TypeReference<List<ChatToolCall>>() {

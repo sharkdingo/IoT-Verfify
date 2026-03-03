@@ -403,20 +403,23 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
-    void cancelTask_pendingTask_setsProgressTo100() {
+    void cancelTask_pendingTask_usesAtomicCancelUpdate() {
         VerificationTaskPo task = VerificationTaskPo.builder()
                 .id(60L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
                 .createdAt(LocalDateTime.now()).build();
 
         when(taskRepository.findByIdAndUserId(60L, 1L))
                 .thenReturn(Optional.of(task));
+        when(taskRepository.cancelTaskIfStillActive(
+                eq(60L), eq(VerificationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList()))
+                .thenReturn(1);
 
         boolean result = service.cancelTask(1L, 60L);
 
         assertTrue(result);
-        assertEquals(VerificationTaskPo.TaskStatus.CANCELLED, task.getStatus());
-        assertEquals(100, task.getProgress());
-        assertNotNull(task.getCompletedAt());
+        verify(taskRepository).cancelTaskIfStillActive(
+                eq(60L), eq(VerificationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
+        verify(taskRepository, never()).save(any());
     }
 
     @Test

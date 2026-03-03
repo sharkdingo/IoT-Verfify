@@ -26,10 +26,10 @@ public class JwtUtil {
     private static final String INSECURE_DEFAULT_PREFIX = "iot-verify-secret-key";
     private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
 
-    @Value("${jwt.secret:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm}")
+    @Value("${jwt.secret}")
     private String secret;
 
-    @Value("${jwt.expiration:86400000}")
+    @Value("${jwt.expiration}")
     private Long expiration;
 
     private final Environment environment;
@@ -53,7 +53,7 @@ public class JwtUtil {
 
     private boolean isProductionProfile() {
         for (String profile : environment.getActiveProfiles()) {
-            if (PRODUCTION_PROFILES.contains(profile)) {
+            if (PRODUCTION_PROFILES.contains(profile.toLowerCase())) {
                 return true;
             }
         }

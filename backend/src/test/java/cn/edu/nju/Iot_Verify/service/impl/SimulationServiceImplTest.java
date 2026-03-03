@@ -490,20 +490,23 @@ class SimulationServiceImplTest {
     }
 
     @Test
-    void cancelTask_pendingTask_setsProgressTo100() {
+    void cancelTask_pendingTask_usesAtomicCancelUpdate() {
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(60L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
                 .requestedSteps(10).createdAt(LocalDateTime.now()).build();
 
         when(simulationTaskRepository.findByIdAndUserId(60L, 1L))
                 .thenReturn(Optional.of(task));
+        when(simulationTaskRepository.cancelTaskIfStillActive(
+                eq(60L), eq(SimulationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList()))
+                .thenReturn(1);
 
         boolean result = service.cancelTask(1L, 60L);
 
         assertTrue(result);
-        assertEquals(SimulationTaskPo.TaskStatus.CANCELLED, task.getStatus());
-        assertEquals(100, task.getProgress());
-        assertNotNull(task.getCompletedAt());
+        verify(simulationTaskRepository).cancelTaskIfStillActive(
+                eq(60L), eq(SimulationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
+        verify(simulationTaskRepository, never()).save(any());
     }
 
     @Test

@@ -1,7 +1,7 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年3月3日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离 + SmvBoundsUtils 边界集中化 + transition clamp 闭环
+> **最后更新**: 2026年3月4日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离 + SmvBoundsUtils 边界集中化 + transition clamp 闭环 + 取消安全原子化 + 超时下界守卫 + AI 工具 Null-Safe 解析 + ArkAiClient 解析预检
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
@@ -434,7 +434,7 @@ next(camera_1.privacy_photo) := case
 esac;
 ```
 
-**注意：** 当 `enablePrivacy=false` 时，如果 specs 中包含 `targetType="privacy"` 的条件，会抛出 `SmvGenerationException`，因为 `privacy_*` 变量未被声明。
+**注意：** 当 `enablePrivacy=false` 时，如果 specs 中包含 `targetType="privacy"` 的条件，上游 `SmvGenerator.validateNoPrivacySpecs()` 会抛出 `SmvGenerationException`（主守卫）。作为防御纵深，`SmvSpecificationBuilder` 在 `enablePrivacy=false` 时遇到 privacy 条件的 spec 也会跳过并生成 `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false` 占位。
 
 ### 5.4 devices（设备实例）
 
@@ -1138,9 +1138,9 @@ Trace Type: Counterexample
 下列链路在当前后端实现中是闭合的：
 
 1. **输入约束闭环**：DTO 校验（`@NotNull/@NotEmpty/@Pattern/@Min/@Max/@Size`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。`@NotEmpty` 替代设备列表的 `@NotNull`（拒绝空列表），`@Size(max=10000)` 限制聊天内容，`@NotNull` 覆盖 `BoardStorageController` 所有 `@RequestBody`。
-2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名必须为合法标识符。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
-3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），`toVarName()` 对设备 ID 做同级防御；trust/privacy 通过“入口归一化 + 校验 + emit 再归一化”三层闭环落地。
-4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失返回 `null`（调用方 `buildDeviceSmvMap()` 记录 WARN 日志并跳过该设备）。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名必须为合法标识符。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），`toVarName()` 对设备 ID 做同级防御，`computeIdentifiers()` 对 varName、moduleName 前缀（base，来自 templateName）和 moduleName 后缀（suffix）均做数字前缀守卫和保留字转义；trust/privacy 通过”入口归一化 + 校验 + emit 再归一化”三层闭环落地。
+4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时（由 `NusmvConfig.timeoutMs` 统一配置，`@Min(100)` 启动校验，通过 YAML `${NUSMV_TIMEOUT_MS:120000}` 支持环境变量覆盖）、并发闸门、busy 返回、stdout/stderr 处理。
 5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度（进度持久化到 DB，三级回退链：内存 → DB 列 → 终态推断）、同步/异步统一错误语义。
 6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 使用原子条件 UPDATE（`WHERE status <> CANCELLED`）消除 TOCTOU 竞态，返回受影响行数（0 = 已取消）。
 7. **可观测性闭环**：`model.smv` / `request.json` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
@@ -1149,7 +1149,7 @@ Trace Type: Counterexample
 仍需依赖的运行前提：
 
 - MySQL、Redis、JWT、NuSMV 可执行路径配置正确。Redis 仅用于 JWT 黑名单（SHA-256 key），不可用时 fail-open 降级（不阻塞登录/验证流程，但登出撤销语义失效——已登出 token 仍可使用直至过期；每 10 次连续失败周期性 ERROR 告警）；需 `commons-pool2` 启用 Lettuce 连接池。
-- 生产环境（`spring.profiles.active` 包含 `prod`/`production`）下，`ProductionSafetyCheck` 要求 `jwt.secret`、`spring.datasource.password`、`volcengine.ark.api-key`（对应 `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`）均已替换为非默认值，否则拒绝启动。`PRODUCTION_MODE` 已移除；本地开发无 profile 时不受限。
+- 生产环境（`spring.profiles.active` 包含 `prod`/`production`）下，`ProductionSafetyCheck` 要求 `jwt.secret` 非 null/空白/不安全默认前缀、`spring.datasource.password`（`DB_PASSWORD`）已替换为非默认值、`volcengine.ark.api-key`（`VOLCENGINE_API_KEY`）非 null/空白/占位值，否则拒绝启动。`PRODUCTION_MODE` 已移除；本地开发无 profile 时不受限。
 - 当前用户模板已初始化且与前端请求中的 `templateName` 一致。
 - `device_templates` 表新增 `(user_id, name)` 唯一约束，首次部署前需确认无重复数据。
 
@@ -1162,7 +1162,7 @@ Trace Type: Counterexample
 ### NuSMV 生成链路
 
 - **标识符安全**（`DeviceSmvDataFactory`）
-  `sanitizeSmvToken()` 现已支持 NuSMV 保留字大小写无关转义（含 `W`），并保留空格清理、非法字符替换、数字前缀处理。`toVarName()` 也同步具备数字前缀与保留字防御。
+  `sanitizeSmvToken()` 现已支持 NuSMV 保留字大小写无关转义（含 `W`），并保留空格清理、非法字符替换、数字前缀处理。`toVarName()` 也同步具备数字前缀与保留字防御。`computeIdentifiers()` 对 `result`（varName）、`base`（moduleName 前缀，来自 templateName）和 `suffix`（moduleName 后缀）均做数字前缀守卫和保留字转义，确保生成的标识符是合法 NuSMV 符号。
 - **trust/privacy 三层防御**（Factory + Validator + Builder）
   入口归一化：`normalizeTrustPrivacy()` (`trim + lowercase`)；
   校验层：`SmvModelValidator.validatePropertyValues()` 覆盖实例值、content privacy、manifest variable trust/privacy、workingState privacy；
@@ -1173,23 +1173,23 @@ Trace Type: Counterexample
 - **防御性强度处理**
   `SmvGenerator` 入口仍将 `intensity` 夹紧到 `0..50`；`SmvBoundsUtils` 额外将负强度防御性归零，避免工具级直接调用出现语义异常。
 - **SmvSpecificationBuilder**
-  `build()` 新增第 5 参数 `enablePrivacy`，当 privacy 关闭时遇到 privacy spec 会记录防御性日志。
+  `build()` 新增第 5 参数 `enablePrivacy`；当 privacy 关闭时遇到 privacy spec 会跳过并生成 `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false` 占位（防御纵深，上游 `validateNoPrivacySpecs` 为主守卫）。
 - **回归测试覆盖**（`SmvGeneratorFixesTest`）
   已补齐 WITH-rate 极端 NCR、内部变量边界分支、`range=0` 与负强度边界用例，防止回归。
 
 ### 后端加固（安全、线程安全、数据完整性）
 
-- **生产安全守卫**：新增 `ProductionSafetyCheck`（`@PostConstruct`）— 当 `spring.profiles.active` 包含 `prod`/`production` 时，若 `jwt.secret`、`spring.datasource.password`、`volcengine.ark.api-key`（对应 `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`）仍为不安全默认值则拒绝启动。`PRODUCTION_MODE` 已移除，生产配置校验统一收拢到 `ProductionSafetyCheck`。`JwtUtil.@PostConstruct` 额外在生产 profile 下对默认密钥输出 WARN 日志（防御纵深）。
+- **生产安全守卫**：新增 `ProductionSafetyCheck`（`@PostConstruct`）— 当 `spring.profiles.active` 包含 `prod`/`production` 时，若 `jwt.secret` 为 null/空白/不安全默认前缀、`spring.datasource.password`（`DB_PASSWORD`）仍为不安全默认值、`volcengine.ark.api-key`（`VOLCENGINE_API_KEY`）为 null/空白/占位值则拒绝启动。`PRODUCTION_MODE` 已移除，生产配置校验统一收拢到 `ProductionSafetyCheck`。`JwtUtil.@PostConstruct` 额外在生产 profile 下对默认密钥输出 WARN 日志（防御纵深）；profile 匹配大小写不敏感（`toLowerCase()`）。
 - **异常处理加固**：`IllegalArgumentException` → 掩码通用消息 (400)、`IllegalStateException` → 500、新增 `DataIntegrityViolationException` → 409 CONFLICT。
 - **线程池上下文传播**：`ThreadConfig.TaskDecorator` 深拷贝 `Authentication`（新建 `UsernamePasswordAuthenticationToken` + `new ArrayList<>` authorities）、`UserContextHolder.userId` 和 MDC 上下文到子线程，防止跨任务引用污染。
-- **异步任务 TOCTOU 消除**：`completeTask`/`failTask` 改为原子条件 UPDATE（`WHERE status <> CANCELLED`）+ `@Modifying(clearAutomatically = true)`，返回受影响行数。`TransactionTemplate` 用于 `VerificationServiceImpl.saveTraces()` 和 `ChatServiceImpl.processStreamChat()` 跨代理边界写入。
+- **异步任务 TOCTOU 消除**：`completeTask`/`failTask` 改为原子条件 UPDATE（`WHERE status <> CANCELLED`）+ `@Modifying(clearAutomatically = true)`，返回受影响行数。`handleCancellation` 改为 `cancelTaskIfStillActive`（`WHERE status IN (PENDING, RUNNING)`），防止覆写已完成/失败的任务。`TransactionTemplate` 用于 `VerificationServiceImpl.saveTraces()` 和 `ChatServiceImpl.processStreamChat()` 跨代理边界写入。
 - **Redis 韧性**：`RedisTokenBlacklistService` 连续失败计数（`AtomicInteger`），每 10 次周期性 ERROR 告警（`% ALERT_THRESHOLD`）。
 - **请求校验强化**：`@NotEmpty` devices、`@Size(max=10000)` chat content、`@NotNull @RequestBody` 全量覆盖（`BoardStorageController` 通过类级 `@Validated` 激活）。
 - **只读事务**：`@Transactional(readOnly = true)` 覆盖 `BoardStorageServiceImpl`、`VerificationServiceImpl`、`SimulationServiceImpl`、`ChatServiceImpl` 全部读方法。
 - **Entity 索引与约束**：`device_edge(user_id)`、`verification_task(user_id)`、`simulation_task(user_id)` 索引 + `device_templates(user_id, name)` 唯一约束。
 - **DTO progress 字段**：`VerificationTaskDto.progress` / `SimulationTaskDto.progress` 暴露到 API。
 - **VerificationTaskDto 一致性**：添加 `@NoArgsConstructor`、`@AllArgsConstructor`、`@JsonInclude(NON_NULL)` 与 `SimulationTaskDto` 对齐。
-- **AI 工具安全**：`AiToolManager.execute()` catch-all 安全网返回通用消息 `"Tool execution failed due to an internal error"`（不泄露 `e.getMessage()`）；`AddTemplateTool` `@PostConstruct` 预建 `tolerantMapper`。
+- **AI 工具安全**：`AiToolManager.execute()` catch-all 安全网返回通用消息 `"Tool execution failed due to an internal error"`（不泄露 `e.getMessage()`）；`AddTemplateTool` `@PostConstruct` 预建 `tolerantMapper`；`AddNodeTool` 使用 `parseDoubleOrNull()` / `parseIntOrNull()` 替代直接 `asDouble()` / `asInt()`，正确处理 JSON null、非数字字符串、空字符串（均传 `null` 给 `NodeService`，触发默认布局值）。
 - **ArkAiClient 超时可配**：`volcengine.ark.timeout-minutes`（默认 5）。
 - **JsonUtils 增强**：注册 `JavaTimeModule`；新增 `fromJsonToStringList()` / `fromJsonList()`。
 - **DELETE trace 404**：不存在的 trace 抛 `ResourceNotFoundException`（原为静默 200）。
@@ -1197,3 +1197,7 @@ Trace Type: Counterexample
 - **异步控制器模式**：`verifyAsync` / `simulateAsync` 返回 `Result<Long>`（不再 `ResponseEntity`）；`TaskRejectedException` 抛 `ServiceUnavailableException`。
 - **临时文件保留**：`cleanupTempFile()` 为空操作 — `nusmv_*` 临时目录保留用于事后排障。
 - **Surefire JVM 配置**：`pom.xml` 配置 `maven-surefire-plugin` 添加 `-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading`，修复 JDK 17 下 Mockito/ByteBuddy `MockMaker` 初始化失败。
+- **错误信息抑制**：`application.yaml` 设置 `server.error.include-message: never` 和 `include-binding-errors: never`，防止 Spring `/error` 端点泄露内部异常信息。
+- **SecurityConfig ObjectMapper**：`SecurityFilterChain` 使用 Spring 管理的 `ObjectMapper`（通过 `@RequiredArgsConstructor` 注入），继承 `JavaTimeModule` 等已注册模块（原为 `new ObjectMapper()` 局部实例）。
+- **ArkAiClient ObjectMapper**：通过构造函数注入 Spring 管理的 `ObjectMapper`（原为 `new ObjectMapper()` 字段初始化），确保序列化配置与全局一致。
+- **ArkAiClient 解析预检**：`parseToolMessage()` 和 `parseAssistantToolCalls()` 在调用 `objectMapper.readTree()` 前增加 `content.stripLeading().startsWith("{")` 快速预检（容忍前导空白/换行），纯文本消息不再进入 JSON 解析路径（避免异常驱动回退的栈填充开销）；回退路径记录 DEBUG 日志（原为静默 `catch (Exception ignore)`）。
