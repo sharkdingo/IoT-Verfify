@@ -434,6 +434,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 | P1 | `validateTriggerAttributes()` | Trigger.Attribute 合法性 + Trigger.Relation 归一化后合法性（`=`/`!=`/`>`/`>=`/`<`/`<=`） |
 | P2 | `validateStartEndStates()` | 多模式 EndState 分号段数 = 模式数 |
 | P3 | `validateEnvVarConflicts()` | 同名环境变量跨设备范围一致 |
+| P4 | `validatePropertyValues()` | trust/privacy 值合法性（实例值、content privacy、manifest variable trust/privacy、workingState privacy 均须为合法枚举值） |
 | P5 | `validateTrustPrivacyConsistency()` | 同 (mode, state) 的 trust/privacy 值一致 |
 
 软性校验（由 Factory 调用）：
@@ -463,7 +464,9 @@ public enum PropertyDimension {
 
 ### 认证
 
-所有端点（除 `/api/auth/**`）需要 JWT 认证：`Authorization: Bearer <token>`
+所有端点（除 `/api/auth/register` 和 `/api/auth/login`）需要 JWT 认证：`Authorization: Bearer <token>`
+
+> 注：Spring Security 对 `/api/auth/**` 整体 `permitAll()`，但 `POST /api/auth/logout` 在控制器层通过 `@CurrentUser` 和 `@RequestHeader("Authorization")` 强制要求有效 Token，无 Token 会返回 401。
 
 ### 验证相关
 
@@ -775,7 +778,7 @@ java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 - **ArkAiClient 超时**：通过 `volcengine.ark.timeout-minutes`（`ARK_TIMEOUT_MINUTES`）可配，默认 5 分钟。
 - **JsonUtils**：注册 `JavaTimeModule`；新增 `fromJsonToStringList()` / `fromJsonList()` 辅助方法。
 - **DELETE trace 404**：`VerificationServiceImpl.deleteTrace()` 对不存在的 trace 抛出 `ResourceNotFoundException`（原为静默 200）。
-- **JwtAuthenticationFilter**：token 提取包裹 try-catch — 畸形 token 视为未认证（不抛 500）。
+- **JwtAuthenticationFilter**：`getUserIdFromToken()` 调用包裹 try-catch — 畸形 token 视为未认证（不抛 500）。
 - **异步控制器模式**：`verifyAsync` / `simulateAsync` 返回 `Result<Long>`（不再 `ResponseEntity`）；`TaskRejectedException` 抛 `ServiceUnavailableException`，由 `GlobalExceptionHandler` 统一处理。
 - **临时文件保留**：`cleanupTempFile()` 在 `VerificationServiceImpl` 和 `SimulationServiceImpl` 中为空操作 — `nusmv_*` 临时目录保留用于事后排障。
 - **Surefire JVM 配置**：`pom.xml` 配置 `maven-surefire-plugin` 添加 `-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading`，修复 JDK 17 下 Mockito/ByteBuddy `MockMaker` 初始化失败问题。

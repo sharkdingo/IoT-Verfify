@@ -141,7 +141,6 @@ const unpack = <T>(response: any): T => {
 | `login(data)` | POST | `/auth/login` | User login |
 | `register(data)` | POST | `/auth/register` | User registration |
 | `logout()` | POST | `/auth/logout` | User logout (blacklists token) |
-| `getUserInfo()` | GET | `/auth/me` | Get current user info |
 
 ### Usage Example
 ```typescript

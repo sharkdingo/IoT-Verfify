@@ -1193,7 +1193,7 @@ Trace Type: Counterexample
 - **ArkAiClient 超时可配**：`volcengine.ark.timeout-minutes`（默认 5）。
 - **JsonUtils 增强**：注册 `JavaTimeModule`；新增 `fromJsonToStringList()` / `fromJsonList()`。
 - **DELETE trace 404**：不存在的 trace 抛 `ResourceNotFoundException`（原为静默 200）。
-- **JwtAuthenticationFilter**：token 提取 try-catch — 畸形 token 视为未认证。
+- **JwtAuthenticationFilter**：`getUserIdFromToken()` 调用包裹 try-catch — 畸形 token 视为未认证。
 - **异步控制器模式**：`verifyAsync` / `simulateAsync` 返回 `Result<Long>`（不再 `ResponseEntity`）；`TaskRejectedException` 抛 `ServiceUnavailableException`。
 - **临时文件保留**：`cleanupTempFile()` 为空操作 — `nusmv_*` 临时目录保留用于事后排障。
 - **Surefire JVM 配置**：`pom.xml` 配置 `maven-surefire-plugin` 添加 `-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading`，修复 JDK 17 下 Mockito/ByteBuddy `MockMaker` 初始化失败。

@@ -101,7 +101,7 @@ Key config in `src/main/resources/application.yaml`:
 - `getModeIndexOfState()` uses exact-match or `mode + "_"` prefix matching (not `contains()`), preventing false positives like mode "on" matching state "offline".
 - `GlobalExceptionHandler` masks internal messages: `IllegalArgumentException` → generic "Invalid request parameter" (400), `IllegalStateException` → "Internal server error" (500), `DataIntegrityViolationException` → "Data conflict, the resource may already exist" (409).
 - `JwtUtil.@PostConstruct` warns if JWT secret is still the insecure default when a production profile (`prod`/`production`) is active (case-insensitive matching via `toLowerCase()`). `ProductionSafetyCheck` hard-fails startup if JWT secret is null, blank, or starts with the insecure default prefix; also catches insecure DB password and null/blank/placeholder API key. `JwtUtil` provides a WARN-level defense-in-depth log.
-- `JwtAuthenticationFilter` wraps token extraction in try-catch — malformed tokens are treated as unauthenticated (no 500).
+- `JwtAuthenticationFilter` wraps `getUserIdFromToken()` in try-catch — malformed tokens are treated as unauthenticated (no 500).
 - Thread pool context propagation: `ThreadConfig.TaskDecorator` deep-copies `Authentication` (new `UsernamePasswordAuthenticationToken` + new `ArrayList` for authorities), `UserContextHolder.userId`, and `MDC` context map into child threads; `finally` clears all three.
 - Async task safety: `completeTask`/`failTask` use atomic conditional UPDATE queries (`WHERE status <> CANCELLED`) instead of check-then-save, eliminating TOCTOU race conditions. `handleCancellation` uses `cancelTaskIfStillActive` (`WHERE status IN (PENDING, RUNNING)`) to prevent overwriting COMPLETED/FAILED with CANCELLED. Repository methods return `int` (affected rows); 0 means task was already cancelled/finished.
 - `@Transactional(readOnly = true)` on all read-only service methods: `BoardStorageServiceImpl` (`getNodes`, `getEdges`, `getSpecs`, `getRules`, `getActive`, `getDeviceTemplates`), `VerificationServiceImpl` (`getTask`, `getTaskProgress`, `getUserTraces`, `getTrace`), `SimulationServiceImpl` (`getTask`, `getTaskProgress`, `getUserSimulations`, `getSimulation`), `ChatServiceImpl` (`getUserSessions`, `getHistory`).
@@ -174,7 +174,7 @@ Key config in `src/main/resources/application.yaml`:
 VerificationRequestDto (devices, rules, specs, isAttack, intensity, enablePrivacy)
   → SmvGenerator.generate()
     → DeviceSmvDataFactory.buildDeviceSmvMap() — merge user device instances with templates
-    → SmvModelValidator.validate() — hard checks (trigger attribute/relation, state format, env conflicts, trust/privacy consistency)
+    → SmvModelValidator.validate() — hard checks (P1 trigger attribute/relation, P2 state format, P3 env conflicts, P4 property value legality, P5 trust/privacy consistency)
     → SmvRuleCommentWriter.build(rules) — rule comments
     → SmvDeviceModuleBuilder.build(smv, isAttack, intensity, enablePrivacy) — per-device MODULE definitions
     → SmvMainModuleBuilder.build(..., enablePrivacy) — main MODULE (instances, ASSIGN, transitions)

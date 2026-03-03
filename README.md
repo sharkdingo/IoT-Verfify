@@ -273,8 +273,8 @@ spring:
 server:
   port: 8080
   error:
-    include-message: always
-    include-binding-errors: always
+    include-message: never
+    include-binding-errors: never
 
 volcengine:
   ark:
@@ -286,8 +286,7 @@ jwt:
   secret: iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256  # ⚠️ 修改为更复杂的密钥
   expiration: 86400000  # Token 有效期 (毫秒)，86400000 = 24 小时
 
-data:
-  redis:
+spring.data.redis:
     host: localhost
     port: 6379
     password:  # ⚠️ 如果 Redis 有密码，填入此处
@@ -330,8 +329,7 @@ spring:
     username: ${PROD_DB_USERNAME}
     password: ${PROD_DB_PASSWORD}
 
-data:
-  redis:
+spring.data.redis:
     host: ${PROD_REDIS_HOST}
     port: ${PROD_REDIS_PORT}
     password: ${PROD_REDIS_PASSWORD}
@@ -588,7 +586,6 @@ taskkill /F /IM node.exe >nul 2>&1
 | POST | `/api/auth/register` | 用户注册 | 否 |
 | POST | `/api/auth/login` | 用户登录 | 否 |
 | POST | `/api/auth/logout` | 退出登录 | 是 |
-| GET | `/api/auth/me` | 获取当前用户信息 | 是 |
 
 ### 设备模板接口
 
@@ -596,19 +593,19 @@ taskkill /F /IM node.exe >nul 2>&1
 |------|------|------|----------|
 | GET | `/api/board/templates` | 获取设备模板列表 | 是 |
 | POST | `/api/board/templates` | 创建设备模板 | 是 |
-| PUT | `/api/board/templates/{id}` | 更新设备模板 | 是 |
 | DELETE | `/api/board/templates/{id}` | 删除设备模板 | 是 |
+| POST | `/api/board/templates/reload` | 重载默认模板 | 是 |
 | GET | `/api/board/active` | 获取活跃设备 | 是 |
-| POST | `/api/board/edges` | 创建边缘设备 | 是 |
+| POST | `/api/board/active` | 保存活跃设备 | 是 |
+| GET | `/api/board/edges` | 获取连线列表 | 是 |
+| POST | `/api/board/edges` | 保存连线列表 | 是 |
 
 ### 规格接口
 
 | 方法 | 路径 | 说明 | 需要认证 |
 |------|------|------|----------|
 | GET | `/api/board/specs` | 获取规格列表 | 是 |
-| POST | `/api/board/specs` | 创建规格 | 是 |
-| PUT | `/api/board/specs/{id}` | 更新规格 | 是 |
-| DELETE | `/api/board/specs/{id}` | 删除规格 | 是 |
+| POST | `/api/board/specs` | 保存规格（全量替换） | 是 |
 
 ### 聊天接口
 
@@ -667,7 +664,7 @@ curl -X POST http://localhost:8080/api/chat/completions \
 | POST | `/api/board/edges` | 保存边列表 | 是 |
 
 **说明：**
-- Rule 表示数据流向：`sources[] → toId.toApi`
+- Rule 表示 IFTTT 规则：`conditions[] → command`（条件满足时执行命令）
 - Edge 是 Rule 的可视化表示，包含连线端点坐标
 - 前端维护 Rule 和 Edge 的同步关系，后端只负责存储
 
@@ -675,10 +672,28 @@ curl -X POST http://localhost:8080/api/chat/completions \
 
 | 方法 | 路径 | 说明 | 需要认证 |
 |------|------|------|----------|
-| POST | `/api/verify` | 执行 IoT 系统形式化验证 | 是 |
+| POST | `/api/verify` | 执行 IoT 系统形式化验证（同步） | 是 |
+| POST | `/api/verify/async` | 异步验证，返回 taskId | 是 |
+| GET | `/api/verify/tasks/{id}` | 获取验证任务状态 | 是 |
+| GET | `/api/verify/tasks/{id}/progress` | 获取验证任务进度 (0-100) | 是 |
+| POST | `/api/verify/tasks/{id}/cancel` | 取消验证任务 | 是 |
 | GET | `/api/verify/traces` | 获取用户所有验证轨迹 | 是 |
 | GET | `/api/verify/traces/{id}` | 获取单个验证轨迹 | 是 |
 | DELETE | `/api/verify/traces/{id}` | 删除验证轨迹 | 是 |
+
+### 模拟接口
+
+| 方法 | 路径 | 说明 | 需要认证 |
+|------|------|------|----------|
+| POST | `/api/verify/simulate` | 随机模拟 N 步（不落库） | 是 |
+| POST | `/api/verify/simulate/async` | 异步模拟，返回 taskId | 是 |
+| GET | `/api/verify/simulations/tasks/{id}` | 获取模拟任务状态 | 是 |
+| GET | `/api/verify/simulations/tasks/{id}/progress` | 获取模拟任务进度 (0-100) | 是 |
+| POST | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟任务 | 是 |
+| POST | `/api/verify/simulations` | 执行模拟并持久化 | 是 |
+| GET | `/api/verify/simulations` | 获取用户所有模拟记录（摘要） | 是 |
+| GET | `/api/verify/simulations/{id}` | 获取单条模拟记录（详情） | 是 |
+| DELETE | `/api/verify/simulations/{id}` | 删除模拟记录 | 是 |
 
 #### 验证请求示例
 
@@ -689,10 +704,8 @@ curl -X POST http://localhost:8080/api/verify \
   -d '{
     "devices": [
       {
-        "id": "device-001",
+        "varName": "ac_1",
         "templateName": "AirConditioner",
-        "label": "AC Cooler",
-        "position": {"x": 100, "y": 200},
         "state": "Off",
         "variables": [{"name": "temperature", "value": "24", "trust": "trusted"}],
         "privacies": [{"name": "temperature", "privacy": "private"}]
@@ -700,17 +713,23 @@ curl -X POST http://localhost:8080/api/verify \
     ],
     "rules": [
       {
-        "sources": [{"fromId": "AC Cooler", "targetType": "variable", "property": "temperature", "relation": ">", "value": "28"}],
-        "toId": "device-001",
-        "toApi": "turnOn"
+        "conditions": [{"deviceName": "ac_1", "attribute": "temperature", "relation": ">", "value": "28"}],
+        "command": {"deviceName": "ac_1", "action": "turnOn"}
       }
     ],
     "specs": [
       {
-        "aConditions": [{"deviceId": "device-001", "targetType": "state", "key": "state", "relation": "=", "value": "Cooling"}]
+        "id": "spec_1",
+        "templateId": "1",
+        "templateLabel": "AG(A)",
+        "aConditions": [{"deviceId": "ac_1", "targetType": "state", "key": "state", "relation": "=", "value": "Cooling"}],
+        "ifConditions": [],
+        "thenConditions": []
       }
     ],
-    "saveTrace": true
+    "isAttack": false,
+    "intensity": 3,
+    "enablePrivacy": false
   }'
 ```
 
@@ -771,13 +790,7 @@ curl -X POST http://localhost:8080/api/verify \
 ```bash
 curl -X POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "testuser", "password": "password123"}'
-```
-
-**获取用户信息（需要 Token）：**
-```bash
-curl -X GET http://localhost:8080/api/auth/me \
-  -H "Authorization: Bearer your_jwt_token_here"
+  -d '{"phone": "13800138000", "password": "password123"}'
 ```
 
 ---
