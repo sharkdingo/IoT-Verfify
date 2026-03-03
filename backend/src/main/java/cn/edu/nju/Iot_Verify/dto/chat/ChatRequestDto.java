@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.chat;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 @Data
@@ -10,5 +11,6 @@ public class ChatRequestDto {
     private String sessionId;
 
     @NotBlank(message = "Content is required")
+    @Size(max = 10000, message = "Content must not exceed 10000 characters")
     private String content;
 }

@@ -11,16 +11,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.lang.NonNull;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.mockito.ArgumentMatchers.any;
 
 @ExtendWith(MockitoExtension.class)
 class NodeServiceImplMutationTest {
@@ -46,7 +47,7 @@ class NodeServiceImplMutationTest {
                 nodeService.addNode(1L, "unknown", null, null, null, null, null, null));
 
         assertEquals(400, ex.getCode());
-        verify(nodeRepo, never()).save(org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(nodeRepo);
     }
 
     @Test
@@ -67,6 +68,15 @@ class NodeServiceImplMutationTest {
         nodeService.addNode(1L, "Light", "shared-node", 10.0, 20.0, "On", 100, 80);
 
         verify(nodeRepo).existsByUserIdAndId(1L, "shared-node");
-        verify(nodeRepo).save(any(DeviceNodePo.class));
+        verify(nodeRepo).save(expectedSavedNode("shared-node", 1L));
+    }
+
+    private @NonNull DeviceNodePo expectedSavedNode(@NonNull String id, @NonNull Long userId) {
+        return Objects.requireNonNull(
+                DeviceNodePo.builder()
+                        .id(id)
+                        .userId(userId)
+                        .build(),
+                "expected saved node must not be null");
     }
 }

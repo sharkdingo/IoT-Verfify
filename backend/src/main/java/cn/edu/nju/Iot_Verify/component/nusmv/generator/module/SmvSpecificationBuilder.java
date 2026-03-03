@@ -25,7 +25,7 @@ public class SmvSpecificationBuilder {
     private static final String CONDITION_SEPARATOR = " & ";
 
     public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
-                       Map<String, DeviceSmvData> deviceSmvMap) {
+                       Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
         StringBuilder content = new StringBuilder();
 
         if (specs == null || specs.isEmpty()) {
@@ -40,6 +40,11 @@ public class SmvSpecificationBuilder {
             if (spec == null) continue;
             if ((spec.getAConditions() == null || spec.getAConditions().isEmpty()) &&
                 (spec.getIfConditions() == null || spec.getIfConditions().isEmpty())) continue;
+
+            // Defense-in-depth: privacy specs should have been caught upstream by SmvGenerator.validateNoPrivacySpecs
+            if (!enablePrivacy && hasAnyPrivacyCondition(spec)) {
+                log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream", spec.getId());
+            }
 
             try {
                 String specString = generateSpecString(spec, isAttack, intensity, deviceSmvMap);
@@ -57,6 +62,19 @@ public class SmvSpecificationBuilder {
 
         log.debug("Generated {} specifications", generatedSpecs);
         return content.toString();
+    }
+
+    private boolean hasAnyPrivacyCondition(SpecificationDto spec) {
+        return hasPrivacyConditions(spec.getAConditions())
+                || hasPrivacyConditions(spec.getIfConditions())
+                || hasPrivacyConditions(spec.getThenConditions());
+    }
+
+    private boolean hasPrivacyConditions(List<SpecConditionDto> conditions) {
+        if (conditions == null) return false;
+        return conditions.stream().anyMatch(c ->
+                c != null && c.getTargetType() != null
+                        && "privacy".equalsIgnoreCase(c.getTargetType().trim()));
     }
 
     /**

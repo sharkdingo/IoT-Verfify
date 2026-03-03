@@ -22,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.lang.reflect.Method;
@@ -30,11 +31,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -54,6 +57,8 @@ class ChatServiceImplToolLoopControlTest {
     private AiToolManager aiToolManager;
     @Mock
     private ChatMapper chatMapper;
+    @Mock
+    private TransactionTemplate transactionTemplate;
 
     private ChatServiceImpl service;
     private Method executeToolLoopMethod;
@@ -61,13 +66,20 @@ class ChatServiceImplToolLoopControlTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        lenient().doAnswer(invocation -> {
+            Consumer<org.springframework.transaction.TransactionStatus> action = invocation.getArgument(0);
+            action.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
                 arkAiClient,
                 aiToolManager,
                 new ObjectMapper(),
-                chatMapper
+                chatMapper,
+                transactionTemplate
         );
         executeToolLoopMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "executeToolLoop",
@@ -160,6 +172,7 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    @SuppressWarnings("null")
     void executeToolLoop_whenFunctionNameMissing_shouldPersistStructuredErrorAndSkipToolExecution() throws Exception {
         when(arkAiClient.checkIntent(anyList(), anyList()))
                 .thenReturn(toolCallResult("   ", "{}"))

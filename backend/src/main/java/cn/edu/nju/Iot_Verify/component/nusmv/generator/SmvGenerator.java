@@ -129,7 +129,7 @@ public class SmvGenerator {
         }
 
         content.append(mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy));
-        content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap));
+        content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy));
 
         return content.toString();
     }

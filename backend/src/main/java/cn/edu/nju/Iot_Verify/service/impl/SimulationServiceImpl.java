@@ -198,6 +198,12 @@ public class SimulationServiceImpl implements SimulationService {
                 return;
             }
 
+            // Codex A: Also check DB status — another instance may have cancelled while we were queued.
+            if (task.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED) {
+                log.info("Simulation task {} already cancelled in DB, skipping execution", taskId);
+                return;
+            }
+
             task.setStatus(SimulationTaskPo.TaskStatus.RUNNING);
             task.setStartedAt(LocalDateTime.now());
             task.setProgress(0);
@@ -247,6 +253,7 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public SimulationTaskDto getTask(Long userId, Long taskId) {
         SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
@@ -255,6 +262,7 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public int getTaskProgress(Long userId, Long taskId) {
         SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
@@ -296,6 +304,7 @@ public class SimulationServiceImpl implements SimulationService {
             task.setProgress(100);
             task.setCompletedAt(LocalDateTime.now());
             simulationTaskRepository.save(task);
+            cancelledTasks.remove(taskId);
         }
         return true;
     }
@@ -317,12 +326,14 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<SimulationTraceSummaryDto> getUserSimulations(Long userId) {
         return simulationTraceMapper.toSummaryDtoList(
                 simulationTraceRepository.findByUserIdOrderByCreatedAtDesc(userId));
     }
 
     @Override
+    @Transactional(readOnly = true)
     public SimulationTraceDto getSimulation(Long userId, Long id) {
         return simulationTraceRepository.findByIdAndUserId(id, userId)
                 .map(simulationTraceMapper::toDto)
@@ -444,25 +455,19 @@ public class SimulationServiceImpl implements SimulationService {
     private void completeTask(SimulationTaskPo task, Long simulationTraceId, int steps, List<String> logs) {
         if (task == null) return;
         try {
-            // Guard against cross-instance cancellation: another instance may have written
-            // CANCELLED to DB while this instance's thread was still executing.
-            // NOTE: This is check-then-act (not atomic). A TOCTOU race of ~microseconds
-            // remains; fully closing it would require a conditional UPDATE or pessimistic lock.
-            if (isTaskCancelledInDb(task.getId())) {
-                log.info("Simulation task {} already cancelled (cross-instance), skipping completion", task.getId());
-                return;
+            LocalDateTime completedAt = LocalDateTime.now();
+            Long processingTimeMs = task.getStartedAt() != null
+                    ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
+            String checkLogsJson = serializeCheckLogs(logs);
+            int updated = simulationTaskRepository.completeTaskIfNotCancelled(
+                    task.getId(),
+                    SimulationTaskPo.TaskStatus.COMPLETED,
+                    completedAt, steps, simulationTraceId,
+                    null, checkLogsJson, processingTimeMs,
+                    SimulationTaskPo.TaskStatus.CANCELLED);
+            if (updated == 0) {
+                log.info("Simulation task {} was already cancelled, skipping completion", task.getId());
             }
-            task.setStatus(SimulationTaskPo.TaskStatus.COMPLETED);
-            task.setCompletedAt(LocalDateTime.now());
-            task.setProgress(100);
-            task.setSteps(steps);
-            task.setSimulationTraceId(simulationTraceId);
-            task.setErrorMessage(null);
-            if (task.getStartedAt() != null) {
-                task.setProcessingTimeMs(java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
-            }
-            writeCheckLogs(task, logs);
-            simulationTaskRepository.save(task);
         } catch (Exception e) {
             log.error("Failed to complete simulation task: {}", task.getId(), e);
         }
@@ -471,29 +476,31 @@ public class SimulationServiceImpl implements SimulationService {
     private void failTask(SimulationTaskPo task, String errorMessage, List<String> logs) {
         if (task == null) return;
         try {
-            // Same TOCTOU guard as completeTask — see note there.
-            if (isTaskCancelledInDb(task.getId())) {
-                log.info("Simulation task {} already cancelled (cross-instance), skipping fail", task.getId());
-                return;
+            LocalDateTime completedAt = LocalDateTime.now();
+            Long processingTimeMs = task.getStartedAt() != null
+                    ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
+            String checkLogsJson = serializeCheckLogs(logs == null || logs.isEmpty() ? List.of(errorMessage) : logs);
+            int updated = simulationTaskRepository.failTaskIfNotCancelled(
+                    task.getId(),
+                    SimulationTaskPo.TaskStatus.FAILED,
+                    completedAt, errorMessage,
+                    checkLogsJson, processingTimeMs,
+                    SimulationTaskPo.TaskStatus.CANCELLED);
+            if (updated == 0) {
+                log.info("Simulation task {} was already cancelled, skipping fail", task.getId());
             }
-            task.setStatus(SimulationTaskPo.TaskStatus.FAILED);
-            task.setCompletedAt(LocalDateTime.now());
-            task.setProgress(100);
-            task.setErrorMessage(errorMessage);
-            if (task.getStartedAt() != null) {
-                task.setProcessingTimeMs(java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
-            }
-            writeCheckLogs(task, logs == null || logs.isEmpty() ? List.of(errorMessage) : logs);
-            simulationTaskRepository.save(task);
         } catch (Exception e) {
             log.error("Failed to mark simulation task as failed: {}", task.getId(), e);
         }
     }
 
-    private boolean isTaskCancelledInDb(Long taskId) {
-        return simulationTaskRepository.findById(taskId)
-                .map(t -> t.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED)
-                .orElse(false);
+    private String serializeCheckLogs(List<String> logs) {
+        try {
+            return objectMapper.writeValueAsString(logs == null ? List.of() : logs);
+        } catch (Exception e) {
+            log.warn("Failed to serialize check logs", e);
+            return "[]";
+        }
     }
 
     private void handleCancellation(SimulationTaskPo task) {
@@ -504,14 +511,15 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     private void updateTaskProgress(Long taskId, int progress, String message) {
+        Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
-        taskProgress.put(taskId, clamped);
+        taskProgress.put(requiredTaskId, clamped);
         // Persist to DB for cross-instance visibility
-        simulationTaskRepository.findById(taskId).ifPresent(task -> {
+        simulationTaskRepository.findById(requiredTaskId).ifPresent(task -> {
             task.setProgress(clamped);
             simulationTaskRepository.save(task);
         });
-        log.debug("Simulation task {} progress: {}% - {}", taskId, progress, message);
+        log.debug("Simulation task {} progress: {}% - {}", requiredTaskId, progress, message);
     }
 
     private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result, String requestJson) {
@@ -642,9 +650,8 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     private void cleanupTempFile(File file) {
-        if (file != null && file.exists()) {
-            log.info("Keeping NuSMV model file for review: {}", file.getAbsolutePath());
-        }
+        // Keeping NuSMV model file for review: model.smv, request.json, output.txt, result.json
+        // Temp directories (nusmv_*) are retained for post-mortem debugging.
     }
 
     private String truncateOutput(String output) {

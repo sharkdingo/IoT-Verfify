@@ -577,7 +577,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = specBuilder.build(List.of(spec), true, 3, map);
+        String result = specBuilder.build(List.of(spec), true, 3, map, false);
 
         assertFalse(result.contains("intensity<="), "Spec should not inject intensity constraint");
     }
@@ -603,7 +603,7 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ts_1", smv);
 
-        String result = specBuilder.build(List.of(spec), true, 3, map);
+        String result = specBuilder.build(List.of(spec), true, 3, map, false);
 
         assertFalse(result.contains("intensity<="), "Safety spec should not inject intensity constraint");
         assertTrue(result.contains(".is_attack=FALSE"), "Safety spec should still include is_attack guard");
@@ -1701,7 +1701,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("(thermostat_1.Mode=auto & thermostat_1.FanMode=on)"),
                 "State tuple should compile to conjunction, got:\n" + result);
     }
@@ -1740,7 +1740,7 @@ class SmvGeneratorFixesTest {
         spec.setAConditions(List.of(a));
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> specBuilder.build(List.of(spec), false, 0, map));
+                () -> specBuilder.build(List.of(spec), false, 0, map, false));
         assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
     }
 
@@ -1774,7 +1774,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
                 "Ambiguous state value should degrade to invalid placeholder, got:\n" + result);
         assertTrue(result.contains("ambiguous across modes"),
@@ -1812,7 +1812,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Environment variable should be referenced as a_temperature, got:\n" + result);
         assertFalse(result.contains("sensor_1.temperature>30"),
@@ -1848,7 +1848,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
                 "Invalid trust key should degrade to placeholder, got:\n" + result);
         assertTrue(result.contains("cannot resolve property key"),
@@ -1886,7 +1886,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Relation with spaces should normalize to >, got:\n" + result);
     }
@@ -1922,7 +1922,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
                 "Unsupported relation should degrade to invalid-spec placeholder, got:\n" + result);
         assertTrue(result.contains("unsupported relation"),
@@ -1960,7 +1960,7 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map);
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
         assertTrue(result.contains("a_temperature>30"),
                 "Safety spec should keep env expression on a_temperature, got:\n" + result);
         assertTrue(result.contains("sensor_1.trust_temperature=untrusted"),

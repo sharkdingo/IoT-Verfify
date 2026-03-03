@@ -12,8 +12,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -39,6 +42,10 @@ class ChatServiceImplHistoryWindowTest {
     private AiToolManager aiToolManager;
     @Mock
     private ChatMapper chatMapper;
+    @Mock
+    private TransactionTemplate transactionTemplate;
+    @Captor
+    private ArgumentCaptor<List<ChatMessagePo>> chatMessageListCaptor;
 
     private ChatServiceImpl service;
 
@@ -50,7 +57,8 @@ class ChatServiceImplHistoryWindowTest {
                 arkAiClient,
                 aiToolManager,
                 new ObjectMapper(),
-                chatMapper
+                chatMapper,
+                transactionTemplate
         );
     }
 
@@ -162,9 +170,8 @@ class ChatServiceImplHistoryWindowTest {
         List<ChatMessageResponseDto> history = service.getHistory(1L, "s4");
 
         assertEquals(2, history.size());
-        org.mockito.ArgumentCaptor<List<ChatMessagePo>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(chatMapper).toChatMessageDtoList(captor.capture());
-        List<ChatMessagePo> visible = captor.getValue();
+        verify(chatMapper).toChatMessageDtoList(chatMessageListCaptor.capture());
+        List<ChatMessagePo> visible = chatMessageListCaptor.getValue();
         assertEquals(2, visible.size());
         assertEquals("user", visible.get(0).getRole());
         assertEquals("assistant", visible.get(1).getRole());
@@ -198,9 +205,8 @@ class ChatServiceImplHistoryWindowTest {
         List<ChatMessageResponseDto> history = service.getHistory(1L, "s5");
 
         assertEquals(3, history.size());
-        org.mockito.ArgumentCaptor<List<ChatMessagePo>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(chatMapper).toChatMessageDtoList(captor.capture());
-        List<ChatMessagePo> visible = captor.getValue();
+        verify(chatMapper).toChatMessageDtoList(chatMessageListCaptor.capture());
+        List<ChatMessagePo> visible = chatMessageListCaptor.getValue();
         assertEquals(3, visible.size());
         assertEquals("assistant", visible.get(1).getRole());
         assertEquals("Calling tool...", visible.get(1).getContent());

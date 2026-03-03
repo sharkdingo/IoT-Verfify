@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotEmpty;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -22,7 +22,7 @@ import java.util.List;
 public class SimulationRequestDto {
 
     @Valid
-    @NotNull(message = "Devices list cannot be null")
+    @NotEmpty(message = "Devices list cannot be empty")
     private List<DeviceVerificationDto> devices;
 
     @Valid

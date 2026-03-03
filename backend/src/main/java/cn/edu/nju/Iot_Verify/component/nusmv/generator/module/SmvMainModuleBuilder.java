@@ -1302,10 +1302,10 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
                 Integer lowerBound = var.getLowerBound();
                 Integer upperBound = var.getUpperBound();
-                boolean hasNumericBounds = lowerBound != null && upperBound != null;
-                if (hasNumericBounds && isAttack && isSensor) {
+                if (lowerBound != null && upperBound != null && isAttack && isSensor) {
                     upperBound = SmvBoundsUtils.resolveEffectiveUpperBound(lowerBound, upperBound, true, intensity);
                 }
+                boolean hasNumericBounds = lowerBound != null && upperBound != null;
 
                 content.append("\n\tnext(").append(varName).append(".").append(var.getName()).append(") :=\n");
                 content.append("\tcase\n");
@@ -1499,6 +1499,13 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
     private String clampExpr(String expr, int lower, int upper) {
         return "max(" + lower + ", min(" + upper + ", " + expr + "))";
+    }
+
+    private String clampExpr(String expr, Integer lower, Integer upper) {
+        if (lower == null || upper == null) {
+            return expr;
+        }
+        return clampExpr(expr, lower.intValue(), upper.intValue());
     }
 
     /**

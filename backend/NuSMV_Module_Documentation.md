@@ -1,7 +1,7 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年3月2日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离
+> **最后更新**: 2026年3月3日
+> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离 + SmvBoundsUtils 边界集中化 + transition clamp 闭环
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
@@ -13,7 +13,7 @@
 > - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
 > - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
 > - 创建自定义模板时会执行 NuSMV 预检（probe generate）：模式名/状态名必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），预检失败返回 400/500。
-> - 模式名、状态名、变量标识统一通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀；值归一化场景仍可能在局部做去空格处理。
+> - 模式名、状态名、变量标识统一通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀、保留字大小写无关转义（含 `W`）；设备 ID 通过 `toVarName()` 做同级防御。
 
 ---
 
@@ -31,6 +31,7 @@
 10. [随机模拟功能](#10-随机模拟功能)
 11. [API 端点速查](#11-api-端点速查)
 12. [逻辑完整性检查清单](#12-逻辑完整性检查清单)
+13. [2026-03-03 同步更新（实现对齐）](#13-2026-03-03-同步更新实现对齐)
 
 ---
 
@@ -231,6 +232,9 @@
 │  │  2. SmvDeviceModuleBuilder → MODULE Device_xxx        │   │
 │  │  3. SmvMainModuleBuilder   → MODULE main              │   │
 │  │  4. SmvSpecificationBuilder → CTLSPEC / LTLSPEC       │   │
+│  │  共享工具:                                              │   │
+│  │   SmvBoundsUtils      — 数值上界扩展公式               │   │
+│  │   SmvRelationUtils    — 关系运算符归一化               │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                          ↓                                  │
 │  写入临时文件 model.smv                                      │
@@ -364,6 +368,7 @@ FROZENVAR
 INVAR intensity <= 3;      -- 全局预算约束（示例 N=3）
 
 -- 环境变量范围按 intensity 比例扩展（仅上界扩展）
+-- 公式集中在 SmvBoundsUtils.resolveEffectiveUpperBound()
 -- expansion = (upper-lower)/5 * intensity/50
 -- 例：temperature 原始 15..35，intensity=50 时变为 15..39
 VAR
@@ -519,25 +524,25 @@ esac;
 | 9 | `appendContentPrivacyTransitions()` | `next(device.privacy_contentName)` | IsChangeable=true 的 content 隐私转换：当规则命令引用该 content 时（如 `THEN Facebook.post(MobilePhone.photo)`），规则触发将 content 隐私设为 `private`；否则自保持 |
 | 10 | `appendVariableRateTransitions()` | `next(device.varName_rate)` | 受影响变量的变化率，由设备 WorkingState.Dynamics 决定。`_rate` 范围根据模板中实际 ChangeRate 值动态计算（无 Dynamics 时 fallback 为 -10..10） |
 | 11 | `appendExternalVariableAssignments()` | `device.varName := a_varName` | 外部变量（IsInside=false）镜像环境变量（简单赋值，非 next）。注意：代码中此方法在 `appendVariableRateTransitions` 之后调用 |
-| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换；攻击模式下生成 `is_attack=TRUE: lower..upper` 分支（使用模板原始范围，不含扩展）。Transition trigger 引用同样使用当前设备 env var 检查 |
+| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | 内部变量（IsInside=true）的 next() 转换；攻击模式下生成 `is_attack=TRUE: lower..upper` 分支（上界经 `SmvBoundsUtils.resolveEffectiveUpperBound()` 扩展）。Transition trigger 引用同样使用当前设备 env var 检查 |
 
 环境变量 `next()` 转换示例（数值型，有设备影响率）：
 ```smv
 next(a_temperature) :=
 case
     -- 有设备影响率时（如 airconditioner.temperature_rate）
-    a_temperature=35-(airconditioner.temperature_rate): {toint(a_temperature)-1+airconditioner.temperature_rate, a_temperature+airconditioner.temperature_rate};
+    a_temperature=35-(airconditioner.temperature_rate): {max(15, min(35, toint(a_temperature)-1+airconditioner.temperature_rate)), max(15, min(35, a_temperature+airconditioner.temperature_rate))};
     a_temperature>35-(airconditioner.temperature_rate): {35};
-    a_temperature=15-(airconditioner.temperature_rate): {a_temperature+airconditioner.temperature_rate, a_temperature+1+airconditioner.temperature_rate};
+    a_temperature=15-(airconditioner.temperature_rate): {max(15, min(35, a_temperature+airconditioner.temperature_rate)), max(15, min(35, a_temperature+1+airconditioner.temperature_rate))};
     a_temperature<15-(airconditioner.temperature_rate): {15};
-    TRUE: {a_temperature-1+airconditioner.temperature_rate, a_temperature+airconditioner.temperature_rate, a_temperature+1+airconditioner.temperature_rate};
+    TRUE: {max(15, min(35, a_temperature-1+airconditioner.temperature_rate)), max(15, min(35, a_temperature+airconditioner.temperature_rate)), max(15, min(35, a_temperature+1+airconditioner.temperature_rate))};
 esac;
 ```
 
 内部变量攻击扩展：分两处生效——
 
 1. **VAR 声明范围扩展**（`SmvDeviceModuleBuilder.appendInternalVariables`）：仅对传感器设备的数值型内部变量，公式与环境变量相同 `expansion = range/5 * intensity/50`，仅扩展上界。
-2. **next() 攻击分支**（`SmvMainModuleBuilder.appendInternalVariableTransitions`）：当 `isAttack=true` 且设备为传感器时，生成 `device.is_attack=TRUE: lower..upper` 分支，使用模板原始范围（不含扩展），允许攻击者将变量设为任意合法值。
+2. **next() 攻击分支**（`SmvMainModuleBuilder.appendInternalVariableTransitions`）：当 `isAttack=true` 且设备为传感器时，生成 `device.is_attack=TRUE: lower..upper` 分支，上界经 `SmvBoundsUtils.resolveEffectiveUpperBound()` 扩展（与 VAR 声明一致），允许攻击者将变量设为扩展后范围内的任意值。
 3. **执行器状态劫持**（`SmvMainModuleBuilder.appendStateTransitions`）：当 `isAttack=true` 且设备为非传感器（执行器）时，在 `next(device.ModeVar)` 的 case 中生成最高优先级分支 `device.is_attack=TRUE: {所有合法状态}`，允许攻击者将执行器劫持到任意合法状态。该分支优先于规则和模板 Transition，因此被攻击的执行器会绕过正常转换逻辑。由此产生的状态跳变也会触发 API 信号脉冲（`appendApiSignalTransitions` 检测到 `next(mode)=endState`），这是预期行为——被劫持的设备可以产生任意信号。
 
 ---
@@ -633,12 +638,12 @@ ASSIGN
 		thermostat_1.ThermostatMode!=cool & next(thermostat_1.ThermostatMode)=cool: TRUE;
 		TRUE: FALSE;
 	esac;
-	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查）
+	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查 + clamp 夹紧）
 	next(a_temperature) :=
 	case
-		a_temperature>=35: {a_temperature-1, a_temperature};   -- 上边界：禁止继续上升，允许下降和保持
-		a_temperature<=15: {a_temperature, a_temperature+1};   -- 下边界：禁止继续下降，允许上升和保持
-		TRUE: {a_temperature-1, a_temperature, a_temperature+1};
+		a_temperature>=39: {max(15, min(39, a_temperature - 1)), a_temperature};   -- 上边界：候选值夹紧到声明区间
+		a_temperature<=15: {a_temperature, max(15, min(39, a_temperature + 1))};   -- 下边界：候选值夹紧到声明区间
+		TRUE: {max(15, min(39, a_temperature - 1)), max(15, min(39, a_temperature)), max(15, min(39, a_temperature + 1))};
 	esac;
 	-- 信任传播
 	next(fan_1.trust_FanMode_auto) := case
@@ -1098,7 +1103,7 @@ Trace Type: Counterexample
 | `result.json` 语义 | `result.json` 外层 `code/message` 不固定 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志命中 `timed out` 时 `504`，其余失败 `500` |
 | 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `request.json/result.json` |
 | 取消边界说明 | 异步任务在结果对象产出前被取消时，可能不写 `result.json`；若已生成 `model.smv`，通常已写入 `request.json`（例如验证异步在生成后、执行前被取消） |
-| 临时文件策略 | 当前实现会保留 `model.smv` 临时文件用于排障（不在 finally 中删除） |
+| 临时文件策略 | `cleanupTempFile()` 为空操作 — `nusmv_*` 临时目录（含 `model.smv`、`request.json`、`output.txt`、`result.json`）保留用于事后排障 |
 
 ---
 
@@ -1132,15 +1137,63 @@ Trace Type: Counterexample
 
 下列链路在当前后端实现中是闭合的：
 
-1. **输入约束闭环**：DTO 校验（`@NotNull/@Pattern/@Min/@Max`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。
+1. **输入约束闭环**：DTO 校验（`@NotNull/@NotEmpty/@Pattern/@Min/@Max/@Size`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。`@NotEmpty` 替代设备列表的 `@NotNull`（拒绝空列表），`@Size(max=10000)` 限制聊天内容，`@NotNull` 覆盖 `BoardStorageController` 所有 `@RequestBody`。
 2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失即失败。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名必须为合法标识符。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
-3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀）；值归一化场景保留局部去空格逻辑。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），`toVarName()` 对设备 ID 做同级防御；trust/privacy 通过“入口归一化 + 校验 + emit 再归一化”三层闭环落地。
 4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时、并发闸门、busy 返回、stdout/stderr 处理。
 5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度（进度持久化到 DB，三级回退链：内存 → DB 列 → 终态推断）、同步/异步统一错误语义。
-6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 写入前检查 DB 取消状态（`isTaskCancelledInDb()` guard）。
+6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 使用原子条件 UPDATE（`WHERE status <> CANCELLED`）消除 TOCTOU 竞态，返回受影响行数（0 = 已取消）。
 7. **可观测性闭环**：`model.smv` / `request.json` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
+8. **数值边界闭环**：环境变量与内部变量的 `next()` 候选表达式统一使用 `max(lower, min(upper, expr))` 夹紧，覆盖 WITH-rate / no-rate 的边界分支与 TRUE 分支，防止算术结果超出 NuSMV VAR 声明区间。攻击模式下上界扩展公式集中在 `SmvBoundsUtils.resolveEffectiveUpperBound()`，由 `SmvDeviceModuleBuilder`（VAR 声明）和 `SmvMainModuleBuilder`（transition clamp 范围）共享，确保声明区间与转换夹紧区间一致。
 
 仍需依赖的运行前提：
 
-- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。Redis 仅用于 JWT 黑名单（SHA-256 key），不可用时 fail-open 降级（不阻塞登录/验证流程，但登出撤销语义失效——已登出 token 仍可使用直至过期）；需 `commons-pool2` 启用 Lettuce 连接池。
+- MySQL、Redis、JWT、NuSMV 可执行路径配置正确。Redis 仅用于 JWT 黑名单（SHA-256 key），不可用时 fail-open 降级（不阻塞登录/验证流程，但登出撤销语义失效——已登出 token 仍可使用直至过期；每 10 次连续失败周期性 ERROR 告警）；需 `commons-pool2` 启用 Lettuce 连接池。
+- 生产环境（`spring.profiles.active` 包含 `prod`/`production`）下，`ProductionSafetyCheck` 要求 `jwt.secret`、`spring.datasource.password`、`volcengine.ark.api-key`（对应 `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`）均已替换为非默认值，否则拒绝启动。`PRODUCTION_MODE` 已移除；本地开发无 profile 时不受限。
 - 当前用户模板已初始化且与前端请求中的 `templateName` 一致。
+- `device_templates` 表新增 `(user_id, name)` 唯一约束，首次部署前需确认无重复数据。
+
+---
+
+## 13. 2026-03-03 同步更新（实现对齐）
+
+以下行为已在当前代码中落地，并与本文档同步：
+
+### NuSMV 生成链路
+
+- **标识符安全**（`DeviceSmvDataFactory`）
+  `sanitizeSmvToken()` 现已支持 NuSMV 保留字大小写无关转义（含 `W`），并保留空格清理、非法字符替换、数字前缀处理。`toVarName()` 也同步具备数字前缀与保留字防御。
+- **trust/privacy 三层防御**（Factory + Validator + Builder）
+  入口归一化：`normalizeTrustPrivacy()` (`trim + lowercase`)；
+  校验层：`SmvModelValidator.validatePropertyValues()` 覆盖实例值、content privacy、manifest variable trust/privacy、workingState privacy；
+  输出层：`SmvDeviceModuleBuilder` emit 前再次归一化，`content privacy` 为 `null` 时默认 `public`。
+- **A10 数值边界闭环**（`SmvBoundsUtils` + `SmvMainModuleBuilder`）
+  攻击模式上界扩展公式统一收敛到 `SmvBoundsUtils.resolveEffectiveUpperBound()`；
+  环境变量与内部变量的 `next()` 候选表达式，在 WITH-rate / no-rate、边界分支 / TRUE 分支均使用 `max(lower, min(upper, expr))` 夹紧，避免越界值进入 NuSMV。
+- **防御性强度处理**
+  `SmvGenerator` 入口仍将 `intensity` 夹紧到 `0..50`；`SmvBoundsUtils` 额外将负强度防御性归零，避免工具级直接调用出现语义异常。
+- **SmvSpecificationBuilder**
+  `build()` 新增第 5 参数 `enablePrivacy`，当 privacy 关闭时遇到 privacy spec 会记录防御性日志。
+- **回归测试覆盖**（`SmvGeneratorFixesTest`）
+  已补齐 WITH-rate 极端 NCR、内部变量边界分支、`range=0` 与负强度边界用例，防止回归。
+
+### 后端加固（安全、线程安全、数据完整性）
+
+- **生产安全守卫**：新增 `ProductionSafetyCheck`（`@PostConstruct`）— 当 `spring.profiles.active` 包含 `prod`/`production` 时，若 `jwt.secret`、`spring.datasource.password`、`volcengine.ark.api-key`（对应 `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`）仍为不安全默认值则拒绝启动。`PRODUCTION_MODE` 已移除，生产配置校验统一收拢到 `ProductionSafetyCheck`。`JwtUtil.@PostConstruct` 额外在生产 profile 下对默认密钥输出 WARN 日志（防御纵深）。
+- **异常处理加固**：`IllegalArgumentException` → 掩码通用消息 (400)、`IllegalStateException` → 500、新增 `DataIntegrityViolationException` → 409 CONFLICT。
+- **线程池上下文传播**：`ThreadConfig.TaskDecorator` 深拷贝 `Authentication`（新建 `UsernamePasswordAuthenticationToken` + `new ArrayList<>` authorities）、`UserContextHolder.userId` 和 MDC 上下文到子线程，防止跨任务引用污染。
+- **异步任务 TOCTOU 消除**：`completeTask`/`failTask` 改为原子条件 UPDATE（`WHERE status <> CANCELLED`）+ `@Modifying(clearAutomatically = true)`，返回受影响行数。`TransactionTemplate` 用于 `VerificationServiceImpl.saveTraces()` 和 `ChatServiceImpl.processStreamChat()` 跨代理边界写入。
+- **Redis 韧性**：`RedisTokenBlacklistService` 连续失败计数（`AtomicInteger`），每 10 次周期性 ERROR 告警（`% ALERT_THRESHOLD`）。
+- **请求校验强化**：`@NotEmpty` devices、`@Size(max=10000)` chat content、`@NotNull @RequestBody` 全量覆盖（`BoardStorageController` 通过类级 `@Validated` 激活）。
+- **只读事务**：`@Transactional(readOnly = true)` 覆盖 `BoardStorageServiceImpl`、`VerificationServiceImpl`、`SimulationServiceImpl`、`ChatServiceImpl` 全部读方法。
+- **Entity 索引与约束**：`device_edge(user_id)`、`verification_task(user_id)`、`simulation_task(user_id)` 索引 + `device_templates(user_id, name)` 唯一约束。
+- **DTO progress 字段**：`VerificationTaskDto.progress` / `SimulationTaskDto.progress` 暴露到 API。
+- **VerificationTaskDto 一致性**：添加 `@NoArgsConstructor`、`@AllArgsConstructor`、`@JsonInclude(NON_NULL)` 与 `SimulationTaskDto` 对齐。
+- **AI 工具安全**：`AiToolManager.execute()` catch-all 安全网返回通用消息 `"Tool execution failed due to an internal error"`（不泄露 `e.getMessage()`）；`AddTemplateTool` `@PostConstruct` 预建 `tolerantMapper`。
+- **ArkAiClient 超时可配**：`volcengine.ark.timeout-minutes`（默认 5）。
+- **JsonUtils 增强**：注册 `JavaTimeModule`；新增 `fromJsonToStringList()` / `fromJsonList()`。
+- **DELETE trace 404**：不存在的 trace 抛 `ResourceNotFoundException`（原为静默 200）。
+- **JwtAuthenticationFilter**：token 提取 try-catch — 畸形 token 视为未认证。
+- **异步控制器模式**：`verifyAsync` / `simulateAsync` 返回 `Result<Long>`（不再 `ResponseEntity`）；`TaskRejectedException` 抛 `ServiceUnavailableException`。
+- **临时文件保留**：`cleanupTempFile()` 为空操作 — `nusmv_*` 临时目录保留用于事后排障。
+- **Surefire JVM 配置**：`pom.xml` 配置 `maven-surefire-plugin` 添加 `-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading`，修复 JDK 17 下 Mockito/ByteBuddy `MockMaker` 初始化失败。

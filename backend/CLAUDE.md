@@ -28,6 +28,8 @@ cn.edu.nju.Iot_Verify/
 │   │   ├── generator/   # SMV model generation
 │   │   │   ├── SmvGenerator.java          # Orchestrator
 │   │   │   ├── SmvModelValidator.java     # Pre-generation validation (P1-P5)
+│   │   │   ├── SmvBoundsUtils.java        # Shared numeric-bound utility (resolveEffectiveUpperBound)
+│   │   │   ├── SmvRelationUtils.java      # Shared relation normalization (EQ/NEQ/GT/GTE/LT/LTE/IN/NOT_IN)
 │   │   │   ├── PropertyDimension.java     # TRUST/PRIVACY enum
 │   │   │   ├── data/    # DeviceSmvData, DeviceSmvDataFactory
 │   │   │   └── module/  # SmvDeviceModuleBuilder, SmvMainModuleBuilder, SmvRuleCommentWriter, SmvSpecificationBuilder
@@ -39,8 +41,9 @@ cn.edu.nju.Iot_Verify/
 ├── po/                  # JPA entities (14 tables + DeviceEdgeId/DeviceNodeId composite keys; DeviceNodePo uses @IdClass(DeviceNodeId) for user-scoped node isolation)
 ├── repository/          # Spring Data JPA repositories (14)
 ├── security/            # JWT filter, @CurrentUser resolver, UserContextHolder, SecurityConfig
-├── configure/           # NusmvConfig, ThreadConfig, ThreadPoolConfig, WebConfig
+├── configure/           # NusmvConfig, ThreadConfig, ThreadPoolConfig, WebConfig, ProductionSafetyCheck
                          # All executors are centrally managed in configure/ (chat, verificationTask, syncVerification, syncSimulation, simulationTask)
+                         # ProductionSafetyCheck: @PostConstruct guard — in prod/production profile, refuses startup if JWT secret / DB password / Ark API key still use insecure defaults
 ├── exception/           # BaseException hierarchy + GlobalExceptionHandler
 └── util/
     ├── mapper/          # PO ↔ DTO mappers (manual, not MapStruct): UserMapper, DeviceNodeMapper, DeviceEdgeMapper, RuleMapper, SpecificationMapper, ChatMapper, TraceMapper, VerificationTaskMapper, SimulationTaskMapper, SimulationTraceMapper
@@ -56,7 +59,7 @@ cn.edu.nju.Iot_Verify/
 cd backend
 mvn compile          # Compile
 mvn spring-boot:run  # Run (requires MySQL; Redis optional — fail-open for logout revocation)
-mvn test             # Run tests
+mvn test             # Run tests (pom.xml configures surefire with -Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading for JDK 17 Mockito/ByteBuddy compatibility)
 ```
 
 Test workflow: `powershell -File test_workflow.ps1` (end-to-end API test, requires running server)
@@ -65,17 +68,18 @@ Test workflow: `powershell -File test_workflow.ps1` (end-to-end API test, requir
 
 Key config in `src/main/resources/application.yaml`:
 - `spring.datasource.*` — MySQL connection
-- `spring.data.redis.*` — Redis connection (token blacklist: SHA-256 hashed keys, fail-open degradation — logout revocation ineffective when Redis is down (logged-out tokens remain valid until expiry), throttled error logging; requires `commons-pool2` for Lettuce connection pooling)
-- `jwt.secret` / `jwt.expiration` — JWT settings
+- `spring.data.redis.*` — Redis connection (token blacklist: SHA-256 hashed keys, fail-open degradation — logout revocation ineffective when Redis is down (logged-out tokens remain valid until expiry), throttled error logging with consecutive-failure alerting at threshold 10; requires `commons-pool2` for Lettuce connection pooling)
+- `jwt.secret` / `jwt.expiration` — JWT settings (supports `${JWT_SECRET:default}` pattern)
 - `nusmv.path` — NuSMV executable path (OS-specific)
 - `nusmv.command-prefix` — Optional prefix (e.g. `wsl` on Windows)
 - `nusmv.timeout-ms` — Execution timeout (default 120000)
 - `nusmv.max-concurrent` — Global NuSMV concurrency cap shared by verification/simulation
 - `nusmv.acquire-permit-timeout-ms` — Timeout for waiting NuSMV execution permit
 - `thread-pool.*` — Executor sizing and queue limits (sync executors use small queues for fast-fail)
-- `volcengine.ark.*` — AI chat API settings
+- `volcengine.ark.*` — AI chat API settings (including configurable `timeout-minutes` via `ARK_TIMEOUT_MINUTES`)
 - `cors.allowed-origins` — CORS allowed origins (used by SecurityConfig)
 - `server.port` — HTTP port (default 8080)
+- **Production safety**: `ProductionSafetyCheck` — when `spring.profiles.active` includes `prod`/`production`, startup fails if `jwt.secret`, `spring.datasource.password`, or `volcengine.ark.api-key` still use insecure defaults (`JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`). `PRODUCTION_MODE` is removed; profile detection is unified on Spring profiles. Local dev (no profile) always starts normally.
 
 ## Key Conventions
 
@@ -90,23 +94,74 @@ Key config in `src/main/resources/application.yaml`:
 - `SmvGenerationException` has a dedicated handler in `GlobalExceptionHandler` that includes `data.errorCategory` (and keeps `[errorCategory]` prefix in message for compatibility). Common categories include `TEMPLATE_NOT_FOUND`, `TEMPLATE_LOAD_ERROR`, `MANIFEST_PARSE_ERROR`, `ILLEGAL_TRIGGER_ATTRIBUTE`, `ILLEGAL_TRIGGER_RELATION`, `INVALID_STATE_FORMAT`, `ENV_VAR_CONFLICT`, `AMBIGUOUS_DEVICE_REFERENCE`, `TRUST_PRIVACY_CONFLICT`, `INVALID_BUILDER_INPUT`, etc.
 - `SmvModelValidator` runs before SMV text generation. Hard validations throw `SmvGenerationException`; soft validations (unknown user variables, stateless device with state) only log warnings.
 - Rule/spec device resolution is strict: prefer `varName`, allow `templateName` only when uniquely matched; ambiguous matches throw `AMBIGUOUS_DEVICE_REFERENCE`.
-- NuSMV identifier sanitization is centralized in `DeviceSmvDataFactory.sanitizeSmvToken()` — removes spaces, replaces non-alphanumeric chars with `_`, prepends `_` if digit-prefixed. Mode/state/variable identifiers go through this function; value normalization may still use local whitespace cleanup.
+- NuSMV identifier sanitization is centralized in `DeviceSmvDataFactory.sanitizeSmvToken()` — removes spaces, replaces non-alphanumeric chars with `_`, prepends `_` if digit-prefixed, and escapes reserved words case-insensitively (including `W`) by prepending `_`. Device IDs converted by `toVarName()` follow the same safety constraints.
 - Template NuSMV pre-check: `BoardStorageServiceImpl.addDeviceTemplate()` validates the manifest and runs a probe `SmvGenerator.generate()` before saving; failures return 400 (invalid template) or 500 (infrastructure). Temp SMV files are cleaned up in `finally`.
 - `DeviceSmvDataFactory.loadManifest()` throws typed exceptions: `BaseException` re-thrown, JSON parse → `MANIFEST_PARSE_ERROR`, other → `TEMPLATE_LOAD_ERROR` (no longer silently returns null).
 - `getModeIndexOfState()` uses exact-match or `mode + "_"` prefix matching (not `contains()`), preventing false positives like mode "on" matching state "offline".
-- Async task progress is persisted to DB (`VerificationTaskPo.progress`, `SimulationTaskPo.progress`) for cross-instance visibility; fallback chain: in-memory → DB column → terminal status inference.
-- Cross-instance task cancellation safety: `completeTask`/`failTask` check DB for CANCELLED before overwriting (TOCTOU limitation documented).
-- AI tools: JSON argument parse errors return structured 400 `VALIDATION_ERROR`; `ServiceUnavailableException` returns 503; generic exceptions no longer leak `e.getMessage()`.
-- AI tools: async dispatch failure (`VerifyModelAsyncTool`/`SimulateModelAsyncTool`) marks task FAILED before re-throwing; `SmvGenerationException` returns `SMV_GENERATION_ERROR` with `errorCategory`.
+- `GlobalExceptionHandler` masks internal messages: `IllegalArgumentException` → generic "Invalid request parameter" (400), `IllegalStateException` → "Internal server error" (500), `DataIntegrityViolationException` → "Data conflict, the resource may already exist" (409).
+- `JwtUtil.@PostConstruct` warns if JWT secret is still the insecure default when a production profile (`prod`/`production`) is active. `ProductionSafetyCheck` hard-fails startup; `JwtUtil` provides a WARN-level defense-in-depth log.
+- `JwtAuthenticationFilter` wraps token extraction in try-catch — malformed tokens are treated as unauthenticated (no 500).
+- Thread pool context propagation: `ThreadConfig.TaskDecorator` deep-copies `Authentication` (new `UsernamePasswordAuthenticationToken` + new `ArrayList` for authorities), `UserContextHolder.userId`, and `MDC` context map into child threads; `finally` clears all three.
+- Async task safety: `completeTask`/`failTask` use atomic conditional UPDATE queries (`WHERE status <> CANCELLED`) instead of check-then-save, eliminating TOCTOU race conditions. Repository methods return `int` (affected rows); 0 means task was already cancelled.
+- `@Transactional(readOnly = true)` on all read-only service methods: `BoardStorageServiceImpl` (`getNodes`, `getEdges`, `getSpecs`, `getRules`, `getActive`, `getDeviceTemplates`), `VerificationServiceImpl` (`getTask`, `getTaskProgress`, `getUserTraces`, `getTrace`), `SimulationServiceImpl` (`getTask`, `getTaskProgress`, `getUserSimulations`, `getSimulation`), `ChatServiceImpl` (`getUserSessions`, `getHistory`).
+- `TransactionTemplate` used in `VerificationServiceImpl.saveTraces()` and `ChatServiceImpl.processStreamChat()` (initial save, tool loop saves, final save) to wrap saves that can't use `@Transactional` due to Spring proxy limitations.
+- Redis consecutive-failure alerting: `RedisTokenBlacklistService` tracks consecutive check/blacklist failures via `AtomicInteger`; logs ERROR every 10 consecutive failures (`% ALERT_THRESHOLD`) to detect persistent Redis degradation without going silent after the first alert.
+- Request validation: `@NotEmpty` on devices lists (rejects both null and empty), `@Size(max=10000)` on chat content, `@NotNull` on all `@RequestBody` parameters in `BoardStorageController` (enforced via class-level `@Validated`).
+- `DELETE /api/verify/traces/{id}` returns 404 (via `ResourceNotFoundException`) if trace not found (previously silent 200).
+- Entity indexes: `device_edge(user_id)`, `verification_task(user_id)`, `simulation_task(user_id)`. Unique constraint: `device_templates(user_id, name)` — requires no duplicate data before first deployment.
+- `SmvSpecificationBuilder.build()` accepts `enablePrivacy` parameter for defense-in-depth logging when privacy specs are encountered with privacy disabled.
+- `DeviceSmvDataFactory.computeIdentifiers()` checks NuSMV reserved words on both `result` and `suffix` before building module names.
 - Chat history (`getHistory`) filters out tool-role messages, assistant tool-call-request messages, and adjacent "Calling tool..." placeholders before returning to frontend.
 - `device_node` table uses composite PK `(id, user_id)` — different users can have nodes with the same ID. Existing databases need manual migration (`sql/manual_migrations/2026-03-02-device-node-composite-pk.sql`).
 - Sync verification/simulation unwrap `ExecutionException` and rethrow `SmvGenerationException` so `errorCategory` is preserved in API responses.
 - SSE endpoints (e.g. `/api/chat/completions`) return `SseEmitter` directly, not wrapped in `Result<T>`.
 - Exception hierarchy: `BaseException(code, message)` → `BadRequestException(400)`, `UnauthorizedException(401)`, `ForbiddenException(403)`, `ResourceNotFoundException(404)`, `ConflictException(409)`, `ValidationException(422)`, `InternalServerException(500)` → `SmvGenerationException`, `ServiceUnavailableException(503)`.
 - Sync verification (`/api/verify`) and sync simulation (`/api/verify/simulate`) now throw `ServiceUnavailableException(503)` when their executors are saturated.
+- Async verification (`/api/verify/async`) and async simulation (`/api/verify/simulate/async`) throw `ServiceUnavailableException` on `TaskRejectedException` (thread pool full), returning 503 via `GlobalExceptionHandler`. Controllers return `Result<Long>` (not `ResponseEntity`).
 - Chat completion (`/api/chat/completions`) throws `ServiceUnavailableException(503)` when `chatExecutor` is saturated.
 - Sync request timeout path uses `future.cancel(true)` and `ThreadPoolExecutor.purge()` to reduce cancelled-task buildup in queue.
-- Debug artifacts in temp dir: `request.json` is saved right after `model.smv` generation (verify/sim); `output.txt` is NuSMV raw output; `result.json` is saved when a result object is produced.
+- Debug artifacts in temp dir: `request.json` is saved right after `model.smv` generation (verify/sim); `output.txt` is NuSMV raw output; `result.json` is saved when a result object is produced. Temp directories (`nusmv_*`) are retained for post-mortem debugging (not deleted after each run).
+
+## 2026-03-03 Sync Notes
+
+### NuSMV Generation Fixes
+- Identifier sanitization is now reserved-word aware (case-insensitive): `DeviceSmvDataFactory.sanitizeSmvToken()` escapes NuSMV reserved words by prepending `_` (including `W`), and still handles spaces/invalid chars/digit prefixes.
+- `DeviceSmvDataFactory.toVarName()` now also defends digit-prefixed IDs and reserved words, so spec/device identifiers cannot generate illegal NuSMV symbols.
+- Trust/privacy pipeline is now defense-in-depth:
+  - normalize on ingestion via `normalizeTrustPrivacy()` (trim + lowercase),
+  - validate enum legality in `SmvModelValidator.validatePropertyValues()` (instance values, content privacy, manifest variable trust/privacy, workingState privacy),
+  - normalize again at emit time in `SmvDeviceModuleBuilder.appendInitialProperty()`.
+- Content privacy emit has null fallback: `SmvDeviceModuleBuilder.appendAssignments()` writes `public` when `ci.getPrivacy()==null`, then normalizes before SMV output.
+- Numeric upper-bound expansion formula is centralized in `SmvBoundsUtils.resolveEffectiveUpperBound()` and shared by:
+  - device/module numeric declarations,
+  - main env declarations + init validation,
+  - transition clamp ranges.
+- `resolveEffectiveUpperBound()` now defensively clamps negative `intensity` to `0` (generator entry still clamps to `0..50`).
+- A10 range safety is closed in transitions: `SmvMainModuleBuilder` clamps numeric next-candidates with `max(lower, min(upper, expr))` in WITH-rate/no-rate branches, including boundary branches and internal-variable branches.
+- `SmvSpecificationBuilder.build()` now takes 5th parameter `enablePrivacy` for defense-in-depth logging.
+- Regression tests were extended in `SmvGeneratorFixesTest` for:
+  - WITH-rate extreme-NCR boundary clamp,
+  - internal-variable boundary clamp,
+  - `SmvBoundsUtils` edge cases (`range=0`, negative intensity).
+
+### Backend Hardening (Security, Thread Safety, Data Integrity)
+- **Production safety guard**: `ProductionSafetyCheck` (@PostConstruct) — when `spring.profiles.active` includes `prod`/`production`, refuses startup if `jwt.secret`, `spring.datasource.password`, or `volcengine.ark.api-key` still use insecure defaults (`JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY`). `PRODUCTION_MODE` has been removed; all production config validation is centralized in `ProductionSafetyCheck`. Additionally, `JwtUtil.@PostConstruct` logs WARN if the default JWT secret is active in production profile (defense-in-depth).
+- **Exception handler hardening**: `IllegalArgumentException` → masked generic message (400), `IllegalStateException` → "Internal server error" (500), new `DataIntegrityViolationException` → 409 CONFLICT.
+- **Thread pool context propagation**: `ThreadConfig.TaskDecorator` deep-copies `Authentication` (new `UsernamePasswordAuthenticationToken` + new `ArrayList<>` for authorities), `UserContextHolder.userId`, and `MDC` context map into child threads. Prevents cross-task mutation pollution.
+- **Async task TOCTOU elimination**: `completeTask`/`failTask` replaced check-then-save with atomic conditional UPDATE queries (`WHERE status <> CANCELLED`). Repository methods `completeTaskIfNotCancelled` / `failTaskIfNotCancelled` return `int` (0 = already cancelled). `@Modifying(clearAutomatically = true)` ensures stale persistence context is cleared after JPQL UPDATE. `TransactionTemplate` used for trace saving in `VerificationServiceImpl` and chat message saving in `ChatServiceImpl.processStreamChat()`.
+- **Redis resilience**: `RedisTokenBlacklistService` tracks consecutive failures via `AtomicInteger`; logs ERROR every 10 consecutive failures (`failures % ALERT_THRESHOLD == 0`) — periodic, not one-shot.
+- **Request validation tightened**: `@NotEmpty` on devices lists (rejects `[]`), `@Size(max=10000)` on chat content, `@NotNull` on all `@RequestBody` in `BoardStorageController` (enforced via class-level `@Validated`).
+- **Read-only transactions**: `@Transactional(readOnly = true)` added to all read-only service methods across `BoardStorageServiceImpl`, `VerificationServiceImpl`, `SimulationServiceImpl`, and `ChatServiceImpl` (`getUserSessions`, `getHistory`).
+- **Entity indexes**: `device_edge(user_id)`, `verification_task(user_id)`, `simulation_task(user_id)`. Unique constraint: `device_templates(user_id, name)`.
+- **DTO progress field**: `VerificationTaskDto.progress` and `SimulationTaskDto.progress` exposed to API (additive, backward-compatible).
+- **VerificationTaskDto consistency**: Added `@NoArgsConstructor`, `@AllArgsConstructor`, `@JsonInclude(NON_NULL)` to match `SimulationTaskDto` (null fields omitted from JSON).
+- **AI tool safety**: `AiToolManager.execute()` has catch-all safety net returning generic `"Tool execution failed due to an internal error"` (never leaks `e.getMessage()`). `AddTemplateTool` pre-computes `tolerantMapper` in `@PostConstruct`.
+- **ArkAiClient timeout**: configurable via `volcengine.ark.timeout-minutes` / `ARK_TIMEOUT_MINUTES` (default 5).
+- **JsonUtils**: registered `JavaTimeModule`, added `fromJsonToStringList()` / `fromJsonList()` helpers.
+- **Delete trace 404**: `VerificationServiceImpl.deleteTrace()` now throws `ResourceNotFoundException` for missing traces (was silent 200).
+- **Async controller pattern**: `VerificationController.verifyAsync()` and `SimulationController.simulateAsync()` return `Result<Long>` (not `ResponseEntity<Result<Long>>`); `TaskRejectedException` throws `ServiceUnavailableException` handled by `GlobalExceptionHandler`.
+- **Temp file retention**: `cleanupTempFile()` in both `VerificationServiceImpl` and `SimulationServiceImpl` is intentionally a no-op — `nusmv_*` temp directories are kept for post-mortem debugging.
+- **Surefire JVM args**: `pom.xml` configures `maven-surefire-plugin` with `-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading` to fix Mockito/ByteBuddy `MockMaker` initialization failures on JDK 17.
 
 ## NuSMV Verification Flow
 

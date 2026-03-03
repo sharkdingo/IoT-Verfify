@@ -52,6 +52,7 @@ class TemplateToolsFallbackTest {
         when(boardStorageService.addDeviceTemplate(anyLong(), any(DeviceTemplateDto.class))).thenReturn(saved);
 
         AddTemplateTool tool = new AddTemplateTool(boardStorageService, failingMapper);
+        tool.initTolerantMapper();
         String result = tool.execute("""
                 {
                   "name":"Lamp",
@@ -85,7 +86,7 @@ class TemplateToolsFallbackTest {
     @Test
     void addTemplate_invalidJsonArgs_shouldReturnValidationError() throws Exception {
         AddTemplateTool tool = new AddTemplateTool(boardStorageService, objectMapper);
-
+        tool.initTolerantMapper();
         String result = tool.execute("{");
         JsonNode json = objectMapper.readTree(result);
 

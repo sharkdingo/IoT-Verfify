@@ -1,18 +1,24 @@
 package cn.edu.nju.Iot_Verify.dto.verification;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 /**
  * 验证任务 DTO
- * 
+ *
  * 用于Controller层返回任务信息，不包含敏感内部字段
  */
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class VerificationTaskDto {
     /**
      * 任务ID
@@ -63,4 +69,6 @@ public class VerificationTaskDto {
      * 错误消息
      */
     private String errorMessage;
+
+    private Integer progress;
 }

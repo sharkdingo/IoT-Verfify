@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
@@ -27,7 +28,7 @@ public class VerificationRequestDto {
      * 设备验证数据列表（仅包含验证所需字段，不含 UI 布局信息）
      */
     @Valid
-    @NotNull(message = "Devices list cannot be null")
+    @NotEmpty(message = "Devices list cannot be empty")
     private List<DeviceVerificationDto> devices;
 
     /**

@@ -50,7 +50,12 @@ public class AiToolManager {
         }
 
         log.info("开始执行 AI 工具: {}", functionName);
-        return tool.execute(argsJson);
+        try {
+            return tool.execute(argsJson);
+        } catch (Exception e) {
+            log.error("AI tool '{}' threw unexpected exception", functionName, e);
+            return errorJson("Tool execution failed due to an internal error", "TOOL_EXECUTION_ERROR", 500);
+        }
     }
 
     private String errorJson(String message, String errorCode, int status) {

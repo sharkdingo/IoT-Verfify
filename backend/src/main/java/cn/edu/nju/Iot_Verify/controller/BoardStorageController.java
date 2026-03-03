@@ -11,11 +11,14 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+@Validated
 @RestController
 @RequestMapping("/api/board")
 @RequiredArgsConstructor
@@ -29,7 +32,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/nodes")
-    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @Valid @RequestBody List<DeviceNodeDto> nodes) {
+    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<DeviceNodeDto> nodes) {
         return Result.success(boardService.saveNodes(userId, nodes));
     }
 
@@ -39,7 +42,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/edges")
-    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @Valid @RequestBody List<DeviceEdgeDto> edges) {
+    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<DeviceEdgeDto> edges) {
         return Result.success(boardService.saveEdges(userId, edges));
     }
 
@@ -49,7 +52,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/specs")
-    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @Valid @RequestBody List<SpecificationDto> specs) {
+    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<SpecificationDto> specs) {
         return Result.success(boardService.saveSpecs(userId, specs));
     }
 
@@ -59,7 +62,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/rules")
-    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @Valid @RequestBody List<RuleDto> rules) {
+    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<RuleDto> rules) {
         return Result.success(boardService.saveRules(userId, rules));
     }
 
@@ -69,7 +72,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/layout")
-    public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @Valid @RequestBody BoardLayoutDto layout) {
+    public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @NotNull @Valid @RequestBody BoardLayoutDto layout) {
         return Result.success(boardService.saveLayout(userId, layout));
     }
 
@@ -79,7 +82,7 @@ public class BoardStorageController {
     }
 
     @PostMapping("/active")
-    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @Valid @RequestBody BoardActiveDto active) {
+    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @NotNull @Valid @RequestBody BoardActiveDto active) {
         return Result.success(boardService.saveActive(userId, active));
     }
 

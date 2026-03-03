@@ -79,7 +79,7 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper,
                 specificationMapper, verificationTaskMapper, new ObjectMapper(),
-                syncVerificationExecutor);
+                syncVerificationExecutor, null);
 
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
@@ -382,15 +382,13 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.findByStatusIn(
                 List.of(VerificationTaskPo.TaskStatus.RUNNING, VerificationTaskPo.TaskStatus.PENDING)))
                 .thenReturn(List.of(running, pending));
-        when(taskRepository.save(any(VerificationTaskPo.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
 
         // @PostConstruct is not invoked by plain constructor — call via reflection
         VerificationServiceImpl freshService = new VerificationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper,
                 specificationMapper, verificationTaskMapper, new ObjectMapper(),
-                syncVerificationExecutor);
+                syncVerificationExecutor, null);
         Method cleanup = VerificationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
         cleanup.setAccessible(true);
         cleanup.invoke(freshService);
@@ -412,8 +410,6 @@ class VerificationServiceImplBuildResultTest {
 
         when(taskRepository.findByIdAndUserId(60L, 1L))
                 .thenReturn(Optional.of(task));
-        when(taskRepository.save(any(VerificationTaskPo.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
 
         boolean result = service.cancelTask(1L, 60L);
 
@@ -429,11 +425,11 @@ class VerificationServiceImplBuildResultTest {
                 .id(70L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
                 .startedAt(LocalDateTime.now()).createdAt(LocalDateTime.now()).build();
 
-        // Another instance already wrote CANCELLED to DB
-        VerificationTaskPo cancelledInDb = VerificationTaskPo.builder()
-                .id(70L).status(VerificationTaskPo.TaskStatus.CANCELLED).build();
-        when(taskRepository.findById(70L))
-                .thenReturn(Optional.of(cancelledInDb));
+        // Atomic UPDATE returns 0 — task was already cancelled in DB
+        when(taskRepository.completeTaskIfNotCancelled(
+                eq(70L), any(), any(), anyBoolean(), anyInt(),
+                any(), any(), any(), any(), any()))
+                .thenReturn(0);
 
         Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
                 "completeTask", VerificationTaskPo.class, boolean.class, int.class,
@@ -441,9 +437,12 @@ class VerificationServiceImplBuildResultTest {
         completeTask.setAccessible(true);
         completeTask.invoke(service, task, true, 0, List.of("done"), "");
 
-        // Guard must prevent overwrite — save never called, status stays RUNNING
-        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        assertEquals(VerificationTaskPo.TaskStatus.RUNNING, task.getStatus());
+        // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
+        verify(taskRepository).completeTaskIfNotCancelled(
+                eq(70L), any(), any(), anyBoolean(), anyInt(),
+                any(), any(), any(), any(), any());
+        // save() should NOT be called — atomic UPDATE replaces it
+        verify(taskRepository, never()).save(any());
     }
 
     @Test
@@ -452,17 +451,20 @@ class VerificationServiceImplBuildResultTest {
                 .id(71L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
                 .startedAt(LocalDateTime.now()).createdAt(LocalDateTime.now()).build();
 
-        VerificationTaskPo cancelledInDb = VerificationTaskPo.builder()
-                .id(71L).status(VerificationTaskPo.TaskStatus.CANCELLED).build();
-        when(taskRepository.findById(71L))
-                .thenReturn(Optional.of(cancelledInDb));
+        // Atomic UPDATE returns 0 — task was already cancelled in DB
+        when(taskRepository.failTaskIfNotCancelled(
+                eq(71L), any(), any(), any(), any(), any(), any()))
+                .thenReturn(0);
 
         Method failTask = VerificationServiceImpl.class.getDeclaredMethod(
                 "failTask", VerificationTaskPo.class, String.class);
         failTask.setAccessible(true);
         failTask.invoke(service, task, "some error");
 
-        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
-        assertEquals(VerificationTaskPo.TaskStatus.RUNNING, task.getStatus());
+        // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
+        verify(taskRepository).failTaskIfNotCancelled(
+                eq(71L), any(), any(), any(), any(), any(), any());
+        // save() should NOT be called — atomic UPDATE replaces it
+        verify(taskRepository, never()).save(any());
     }
 }

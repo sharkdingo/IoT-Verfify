@@ -7,6 +7,7 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 
 import java.util.List;
+import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,9 +25,9 @@ class DeviceNodeRepositoryTest {
 
     @Test
     void searchByUserIdAndTemplateOrLabel_shouldApplyUserScopeToBothSidesOfOr() {
-        repository.save(node("n1", 1L, "Smart Light", "Kitchen Lamp"));
-        repository.save(node("n2", 1L, "Thermostat", "Living Light Sensor"));
-        repository.save(node("n3", 2L, "Camera", "Guest Light"));
+        repository.save(Objects.requireNonNull(node("n1", 1L, "Smart Light", "Kitchen Lamp")));
+        repository.save(Objects.requireNonNull(node("n2", 1L, "Thermostat", "Living Light Sensor")));
+        repository.save(Objects.requireNonNull(node("n3", 2L, "Camera", "Guest Light")));
 
         List<DeviceNodePo> result = repository.searchByUserIdAndTemplateOrLabel(1L, "LIGHT");
 
@@ -36,8 +37,8 @@ class DeviceNodeRepositoryTest {
 
     @Test
     void save_shouldAllowSameNodeIdAcrossDifferentUsers() {
-        repository.save(node("shared-node", 1L, "Smart Light", "Kitchen Lamp"));
-        repository.save(node("shared-node", 2L, "Smart Lock", "Door Lock"));
+        repository.save(Objects.requireNonNull(node("shared-node", 1L, "Smart Light", "Kitchen Lamp")));
+        repository.save(Objects.requireNonNull(node("shared-node", 2L, "Smart Lock", "Door Lock")));
 
         List<DeviceNodePo> user1 = repository.findByUserId(1L);
         List<DeviceNodePo> user2 = repository.findByUserId(2L);

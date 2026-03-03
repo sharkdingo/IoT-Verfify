@@ -470,8 +470,6 @@ class SimulationServiceImplTest {
         when(simulationTaskRepository.findByStatusIn(
                 List.of(SimulationTaskPo.TaskStatus.RUNNING, SimulationTaskPo.TaskStatus.PENDING)))
                 .thenReturn(List.of(running, pending));
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
 
         // @PostConstruct is not invoked by plain constructor — call via reflection
         SimulationServiceImpl freshService = new SimulationServiceImpl(
@@ -499,8 +497,6 @@ class SimulationServiceImplTest {
 
         when(simulationTaskRepository.findByIdAndUserId(60L, 1L))
                 .thenReturn(Optional.of(task));
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
 
         boolean result = service.cancelTask(1L, 60L);
 
@@ -517,20 +513,23 @@ class SimulationServiceImplTest {
                 .requestedSteps(10).startedAt(LocalDateTime.now())
                 .createdAt(LocalDateTime.now()).build();
 
-        // Another instance already wrote CANCELLED to DB
-        SimulationTaskPo cancelledInDb = SimulationTaskPo.builder()
-                .id(70L).status(SimulationTaskPo.TaskStatus.CANCELLED).build();
-        when(simulationTaskRepository.findById(70L))
-                .thenReturn(Optional.of(cancelledInDb));
+        // Atomic UPDATE returns 0 — task was already cancelled in DB
+        when(simulationTaskRepository.completeTaskIfNotCancelled(
+                eq(70L), any(), any(), anyInt(), any(),
+                any(), any(), any(), any()))
+                .thenReturn(0);
 
         Method completeTask = SimulationServiceImpl.class.getDeclaredMethod(
                 "completeTask", SimulationTaskPo.class, Long.class, int.class, List.class);
         completeTask.setAccessible(true);
         completeTask.invoke(service, task, 999L, 10, List.of("done"));
 
-        // Guard must prevent overwrite — save never called, status stays RUNNING
-        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        assertEquals(SimulationTaskPo.TaskStatus.RUNNING, task.getStatus());
+        // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
+        verify(simulationTaskRepository).completeTaskIfNotCancelled(
+                eq(70L), any(), any(), anyInt(), any(),
+                any(), any(), any(), any());
+        // save() should NOT be called — atomic UPDATE replaces it
+        verify(simulationTaskRepository, never()).save(any());
     }
 
     @Test
@@ -540,17 +539,20 @@ class SimulationServiceImplTest {
                 .requestedSteps(10).startedAt(LocalDateTime.now())
                 .createdAt(LocalDateTime.now()).build();
 
-        SimulationTaskPo cancelledInDb = SimulationTaskPo.builder()
-                .id(71L).status(SimulationTaskPo.TaskStatus.CANCELLED).build();
-        when(simulationTaskRepository.findById(71L))
-                .thenReturn(Optional.of(cancelledInDb));
+        // Atomic UPDATE returns 0 — task was already cancelled in DB
+        when(simulationTaskRepository.failTaskIfNotCancelled(
+                eq(71L), any(), any(), any(), any(), any(), any()))
+                .thenReturn(0);
 
         Method failTask = SimulationServiceImpl.class.getDeclaredMethod(
                 "failTask", SimulationTaskPo.class, String.class, List.class);
         failTask.setAccessible(true);
         failTask.invoke(service, task, "some error", List.of("some error"));
 
-        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
-        assertEquals(SimulationTaskPo.TaskStatus.RUNNING, task.getStatus());
+        // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
+        verify(simulationTaskRepository).failTaskIfNotCancelled(
+                eq(71L), any(), any(), any(), any(), any(), any());
+        // save() should NOT be called — atomic UPDATE replaces it
+        verify(simulationTaskRepository, never()).save(any());
     }
 }

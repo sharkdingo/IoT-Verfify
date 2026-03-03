@@ -319,6 +319,12 @@ public class DeviceSmvDataFactory {
         if (result.isEmpty() || result.matches("^_+$")) {
             result = "device_0";
         }
+        // Check NuSMV reserved words (same as sanitizeSmvToken)
+        if (NUSMV_RESERVED_WORDS.contains(result)
+                || NUSMV_RESERVED_WORDS.contains(result.toUpperCase())
+                || NUSMV_RESERVED_WORDS.contains(result.toLowerCase())) {
+            result = "_" + result;
+        }
         smv.setVarName(result);
 
         // moduleName
@@ -326,6 +332,12 @@ public class DeviceSmvDataFactory {
         String base = tplName.replaceAll("[^a-zA-Z0-9]", "");
         if (base.isEmpty()) base = "Device";
         String suffix = result;
+        // NuSMV reserved-word guard on suffix (defense-in-depth, result is already checked)
+        if (NUSMV_RESERVED_WORDS.contains(suffix)
+                || NUSMV_RESERVED_WORDS.contains(suffix.toUpperCase())
+                || NUSMV_RESERVED_WORDS.contains(suffix.toLowerCase())) {
+            suffix = "_" + suffix;
+        }
         // NuSMV identifiers should not start with a digit.
         if (!suffix.isEmpty() && Character.isDigit(suffix.charAt(0))) {
             suffix = "_" + suffix;

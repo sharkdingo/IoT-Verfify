@@ -115,7 +115,8 @@ class ManageSpecToolTest {
         assertTrue(result.contains("Specification added successfully."));
 
         @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SpecificationDto>> captor = ArgumentCaptor.forClass((Class) List.class);
+        ArgumentCaptor<List<SpecificationDto>> captor =
+                ArgumentCaptor.forClass((Class<List<SpecificationDto>>) (Class<?>) List.class);
         verify(boardStorageService).saveSpecs(eq(1L), captor.capture());
         List<SpecificationDto> savedSpecs = captor.getValue();
         assertEquals(1, savedSpecs.size());

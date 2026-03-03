@@ -12,7 +12,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Entity
-@Table(name = "simulation_task")
+@Table(name = "simulation_task", indexes = {
+        @Index(name = "idx_simulation_task_user_id", columnList = "user_id")
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -29,7 +31,7 @@ public class SimulationTaskPo {
     @EqualsAndHashCode.Include
     private Long id;
 
-    @Column(nullable = false)
+    @Column(name = "user_id", nullable = false)
     private Long userId;
 
     @Enumerated(EnumType.STRING)

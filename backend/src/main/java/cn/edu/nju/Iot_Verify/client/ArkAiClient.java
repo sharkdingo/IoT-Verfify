@@ -37,6 +37,9 @@ public class ArkAiClient {
     @Value("${volcengine.ark.base-url:https://ark.cn-beijing.volces.com}")
     private String baseUrl;
 
+    @Value("${volcengine.ark.timeout-minutes:5}")
+    private int timeoutMinutes;
+
     private ArkService arkService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -55,7 +58,7 @@ public class ArkAiClient {
         this.arkService = ArkService.builder()
                 .apiKey(apiKey)
                 .baseUrl(normalizedBaseUrl)
-                .timeout(Duration.ofMinutes(5))
+                .timeout(Duration.ofMinutes(timeoutMinutes))
                 .build();
         log.info("ArkAiClient initialized with Model ID: {}, Base URL: {}", modelId, normalizedBaseUrl);
     }
@@ -139,7 +142,8 @@ public class ArkAiClient {
         ChatMessageRole roleEnum = ChatMessageRole.USER;
         try {
             roleEnum = ChatMessageRole.valueOf(roleStr.toUpperCase(Locale.ROOT));
-        } catch (Exception ignore) {
+        } catch (Exception e) {
+            log.warn("Unknown chat message role '{}', defaulting to USER", roleStr);
         }
 
         return ChatMessage.builder()

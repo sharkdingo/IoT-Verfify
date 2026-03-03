@@ -6,6 +6,8 @@ import lombok.*;
 @Entity
 @Table(name = "device_templates", indexes = {
         @Index(name = "idx_device_templates_user_id", columnList = "user_id")
+}, uniqueConstraints = {
+        @UniqueConstraint(name = "uk_template_user_name", columnNames = {"user_id", "name"})
 })
 @Data
 @Builder

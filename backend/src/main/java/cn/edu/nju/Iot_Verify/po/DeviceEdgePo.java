@@ -5,7 +5,9 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "device_edge")
+@Table(name = "device_edge", indexes = {
+        @Index(name = "idx_device_edge_user_id", columnList = "user_id")
+})
 @IdClass(DeviceEdgeId.class)
 @Data
 @NoArgsConstructor

@@ -6,14 +6,13 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.task.TaskRejectedException;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -42,7 +41,7 @@ public class SimulationController {
     }
 
     @PostMapping("/simulate/async")
-    public ResponseEntity<Result<Long>> simulateAsync(
+    public Result<Long> simulateAsync(
             @CurrentUser Long userId,
             @Valid @RequestBody SimulationRequestDto request) {
         Long taskId = simulationService.createTask(userId, request.getSteps());
@@ -60,11 +59,10 @@ public class SimulationController {
         } catch (TaskRejectedException e) {
             log.warn("Simulation task {} rejected: thread pool full", taskId);
             simulationService.failTaskById(taskId, "Server busy, please try again later");
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Result.error(503, "Server busy, please try again later"));
+            throw new ServiceUnavailableException("Server busy, please try again later");
         }
 
-        return ResponseEntity.ok(Result.success(taskId));
+        return Result.success(taskId);
     }
 
     @GetMapping("/simulations/tasks/{id}")

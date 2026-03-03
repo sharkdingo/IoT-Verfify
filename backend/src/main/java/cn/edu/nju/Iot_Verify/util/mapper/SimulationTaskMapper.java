@@ -24,6 +24,7 @@ public class SimulationTaskMapper {
                 .simulationTraceId(po.getSimulationTraceId())
                 .checkLogs(po.getCheckLogs() != null ? po.getCheckLogs() : JsonUtils.fromJsonToStringList(po.getCheckLogsJson()))
                 .errorMessage(po.getErrorMessage())
+                .progress(po.getProgress())
                 .build();
     }
 }

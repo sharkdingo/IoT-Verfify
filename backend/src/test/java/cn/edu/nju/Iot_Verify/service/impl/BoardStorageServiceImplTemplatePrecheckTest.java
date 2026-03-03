@@ -24,10 +24,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.lang.NonNull;
 
 import java.io.File;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -103,7 +105,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         verify(smvGenerator, never()).generate(
                 anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class));
-        verify(deviceTemplateRepo, never()).saveAndFlush(any());
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
     }
 
     @Test
@@ -111,8 +113,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildTemplate("Demo", true);
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Demo")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(100L);
             return po;
         });
@@ -135,8 +137,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildTemplate("Demo", true);
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Demo")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(102L);
             return po;
         });
@@ -156,8 +158,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildTemplate("Demo", true);
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Demo")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(103L);
             return po;
         });
@@ -177,8 +179,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildTemplate("Demo", true);
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Demo")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(104L);
             return po;
         });
@@ -198,8 +200,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildTemplate("Demo", true);
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Demo")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(101L);
             return po;
         });
@@ -221,8 +223,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         DeviceTemplateDto dto = buildNoModeTemplate("WeatherSensor");
 
         when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "WeatherSensor")).thenReturn(false);
-        when(deviceTemplateRepo.saveAndFlush(any(DeviceTemplatePo.class))).thenAnswer(inv -> {
-            DeviceTemplatePo po = inv.getArgument(0, DeviceTemplatePo.class);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
             po.setId(200L);
             return po;
         });
@@ -255,7 +257,13 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 service.addDeviceTemplate(1L, dto));
 
         assertEquals(400, ex.getCode());
-        verify(deviceTemplateRepo, never()).saveAndFlush(any());
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+    }
+
+    @SuppressWarnings("all")
+    @NonNull
+    private DeviceTemplatePo anyTemplatePo() {
+        return (DeviceTemplatePo) any(DeviceTemplatePo.class);
     }
 
     private DeviceTemplateDto buildTemplate(String name, boolean withWorkingStates) {

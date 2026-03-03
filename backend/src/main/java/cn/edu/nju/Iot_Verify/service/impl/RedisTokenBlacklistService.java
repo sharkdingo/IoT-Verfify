@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
@@ -21,17 +22,25 @@ public class RedisTokenBlacklistService implements TokenBlacklistService {
 
     private static final String BLACKLIST_PREFIX = "jwt:blacklist:";
     private static final long LOG_INTERVAL_MS = 60_000;
+    private static final int ALERT_THRESHOLD = 10;
 
     private final StringRedisTemplate redisTemplate;
     private final AtomicLong lastBlacklistErrorTime = new AtomicLong(0);
     private final AtomicLong lastCheckErrorTime = new AtomicLong(0);
+    private final AtomicInteger consecutiveCheckFailures = new AtomicInteger(0);
+    private final AtomicInteger consecutiveBlacklistFailures = new AtomicInteger(0);
 
     @Override
     public void blacklist(String token, long expirationSeconds) {
         try {
             String key = toSha256Key(token);
             redisTemplate.opsForValue().set(key, "1", expirationSeconds, TimeUnit.SECONDS);
+            consecutiveBlacklistFailures.set(0);
         } catch (Exception e) {
+            int failures = consecutiveBlacklistFailures.incrementAndGet();
+            if (failures > 0 && failures % ALERT_THRESHOLD == 0) {
+                log.error("Redis blacklist failures reached {} consecutive errors — token blacklisting is degraded", failures);
+            }
             logThrottled(lastBlacklistErrorTime, "Redis unavailable, failed to blacklist token", e);
         }
     }
@@ -40,8 +49,14 @@ public class RedisTokenBlacklistService implements TokenBlacklistService {
     public boolean isBlacklisted(String token) {
         try {
             String key = toSha256Key(token);
-            return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+            boolean result = Boolean.TRUE.equals(redisTemplate.hasKey(key));
+            consecutiveCheckFailures.set(0);
+            return result;
         } catch (Exception e) {
+            int failures = consecutiveCheckFailures.incrementAndGet();
+            if (failures > 0 && failures % ALERT_THRESHOLD == 0) {
+                log.error("Redis blacklist check failures reached {} consecutive errors — blacklist is fail-open", failures);
+            }
             logThrottled(lastCheckErrorTime, "Redis unavailable, blacklist check skipped", e);
             return false;
         }

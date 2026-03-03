@@ -37,6 +37,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.*;
 import java.time.LocalDateTime;
@@ -63,6 +64,7 @@ public class VerificationServiceImpl implements VerificationService {
     private final VerificationTaskMapper verificationTaskMapper;
     private final ObjectMapper objectMapper;
     private final ThreadPoolTaskExecutor syncVerificationExecutor;
+    private final TransactionTemplate transactionTemplate;
 
     private static final int MAX_OUTPUT_LENGTH = 10000;
     private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
@@ -81,7 +83,8 @@ public class VerificationServiceImpl implements VerificationService {
                                    SpecificationMapper specificationMapper,
                                    VerificationTaskMapper verificationTaskMapper,
                                    ObjectMapper objectMapper,
-                                   @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor) {
+                                   @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor,
+                                   TransactionTemplate transactionTemplate) {
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
         this.nusmvExecutor = nusmvExecutor;
@@ -93,6 +96,7 @@ public class VerificationServiceImpl implements VerificationService {
         this.verificationTaskMapper = verificationTaskMapper;
         this.objectMapper = objectMapper;
         this.syncVerificationExecutor = syncVerificationExecutor;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @PostConstruct
@@ -375,6 +379,12 @@ public class VerificationServiceImpl implements VerificationService {
                 return;
             }
 
+            // Codex A: Also check DB status — another instance may have cancelled while we were queued.
+            if (task.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED) {
+                log.info("Task {} already cancelled in DB, skipping execution", taskId);
+                return;
+            }
+
             task.setStatus(VerificationTaskPo.TaskStatus.RUNNING);
             task.setStartedAt(LocalDateTime.now());
             task.setProgress(0);
@@ -463,6 +473,7 @@ public class VerificationServiceImpl implements VerificationService {
     // ==================== 查询方法 ====================
 
     @Override
+    @Transactional(readOnly = true)
     public VerificationTaskDto getTask(Long userId, Long taskId) {
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
@@ -471,11 +482,13 @@ public class VerificationServiceImpl implements VerificationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<TraceDto> getUserTraces(Long userId) {
         return traceMapper.toDtoList(traceRepository.findByUserIdOrderByCreatedAtDesc(userId));
     }
 
     @Override
+    @Transactional(readOnly = true)
     public TraceDto getTrace(Long userId, Long traceId) {
         return traceRepository.findByIdAndUserId(traceId, userId)
                 .map(traceMapper::toDto)
@@ -485,7 +498,9 @@ public class VerificationServiceImpl implements VerificationService {
     @Override
     @Transactional
     public void deleteTrace(Long userId, Long traceId) {
-        traceRepository.findByIdAndUserId(traceId, userId).ifPresent(traceRepository::delete);
+        TracePo trace = traceRepository.findByIdAndUserId(traceId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Trace", traceId));
+        traceRepository.delete(trace);
     }
 
     @Override
@@ -507,6 +522,7 @@ public class VerificationServiceImpl implements VerificationService {
             task.setProgress(100);
             task.setCompletedAt(LocalDateTime.now());
             taskRepository.save(task);
+            cancelledTasks.remove(taskId);
         }
 
         return true;
@@ -514,17 +530,19 @@ public class VerificationServiceImpl implements VerificationService {
 
     @Override
     public void updateTaskProgress(Long taskId, int progress, String message) {
+        Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
-        taskProgress.put(taskId, clamped);
+        taskProgress.put(requiredTaskId, clamped);
         // Persist to DB for cross-instance visibility
-        taskRepository.findById(taskId).ifPresent(task -> {
+        taskRepository.findById(requiredTaskId).ifPresent(task -> {
             task.setProgress(clamped);
             taskRepository.save(task);
         });
-        log.debug("Task {} progress: {}% - {}", taskId, progress, message);
+        log.debug("Task {} progress: {}% - {}", requiredTaskId, progress, message);
     }
 
     @Override
+    @Transactional(readOnly = true)
     public int getTaskProgress(Long userId, Long taskId) {
         // Validate task ownership.
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
@@ -685,25 +703,20 @@ public class VerificationServiceImpl implements VerificationService {
     private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
                               List<String> checkLogs, String nusmvOutput) {
         try {
-            if (isTaskCancelledInDb(task.getId())) {
-                // NOTE: check-then-act guard — TOCTOU race of ~microseconds remains;
-                // fully closing it would require a conditional UPDATE or pessimistic lock.
-                log.info("Verification task {} already cancelled (cross-instance), skipping completion", task.getId());
-                return;
+            LocalDateTime completedAt = LocalDateTime.now();
+            Long processingTimeMs = task.getStartedAt() != null
+                    ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
+            String checkLogsJson = serializeCheckLogs(checkLogs);
+            int updated = taskRepository.completeTaskIfNotCancelled(
+                    task.getId(),
+                    VerificationTaskPo.TaskStatus.COMPLETED,
+                    completedAt, isSafe, traceCount,
+                    checkLogsJson, truncateOutput(nusmvOutput),
+                    null, processingTimeMs,
+                    VerificationTaskPo.TaskStatus.CANCELLED);
+            if (updated == 0) {
+                log.info("Verification task {} was already cancelled, skipping completion", task.getId());
             }
-            task.setStatus(VerificationTaskPo.TaskStatus.COMPLETED);
-            task.setCompletedAt(LocalDateTime.now());
-            task.setProgress(100);
-            task.setIsSafe(isSafe);
-            task.setViolatedSpecCount(traceCount);
-            if (task.getStartedAt() != null) {
-                task.setProcessingTimeMs(
-                        java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
-            }
-            task.setNusmvOutput(truncateOutput(nusmvOutput));
-            writeCheckLogs(task, checkLogs);
-            task.setErrorMessage(null);
-            taskRepository.save(task);
         } catch (Exception e) {
             log.error("Failed to complete task: {}", task.getId(), e);
         }
@@ -715,31 +728,31 @@ public class VerificationServiceImpl implements VerificationService {
             return;
         }
         try {
-            // Same TOCTOU guard as completeTask — see note there.
-            if (isTaskCancelledInDb(task.getId())) {
-                log.info("Verification task {} already cancelled (cross-instance), skipping fail", task.getId());
-                return;
+            LocalDateTime completedAt = LocalDateTime.now();
+            Long processingTimeMs = task.getStartedAt() != null
+                    ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
+            String checkLogsJson = serializeCheckLogs(List.of(errorMessage));
+            int updated = taskRepository.failTaskIfNotCancelled(
+                    task.getId(),
+                    VerificationTaskPo.TaskStatus.FAILED,
+                    completedAt, errorMessage,
+                    checkLogsJson, processingTimeMs,
+                    VerificationTaskPo.TaskStatus.CANCELLED);
+            if (updated == 0) {
+                log.info("Verification task {} was already cancelled, skipping fail", task.getId());
             }
-            task.setStatus(VerificationTaskPo.TaskStatus.FAILED);
-            task.setCompletedAt(LocalDateTime.now());
-            task.setProgress(100);
-            task.setIsSafe(false);
-            task.setErrorMessage(errorMessage);
-            if (task.getStartedAt() != null) {
-                task.setProcessingTimeMs(
-                        java.time.Duration.between(task.getStartedAt(), task.getCompletedAt()).toMillis());
-            }
-            writeCheckLogs(task, List.of(errorMessage));
-            taskRepository.save(task);
         } catch (Exception e) {
             log.error("Failed to mark task as failed: {}", task.getId(), e);
         }
     }
 
-    private boolean isTaskCancelledInDb(Long taskId) {
-        return taskRepository.findById(taskId)
-                .map(t -> t.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED)
-                .orElse(false);
+    private String serializeCheckLogs(List<String> logs) {
+        try {
+            return objectMapper.writeValueAsString(logs == null ? List.of() : logs);
+        } catch (Exception e) {
+            log.warn("Failed to serialize check logs", e);
+            return "[]";
+        }
     }
 
     private void handleCancellation(VerificationTaskPo task) {
@@ -753,12 +766,14 @@ public class VerificationServiceImpl implements VerificationService {
     // ==================== Utilities ====================
 
     private void saveTraces(List<TraceDto> traces, Long userId, Long taskId) {
-        for (TraceDto trace : traces) {
-            trace.setUserId(userId);
-            if (taskId != null) trace.setVerificationTaskId(taskId);
-            TracePo po = traceMapper.toEntity(trace);
-            if (po != null) traceRepository.save(po);
-        }
+        transactionTemplate.executeWithoutResult(status -> {
+            for (TraceDto trace : traces) {
+                trace.setUserId(userId);
+                if (taskId != null) trace.setVerificationTaskId(taskId);
+                TracePo po = traceMapper.toEntity(trace);
+                if (po != null) traceRepository.save(po);
+            }
+        });
     }
 
     private VerificationResultDto buildErrorResult(String nusmvOutput, List<String> checkLogs) {
@@ -795,9 +810,8 @@ public class VerificationServiceImpl implements VerificationService {
     }
 
     private void cleanupTempFile(File file) {
-        if (file != null && file.exists()) {
-            log.info("Keeping NuSMV model file for review: {}", file.getAbsolutePath());
-        }
+        // Keeping NuSMV model file for review: model.smv, request.json, output.txt, result.json
+        // Temp directories (nusmv_*) are retained for post-mortem debugging.
     }
 
     private String syncVerificationExecutorSnapshot() {

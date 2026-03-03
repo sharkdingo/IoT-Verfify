@@ -1,9 +1,18 @@
 package cn.edu.nju.Iot_Verify.configure;
 
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
+import org.slf4j.MDC;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskDecorator;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
@@ -63,7 +72,49 @@ public class ThreadConfig {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(awaitTerminationSeconds);
+        executor.setTaskDecorator(contextPropagatingDecorator());
         executor.initialize();
         return executor;
+    }
+
+    private TaskDecorator contextPropagatingDecorator() {
+        return runnable -> {
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            Authentication authCopy = deepCopyAuthentication(auth);
+            Long userId = UserContextHolder.getUserId();
+            Map<String, String> mdcCtx = MDC.getCopyOfContextMap();
+            return () -> {
+                SecurityContext newCtx = SecurityContextHolder.createEmptyContext();
+                if (authCopy != null) {
+                    newCtx.setAuthentication(authCopy);
+                }
+                SecurityContextHolder.setContext(newCtx);
+                if (userId != null) {
+                    UserContextHolder.setUserId(userId);
+                }
+                if (mdcCtx != null) {
+                    MDC.setContextMap(mdcCtx);
+                }
+                try {
+                    runnable.run();
+                } finally {
+                    SecurityContextHolder.clearContext();
+                    UserContextHolder.clear();
+                    MDC.clear();
+                }
+            };
+        };
+    }
+
+    private Authentication deepCopyAuthentication(Authentication auth) {
+        if (auth == null) {
+            return null;
+        }
+        UsernamePasswordAuthenticationToken copy = new UsernamePasswordAuthenticationToken(
+                auth.getPrincipal(),
+                auth.getCredentials(),
+                new ArrayList<>(auth.getAuthorities()));
+        copy.setDetails(auth.getDetails());
+        return copy;
     }
 }

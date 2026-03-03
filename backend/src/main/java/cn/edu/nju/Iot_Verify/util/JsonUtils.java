@@ -4,13 +4,21 @@ import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.List;
 
 public final class JsonUtils {
 
+    private static final Logger log = LoggerFactory.getLogger(JsonUtils.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    static {
+        MAPPER.registerModule(new JavaTimeModule());
+    }
 
     private JsonUtils() {
     }
@@ -33,6 +41,7 @@ public final class JsonUtils {
         try {
             return MAPPER.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
+            log.warn("JSON serialization failed, returning empty array", e);
             return "[]";
         }
     }
@@ -77,6 +86,7 @@ public final class JsonUtils {
         try {
             return MAPPER.readValue(json, new TypeReference<List<String>>() {});
         } catch (JsonProcessingException e) {
+            log.warn("Failed to parse JSON string list", e);
             return Collections.emptyList();
         }
     }
@@ -96,6 +106,7 @@ public final class JsonUtils {
             return MAPPER.readValue(json, MAPPER.getTypeFactory()
                     .constructCollectionType(List.class, clazz));
         } catch (JsonProcessingException e) {
+            log.warn("Failed to parse JSON list for type {}", clazz.getSimpleName(), e);
             return Collections.emptyList();
         }
     }

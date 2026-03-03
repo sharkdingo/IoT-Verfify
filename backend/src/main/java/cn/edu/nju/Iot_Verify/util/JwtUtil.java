@@ -9,14 +9,22 @@ import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+
+import lombok.extern.slf4j.Slf4j;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.Set;
 
+@Slf4j
 @Component
 public class JwtUtil {
+
+    private static final String INSECURE_DEFAULT_PREFIX = "iot-verify-secret-key";
+    private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
 
     @Value("${jwt.secret:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm}")
     private String secret;
@@ -24,12 +32,32 @@ public class JwtUtil {
     @Value("${jwt.expiration:86400000}")
     private Long expiration;
 
+    private final Environment environment;
+
     private SecretKey signingKey;
+
+    public JwtUtil(Environment environment) {
+        this.environment = environment;
+    }
 
     @PostConstruct
     public void init() {
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
+
+        if (secret.startsWith(INSECURE_DEFAULT_PREFIX) && isProductionProfile()) {
+            log.warn("JWT secret is still using the insecure default value — "
+                    + "configure jwt.secret (or JWT_SECRET env) for production!");
+        }
+    }
+
+    private boolean isProductionProfile() {
+        for (String profile : environment.getActiveProfiles()) {
+            if (PRODUCTION_PROFILES.contains(profile)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private SecretKey getSigningKey() {
@@ -51,7 +79,11 @@ public class JwtUtil {
 
     public Long getUserIdFromToken(String token) {
         Claims claims = parseClaims(token);
-        return Long.parseLong(claims.getSubject());
+        try {
+            return Long.parseLong(claims.getSubject());
+        } catch (NumberFormatException e) {
+            throw new UnauthorizedException("Invalid token: malformed user ID");
+        }
     }
 
     public String getPhoneFromToken(String token) {

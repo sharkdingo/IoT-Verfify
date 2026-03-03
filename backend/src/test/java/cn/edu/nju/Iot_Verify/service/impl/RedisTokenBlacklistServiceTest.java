@@ -3,19 +3,22 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.lang.NonNull;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -42,12 +45,7 @@ class RedisTokenBlacklistServiceTest {
 
         service.blacklist("test-token", 3600);
 
-        verify(valueOperations).set(
-                argThat(key -> key.startsWith("jwt:blacklist:") && !key.contains("test-token")),
-                eq("1"),
-                eq(3600L),
-                eq(TimeUnit.SECONDS)
-        );
+        verify(valueOperations).set(toSha256Key("test-token"), "1", 3600L, TimeUnit.SECONDS);
     }
 
     @Test
@@ -61,21 +59,21 @@ class RedisTokenBlacklistServiceTest {
 
     @Test
     void isBlacklisted_keyExists_returnsTrue() {
-        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(redisTemplate.hasKey(toSha256Key("test-token"))).thenReturn(true);
 
         assertTrue(service.isBlacklisted("test-token"));
     }
 
     @Test
     void isBlacklisted_keyMissing_returnsFalse() {
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        when(redisTemplate.hasKey(toSha256Key("test-token"))).thenReturn(false);
 
         assertFalse(service.isBlacklisted("test-token"));
     }
 
     @Test
     void isBlacklisted_redisDown_returnsFalse() {
-        when(redisTemplate.hasKey(anyString())).thenThrow(new RedisConnectionFailureException("Connection refused"));
+        when(redisTemplate.hasKey(toSha256Key("test-token"))).thenThrow(new RedisConnectionFailureException("Connection refused"));
 
         assertFalse(service.isBlacklisted("test-token"));
     }
@@ -84,33 +82,36 @@ class RedisTokenBlacklistServiceTest {
 
     @Test
     void sameToken_producesSameKey() {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        when(redisTemplate.hasKey(toSha256Key("token-a"))).thenReturn(false);
 
         service.isBlacklisted("token-a");
         service.isBlacklisted("token-a");
 
-        verify(redisTemplate, times(2)).hasKey(captor.capture());
-        assertEquals(captor.getAllValues().get(0), captor.getAllValues().get(1));
+        verify(redisTemplate, times(2)).hasKey(toSha256Key("token-a"));
     }
 
     @Test
     void differentTokens_produceDifferentKeys() {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        String tokenAKey = toSha256Key("token-a");
+        String tokenBKey = toSha256Key("token-b");
+        when(redisTemplate.hasKey(toSha256Key("token-a"))).thenReturn(false);
+        when(redisTemplate.hasKey(toSha256Key("token-b"))).thenReturn(false);
 
         service.isBlacklisted("token-a");
         service.isBlacklisted("token-b");
 
-        verify(redisTemplate, times(2)).hasKey(captor.capture());
-        assertNotEquals(captor.getAllValues().get(0), captor.getAllValues().get(1));
+        verify(redisTemplate).hasKey(toSha256Key("token-a"));
+        verify(redisTemplate).hasKey(toSha256Key("token-b"));
+        assertNotEquals(tokenAKey, tokenBKey);
     }
 
     // --- 日志限流 ---
 
     @Test
     void logThrottling_sameWindow_logsOnlyOnce() throws Exception {
-        when(redisTemplate.hasKey(anyString())).thenThrow(new RedisConnectionFailureException("down"));
+        when(redisTemplate.hasKey(toSha256Key("token-1"))).thenThrow(new RedisConnectionFailureException("down"));
+        when(redisTemplate.hasKey(toSha256Key("token-2"))).thenThrow(new RedisConnectionFailureException("down"));
+        when(redisTemplate.hasKey(toSha256Key("token-3"))).thenThrow(new RedisConnectionFailureException("down"));
 
         // 将 lastCheckErrorTime 设为"刚刚"，模拟同一个 60 秒窗口内
         Field field = RedisTokenBlacklistService.class.getDeclaredField("lastCheckErrorTime");
@@ -130,7 +131,7 @@ class RedisTokenBlacklistServiceTest {
 
     @Test
     void logThrottling_blacklistAndCheck_independent() throws Exception {
-        when(redisTemplate.hasKey(anyString())).thenThrow(new RedisConnectionFailureException("down"));
+        when(redisTemplate.hasKey(toSha256Key("token"))).thenThrow(new RedisConnectionFailureException("down"));
         when(redisTemplate.opsForValue()).thenThrow(new RedisConnectionFailureException("down"));
 
         Field blacklistField = RedisTokenBlacklistService.class.getDeclaredField("lastBlacklistErrorTime");
@@ -149,5 +150,15 @@ class RedisTokenBlacklistServiceTest {
         // 两个限流时间戳都应已更新
         assertTrue(blacklistTime.get() > 0, "blacklist 限流时间戳应已更新");
         assertTrue(checkTime.get() > 0, "check 限流时间戳应已更新");
+    }
+
+    private @NonNull String toSha256Key(@NonNull String token) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(token.getBytes(StandardCharsets.UTF_8));
+            return "jwt:blacklist:" + HexFormat.of().formatHex(hashBytes);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 }

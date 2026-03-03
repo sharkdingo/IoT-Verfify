@@ -2,8 +2,13 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,4 +42,43 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      * 删除用户的所有任务
      */
     void deleteByUserId(Long userId);
+
+    /**
+     * Atomically complete a task only if it has not been cancelled.
+     * Returns 1 if updated, 0 if the task was already CANCELLED.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
+         + "t.progress = 100, t.isSafe = :isSafe, t.violatedSpecCount = :violatedSpecCount, "
+         + "t.checkLogsJson = :checkLogsJson, t.nusmvOutput = :nusmvOutput, "
+         + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs "
+         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
+    int completeTaskIfNotCancelled(@Param("taskId") Long taskId,
+                                   @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
+                                   @Param("completedAt") LocalDateTime completedAt,
+                                   @Param("isSafe") Boolean isSafe,
+                                   @Param("violatedSpecCount") Integer violatedSpecCount,
+                                   @Param("checkLogsJson") String checkLogsJson,
+                                   @Param("nusmvOutput") String nusmvOutput,
+                                   @Param("errorMessage") String errorMessage,
+                                   @Param("processingTimeMs") Long processingTimeMs,
+                                   @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus);
+
+    /**
+     * Atomically fail a task only if it has not been cancelled.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
+         + "t.progress = 100, t.isSafe = false, t.errorMessage = :errorMessage, "
+         + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs "
+         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
+    int failTaskIfNotCancelled(@Param("taskId") Long taskId,
+                               @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
+                               @Param("completedAt") LocalDateTime completedAt,
+                               @Param("errorMessage") String errorMessage,
+                               @Param("checkLogsJson") String checkLogsJson,
+                               @Param("processingTimeMs") Long processingTimeMs,
+                               @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus);
 }

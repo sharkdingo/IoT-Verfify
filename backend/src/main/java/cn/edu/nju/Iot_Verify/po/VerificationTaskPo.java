@@ -15,7 +15,9 @@ import java.util.List;
  * 验证任务持久化实体
  */
 @Entity
-@Table(name = "verification_task")
+@Table(name = "verification_task", indexes = {
+        @Index(name = "idx_verification_task_user_id", columnList = "user_id")
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -32,7 +34,7 @@ public class VerificationTaskPo {
     @EqualsAndHashCode.Include
     private Long id;
 
-    @Column(nullable = false)
+    @Column(name = "user_id", nullable = false)
     private Long userId;
 
     @Enumerated(EnumType.STRING)

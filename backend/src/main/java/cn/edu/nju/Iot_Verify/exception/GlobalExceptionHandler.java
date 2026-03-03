@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.exception;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -105,10 +106,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Result<Void>> handleIllegalArgumentException(IllegalArgumentException e) {
-        log.warn("Bad request: {}", e.getMessage());
+        log.warn("IllegalArgumentException: {}", e.getMessage());
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Result.badRequest(e.getMessage()));
+                .body(Result.badRequest("Invalid request parameter"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -157,10 +158,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Result<Void>> handleIllegalStateException(IllegalStateException e) {
-        log.warn("Conflict: {}", e.getMessage());
+        log.error("IllegalStateException: {}", e.getMessage(), e);
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error(500, "Internal server error"));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Result<Void>> handleDataIntegrityViolation(DataIntegrityViolationException e) {
+        log.warn("Data integrity violation: {}", e.getMessage());
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
-                .body(Result.conflict(e.getMessage()));
+                .body(Result.conflict("Data conflict, the resource may already exist"));
     }
 
     @ExceptionHandler(RuntimeException.class)

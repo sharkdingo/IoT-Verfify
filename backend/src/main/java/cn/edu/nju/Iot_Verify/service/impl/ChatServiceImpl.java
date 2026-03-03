@@ -26,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -55,8 +56,10 @@ public class ChatServiceImpl implements ChatService {
     private final AiToolManager aiToolManager;
     private final ObjectMapper objectMapper;
     private final ChatMapper chatMapper;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
+    @Transactional(readOnly = true)
     public List<ChatSessionResponseDto> getUserSessions(Long userId) {
         return chatMapper.toChatSessionDtoList(sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId));
     }
@@ -73,6 +76,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<ChatMessageResponseDto> getHistory(Long userId, String sessionId) {
         sessionRepo.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
@@ -104,8 +108,10 @@ public class ChatServiceImpl implements ChatService {
         emitter.onError(ex -> isDisconnect.set(true));
 
         try {
-            saveSimpleMsg(sessionId, "user", content);
-            touchSessionTitle(sessionId, userId, content);
+            transactionTemplate.executeWithoutResult(status -> {
+                saveSimpleMsg(sessionId, "user", content);
+                touchSessionTitle(sessionId, userId, content);
+            });
 
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
             List<ChatMessage> sdkMessages = arkAiClient.convertToSdkMessages(historyPO);
@@ -140,7 +146,8 @@ public class ChatServiceImpl implements ChatService {
             }
 
             if (!finalAnswer.isEmpty()) {
-                saveSimpleMsg(sessionId, "assistant", finalAnswer.toString());
+                transactionTemplate.executeWithoutResult(status ->
+                        saveSimpleMsg(sessionId, "assistant", finalAnswer.toString()));
             }
             emitter.complete();
         } catch (Exception e) {
@@ -229,7 +236,8 @@ public class ChatServiceImpl implements ChatService {
             }
 
             hadToolCalls = true;
-            saveAiToolCallRequest(sessionId, toolCalls);
+            transactionTemplate.executeWithoutResult(status ->
+                    saveAiToolCallRequest(sessionId, toolCalls));
             sdkMessages.add(aiMsg);
 
             for (ChatToolCall toolCall : toolCalls) {
@@ -259,7 +267,8 @@ public class ChatServiceImpl implements ChatService {
                     }
                 }
 
-                saveToolExecutionResult(sessionId, toolCallId, toolResult);
+                transactionTemplate.executeWithoutResult(status ->
+                        saveToolExecutionResult(sessionId, toolCallId, toolResult));
                 sdkMessages.add(ChatMessage.builder()
                         .role(ChatMessageRole.TOOL)
                         .content(toolResult)

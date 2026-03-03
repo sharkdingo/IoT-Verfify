@@ -32,6 +32,7 @@ public class VerificationTaskMapper {
                 .violatedSpecCount(po.getViolatedSpecCount())
                 .checkLogs(po.getCheckLogs() != null ? po.getCheckLogs() : JsonUtils.fromJsonToStringList(po.getCheckLogsJson()))
                 .errorMessage(po.getErrorMessage())
+                .progress(po.getProgress())
                 .build();
     }
 

@@ -27,5 +27,6 @@ public class SimulationTaskDto {
     private Long simulationTraceId;
     private List<String> checkLogs;
     private String errorMessage;
+    private Integer progress;
 }
 

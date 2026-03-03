@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -28,6 +29,16 @@ public class AddTemplateTool implements AiTool {
 
     private final BoardStorageService boardStorageService;
     private final ObjectMapper objectMapper;
+    private ObjectMapper tolerantMapper;
+
+    @PostConstruct
+    void initTolerantMapper() {
+        tolerantMapper = objectMapper.copy();
+        tolerantMapper.setConfig(
+                tolerantMapper.getDeserializationConfig()
+                        .with(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES)
+        );
+    }
 
     @Override
     public String getName() {
@@ -92,8 +103,6 @@ public class AddTemplateTool implements AiTool {
                 return errorJson("Manifest object is required.", "VALIDATION_ERROR", 400);
             }
 
-            ObjectMapper tolerantMapper = objectMapper.copy();
-            tolerantMapper.enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
             DeviceTemplateDto.DeviceManifest manifest = tolerantMapper.treeToValue(
                     manifestNode, DeviceTemplateDto.DeviceManifest.class);
             if (manifest == null || manifest.getModes() == null || manifest.getModes().isEmpty()) {

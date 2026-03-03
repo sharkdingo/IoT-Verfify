@@ -57,6 +57,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceEdgeMapper deviceEdgeMapper;
 
     @Override
+    @Transactional(readOnly = true)
     public List<DeviceNodeDto> getNodes(Long userId) {
         return nodeRepo.findByUserId(userId).stream()
                 .map(deviceNodeMapper::toDto)
@@ -75,6 +76,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<DeviceEdgeDto> getEdges(Long userId) {
         return edgeRepo.findByUserId(userId).stream()
                 .map(deviceEdgeMapper::toDto)
@@ -93,6 +95,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<SpecificationDto> getSpecs(Long userId) {
         return specRepo.findByUserId(userId).stream()
                 .map(specificationMapper::toDto)
@@ -111,6 +114,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<RuleDto> getRules(Long userId) {
         return ruleRepo.findByUserId(userId).stream()
                 .map(ruleMapper::toDto)
@@ -290,6 +294,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public BoardActiveDto getActive(Long userId) {
         BoardActivePo po = activeRepo.findByUserId(userId).orElse(null);
         BoardActiveDto dto = new BoardActiveDto();
@@ -323,6 +328,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<DeviceTemplateDto> getDeviceTemplates(Long userId) {
         List<DeviceTemplatePo> poList = deviceTemplateRepo.findByUserId(userId);
 
