@@ -1201,3 +1201,18 @@ Trace Type: Counterexample
 - **SecurityConfig ObjectMapper**：`SecurityFilterChain` 使用 Spring 管理的 `ObjectMapper`（通过 `@RequiredArgsConstructor` 注入），继承 `JavaTimeModule` 等已注册模块（原为 `new ObjectMapper()` 局部实例）。
 - **ArkAiClient ObjectMapper**：通过构造函数注入 Spring 管理的 `ObjectMapper`（原为 `new ObjectMapper()` 字段初始化），确保序列化配置与全局一致。
 - **ArkAiClient 解析预检**：`parseToolMessage()` 和 `parseAssistantToolCalls()` 在调用 `objectMapper.readTree()` 前增加 `content.stripLeading().startsWith("{")` 快速预检（容忍前导空白/换行），纯文本消息不再进入 JSON 解析路径（避免异常驱动回退的栈填充开销）；回退路径记录 DEBUG 日志（原为静默 `catch (Exception ignore)`）。
+
+## 14. 2026-03-04 同步更新
+
+### 无模式设备 InitState 空串修复
+
+16 个无模式传感器模板（Weather、Clock、Temperature Sensor、Humidity Sensor 等）的 `InitState` 为空字符串。此前 AI 创建设备时 `NodeServiceImpl.getInitStateFromTemplate()` 会将 `""` 原样返回，导致落库 `state=""`；后续前端保存画布经 `POST /api/board/nodes` 时被 `DeviceNodeDto.state` 的 `@NotBlank` 校验拒绝（400）。
+
+修复点：
+- **`NodeServiceImpl.getInitStateFromTemplate()`**：读取 `InitState` 后增加 `isBlank()` 检查，空串降级为 `HARD_FALLBACK_STATE`（`"Working"`）。日志由 `"does not contain InitState"` 修正为 `"has missing or blank InitState"`。
+- **`DeviceNodeMapper.toDto()`**：读取 PO 时若 `state` 为 null 或空白，自动补为 `"Working"`（`FALLBACK_STATE`），防止历史脏数据在 GET → 再 POST 时触发 `@NotBlank` 校验。
+- 新增 3 个单元测试（`NodeServiceImplMutationTest`）：空 InitState、正常 InitState、缺失 InitState。
+
+### 设备模板修正
+
+- **Sprinkler Controller.json**：API 定义中的键名由错误的 `"s"` 修正为 `"Assignments"`（两处）。

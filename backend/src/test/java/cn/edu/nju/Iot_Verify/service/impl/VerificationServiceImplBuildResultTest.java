@@ -299,6 +299,7 @@ class VerificationServiceImplBuildResultTest {
                 .build();
         when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
         when(taskRepository.save(any(VerificationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, VerificationTaskPo.class)));
+        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
 
         service.verifyAsync(
                 1L, 7L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
@@ -326,6 +327,26 @@ class VerificationServiceImplBuildResultTest {
                 1L, 8L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
                 false, 0, false);
 
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void verifyAsync_noLongerPending_skipsGeneration() throws Exception {
+        // startTaskIfStillPending returns 0 by default (Mockito int stub),
+        // simulating a DB-level race where the task was cancelled or started by another process
+        // after the in-memory check passed.
+        service.verifyAsync(
+                1L, 11L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
+                false, 0, false);
+
+        // Verify the atomic start was attempted.
+        verify(taskRepository).startTaskIfStillPending(
+                eq(11L), eq(VerificationTaskPo.TaskStatus.RUNNING),
+                any(LocalDateTime.class), eq(0), anyString(),
+                eq(VerificationTaskPo.TaskStatus.PENDING));
+        // Verify early return: findById for task loading should NOT be called after abort.
+        // (updateTaskProgress may call findById(11L) before the atomic check, so we only
+        // assert generate() was never reached.)
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 

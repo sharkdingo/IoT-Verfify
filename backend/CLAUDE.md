@@ -168,6 +168,17 @@ Key config in `src/main/resources/application.yaml`:
 - **ArkAiClient ObjectMapper**: Uses Spring-managed `ObjectMapper` via constructor injection (was `new ObjectMapper()` field initializer), ensuring consistent serialization configuration with the rest of the application.
 - **ArkAiClient parse logging**: `parseToolMessage()` and `parseAssistantToolCalls()` now log at DEBUG level on JSON parse fallback (was silent `catch (Exception ignore)`), improving observability for structured format parsing failures. Both methods use `content.stripLeading().startsWith("{")` pre-check (tolerant of leading whitespace/newlines) to skip JSON parsing for plain text messages, avoiding unnecessary exception overhead in high-volume history conversion.
 
+## 2026-03-04 Sync Notes
+
+### Stateless Device Empty InitState Fix
+- 16 no-mode sensor templates (Weather, Clock, Temperature Sensor, Humidity Sensor, etc.) have `"InitState": ""`. Previously `NodeServiceImpl.getInitStateFromTemplate()` returned the empty string as-is, resulting in `state=""` persisted to DB. When the frontend subsequently saved the board via `POST /api/board/nodes`, `DeviceNodeDto.state`'s `@NotBlank` validation rejected it (400).
+- **`NodeServiceImpl.getInitStateFromTemplate()`**: now checks `isBlank()` after reading `InitState`; empty/blank values fall back to `HARD_FALLBACK_STATE` (`"Working"`). Log message corrected from `"does not contain InitState"` to `"has missing or blank InitState"`.
+- **`DeviceNodeMapper.toDto()`**: sanitizes blank/null `state` to `"Working"` (`FALLBACK_STATE`) on read, preventing historical dirty data from triggering `@NotBlank` validation on subsequent GET → POST round-trips.
+- 3 new unit tests in `NodeServiceImplMutationTest`: empty InitState, normal InitState, missing InitState key.
+
+### Device Template Fix
+- **Sprinkler Controller.json**: API definitions had erroneous key `"s"` instead of `"Assignments"` (2 occurrences fixed).
+
 ## NuSMV Verification Flow
 
 ```

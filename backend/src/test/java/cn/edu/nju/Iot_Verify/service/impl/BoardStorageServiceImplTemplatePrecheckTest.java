@@ -145,7 +145,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         when(smvGenerator.generate(
                 anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
                 any(SmvGenerator.GeneratePurpose.class)))
-                .thenThrow(new Exception("disk io failed"));
+                .thenThrow(new java.io.IOException("disk io failed"));
 
         InternalServerException ex = assertThrows(InternalServerException.class, () ->
                 service.addDeviceTemplate(1L, dto));

@@ -26,16 +26,16 @@ public class SmvMainModuleBuilder {
                        int intensity,
                        boolean enablePrivacy) {
 
-        // 閸欏倹鏆熸宀冪槈
+        // Parameter validation
         if (devices == null) {
-            log.error("SmvMainModuleBuilder.build: devices 閸欏倹鏆熸稉宥堝厴娑撶皠ull");
+            log.error("SmvMainModuleBuilder.build: devices must not be null");
             throw SmvGenerationException.invalidBuilderInput(
                     "SmvMainModuleBuilder",
                     "devices",
                     "must not be null");
         }
         if (deviceSmvMap == null) {
-            log.error("SmvMainModuleBuilder.build: deviceSmvMap 閸欏倹鏆熸稉宥堝厴娑撶皠ull");
+            log.error("SmvMainModuleBuilder.build: deviceSmvMap must not be null");
             throw SmvGenerationException.invalidBuilderInput(
                     "SmvMainModuleBuilder",
                     "deviceSmvMap",
@@ -46,8 +46,8 @@ public class SmvMainModuleBuilder {
 
         content.append("\nMODULE main");
 
-        // intensity 閺勵垰鍠曠紒鎾冲綁闁插骏绱欐稉宥瓻DIC 娑撯偓閼疯揪绱氶敍姘偓鑲╂暠閸氬嫯顔曟径鍣剆_attack 娑斿鎷伴崘鍐茬暰閿涘矂鐛欑拠浣界箖缁嬪鑵戞稉宥呭綁
-        // 閸欘亣顩?isAttack=true 鐏忓崬锛愰弰宸宯tensity閿涘苯鑻熼悽鈫朜VAR 缁撅附娼稉濠囨
+        // Attack-mode: intensity is declared as FROZENVAR with INVAR <= user-specified intensity;
+        // is_attack boolean FROZENVAR is declared per device module.
         // Attack-mode guard.
         if (isAttack) {
             content.append("\nFROZENVAR");
@@ -113,7 +113,7 @@ public class SmvMainModuleBuilder {
 
         content.append("\nASSIGN");
 
-        // 閻㈢喐鍨氶悳顖氼暔閸欐﹢鍣洪惃鍒琻it()閿涘牅濞囬悽銊ф暏閹撮攱瀵氱€规氨娈戦崚婵嗩潗閸婄》绱?
+        // Env variable init assignments
         for (Map.Entry<String, String> entry : envVarInitValues.entrySet()) {
             content.append("\n\tinit(a_").append(entry.getKey()).append(") := ")
                    .append(entry.getValue()).append(";");
@@ -152,8 +152,9 @@ public class SmvMainModuleBuilder {
     }
 
     /**
-     * 娑撶儤澧嶉張澶庮啎婢跺洨娈?IsInside=false 閸欐﹢鍣洪悽鐔稿灇缁犫偓閸楁洝绁撮崐纭风礄闂€婊冨剼閻滎垰顣ㄩ崣姗€鍣洪敍澶涙嫹?     * 娓氬顩ч敍姝礹ermostat.temperature := a_temperature;
-     * 娑撳秹妾烘禍搴濈炊閹扮喎娅掔拋鎯ь槵閳ユ柡鈧棃娼导鐘冲妳閸ｃ劏顔曟径鍥风礄婵′繂hermostat閿涘娈戞径鏍劥閸欐﹢鍣烘稊鐔兼付鐟曚浇绻涢幒銉ュ煂閻滎垰顣ㄩ崣姗€鍣洪敓?     */
+     * Assign external (IsInside=false) variables using simple assignment in main module.
+     * e.g. Thermostat.temperature := a_temperature; The device module must not use init() for these.
+     */
     private void appendExternalVariableAssignments(StringBuilder content,
                                                    List<DeviceVerificationDto> devices,
                                                    Map<String, DeviceSmvData> deviceSmvMap) {
@@ -264,7 +265,7 @@ public class SmvMainModuleBuilder {
 
                             DeviceManifest.Trigger trigger = trans.getTrigger();
                             if (trigger != null) {
-                                // M4 娣囶喖顦查敍姝祌igger value 闂団偓鐟曚礁骞撶粚鐑樼壐
+                                // M4: clean trigger value (remove spaces for NuSMV compatibility)
                                 String triggerValue = trigger.getValue() != null ? trigger.getValue().replace(" ", "") : "";
                                 String triggerRelation = normalizeTriggerRelationOrThrow(
                                         smv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
@@ -690,7 +691,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                                 "attribute=" + trigger.getAttribute() + ", relation=" + trigger.getRelation()
                                                         + ", value=" + trigger.getValue() + ", assignValue=" + assignment.getValue());
                                     }
-                                    // P4: 閼活櫤rigger.attribute 閺堫剝闊╅弰鐥歯v var閿涘瞼娲块幒銉ф暏 a_<attr>
+                                    // P4: if trigger.attribute is an env var, reference it as a_<attr>
                                     String triggerRelation = normalizeTriggerRelationOrThrow(
                                             transSmv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
                                     String triggerRef;
@@ -700,7 +701,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                         triggerRef = transSmv.getVarName() + "." + trigger.getAttribute();
                                     }
                                     content.append("\t\t");
-                                    // P1-1 娣囶喖顦查敍姘杻閸旂垙tartState 缁撅附娼?
+                                    // P1-1: prepend StartState guard condition if present
                                     if (trans.getStartState() != null && transSmv.getModes() != null && !transSmv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < transSmv.getModes().size(); mi++) {
                                             String ss = getStateForMode(trans.getStartState(), mi);
@@ -720,7 +721,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 }
 
                 if (var.getValues() != null && !var.getValues().isEmpty()) {
-                    // 閺嬫矮濡囬崹瀣箚婢у啫褰夐柌蹇ョ窗闂堢偟鈥樼€规碍鈧団偓澶嬪閹碘偓閺堝褰查懗钘夆偓纭风礄娑撳窏ample.smv 娑撯偓閼疯揪绱?
+                    // Enum env variable: non-deterministic choice from clean value set (consistent with sample.smv)
                     List<String> cleanValues = new ArrayList<>();
                     for (String v : var.getValues()) {
                         cleanValues.add(v.replace(" ", ""));
@@ -739,7 +740,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 閻㈢喐鍨氶弫鏉库偓鐓庣€烽悳顖氼暔閸欐﹢鍣洪惃鍒礶xt() 鏉烆剚宕查敍灞藉棘閻擃湽ample.smv 閺嶇厧绱￠敓?     * 閸栧懎鎯堢拋鎯ь槵瑜板崬鎼烽悳鍥风礄婵′繘irconditioner.temperature_rate閿涘鎷?NaturalChangeRate
+     * Generate numeric env variable next() transition following sample.smv pattern.
+     * Incorporates device _rate (e.g. airconditioner.temperature_rate) and NaturalChangeRate.
      */
     private void appendNumericEnvTransition(StringBuilder content, String smvVarName,
                                             DeviceManifest.InternalVariable var, String varName,
@@ -753,7 +755,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         int[] ncr = parseNaturalChangeRate(var.getNaturalChangeRate(), "env:" + varName);
         int lowerRate = ncr[0], upperRate = ncr[1];
 
-        // 閿熸枻鎷烽敓鏂ゆ嫹閿熸枻鎷烽敓鏂ゆ嫹褰遍敓鏂ゆ嫹鍚敓鏂ゆ嫹閿熸枻鎷烽敓鏂ゆ嫹鐠為潻鎷烽敓?rate 閿熸枻鎷烽敓鏂ゆ嫹
+        // Check if any device provides an impacted _rate expression for this variable
         String rateExpr = findImpactRateExpression(varName, devices, deviceSmvMap);
 
         if (rateExpr != null) {
@@ -788,7 +790,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             }
             content.append("\t\tTRUE: {").append(String.join(", ", rateCandidates)).append("};\n");
         } else {
-            // 閿熸枻鎷烽敓鍊熷褰遍敓鏂ゆ嫹閿熺粸锝忔嫹NaturalChangeRate閿熸枻鎷稵RUE 閿熸枻鎷锋敮閿熸枻鎷烽€夊€煎悓閿熸枻鎷烽敓鍙枻鎷?
+            // No impacted rate: use NaturalChangeRate for TRUE branch candidates
             if (upperRate > 0) {
                 StringBuilder upperSet = new StringBuilder("{");
                 if (lowerRate < 0) {
@@ -907,7 +909,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 娑撶皪ransition signal閿涘牓娼?API signal閿涘鏁撻幋鎭榚xt() 鏉烆剚宕查敓?     * 瑜版捁顔曟径鍥︾矤 startState 鏉烆剚宕查崚鐧硁dState 閺冪ignal=TRUE閿涘苯鎯侀崚姗LSE閿?     */
+     * Generate Transition signal and API signal next() transitions.
+     * When current state matches startState and next state matches endState, signal=TRUE; otherwise FALSE.
+     */
     private void appendTransitionSignalTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
                                                     Map<String, DeviceSmvData> deviceSmvMap) {
@@ -998,7 +1002,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                 appendRuleConditions(content, rule, deviceSmvMap, false);
                                 content.append(" & (");
                                 appendRulePropertyConditions(content, rule, deviceSmvMap, dim);
-                                // content 闂呮劗顫嗘导鐘虫尡閿涙俺顫夐崚娆愭儭鐢泬ontentDevice.content 閺冩儼鎷烽崝鐕緊ntent privacy 閺夆€叉
+                                // Content privacy condition: check if rule references contentDevice.content for content privacy
                                 if (dim == PropertyDimension.PRIVACY) {
                                     String contentCond = buildContentPrivacyCondition(rule, deviceSmvMap);
                                     if (contentCond != null) {
@@ -1024,7 +1028,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 娑撶ctuator 鐠佹儳顦惃鍕綁闁插繒楠?trust/privacy 閻㈢喐鍨?next() 鏉烆剚宕查敍鍫ｅ殰娣囨繃瀵旈敍澶涙嫹?     * 鏉╂瑤绨洪崣姗€鍣洪崷鈯縨vDeviceModuleBuilder 娑擃厼锛愰弰搴濊礋 VAR閿涘苯绻€妞ょ粯婀?next() 閸氾箑鍨?NuSMV 鐟欏棔璐熼棃鐐碘€樼€规碍鈧嶆嫹?     */
+     * Generate actuator internal variable trust/privacy next() transitions (keep current value).
+     * These correspond to VAR declarations in SmvDeviceModuleBuilder; next() keeps value unchanged.
+     */
     private void appendVariablePropertyTransitions(StringBuilder content,
                                                     List<DeviceVerificationDto> devices,
                                                     Map<String, DeviceSmvData> deviceSmvMap,
@@ -1049,18 +1055,32 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             return;
         }
 
+        int attemptedConditions = 0;
         List<String> parts = new ArrayList<>();
         for (RuleDto.Condition condition : rule.getConditions()) {
             if (condition == null || condition.getDeviceName() == null) continue;
             DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(condition.getDeviceName(), deviceSmvMap);
             if (condSmv == null || condSmv.getManifest() == null) continue;
+            attemptedConditions++;
 
             String part = buildPropertyConditionPart(condition, condSmv, condSmv.getVarName(), condSmv.getManifest(), dim);
             if (part != null && !part.isEmpty()) parts.add(part);
         }
 
-        // C2 娣囶喖顦查敍姘閺堝娼禒鑸电爱闁棄褰叉穱鈩冩閹靛秳绱堕幘鐠絩usted閿涘瞼鏁?& 閼板矂娼?|
-        content.append(parts.isEmpty() ? "TRUE" : String.join(" & ", parts));
+        // C2: join trust/privacy condition parts with & (all sources must be trusted).
+        // Fail-closed: if conditions existed but none produced a property part,
+        // output FALSE rather than TRUE to avoid silently relaxing the property constraint.
+        if (parts.isEmpty()) {
+            if (attemptedConditions > 0) {
+                log.warn("Rule has {} condition(s) but none produced a {} property part; using fail-closed FALSE",
+                        attemptedConditions, dim.name());
+                content.append("FALSE");
+            } else {
+                content.append("TRUE");
+            }
+        } else {
+            content.append(String.join(" & ", parts));
+        }
     }
 
     private String buildPropertyConditionPart(RuleDto.Condition condition, DeviceSmvData condSmv,
@@ -1097,45 +1117,211 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 }
             }
 
-            if ("=".equals(normalizeRuleRelation(condition.getRelation())) && condition.getValue() != null) {
+            String normalizedRel = normalizeRuleRelation(condition.getRelation());
+            if (condition.getValue() != null && normalizedRel != null) {
                 String stateValue = condition.getValue().replace(" ", "");
-                if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-                    // First check whether attribute is a mode name.
-                    if (condSmv.getModes().contains(condition.getAttribute())) {
-                        return condVarName + "." + dim.prefix + condition.getAttribute() + "_" + stateValue + "=" + dim.activeValue;
-                    }
-                    // Multi-mode value with semicolons should be mapped segment by segment.
-                    if (stateValue.contains(";") && condSmv.getModes().size() > 1) {
-                        String[] parts = stateValue.split(";");
-                        List<String> propParts = new ArrayList<>();
-                        for (int mi = 0; mi < parts.length && mi < condSmv.getModes().size(); mi++) {
-                            String part = parts[mi].trim();
-                            if (!part.isEmpty()) {
-                                propParts.add(condVarName + "." + dim.prefix + condSmv.getModes().get(mi) + "_" + part + "=" + dim.activeValue);
+
+                if ("=".equals(normalizedRel)) {
+                    if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
+                        // First check whether attribute is a mode name.
+                        if (condSmv.getModes().contains(condition.getAttribute())) {
+                            return condVarName + "." + dim.prefix + condition.getAttribute() + "_" + stateValue + "=" + dim.activeValue;
+                        }
+                        // Multi-mode value with semicolons should be mapped segment by segment.
+                        if (stateValue.contains(";") && condSmv.getModes().size() > 1) {
+                            String[] parts = stateValue.split(";");
+                            List<String> propParts = new ArrayList<>();
+                            for (int mi = 0; mi < parts.length && mi < condSmv.getModes().size(); mi++) {
+                                String part = parts[mi].trim();
+                                if (!part.isEmpty()) {
+                                    propParts.add(condVarName + "." + dim.prefix + condSmv.getModes().get(mi) + "_" + part + "=" + dim.activeValue);
+                                }
+                            }
+                            if (!propParts.isEmpty()) {
+                                return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
                             }
                         }
-                        if (!propParts.isEmpty()) {
-                            return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
+                        // Try to match value to a mode's legal state list
+                        for (String mode : condSmv.getModes()) {
+                            List<String> modeStates = condSmv.getModeStates().get(mode);
+                            if (modeStates != null && modeStates.contains(stateValue)) {
+                                return condVarName + "." + dim.prefix + mode + "_" + stateValue + "=" + dim.activeValue;
+                            }
                         }
+                        log.warn("Trust/privacy propagation: state value '{}' not found in any mode for device '{}', skipping",
+                                stateValue, condVarName);
+                        return null;
+                    } else {
+                        return condVarName + "." + dim.prefix + stateValue + "=" + dim.activeValue;
                     }
-                    // 閸氾箑鍨幐濉縜lue 閸︺劌鎽㈡稉鐚皁de 閻ㄥ嫮濮搁幀浣稿灙鐞涖劋鑵戦弻銉﹀
-                    for (String mode : condSmv.getModes()) {
-                        List<String> modeStates = condSmv.getModeStates().get(mode);
-                        if (modeStates != null && modeStates.contains(stateValue)) {
-                            return condVarName + "." + dim.prefix + mode + "_" + stateValue + "=" + dim.activeValue;
-                        }
-                    }
-                    return condVarName + "." + dim.prefix + condSmv.getModes().get(0) + "_" + stateValue + "=" + dim.activeValue;
-                } else {
-                    return condVarName + "." + dim.prefix + stateValue + "=" + dim.activeValue;
+                } else if ("!=".equals(normalizedRel)) {
+                    // != on state: property-check all states EXCEPT stateValue.
+                    // If attribute names a specific mode, scope to that mode only (consistent with = branch).
+                    String targetMode = resolveAttributeAsMode(condSmv, condition);
+                    return collectStatePropertyPartsExcluding(condSmv, condVarName, dim, Set.of(stateValue), targetMode);
+                } else if ("in".equals(normalizedRel)) {
+                    // IN: property-check each value in the set.
+                    Set<String> values = parseStateValueSet(stateValue, condSmv);
+                    String targetMode = resolveAttributeAsMode(condSmv, condition);
+                    return collectStatePropertyPartsIncluding(condSmv, condVarName, dim, values, targetMode);
+                } else if ("not in".equals(normalizedRel)) {
+                    // NOT IN: property-check all states EXCEPT those in the set.
+                    Set<String> values = parseStateValueSet(stateValue, condSmv);
+                    String targetMode = resolveAttributeAsMode(condSmv, condition);
+                    return collectStatePropertyPartsExcluding(condSmv, condVarName, dim, values, targetMode);
                 }
+                // For numeric comparisons (>, <, >=, <=) on enum states: fall through to null.
+                // Caught by fail-closed check in appendRulePropertyConditions.
             }
         }
         return null;
     }
 
     /**
-     * 瑜版捁顫夐崚娆忔嚒娴犮倖鎯＄敮顩塷ntentDevice.content 閺冭绱濋悽鐔稿灇 content 闂呮劗顫嗛弶鈥叉閿?     * 娓氬顩х憴鍕灟 "THEN Facebook.post(MobilePhone.photo)" 閿?mobilephone.privacy_photo=private"
+     * If condition.getAttribute() names one of the device's modes, return it as the target mode
+     * for scoped property generation. Otherwise return null (process all modes).
+     * Mirrors the attribute-is-mode check in the "=" branch of buildPropertyConditionPart.
+     */
+    private static String resolveAttributeAsMode(DeviceSmvData condSmv, RuleDto.Condition condition) {
+        if (condSmv.getModes() != null && condition.getAttribute() != null
+                && condSmv.getModes().contains(condition.getAttribute())) {
+            return condition.getAttribute();
+        }
+        return null;
+    }
+
+    /**
+     * Parse a state value set string (e.g. "A,B,C" or "[A|B|C]") into individual values.
+     * Uses the same separator convention as splitStateRuleCandidates:
+     * multi-mode devices use [,|] (preserving ; as tuple separator),
+     * single-mode devices use [,;|].
+     */
+    private Set<String> parseStateValueSet(String raw, DeviceSmvData condSmv) {
+        String cleaned = raw.replaceAll("[\\[\\]{}]", "");
+        boolean multiMode = condSmv.getModes() != null && condSmv.getModes().size() > 1;
+        String splitRegex = multiMode ? "[,|]" : "[,;|]";
+        Set<String> result = new LinkedHashSet<>();
+        for (String v : cleaned.split(splitRegex)) {
+            String trimmed = v.trim().replace(" ", "");
+            if (!trimmed.isEmpty()) result.add(trimmed);
+        }
+        return result;
+    }
+
+    /**
+     * Collect property condition parts for states IN the given set.
+     * Used for "IN" relation: ensure all listed states are trusted/private.
+     * When targetMode is non-null, only considers states within that specific mode.
+     * When targetMode is null, processes all modes and handles tuple values via resolveStateTupleCandidate.
+     */
+    private String collectStatePropertyPartsIncluding(DeviceSmvData condSmv, String condVarName,
+                                                      PropertyDimension dim, Set<String> includeValues,
+                                                      String targetMode) {
+        List<String> propParts = new ArrayList<>();
+        if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
+            for (String val : includeValues) {
+                if (targetMode != null) {
+                    // Scoped to a single mode: match directly within that mode.
+                    List<String> ms = condSmv.getModeStates() != null ? condSmv.getModeStates().get(targetMode) : null;
+                    if (ms != null && ms.contains(val)) {
+                        propParts.add(condVarName + "." + dim.prefix + targetMode + "_" + val + "=" + dim.activeValue);
+                    }
+                    continue;
+                }
+                // No target mode: try tuple resolution first, then simple match across modes.
+                Map<String, String> tuple = resolveStateTupleCandidate(condSmv, val);
+                if (tuple != null) {
+                    for (Map.Entry<String, String> e : tuple.entrySet()) {
+                        propParts.add(condVarName + "." + dim.prefix + e.getKey() + "_" + e.getValue() + "=" + dim.activeValue);
+                    }
+                } else {
+                    for (String mode : condSmv.getModes()) {
+                        List<String> ms = condSmv.getModeStates() != null ? condSmv.getModeStates().get(mode) : null;
+                        if (ms != null && ms.contains(val)) {
+                            propParts.add(condVarName + "." + dim.prefix + mode + "_" + val + "=" + dim.activeValue);
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            for (String val : includeValues) {
+                propParts.add(condVarName + "." + dim.prefix + val + "=" + dim.activeValue);
+            }
+        }
+        if (propParts.isEmpty()) return null;
+        return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
+    }
+
+    /**
+     * Collect property condition parts for all states EXCEPT those in the given set.
+     * Used for "!=" and "NOT IN" relations: ensure all other possible states are trusted/private.
+     * When targetMode is non-null, only considers states within that specific mode.
+     * When targetMode is null, processes all modes and handles tuple values via resolveStateTupleCandidate.
+     */
+    private String collectStatePropertyPartsExcluding(DeviceSmvData condSmv, String condVarName,
+                                                      PropertyDimension dim, Set<String> excludeValues,
+                                                      String targetMode) {
+        List<String> propParts = new ArrayList<>();
+        if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
+            if (targetMode != null) {
+                // Scoped to a single mode: exclude directly within that mode's states.
+                List<String> modeStates = condSmv.getModeStates() != null ? condSmv.getModeStates().get(targetMode) : null;
+                if (modeStates != null) {
+                    for (String s : modeStates) {
+                        if (!excludeValues.contains(s)) {
+                            propParts.add(condVarName + "." + dim.prefix + targetMode + "_" + s + "=" + dim.activeValue);
+                        }
+                    }
+                }
+            } else {
+                List<String> modes = condSmv.getModes();
+                // Build per-mode exclusion sets from potentially tuple values.
+                Map<String, Set<String>> perModeExclusions = new LinkedHashMap<>();
+                for (String mode : modes) perModeExclusions.put(mode, new LinkedHashSet<>());
+
+                for (String val : excludeValues) {
+                    Map<String, String> tuple = resolveStateTupleCandidate(condSmv, val);
+                    if (tuple != null) {
+                        for (Map.Entry<String, String> e : tuple.entrySet()) {
+                            perModeExclusions.get(e.getKey()).add(e.getValue());
+                        }
+                    } else {
+                        for (String mode : modes) {
+                            List<String> modeStates = condSmv.getModeStates() != null ? condSmv.getModeStates().get(mode) : null;
+                            if (modeStates != null && modeStates.contains(val)) {
+                                perModeExclusions.get(mode).add(val);
+                            }
+                        }
+                    }
+                }
+
+                for (String mode : modes) {
+                    List<String> modeStates = condSmv.getModeStates() != null ? condSmv.getModeStates().get(mode) : null;
+                    if (modeStates != null) {
+                        Set<String> excluded = perModeExclusions.get(mode);
+                        for (String s : modeStates) {
+                            if (!excluded.contains(s)) {
+                                propParts.add(condVarName + "." + dim.prefix + mode + "_" + s + "=" + dim.activeValue);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (condSmv.getStates() != null) {
+            for (String s : condSmv.getStates()) {
+                if (!excludeValues.contains(s)) {
+                    propParts.add(condVarName + "." + dim.prefix + s + "=" + dim.activeValue);
+                }
+            }
+        }
+        if (propParts.isEmpty()) return null;
+        return propParts.size() == 1 ? propParts.get(0) : "(" + String.join(" & ", propParts) + ")";
+    }
+
+    /**
+     * Build content privacy condition from rule command referencing contentDevice.content.
+     * e.g. "THEN Facebook.post(MobilePhone.photo)" checks "mobilephone.privacy_photo=private"
      */
     private String buildContentPrivacyCondition(RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap) {
         if (rule.getCommand() == null) return null;
@@ -1151,7 +1337,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             return null;
         }
 
-        // 妤犲矁鐦?content 绾喖鐤勭€涙ê婀禍搴ゎ嚉鐠佹儳顦?
+        // Verify the content exists in the content device
         for (DeviceSmvData.ContentInfo ci : contentSmv.getContents()) {
             if (contentName.equals(ci.getName())) {
                 return contentSmv.getVarName() + ".privacy_" + contentName + "=private";
@@ -1161,7 +1347,10 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 娑撶瘨sChangeable=true 閻ㄥ垻ontent 閻㈢喐鍨?next() 鏉烆剚宕查敓?     * 瑜版捁顫夐崚娆忔嚒娴犮倕绱╅悽銊ょ啊鐠囶櫓ontent閿涘牆顩?THEN Facebook.post(MobilePhone.photo)閿涘妞傞敓?     * 鐟欏嫬鍨憴锕€褰傛导姘殺 content 闂呮劗顫嗙拋鍙ヨ礋 private閿涙稑鎯侀崚娆掑殰娣囨繃瀵旈敓?     */
+     * Generate next() transitions for IsChangeable=true content privacy variables.
+     * When a rule references this content (e.g. THEN Facebook.post(MobilePhone.photo)),
+     * the content privacy is set to private; otherwise it keeps its current value.
+     */
     private void appendContentPrivacyTransitions(StringBuilder content,
                                                   List<DeviceVerificationDto> devices,
                                                   List<RuleDto> rules,
@@ -1199,7 +1388,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 閺屻儲澹橀幍鈧張濉﹐mmand.contentDevice 閸栧綊鍘ら幐鍥х暰鐠佹儳顦稉鏀僶mmand.content 閸栧綊鍘ら幐鍥х暰 content 閸氬秶袨閻ㄥ嫯顫夐崚娆欐嫹?     */
+     * Find rules whose command.contentDevice matches the given device and command.content matches the given content name.
+     */
     private List<RuleDto> findRulesReferencingContent(List<RuleDto> rules,
                                                        String deviceVarName,
                                                        String contentName,
@@ -1235,7 +1425,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
             for (String varName2 : smv.getImpactedVariables()) {
                 boolean isEnum = false;
                 for (DeviceManifest.InternalVariable var : smv.getManifest().getInternalVariables()) {
-                    if (var.getName().equals(varName2) && var.getValues() != null) {
+                    if (var.getName().equals(varName2) && var.getValues() != null && !var.getValues().isEmpty()) {
                         isEnum = true;
                         break;
                     }
@@ -1509,7 +1699,10 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 鐟欙絾鐎?NaturalChangeRate 鐎涙顑佹稉韫礋 [lowerRate, upperRate]閿?     * 閺嶇厧绱￠敍姘礋閿?3" 閹存牞瀵栭敓?[-1,2]"閿?     * 鏉╂柨娲?int[2]閿涘0]=lowerRate, [1]=upperRate閿?     */
+     * Parse NaturalChangeRate string into [lowerRate, upperRate].
+     * Supports formats: "3", "[-1,2]", etc.
+     * Returns int[2] where [0]=lowerRate, [1]=upperRate.
+     */
     private int[] parseNaturalChangeRate(String ncr, String contextName) {
         int lowerRate = 0, upperRate = 0;
         if (ncr != null && !ncr.isEmpty()) {
@@ -1553,7 +1746,10 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 閺嶏繝鐛欓悳顖氼暔閸欐﹢鍣洪崚婵嗩潗閸婂吋妲搁崥锕€婀竟鐗堟閼煎啫娲块崘鍜冩嫹?     * 鐎甸€涚艾閺佹澘鈧厧鐎烽崣姗€鍣洪敍宀冪Т閸戦缚瀵栭崶瀛樻 clamp 閸掓媽绔熼悾灞借嫙鐠佹澘缍嶇拃锕€鎲￠敓?     * 鐎甸€涚艾閺嬫矮濡囬崹瀣綁闁插骏绱濆Λ鈧弻銉モ偓鍏兼Ц閸氾箑婀弸姘閸掓銆冩稉顓ㄦ嫹?     */
+     * Validate and clamp user-provided init value for an env variable.
+     * Enum variables: value must be in the enum set; numeric variables: clamp to bounds.
+     * Returns null if the value is invalid and should be skipped.
+     */
     private String validateEnvVarInitValue(String varName, String userInit,
                                            DeviceManifest.InternalVariable var, boolean isAttack, int intensity) {
         if (var.getValues() != null && !var.getValues().isEmpty()) {
@@ -1585,7 +1781,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 return null;
             }
         }
-        // 閺冪姵鐏囨稉鐐￥鏉堝湱鏅€规矮绠熼弮璁圭礉閸欐﹢鍣洪敓?main 娑擃厺浜?0..100 婢圭増妲戦敍灞藉灥閸婇棿绡冩惔鏂剧箽閹镐礁鎮撻懠鍐ㄦ纯閺佸瓨鏆?
+        // Fallback for variables without enum/range: assume default range 0..100 in main module
         try {
             int value = Integer.parseInt(userInit.trim());
             if (value < 0) {
@@ -1605,7 +1801,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 鐏忓棗澧犵粩顖氬彠缁崵顑佽ぐ鎺嶇閸栨牔璐?NuSMV 鏉╂劗鐣荤粭锔兼嫹?     */
+     * Normalize trigger relation and throw if unsupported for NuSMV.
+     */
     private String normalizeTriggerRelationOrThrow(String deviceName, String context, String rawRelation) {
         String normalized = SmvRelationUtils.normalizeTriggerRelation(rawRelation);
         if (!SmvRelationUtils.isSupportedTriggerRelation(normalized)) {
@@ -1625,7 +1822,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 鐏忓捄N/NOT_IN 鐏炴洖绱戞稉绡榰SMV 閿?x=a | x=b) 閿?x!=a & x!=b)閿?     * 闂堢偤娉﹂崥鍫ｇ箥缁犳顑侀惄瀛樺复鏉╂柨娲?left + relation + value閿?     */
+     * Handle IN/NOT_IN by expanding to SMV expressions: (x=a | x=b) or (x!=a & x!=b).
+     * For other relations, returns left + relation + value directly.
+     */
     private static String buildRuleRelationExpr(String left, String relation, String value) {
         if ("in".equals(relation) || "not in".equals(relation)) {
             String[] parts = value.split("[,;|]");
@@ -1657,7 +1856,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 閿?;| 閹峰棗鍨庨崐鐓庡灙鐞涱煉绱欓悽銊ょ艾 IN/NOT_IN閿涘绱濋崡鏇炩偓鍏兼鏉╂柨娲栭崠鍛儓閸樼喎鈧偐娈戦崡鏇炲帗缁辩姴鍨悰顭掓嫹?     */
+     * Split value by ,;| delimiters for IN/NOT_IN; for other relations return the value as single-element list.
+     */
     private static List<String> splitRuleValues(String value) {
         if (value == null) return List.of();
         String[] parts = value.split("[,;|]");
@@ -1672,7 +1872,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
     }
 
     /**
-     * 鐎电ode 閻樿埖鈧礁鈧厧浠?cleanStateName閿涘瓥N/NOT_IN 閺冨爼鈧劒閲滃〒鍛倞閸愬秶鏁ら柅妤€褰块幏鍏煎复閿?     */
+     * Clean state value via cleanStateName; for IN/NOT_IN, clean each segment individually.
+     */
     private static String cleanRuleValueByRelation(String normalizedRelation, String value) {
         if (value == null) return null;
         if ("in".equals(normalizedRelation) || "not in".equals(normalizedRelation)) {

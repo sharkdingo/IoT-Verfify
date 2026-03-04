@@ -789,6 +789,23 @@ java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 
 ---
 
+## 10. 2026-03-04 同步更新
+
+### 无模式设备 InitState 空串修复
+
+16 个无模式传感器模板（Weather、Clock、Temperature Sensor、Humidity Sensor 等）的 `InitState` 为空字符串 `""`。此前 AI 创建设备时 `NodeServiceImpl.getInitStateFromTemplate()` 会将 `""` 原样返回，导致落库 `state=""`；后续前端保存画布经 `POST /api/board/nodes` 时被 `DeviceNodeDto.state` 的 `@NotBlank` 校验拒绝（400）。
+
+修复点：
+- **`NodeServiceImpl.getInitStateFromTemplate()`**：读取 `InitState` 后增加 `isBlank()` 检查，空串降级为 `HARD_FALLBACK_STATE`（`"Working"`）。日志由 `"does not contain InitState"` 修正为 `"has missing or blank InitState"`。
+- **`DeviceNodeMapper.toDto()`**：读取 PO 时若 `state` 为 null 或空白，自动补为 `"Working"`（`FALLBACK_STATE`），防止历史脏数据在 GET → 再 POST 时触发 `@NotBlank` 校验。
+- 新增 3 个单元测试（`NodeServiceImplMutationTest`）：空 InitState、正常 InitState、缺失 InitState。
+
+### 设备模板修正
+
+- **Sprinkler Controller.json**：API 定义中的键名由错误的 `"s"` 修正为 `"Assignments"`（两处）。
+
+---
+
 ## License
 
 MIT License

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
+import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +20,9 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -78,5 +82,54 @@ class NodeServiceImplMutationTest {
                         .userId(userId)
                         .build(),
                 "expected saved node must not be null");
+    }
+
+    // --- Empty InitState fallback tests ---
+
+    @Test
+    void addNode_whenTemplateHasEmptyInitState_shouldUseFallbackState() {
+        // Simulates Weather/Clock/Temperature Sensor templates whose InitState is ""
+        String weatherJson = "{\"Name\":\"Weather\",\"Modes\":[],\"InitState\":\"\",\"WorkingStates\":[]}";
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(1L).userId(1L).name("Weather").manifestJson(weatherJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Weather")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Weather")).thenReturn(Optional.of(templatePo));
+        when(nodeRepo.existsByUserIdAndId(eq(1L), any())).thenReturn(false);
+
+        nodeService.addNode(1L, "Weather", "weather_1", null, null, null, null, null);
+
+        verify(nodeRepo).save(argThat(po -> "Working".equals(po.getState())));
+    }
+
+    @Test
+    void addNode_whenTemplateHasNonEmptyInitState_shouldUseTemplateState() {
+        String lightJson = "{\"Name\":\"Light\",\"Modes\":[\"SwitchState\"],\"InitState\":\"on\",\"WorkingStates\":[{\"Name\":\"on\"},{\"Name\":\"off\"}]}";
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(2L).userId(1L).name("Light").manifestJson(lightJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Light")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Light")).thenReturn(Optional.of(templatePo));
+        when(nodeRepo.existsByUserIdAndId(eq(1L), any())).thenReturn(false);
+
+        nodeService.addNode(1L, "Light", "light_1", null, null, null, null, null);
+
+        verify(nodeRepo).save(argThat(po -> "on".equals(po.getState())));
+    }
+
+    @Test
+    void addNode_whenTemplateManifestMissingInitState_shouldUseFallbackState() {
+        // Template JSON with no InitState key at all
+        String noInitJson = "{\"Name\":\"Custom\",\"Modes\":[]}";
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(3L).userId(1L).name("Custom").manifestJson(noInitJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Custom")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
+        when(nodeRepo.existsByUserIdAndId(eq(1L), any())).thenReturn(false);
+
+        nodeService.addNode(1L, "Custom", "custom_1", null, null, null, null, null);
+
+        verify(nodeRepo).save(argThat(po -> "Working".equals(po.getState())));
     }
 }

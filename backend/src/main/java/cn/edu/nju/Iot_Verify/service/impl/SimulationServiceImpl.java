@@ -189,26 +189,32 @@ public class SimulationServiceImpl implements SimulationService {
 
         SimulationTaskPo task = null;
         try {
-            task = simulationTaskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
-            if (task == null) {
-                log.error("Simulation task not found: {}", taskId);
-                return;
-            }
+            // Check in-memory cancellation marker (fast path for same-instance cancellation).
             if (cancelledTasks.contains(taskId)) {
                 return;
             }
 
-            // Codex A: Also check DB status — another instance may have cancelled while we were queued.
-            if (task.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED) {
-                log.info("Simulation task {} already cancelled in DB, skipping execution", taskId);
+            // Atomically transition PENDING → RUNNING to close the cancel-vs-start race window.
+            // A plain findById + save was vulnerable to TOCTOU: a concurrent cancel could set
+            // CANCELLED between the read and the save, and the save would overwrite it back to RUNNING.
+            LocalDateTime startedAt = LocalDateTime.now();
+            String startCheckLogs = serializeCheckLogs(List.of("Task started"));
+            int updated = simulationTaskRepository.startTaskIfStillPending(
+                    taskId,
+                    SimulationTaskPo.TaskStatus.RUNNING,
+                    startedAt, 0, startCheckLogs,
+                    SimulationTaskPo.TaskStatus.PENDING);
+            if (updated == 0) {
+                log.info("Simulation task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
             }
 
-            task.setStatus(SimulationTaskPo.TaskStatus.RUNNING);
-            task.setStartedAt(LocalDateTime.now());
-            task.setProgress(0);
-            writeCheckLogs(task, List.of("Task started"));
-            simulationTaskRepository.save(task);
+            // Load entity for subsequent use (failTask/completeTask only need id and startedAt).
+            task = simulationTaskRepository.findById(Objects.requireNonNull(taskId)).orElse(null);
+            if (task == null) {
+                log.error("Simulation task not found after atomic start: {}", taskId);
+                return;
+            }
 
             if (devices == null || devices.isEmpty()) {
                 failTask(task, "Invalid input: devices list cannot be empty", List.of("Invalid input: devices list cannot be empty"));
