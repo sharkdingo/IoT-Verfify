@@ -43,6 +43,15 @@ public class GlobalExceptionHandler {
                 .body(Result.unauthorized(e.getMessage()));
     }
 
+    // 调试：打印所有未捕获的异常
+    @ExceptionHandler(Throwable.class)
+    public ResponseEntity<Result<Void>> handleThrowable(Throwable e) {
+        log.error("Unhandled Throwable: {} - {}", e.getClass().getName(), e.getMessage(), e);
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error(500, "Internal server error: " + e.getMessage()));
+    }
+
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<Result<Void>> handleForbiddenException(ForbiddenException e) {
         log.warn("Forbidden: {}", e.getMessage());
@@ -182,9 +191,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception e) {
-        log.error("Unexpected error", e);
+        String errorMsg = e.getClass().getName() + ": " + e.getMessage();
+        log.error("Unexpected error: {}", errorMsg, e);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error("Internal server error"));
+                .body(Result.error("Server error: " + errorMsg));
     }
 }

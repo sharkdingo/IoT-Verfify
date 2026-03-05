@@ -44,6 +44,15 @@ public class ArkAiClient {
 
     private final ObjectMapper objectMapper;
 
+    // Getters for external access
+    public String getModelId() {
+        return modelId;
+    }
+
+    public ArkService getArkService() {
+        return arkService;
+    }
+
     public ArkAiClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.controller;
 
+import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -10,14 +11,18 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
+@Slf4j
 @Validated
 @RestController
 @RequestMapping("/api/board")
@@ -25,6 +30,8 @@ import java.util.List;
 public class BoardStorageController {
 
     private final BoardStorageService boardService;
+    private final RecommendRulesTool recommendRulesTool;
+    private final ObjectMapper objectMapper;
 
     @GetMapping("/nodes")
     public Result<List<DeviceNodeDto>> getNodes(@CurrentUser Long userId) {
@@ -106,5 +113,36 @@ public class BoardStorageController {
     public Result<Integer> reloadTemplates(@CurrentUser Long userId) {
         int count = boardService.reloadDeviceTemplates(userId);
         return Result.success(count);
+    }
+
+    /**
+     * 获取规则推荐
+     * @param userId 用户ID
+     * @param maxRecommendations 最大推荐数量
+     * @param category 分类筛选
+     * @return 规则推荐列表
+     */
+    @GetMapping("/rules/recommend")
+    public Result<Map<String, Object>> recommendRules(
+            @CurrentUser Long userId,
+            @RequestParam(defaultValue = "5") Integer maxRecommendations,
+            @RequestParam(defaultValue = "all") String category) {
+        
+        try {
+            if (userId == null) {
+                return Result.unauthorized("User not logged in");
+            }
+            
+            String args = String.format("{\"maxRecommendations\": %d, \"category\": \"%s\"}", maxRecommendations, category);
+            String result = recommendRulesTool.execute(args);
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
+            
+            return Result.success(resultMap);
+            
+        } catch (Exception e) {
+            return Result.error(500, "Error: " + e.getMessage());
+        }
     }
 }

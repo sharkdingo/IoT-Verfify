@@ -44,8 +44,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
                 SecurityContextHolder.getContext().setAuthentication(authentication);
+                // Also set UserContextHolder for AI tools
+                UserContextHolder.setUserId(userId);
             } catch (Exception e) {
-                log.warn("Failed to extract user from valid token, treating as unauthenticated: {}", e.getMessage());
+                // Token validation failed, continue without authentication
             }
         }
 

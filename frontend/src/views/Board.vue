@@ -32,6 +32,7 @@ import { defaultSpecTemplates } from '../assets/config/specTemplates'
 // API
 import boardApi from '@/api/board'
 import simulationApi from '@/api/simulation'
+import rulesApi, { type RuleRecommendation, type RecommendRulesResponse } from '@/api/rules'
 
 // Components
 import DeviceDialog from '../components/DeviceDialog.vue'
@@ -408,6 +409,49 @@ const handleAddRule = async (payload: RuleForm) => {
       const errorMsg = e?.response?.data?.message || e?.message || '保存规则失败'
       ElMessage.error(errorMsg)
     }
+  }
+}
+
+// 应用推荐的规则
+const applyRecommendation = async (rec: RuleRecommendation) => {
+  try {
+    // 将推荐转换为 RuleForm 格式
+    const ruleId = 'rule_' + Date.now()
+    
+    const newRule: RuleForm = {
+      id: ruleId,
+      name: rec.description.substring(0, 30) + (rec.description.length > 30 ? '...' : ''),
+      sources: rec.conditions?.map(c => ({
+        fromId: c.deviceName,
+        fromApi: c.attribute,
+        relation: c.relation || '=',
+        value: c.value
+      })) || [],
+      toId: rec.command?.deviceName || '',
+      toApi: rec.command?.action || ''
+    }
+
+    // 验证必要字段
+    if (!newRule.sources.length || !newRule.toId || !newRule.toApi) {
+      ElMessage.warning('Invalid recommendation format')
+      return
+    }
+
+    // 保存到后端
+    const allRules = JSON.parse(JSON.stringify([...rules.value, newRule]))
+    await boardApi.saveRules(allRules)
+
+    // 更新前端状态
+    rules.value = allRules
+    edges.value = generateEdgesFromRules()
+
+    ElMessage.success('Rule applied successfully')
+    
+    // 不关闭面板，允许继续应用更多规则
+  } catch (e: any) {
+    console.error('applyRecommendation error', e)
+    const errorMsg = e?.response?.data?.message || e?.message || 'Failed to apply rule'
+    ElMessage.error(errorMsg)
   }
 }
 
@@ -1189,6 +1233,59 @@ const isVerifying = ref(false)
 const verificationResult = ref<any>(null)
 const verificationError = ref<string | null>(null)
 
+// ==== Rule Recommendation Logic ====
+const isRecommendingRules = ref(false)
+const ruleRecommendations = ref<RuleRecommendation[]>([])
+const showRecommendationPanel = ref(false)
+
+const fetchRuleRecommendations = async () => {
+  // 如果正在推荐中，点击按钮则停止推荐
+  if (isRecommendingRules.value) {
+    // 调用取消函数
+    rulesApi.cancelRecommendRules()
+    isRecommendingRules.value = false
+    ElMessage.info('Rule recommendation cancelled')
+    return
+  }
+  
+  // 互斥检查：如果模拟动画或反例路径动画正在显示，则不允许打开推荐面板
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    return
+  }
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    return
+  }
+  
+  isRecommendingRules.value = true
+  showRecommendationPanel.value = true
+  try {
+    const response = await rulesApi.recommendRules(5, 'all')
+    ruleRecommendations.value = response.recommendations || []
+  } catch (error: any) {
+    // 如果是取消请求，不显示错误
+    if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+      console.log('Rule recommendation request cancelled')
+      return
+    }
+    console.error('Failed to fetch rule recommendations:', error)
+    ElMessage.error('Failed to fetch rule recommendations')
+  } finally {
+    isRecommendingRules.value = false
+  }
+}
+
+// 关闭推荐面板
+const closeRecommendationPanel = () => {
+  // 如果正在推荐中，先取消请求
+  if (isRecommendingRules.value) {
+    rulesApi.cancelRecommendRules()
+    isRecommendingRules.value = false
+  }
+  showRecommendationPanel.value = false
+}
+
 // ==== Simulation Logic ====
 const isSimulating = ref(false)
 const simulationResult = ref<any>(null)
@@ -1292,6 +1389,12 @@ const showSimulationPanel = ref(false)
 
 // 面板互斥切换函数
 const togglePanel = (panel: 'simulation' | 'verification') => {
+  // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开模拟/验证面板
+  if (showRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
+    return
+  }
+  
   if (panel === 'simulation') {
     if (showSimulationPanel.value) {
       showSimulationPanel.value = false
@@ -1357,6 +1460,12 @@ const selectAndPlayTrace = (traceIndex: number) => {
   // 互斥检查：如果模拟动画正在显示，则不允许打开反例路径动画
   if (simulationAnimationState.value.visible) {
     ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    return
+  }
+  
+  // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开反例路径动画
+  if (showRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
     return
   }
   
@@ -1521,6 +1630,12 @@ const openSimulationTimeline = () => {
   // 互斥检查：如果反例路径动画正在显示，则不允许打开模拟动画
   if (traceAnimationState.value.visible) {
     ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    return
+  }
+  
+  // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开模拟动画
+  if (showRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
     return
   }
   
@@ -2123,10 +2238,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('simulation')"
-          :disabled="traceAnimationState.visible || simulationAnimationState.visible"
+          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible) 
+            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel) 
               ? 'bg-indigo-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-indigo-500 hover:bg-indigo-600'
           ]"
@@ -2152,10 +2267,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('verification')"
-          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible"
+          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible)
+            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel)
               ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-green-500 hover:bg-green-600'
           ]"
@@ -2169,6 +2284,35 @@ const closeResultDialog = () => {
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
             {{ isVerifying ? 'Verifying...' : 'Verification Settings' }}
             <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">(Active)</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- Recommend Rules Button (Circle) -->
+      <div class="relative group">
+        <!-- Pulse animation when loading -->
+        <div 
+          v-if="isRecommendingRules"
+          class="absolute inset-0 rounded-full bg-amber-400 animate-ping opacity-75"
+        ></div>
+        <button
+          @click="fetchRuleRecommendations"
+          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked)"
+          :class="[
+            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked))
+              ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100' 
+              : isRecommendingRules
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-amber-500 hover:bg-amber-600'
+          ]"
+          :title="isRecommendingRules ? 'Stop' : 'Rule Recommendations'"
+        >
+          <span v-if="isRecommendingRules" class="material-symbols-outlined text-xl">stop</span>
+          <span v-else class="material-symbols-outlined text-xl">auto_awesome</span>
+          <!-- Tooltip -->
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ isRecommendingRules ? 'Stop' : 'Rule Recommendations' }}
           </span>
         </button>
       </div>
@@ -2325,6 +2469,179 @@ const closeResultDialog = () => {
             Run
           </template>
         </button>
+      </div>
+    </div>
+
+    <!-- Rule Recommendation Panel -->
+    <div 
+      v-if="showRecommendationPanel"
+      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+    >
+      <!-- Recommendation Header with gradient -->
+      <div class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-amber-500 to-orange-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
+        <div class="relative flex items-center justify-between p-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-amber-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-xl">auto_awesome</span>
+            </div>
+            <div>
+              <h3 class="text-black font-bold text-base">Rule Recommendations</h3>
+              <p class="text-black/70 text-xs">AI-powered automation suggestions</p>
+            </div>
+          </div>
+          <button 
+            @click="closeRecommendationPanel"
+            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Recommendation Content -->
+      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-amber-50/30 max-h-[500px] overflow-y-auto">
+        <!-- Loading State -->
+        <div v-if="isRecommendingRules" class="flex flex-col items-center justify-center py-10">
+          <div class="relative">
+            <span class="material-symbols-outlined text-amber-500 text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-amber-400 rounded-full animate-ping opacity-20"></div>
+          </div>
+          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your devices...</p>
+          <p class="text-slate-400 text-xs mt-1">Generating intelligent automation rules</p>
+        </div>
+
+        <!-- Empty State -->
+        <div v-else-if="ruleRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
+          <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined text-slate-300 text-3xl">psychology</span>
+          </div>
+          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered automation suggestions</p>
+        </div>
+
+        <!-- Recommendations List -->
+        <div v-else class="space-y-3">
+          <!-- Header with count -->
+          <div class="flex items-center justify-between px-1">
+            <span class="text-xs font-medium text-slate-500">{{ ruleRecommendations.length }} recommendations found</span>
+            <button 
+              @click="fetchRuleRecommendations"
+              class="text-xs text-amber-600 hover:text-amber-700 font-medium flex items-center gap-1"
+            >
+              <span class="material-symbols-outlined text-sm">refresh</span>
+              Refresh
+            </button>
+          </div>
+
+          <div 
+            v-for="(rec, index) in ruleRecommendations" 
+            :key="index"
+            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+          >
+            <!-- Card Header -->
+            <div class="p-3 pb-2">
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <!-- Category Icon -->
+                  <div 
+                    class="w-8 h-8 rounded-lg flex items-center justify-center"
+                    :class="{
+                      'bg-red-100': rec.category === 'security',
+                      'bg-green-100': rec.category === 'energy_saving',
+                      'bg-blue-100': rec.category === 'comfort',
+                      'bg-purple-100': rec.category === 'automation'
+                    }"
+                  >
+                    <span 
+                      class="material-symbols-outlined text-lg"
+                      :class="{
+                        'text-red-600': rec.category === 'security',
+                        'text-green-600': rec.category === 'energy_saving',
+                        'text-blue-600': rec.category === 'comfort',
+                        'text-purple-600': rec.category === 'automation'
+                      }"
+                    >
+                      {{ rec.category === 'security' ? 'security' : rec.category === 'energy_saving' ? 'bolt' : rec.category === 'comfort' ? 'ac_unit' : 'smart_toy' }}
+                    </span>
+                  </div>
+                  <div>
+                    <span 
+                      class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                      :class="{
+                        'bg-red-100 text-red-600': rec.category === 'security',
+                        'bg-green-100 text-green-600': rec.category === 'energy_saving',
+                        'bg-blue-100 text-blue-600': rec.category === 'comfort',
+                        'bg-purple-100 text-purple-600': rec.category === 'automation'
+                      }"
+                    >
+                      {{ rec.category === 'energy_saving' ? 'Energy' : rec.category === 'comfort' ? 'Comfort' : rec.category }}
+                    </span>
+                  </div>
+                </div>
+                <!-- Confidence Score -->
+                <div class="flex items-center gap-1">
+                  <div class="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div 
+                      class="h-full rounded-full transition-all"
+                      :class="{
+                        'bg-red-500': rec.confidence >= 0.8,
+                        'bg-amber-500': rec.confidence >= 0.5 && rec.confidence < 0.8,
+                        'bg-slate-400': rec.confidence < 0.5
+                      }"
+                      :style="{ width: `${rec.confidence * 100}%` }"
+                    ></div>
+                  </div>
+                  <span class="text-[10px] font-medium" :class="{
+                    'text-red-600': rec.confidence >= 0.8,
+                    'text-amber-600': rec.confidence >= 0.5 && rec.confidence < 0.8,
+                    'text-slate-400': rec.confidence < 0.5
+                  }">{{ Math.round(rec.confidence * 100) }}%</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card Body -->
+            <div class="px-3 pb-2">
+              <!-- Description -->
+              <p class="text-sm text-slate-700 font-medium mb-2 line-clamp-2">{{ rec.description }}</p>
+
+              <!-- Rule Preview -->
+              <div class="bg-slate-50 rounded-lg p-2 text-xs space-y-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-400 font-medium min-w-[40px]">IF</span>
+                  <div v-if="rec.conditions && rec.conditions.length > 0" class="flex items-center gap-1 text-slate-600">
+                    <span class="font-medium text-blue-600">{{ rec.conditions[0].deviceName }}</span>
+                    <span class="text-slate-400">.</span>
+                    <span>{{ rec.conditions[0].attribute }}</span>
+                    <span class="font-medium">{{ rec.conditions[0].relation }}</span>
+                    <span class="px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">"{{ rec.conditions[0].value }}"</span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-400 font-medium min-w-[40px]">THEN</span>
+                  <div v-if="rec.command" class="flex items-center gap-1 text-slate-600">
+                    <span class="font-medium text-green-600">{{ rec.command.deviceName }}</span>
+                    <span class="text-slate-400">.</span>
+                    <span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">{{ rec.command.action }}()</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card Footer -->
+            <div class="px-3 pb-3 pt-2 border-t border-slate-100 mt-2">
+              <button
+                @click="applyRecommendation(rec)"
+                class="w-full py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-red rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm hover:shadow"
+              >
+                <span class="material-symbols-outlined text-sm">add_circle</span>
+                Apply This Rule
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

@@ -183,9 +183,16 @@ public class ChatServiceImpl implements ChatService {
         4. Avoid exposing internal IDs unless user asks.
         5. For casual non-IoT questions, answer directly.
 
+        Rule Recommendation Guidelines:
+        - When users want to create rules or ask for rule suggestions, use recommend_rules tool first
+        - analyze the device capabilities (APIs, variables, states) from the recommendation result
+        - Only recommend rules using APIs and variables that actually exist in the device templates
+        - Present recommended rules in a clear format and ask user to confirm before creating
+        - Set confidence level based on how well the rule matches device capabilities
+
         Available tools:
         - Device: add_device, delete_device, search_devices
-        - Rule: list_rules, manage_rule
+        - Rule: list_rules, manage_rule, recommend_rules
         - Spec: list_specs, manage_spec
         - Template: list_templates, add_template, delete_template
         - Verification sync: verify_model
