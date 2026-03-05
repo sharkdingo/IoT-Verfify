@@ -23,8 +23,14 @@ import java from "@shikijs/langs/java";
 
 import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
 import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
+import { useChatStore } from '@/stores/chat';
 
 const emit = defineEmits(['command']);
+
+// 使用全局状态
+const chatStore = useChatStore();
+const visible = computed(() => chatStore.state.visible);
+const isExpanded = computed(() => chatStore.state.isExpanded);
 
 const loadingRegex = /^正在执行指令[.\s\n]*/;
 const presetTasks = [
@@ -32,31 +38,30 @@ const presetTasks = [
     icon: ThunderboltOutlined,
     title: '快速创建设备',
     desc: '一键添加空调、净化器等组件',
-    text: '请帮我创建一个名为“LivingRoom_AC”的空调设备，初始状态为关闭，放置在坐标(100, 100)处。'
+    text: '请帮我创建一个名为"LivingRoom_AC"的空调设备，初始状态为关闭，放置在坐标(100, 100)处。'
   },
   {
     icon: SafetyCertificateOutlined,
-    title: '系统形式化验证',
-    desc: '基于 NuSMV 检查系统安全性',
-    text: '请对当前的智能家居系统模型进行形式化验证，检查是否存在“空调开启时窗户未关闭”的安全隐患。'
+    title: '系统验证',
+    desc: '检查系统安全性',
+    text: '请对当前的智能家居系统模型进行形式化验证，检查是否存在"空调开启时窗户未关闭"的安全隐患。'
   },
   {
     icon: ExperimentOutlined,
-    title: '场景联动测试',
+    title: '场景测试',
     desc: '模拟设备交互与规则触发',
-    text: '如果我现在将“PM2.5监测仪”的读数调整为 150，系统中的空气净化器会自动开启吗？'
+    text: '如果我现在将"PM2.5监测仪"的读数调整为 150，系统中的空气净化器会自动开启吗？'
   },
   {
     icon: CodeOutlined,
-    title: '通用代码助手',
-    desc: '编写脚本或解释技术概念',
+    title: '脚本生成',
+    desc: '编写设备数据模拟脚本',
     text: '请写一段 Python 脚本，用于模拟智能家居中的温度传感器数据上报逻辑，要求使用 MQTT 协议。'
   }
 ];
 
-// State
-const visible = ref(false);
-const isExpanded = ref(false);
+// State - 使用全局状态，不重复定义
+// visible 和 isExpanded 来自 chatStore (上面已定义)
 const isSidebarOpen = ref(true);
 // 移除深色模式功能，固定使用亮色主题
 const isRecording = ref(false);
@@ -158,13 +163,16 @@ const startListening = () => {
 };
 
 const toggleChat = () => {
-  visible.value = !visible.value;
-  // 仅当首次打开且无会话时加载，避免重复请求
-  if (visible.value && sessions.value.length === 0) initSessions();
-  // 每次打开时，如果不是全屏模式，默认收起侧边栏（根据你的原始逻辑）
-  // 或者保持上次状态更友好？这里保留你的原始逻辑
-  if (visible.value && !isExpanded.value) isSidebarOpen.value = false;
+  chatStore.toggleChat();
 };
+
+// 监听 visible 变化，执行相应逻辑
+watch(visible, (newVal) => {
+  // 仅当首次打开且无会话时加载，避免重复请求
+  if (newVal && sessions.value.length === 0) initSessions();
+  // 每次打开时，如果不是全屏模式，默认收起侧边栏
+  if (newVal && !isExpanded.value) isSidebarOpen.value = false;
+});
 
 const initSessions = async () => {
   try {
@@ -340,13 +348,6 @@ const scrollToBottom = (force = false) => {
 <template>
   <div class="global-chat-wrapper">
 
-    <div class="float-ball" @click="toggleChat" v-show="!visible">
-      <div class="ripple"></div>
-      <div class="float-tooltip">
-        Hi~ 我是您的 IoT 智能助手 👋
-      </div>
-    </div>
-
     <transition name="panel-zoom">
       <div v-show="visible" :class="['chat-panel', { expanded: isExpanded }]">
 
@@ -386,16 +387,16 @@ const scrollToBottom = (force = false) => {
                   @click="isSidebarOpen = !isSidebarOpen"
               />
               <div class="header-title">
-                <span class="logo-emoji">🤖</span> IoT Assistant
+                <span class="logo-emoji">💬</span> 在线支持
               </div>
             </div>
             <div class="header-controls">
               <component
                   :is="isExpanded ? ShrinkOutlined : ArrowsAltOutlined"
                   class="control-icon"
-                  @click="isExpanded = !isExpanded"
+                  @click="chatStore.toggleExpand()"
               />
-              <CloseOutlined class="control-icon close-icon" @click="visible = false"/>
+              <CloseOutlined class="control-icon close-icon" @click="chatStore.closeChat()"/>
             </div>
           </div>
 
@@ -406,8 +407,8 @@ const scrollToBottom = (force = false) => {
                   <img src="/AI.png" alt="IoT Assistant" class="custom-logo-img" />
                 </div>
               </div>
-              <h3 class="welcome-title">IoT-Verify 智能助手</h3>
-              <p class="welcome-subtitle">基于 NuSMV 的智能家居仿真与验证平台</p>
+              <h3 class="welcome-title">IoT-Verify 在线支持</h3>
+              <p class="welcome-subtitle">智能家居系统仿真与验证平台</p>
 
               <div class="task-grid">
                 <div
@@ -458,7 +459,7 @@ const scrollToBottom = (force = false) => {
                   </div>
 
                   <div v-if="isLoading && msg.role === 'assistant' && !msg.content" class="thinking-state">
-                    <span class="thinking-text">Thinking</span>
+                    <span class="thinking-text">正在回复</span>
                     <div class="typing-indicator"><span></span><span></span><span></span></div>
                   </div>
                 </div>
@@ -471,7 +472,7 @@ const scrollToBottom = (force = false) => {
             <div class="input-card">
               <a-textarea
                   v-model:value="inputValue"
-                  placeholder="给 IoT 助手发送消息..."
+                  placeholder="请输入您的问题..."
                   :auto-size="{ minRows: 1, maxRows: 5 }"
                   @keydown.ctrl.enter="handleSend"
                   class="modern-textarea"
@@ -488,7 +489,6 @@ const scrollToBottom = (force = false) => {
                 </div>
               </div>
             </div>
-            <div class="disclaimer">内容由 AI 生成，请核查重要信息。</div>
           </div>
         </div>
       </div>

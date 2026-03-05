@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
+import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
+import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -31,6 +33,8 @@ public class BoardStorageController {
 
     private final BoardStorageService boardService;
     private final RecommendRulesTool recommendRulesTool;
+    private final RecommendRelatedDevicesTool recommendRelatedDevicesTool;
+    private final CheckDuplicateRuleTool checkDuplicateRuleTool;
     private final ObjectMapper objectMapper;
 
     @GetMapping("/nodes")
@@ -135,6 +139,68 @@ public class BoardStorageController {
             
             String args = String.format("{\"maxRecommendations\": %d, \"category\": \"%s\"}", maxRecommendations, category);
             String result = recommendRulesTool.execute(args);
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
+            
+            return Result.success(resultMap);
+            
+        } catch (Exception e) {
+            return Result.error(500, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 根据画布中所有设备推荐新设备
+     * @param userId 用户ID
+     * @param requestBody 包含设备列表和模板列表的请求体
+     * @return 设备推荐列表
+     */
+    @PostMapping("/devices/recommend")
+    public Result<Map<String, Object>> recommendDevices(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody Map<String, Object> requestBody) {
+        
+        try {
+            if (userId == null) {
+                return Result.unauthorized("User not logged in");
+            }
+            
+            // 构建参数 JSON
+            String argsJson = objectMapper.writeValueAsString(requestBody);
+            String result = recommendRelatedDevicesTool.executeBoardRecommendations(argsJson);
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
+            
+            return Result.success(resultMap);
+            
+        } catch (Exception e) {
+            log.error("Error in recommendDevices", e);
+            return Result.error(500, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 检查规则是否重复
+     * 当用户添加一条规则后，检查该规则是否与现有规则重复
+     * @param userId 用户ID
+     * @param rule 新添加的规则
+     * @return 重复检查结果
+     */
+    @PostMapping("/rules/check-duplicate")
+    public Result<Map<String, Object>> checkDuplicateRule(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody RuleDto rule) {
+        
+        try {
+            if (userId == null) {
+                return Result.unauthorized("User not logged in");
+            }
+            
+            String ruleJson = objectMapper.writeValueAsString(rule);
+            String args = String.format("{\"newRule\": %s}", ruleJson);
+            String result = checkDuplicateRuleTool.execute(args);
             
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);

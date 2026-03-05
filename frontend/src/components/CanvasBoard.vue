@@ -1001,7 +1001,7 @@ onBeforeUnmount(() => {
             <span class="material-symbols-outlined">arrow_downward</span>
             <span>Attacked</span>
           </div>
-          <!-- 上部分：左边图标，右边名字 -->
+          <!-- 上部分：图标 -->
           <div class="device-top-row">
             <img
                 class="device-img"
@@ -1009,15 +1009,16 @@ onBeforeUnmount(() => {
                 :alt="node.label"
                 draggable="false"
                 :style="{
-                width: node.width * 0.38 + 'px',
-                height: node.height * 0.35 + 'px'
+                width: node.width * 0.45 + 'px',
+                height: node.height * 0.4 + 'px'
               }"
                 @error="handleImageError($event, node)"
             />
-            <div class="device-label-wrapper">
-              <div class="device-label" :style="getNodeLabelStyle(node)">
-                {{ node.label }}
-              </div>
+          </div>
+          <!-- 名字 -->
+          <div class="device-label-wrapper">
+            <div class="device-label" :style="getNodeLabelStyle(node)">
+              {{ node.label }}
             </div>
           </div>
           <!-- 下部分：设备状态显示 -->

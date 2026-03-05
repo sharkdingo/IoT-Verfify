@@ -2,11 +2,14 @@
 import { computed, ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuth } from '@/stores/auth';
+import { useChatStore } from '@/stores/chat';
 import { authApi } from '@/api/auth';
 import LogoutConfirm from './LogoutConfirm.vue';
+import { RobotOutlined } from '@ant-design/icons-vue';
 
 const router = useRouter();
 const { state, logout, getUser } = useAuth();
+const { toggleChat } = useChatStore();
 const showLogoutConfirm = ref(false);
 
 // 移除主题切换功能，固定使用亮色主题
@@ -60,6 +63,17 @@ const goToRegister = () => {
       <el-col :span="20" class="header-right">
         <!-- 登录状态显示 -->
         <template v-if="isLoggedIn">
+          <!-- AI 助手按钮 -->
+          <el-button
+            size="default"
+            round
+            class="ai-assistant-btn"
+            @click="toggleChat"
+          >
+            <RobotOutlined />
+            <span> 智能助手</span>
+          </el-button>
+
           <div class="user-info">
             <div class="user-avatar-container">
               <el-avatar :size="36" class="user-avatar">
@@ -292,6 +306,24 @@ export default {
 }
 
 .register-btn:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.ai-assistant-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  color: white;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.ai-assistant-btn:hover {
   background: linear-gradient(135deg, #4f46e5, #7c3aed);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);

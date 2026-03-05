@@ -240,5 +240,27 @@ export default {
     // 发起异步验证
     verifyAsync: async (req: VerificationRequest): Promise<number> => {
         return unpack<number>(await api.post('/verify/async', req));
+    },
+
+    // ==== 设备推荐 ====
+    recommendRelatedDevices: async (
+        devices: any[], 
+        templates: DeviceTemplate[],
+        signal?: AbortSignal
+    ): Promise<{ recommendations: any[] }> => {
+        return unpack<{ recommendations: any[] }>(await api.post('/board/devices/recommend', {
+            devices: devices.map(d => ({
+                label: d.label,
+                templateName: d.templateName,
+                state: d.state
+            })),
+            templates: templates.map(t => ({
+                name: t.manifest.Name,
+                description: t.manifest.Description,
+                variables: t.manifest.Variables || [],
+                apis: t.manifest.APIs || [],
+                workingStates: t.manifest.WorkingStates || []
+            }))
+        }, { signal }));
     }
 }

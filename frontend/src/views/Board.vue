@@ -32,7 +32,7 @@ import { defaultSpecTemplates } from '../assets/config/specTemplates'
 // API
 import boardApi from '@/api/board'
 import simulationApi from '@/api/simulation'
-import rulesApi, { type RuleRecommendation, type RecommendRulesResponse } from '@/api/rules'
+import rulesApi, { type RuleRecommendation } from '@/api/rules'
 
 // Components
 import DeviceDialog from '../components/DeviceDialog.vue'
@@ -347,6 +347,43 @@ const onCanvasDrop = async (e: DragEvent) => {
 
   await createDeviceInstanceAt(tpl, { x, y })
   draggingTplName.value = null
+}
+
+// 处理 AI 推荐的设备添加
+const handleAISuggestionAddDevice = async (event: Event) => {
+  const customEvent = event as CustomEvent
+  const { templateName } = customEvent.detail || {}
+  
+  if (!templateName) {
+    console.warn('AI Suggestion: No template name provided')
+    return
+  }
+
+  // 查找模板
+  const tpl = deviceTemplates.value.find(d => 
+    d.manifest.Name.toLowerCase() === templateName.toLowerCase()
+  )
+
+  if (!tpl) {
+    console.warn(`AI Suggestion: Template not found: ${templateName}`)
+    return
+  }
+
+  // 计算新设备的位置（画布中心附近）
+  const canvasEl = document.querySelector('.canvas-container')
+  if (!canvasEl) return
+  
+  const rect = canvasEl.getBoundingClientRect()
+  const centerX = rect.width / 2
+  const centerY = rect.height / 2
+  
+  const x = (centerX - canvasPan.value.x) / canvasZoom.value
+  const y = (centerY - canvasPan.value.y) / canvasZoom.value
+
+  // 创建设备实例
+  await createDeviceInstanceAt(tpl, { x, y })
+  
+  console.log(`AI Suggestion: Added device ${tpl.manifest.Name} at (${x}, ${y})`)
 }
 
 const handleNodeMovedOrResized = async () => {
@@ -867,6 +904,9 @@ onMounted(async () => {
   await refreshRules()
   await refreshSpecifications()
 
+  // 监听 AI 推荐的设备添加事件
+  window.addEventListener('ai-suggestion-add-device', handleAISuggestionAddDevice as EventListener)
+
   // Snapshot manifests for all nodes while templates still exist.
   // This ensures deleting templates later won't affect existing nodes’ details (variables/states/APIs).
   const resolveTemplateForHydration = (n: DeviceNode) => {
@@ -1219,6 +1259,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
+  window.removeEventListener('ai-suggestion-add-device', handleAISuggestionAddDevice as EventListener)
 })
 
 defineExpose({
@@ -1257,6 +1298,11 @@ const fetchRuleRecommendations = async () => {
     ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
     return
   }
+  // 互斥检查：如果设备推荐面板正在显示
+  if (showDeviceRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
+    return
+  }
   
   isRecommendingRules.value = true
   showRecommendationPanel.value = true
@@ -1284,6 +1330,105 @@ const closeRecommendationPanel = () => {
     isRecommendingRules.value = false
   }
   showRecommendationPanel.value = false
+}
+
+// ==== Device Recommendation Logic ====
+const isRecommendingDevices = ref(false)
+const deviceRecommendations = ref<any[]>([])
+const showDeviceRecommendationPanel = ref(false)
+const deviceRecommendationAbortController = ref<AbortController | null>(null)
+
+const fetchDeviceRecommendations = async () => {
+  // 如果正在推荐中，点击按钮则停止推荐
+  if (isRecommendingDevices.value) {
+    if (deviceRecommendationAbortController.value) {
+      deviceRecommendationAbortController.value.abort()
+    }
+    isRecommendingDevices.value = false
+    ElMessage.info('Device recommendation cancelled')
+    return
+  }
+  
+  // 互斥检查
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    return
+  }
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    return
+  }
+  if (showRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the rule recommendation panel first', type: 'warning' })
+    return
+  }
+  if (isAnimationLocked.value) {
+    ElMessage.warning({ message: 'Animation is running, please wait', type: 'warning' })
+    return
+  }
+  
+  isRecommendingDevices.value = true
+  showDeviceRecommendationPanel.value = true
+  deviceRecommendationAbortController.value = new AbortController()
+  
+  try {
+    const response = await boardApi.recommendRelatedDevices(
+      nodes.value,
+      deviceTemplates.value,
+      deviceRecommendationAbortController.value.signal
+    )
+    deviceRecommendations.value = response.recommendations || []
+  } catch (error: any) {
+    if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+      console.log('Device recommendation request cancelled')
+      return
+    }
+    console.error('Failed to fetch device recommendations:', error)
+    ElMessage.error('Failed to fetch device recommendations')
+  } finally {
+    isRecommendingDevices.value = false
+  }
+}
+
+// 关闭设备推荐面板
+const closeDeviceRecommendationPanel = () => {
+  if (isRecommendingDevices.value) {
+    if (deviceRecommendationAbortController.value) {
+      deviceRecommendationAbortController.value.abort()
+    }
+    isRecommendingDevices.value = false
+  }
+  showDeviceRecommendationPanel.value = false
+}
+
+// 应用设备推荐 - 将推荐的设备添加到画布
+const applyDeviceRecommendation = async (recommendation: any) => {
+  const templateName = recommendation.templateName
+  const template = deviceTemplates.value.find(t => 
+    t.manifest.Name.toLowerCase() === templateName.toLowerCase()
+  )
+  
+  if (!template) {
+    ElMessage.error(`Template not found: ${templateName}`)
+    return
+  }
+  
+  // 计算新设备位置（画布中央附近）
+  const canvasEl = document.querySelector('.canvas-container')
+  if (!canvasEl) return
+  
+  const rect = canvasEl.getBoundingClientRect()
+  const centerX = rect.width / 2
+  const centerY = rect.height / 2
+  
+  const x = (centerX - canvasPan.value.x) / canvasZoom.value
+  const y = (centerY - canvasPan.value.y) / canvasZoom.value
+  
+  // 创建设备实例
+  await createDeviceInstanceAt(template, { x, y })
+  await saveNodesToServer()
+  
+  ElMessage.success(`Device "${templateName}" added successfully`)
 }
 
 // ==== Simulation Logic ====
@@ -1389,9 +1534,14 @@ const showSimulationPanel = ref(false)
 
 // 面板互斥切换函数
 const togglePanel = (panel: 'simulation' | 'verification') => {
-  // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开模拟/验证面板
+  // 互斥检查：如果 Rule Recommendations 或 Device Recommendations 面板正在显示，则不允许打开模拟/验证面板
   if (showRecommendationPanel.value) {
     ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
+    return
+  }
+  
+  if (showDeviceRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
     return
   }
   
@@ -2238,10 +2388,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('simulation')"
-          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel"
+          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel) 
+            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel) 
               ? 'bg-indigo-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-indigo-500 hover:bg-indigo-600'
           ]"
@@ -2267,10 +2417,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('verification')"
-          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel"
+          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel)
+            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel)
               ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-green-500 hover:bg-green-600'
           ]"
@@ -2297,10 +2447,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchRuleRecommendations"
-          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked)"
+          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked))
+            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel))
               ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingRules
                 ? 'bg-red-500 hover:bg-red-600'
@@ -2313,6 +2463,35 @@ const closeResultDialog = () => {
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
             {{ isRecommendingRules ? 'Stop' : 'Rule Recommendations' }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Recommend Devices Button (Circle) -->
+      <div class="relative group">
+        <!-- Pulse animation when loading -->
+        <div 
+          v-if="isRecommendingDevices"
+          class="absolute inset-0 rounded-full bg-purple-400 animate-ping opacity-75"
+        ></div>
+        <button
+          @click="fetchDeviceRecommendations"
+          :disabled="!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked)"
+          :class="[
+            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            (!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked))
+              ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100' 
+              : isRecommendingDevices
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-purple-500 hover:bg-purple-600'
+          ]"
+          :title="isRecommendingDevices ? 'Stop' : 'Device Recommendations'"
+        >
+          <span v-if="isRecommendingDevices" class="material-symbols-outlined text-xl">stop</span>
+          <span v-else class="material-symbols-outlined text-xl">devices</span>
+          <!-- Tooltip -->
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ isRecommendingDevices ? 'Stop' : 'Device Recommendations' }}
           </span>
         </button>
       </div>
@@ -2544,100 +2723,143 @@ const closeResultDialog = () => {
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
                 <div class="flex items-center gap-2">
-                  <!-- Category Icon -->
-                  <div 
-                    class="w-8 h-8 rounded-lg flex items-center justify-center"
-                    :class="{
-                      'bg-red-100': rec.category === 'security',
-                      'bg-green-100': rec.category === 'energy_saving',
-                      'bg-blue-100': rec.category === 'comfort',
-                      'bg-purple-100': rec.category === 'automation'
-                    }"
-                  >
-                    <span 
-                      class="material-symbols-outlined text-lg"
-                      :class="{
-                        'text-red-600': rec.category === 'security',
-                        'text-green-600': rec.category === 'energy_saving',
-                        'text-blue-600': rec.category === 'comfort',
-                        'text-purple-600': rec.category === 'automation'
-                      }"
-                    >
-                      {{ rec.category === 'security' ? 'security' : rec.category === 'energy_saving' ? 'bolt' : rec.category === 'comfort' ? 'ac_unit' : 'smart_toy' }}
-                    </span>
+                  <!-- Rule Icon -->
+                  <div class="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                    <span class="material-symbols-outlined text-amber-600">smart_toy</span>
                   </div>
                   <div>
-                    <span 
-                      class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
-                      :class="{
-                        'bg-red-100 text-red-600': rec.category === 'security',
-                        'bg-green-100 text-green-600': rec.category === 'energy_saving',
-                        'bg-blue-100 text-blue-600': rec.category === 'comfort',
-                        'bg-purple-100 text-purple-600': rec.category === 'automation'
-                      }"
-                    >
-                      {{ rec.category === 'energy_saving' ? 'Energy' : rec.category === 'comfort' ? 'Comfort' : rec.category }}
-                    </span>
+                    <h4 class="text-sm font-bold text-slate-800">Automation Rule</h4>
+                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
                   </div>
                 </div>
-                <!-- Confidence Score -->
-                <div class="flex items-center gap-1">
-                  <div class="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div 
-                      class="h-full rounded-full transition-all"
-                      :class="{
-                        'bg-red-500': rec.confidence >= 0.8,
-                        'bg-amber-500': rec.confidence >= 0.5 && rec.confidence < 0.8,
-                        'bg-slate-400': rec.confidence < 0.5
-                      }"
-                      :style="{ width: `${rec.confidence * 100}%` }"
-                    ></div>
-                  </div>
-                  <span class="text-[10px] font-medium" :class="{
-                    'text-red-600': rec.confidence >= 0.8,
-                    'text-amber-600': rec.confidence >= 0.5 && rec.confidence < 0.8,
-                    'text-slate-400': rec.confidence < 0.5
-                  }">{{ Math.round(rec.confidence * 100) }}%</span>
+                <!-- Confidence Badge -->
+                <div v-if="rec.confidence" class="px-2 py-1 bg-amber-100 rounded-full">
+                  <span class="text-xs font-medium text-amber-700">{{ Math.round(rec.confidence * 100) }}%</span>
                 </div>
               </div>
             </div>
 
-            <!-- Card Body -->
+            <!-- Reason -->
             <div class="px-3 pb-2">
-              <!-- Description -->
-              <p class="text-sm text-slate-700 font-medium mb-2 line-clamp-2">{{ rec.description }}</p>
+              <p class="text-xs text-slate-600">{{ rec.category ? `Category: ${rec.category}` : 'AI-generated automation rule' }}</p>
+            </div>
 
-              <!-- Rule Preview -->
-              <div class="bg-slate-50 rounded-lg p-2 text-xs space-y-1.5">
+            <!-- Action Button -->
+            <div class="px-3 pb-3">
+              <button 
+                @click="applyRecommendation(rec)"
+                class="w-full py-2 px-4 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <span class="material-symbols-outlined text-sm">add</span>
+                Apply This Rule
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Device Recommendation Panel -->
+    <div 
+      v-if="showDeviceRecommendationPanel"
+      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+    >
+      <!-- Recommendation Header with gradient -->
+      <div class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-purple-500 to-violet-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
+        <div class="relative flex items-center justify-between p-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-purple-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-xl">devices</span>
+            </div>
+            <div>
+              <h3 class="text-black font-bold text-base">Device Recommendations</h3>
+              <p class="text-black/70 text-xs">AI-powered device suggestions</p>
+            </div>
+          </div>
+          <button 
+            @click="closeDeviceRecommendationPanel"
+            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Recommendation Content -->
+      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-purple-50/30 max-h-[500px] overflow-y-auto">
+        <!-- Loading State -->
+        <div v-if="isRecommendingDevices" class="flex flex-col items-center justify-center py-10">
+          <div class="relative">
+            <span class="material-symbols-outlined text-purple-500 text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-purple-400 rounded-full animate-ping opacity-20"></div>
+          </div>
+          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your board...</p>
+          <p class="text-slate-400 text-xs mt-1">Finding compatible devices</p>
+        </div>
+
+        <!-- Empty State -->
+        <div v-else-if="deviceRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
+          <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined text-slate-300 text-3xl">devices</span>
+          </div>
+          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered device suggestions</p>
+        </div>
+
+        <!-- Recommendations List -->
+        <div v-else class="space-y-3">
+          <!-- Header with count -->
+          <div class="flex items-center justify-between px-1">
+            <span class="text-xs font-medium text-slate-500">{{ deviceRecommendations.length }} devices recommended</span>
+            <button 
+              @click="fetchDeviceRecommendations"
+              class="text-xs text-purple-600 hover:text-purple-700 font-medium flex items-center gap-1"
+            >
+              <span class="material-symbols-outlined text-sm">refresh</span>
+              Refresh
+            </button>
+          </div>
+
+          <div 
+            v-for="(rec, index) in deviceRecommendations" 
+            :key="index"
+            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+          >
+            <!-- Card Header -->
+            <div class="p-3 pb-2">
+              <div class="flex items-start justify-between gap-2">
                 <div class="flex items-center gap-2">
-                  <span class="text-slate-400 font-medium min-w-[40px]">IF</span>
-                  <div v-if="rec.conditions && rec.conditions.length > 0" class="flex items-center gap-1 text-slate-600">
-                    <span class="font-medium text-blue-600">{{ rec.conditions[0].deviceName }}</span>
-                    <span class="text-slate-400">.</span>
-                    <span>{{ rec.conditions[0].attribute }}</span>
-                    <span class="font-medium">{{ rec.conditions[0].relation }}</span>
-                    <span class="px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">"{{ rec.conditions[0].value }}"</span>
+                  <!-- Device Icon -->
+                  <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <span class="material-symbols-outlined text-purple-600">device_hub</span>
+                  </div>
+                  <div>
+                    <h4 class="text-sm font-bold text-slate-800">{{ rec.templateName }}</h4>
+                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
                   </div>
                 </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-400 font-medium min-w-[40px]">THEN</span>
-                  <div v-if="rec.command" class="flex items-center gap-1 text-slate-600">
-                    <span class="font-medium text-green-600">{{ rec.command.deviceName }}</span>
-                    <span class="text-slate-400">.</span>
-                    <span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">{{ rec.command.action }}()</span>
-                  </div>
+                <!-- Confidence Badge -->
+                <div v-if="rec.confidence" class="px-2 py-1 bg-purple-100 rounded-full">
+                  <span class="text-xs font-medium text-purple-700">{{ Math.round(rec.confidence * 100) }}%</span>
                 </div>
               </div>
             </div>
 
-            <!-- Card Footer -->
-            <div class="px-3 pb-3 pt-2 border-t border-slate-100 mt-2">
-              <button
-                @click="applyRecommendation(rec)"
-                class="w-full py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-red rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm hover:shadow"
+            <!-- Reason -->
+            <div class="px-3 pb-2">
+              <p class="text-xs text-slate-600">{{ rec.reason || 'Recommended based on your current devices' }}</p>
+            </div>
+
+            <!-- Action Button -->
+            <div class="px-3 pb-3">
+              <button 
+                @click="applyDeviceRecommendation(rec)"
+                class="w-full py-2 px-4 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                <span class="material-symbols-outlined text-sm">add_circle</span>
-                Apply This Rule
+                <span class="material-symbols-outlined text-sm">add</span>
+                Add This Device
               </button>
             </div>
           </div>

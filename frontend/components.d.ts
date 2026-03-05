@@ -11,6 +11,9 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AIContextBubble: typeof import('./src/components/AIContextBubble.vue')['default']
+    AIInsightBubble: typeof import('./src/components/AIInsightBubble.vue')['default']
+    AISettings: typeof import('./src/components/AISettings.vue')['default']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
     ChatView: typeof import('./src/components/ChatView.vue')['default']
     CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
@@ -20,6 +23,7 @@ declare module 'vue' {
     ElAvatar: typeof import('element-plus/es')['ElAvatar']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCol: typeof import('element-plus/es')['ElCol']
+    ElDialog: typeof import('element-plus/es')['ElDialog']
     ElForm: typeof import('element-plus/es')['ElForm']
     ElHeader: typeof import('element-plus/es')['ElHeader']
     ElInput: typeof import('element-plus/es')['ElInput']
