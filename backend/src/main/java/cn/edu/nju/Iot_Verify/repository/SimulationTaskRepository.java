@@ -63,6 +63,24 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
                                @Param("cancelledStatus") SimulationTaskPo.TaskStatus cancelledStatus);
 
     /**
+     * Atomically transition a task from PENDING to RUNNING.
+     * Closes the race window where a concurrent cancel could be overwritten by a plain save().
+     * Returns 1 if updated, 0 if the task is no longer PENDING (e.g. already CANCELLED).
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE SimulationTaskPo t SET t.status = :running, "
+         + "t.startedAt = :startedAt, t.progress = :progress, "
+         + "t.checkLogsJson = :checkLogsJson "
+         + "WHERE t.id = :taskId AND t.status = :pendingStatus")
+    int startTaskIfStillPending(@Param("taskId") Long taskId,
+                                @Param("running") SimulationTaskPo.TaskStatus running,
+                                @Param("startedAt") LocalDateTime startedAt,
+                                @Param("progress") int progress,
+                                @Param("checkLogsJson") String checkLogsJson,
+                                @Param("pendingStatus") SimulationTaskPo.TaskStatus pendingStatus);
+
+    /**
      * Atomically cancel a task only if it is still PENDING or RUNNING.
      * Prevents overwriting a legitimately COMPLETED or FAILED status.
      * Returns 1 if updated, 0 if the task already finished.
@@ -76,4 +94,14 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
                                 @Param("cancelledStatus") SimulationTaskPo.TaskStatus cancelledStatus,
                                 @Param("completedAt") LocalDateTime completedAt,
                                 @Param("activeStatuses") List<SimulationTaskPo.TaskStatus> activeStatuses);
+
+    /**
+     * Atomically update progress only if the task is still active (PENDING or RUNNING).
+     * Prevents overwriting progress on terminal-state tasks.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE SimulationTaskPo t SET t.progress = :progress "
+         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
+    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
 }

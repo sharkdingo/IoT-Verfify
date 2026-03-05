@@ -89,20 +89,23 @@ public class SearchNodeTool implements AiTool {
         if (raw == null || raw.isBlank()) {
             return objectMapper.writeValueAsString(Map.of("count", 0, "devices", Collections.emptyList()));
         }
+        JsonNode root;
         try {
-            JsonNode root = objectMapper.readTree(raw);
-            if (root.isArray()) {
-                return objectMapper.writeValueAsString(Map.of(
-                        "count", root.size(),
-                        "devices", root
-                ));
-            }
-            if (root.isObject()) {
-                return raw;
-            }
+            root = objectMapper.readTree(raw);
         } catch (Exception ignore) {
+            // Not valid JSON — wrap as plain message
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("message", raw);
+            body.put("count", 0);
+            body.put("devices", Collections.emptyList());
+            return objectMapper.writeValueAsString(body);
         }
-
+        if (root.isArray()) {
+            return objectMapper.writeValueAsString(Map.of("count", root.size(), "devices", root));
+        }
+        if (root.isObject()) {
+            return raw;
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", raw);
         body.put("count", 0);

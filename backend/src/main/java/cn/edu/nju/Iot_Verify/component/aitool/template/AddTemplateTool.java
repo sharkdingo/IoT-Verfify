@@ -56,11 +56,12 @@ public class AddTemplateTool implements AiTool {
 
         props.put("manifest", Map.of(
                 "type", "object",
-                "description", "Full device manifest JSON defining the device behavior. Must include: " +
-                        "Name, Description, Modes (array of state names), InitState, " +
-                        "WorkingStates (array of {Name, Description}), " +
-                        "Transitions (array of {From, To, Trigger, Conditions[], Assignments[]}), " +
-                        "APIs (array of {Name, Description, Trigger}). " +
+                "description", "Full device manifest JSON defining the device behavior. " +
+                        "For stateful devices, must include: Name, Description, Modes (array of mode dimension names), InitState (semicolon-separated for multi-mode), " +
+                        "WorkingStates (array of {Name, Description, Trust, Privacy, Dynamics[]}), " +
+                        "Transitions (array of {Name, StartState, EndState, Trigger{Attribute,Relation,Value}, Signal, Assignments[{Attribute,Value}]}), " +
+                        "APIs (array of {Name, Description, StartState, EndState, Signal, Trigger{Attribute,Relation,Value}, Assignments[{Attribute,Value}]}). " +
+                        "For stateless sensors (no modes), Modes/InitState/WorkingStates can all be empty. " +
                         "Optional: InternalVariables, ImpactedVariables, Contents."
         ));
 
@@ -105,11 +106,23 @@ public class AddTemplateTool implements AiTool {
 
             DeviceTemplateDto.DeviceManifest manifest = tolerantMapper.treeToValue(
                     manifestNode, DeviceTemplateDto.DeviceManifest.class);
-            if (manifest == null || manifest.getModes() == null || manifest.getModes().isEmpty()) {
-                return errorJson("Manifest must contain non-empty modes.", "VALIDATION_ERROR", 400);
+            if (manifest == null) {
+                return errorJson("Manifest could not be parsed.", "VALIDATION_ERROR", 400);
             }
-            if (manifest.getInitState() == null || manifest.getInitState().isBlank()) {
-                return errorJson("Manifest must contain InitState.", "VALIDATION_ERROR", 400);
+            // Align with backend: no-mode sensors have all three empty; otherwise all must be present
+            boolean hasModes = manifest.getModes() != null && !manifest.getModes().isEmpty();
+            boolean hasInitState = manifest.getInitState() != null && !manifest.getInitState().isBlank();
+            boolean hasWorkingStates = manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
+            if (hasModes || hasInitState || hasWorkingStates) {
+                if (!hasModes) {
+                    return errorJson("Manifest must contain non-empty Modes when InitState or WorkingStates are defined.", "VALIDATION_ERROR", 400);
+                }
+                if (!hasInitState) {
+                    return errorJson("Manifest must contain InitState when Modes are defined.", "VALIDATION_ERROR", 400);
+                }
+                if (!hasWorkingStates) {
+                    return errorJson("Manifest must contain non-empty WorkingStates when Modes are defined.", "VALIDATION_ERROR", 400);
+                }
             }
 
             DeviceTemplateDto dto = new DeviceTemplateDto();

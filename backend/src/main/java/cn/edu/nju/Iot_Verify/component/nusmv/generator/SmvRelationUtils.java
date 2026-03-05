@@ -41,9 +41,10 @@ public final class SmvRelationUtils {
 
     /**
      * Normalize a rule/spec relation string, including IN/NOT_IN support.
+     * Returns null for null input (consistent with normalizeTriggerRelation).
      */
     public static String normalizeRelation(String relation) {
-        if (relation == null) return "=";
+        if (relation == null) return null;
         String normalized = relation.trim();
         return switch (normalized.toUpperCase()) {
             case "EQ", "==" -> "=";

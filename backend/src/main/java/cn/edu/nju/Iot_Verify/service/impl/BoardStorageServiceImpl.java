@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -56,6 +57,30 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceNodeMapper deviceNodeMapper;
     private final DeviceEdgeMapper deviceEdgeMapper;
 
+    /**
+     * User-level write locks for saveRules/saveSpecs to prevent cross-session
+     * read-modify-write races (e.g. two AI tool calls for the same user).
+     * Note: only effective for single-instance deployments. Multi-instance requires
+     * DB-level optimistic locking or atomic SQL.
+     *
+     * Uses striped locks (fixed-size array) to bound memory while preserving correctness:
+     * - 1024 lock stripes (sufficient for most deployments, ~4KB memory overhead)
+     * - userId % stripes → deterministic lock assignment
+     * - No eviction → same userId always maps to same lock (correctness preserved)
+     */
+    private static final int LOCK_STRIPES = 1024;
+    private final Object[] userWriteLocks = new Object[LOCK_STRIPES];
+    {
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            userWriteLocks[i] = new Object();
+        }
+    }
+
+    private Object getUserWriteLock(Long userId) {
+        int stripe = Math.abs((int) (userId % LOCK_STRIPES));
+        return userWriteLocks[stripe];
+    }
+
     @Override
     @Transactional(readOnly = true)
     public List<DeviceNodeDto> getNodes(Long userId) {
@@ -105,6 +130,37 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs) {
+        synchronized (getUserWriteLock(userId)) {
+            return saveSpecsInternal(userId, specs);
+        }
+    }
+
+    @Override
+    @Transactional
+    public List<SpecificationDto> addSpec(Long userId, SpecificationDto spec) {
+        synchronized (getUserWriteLock(userId)) {
+            List<SpecificationDto> existing = new ArrayList<>(getSpecs(userId));
+            existing.add(spec);
+            return saveSpecsInternal(userId, existing);
+        }
+    }
+
+    @Override
+    @Transactional
+    public List<SpecificationDto> removeSpec(Long userId, String specId) {
+        synchronized (getUserWriteLock(userId)) {
+            List<SpecificationDto> existing = new ArrayList<>(getSpecs(userId));
+            boolean removed = existing.removeIf(s -> specId.equals(s.getId()));
+            if (!removed) {
+                return null;
+            }
+            saveSpecsInternal(userId, existing);
+            return existing;
+        }
+    }
+
+    /** Internal save without re-acquiring the lock. */
+    private List<SpecificationDto> saveSpecsInternal(Long userId, List<SpecificationDto> specs) {
         specRepo.deleteByUserId(userId);
         List<SpecificationPo> pos = specs.stream()
                 .map(dto -> specificationMapper.toEntity(dto, userId))
@@ -124,44 +180,74 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional
     public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
-        // 增量更新：获取现有规则
-        Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
-                .collect(Collectors.toMap(RulePo::getId, r -> r));
+        synchronized (getUserWriteLock(userId)) {
+            // 增量更新：获取现有规则
+            Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
+                    .collect(Collectors.toMap(RulePo::getId, r -> r));
 
-        // 新规则 ID 集合
-        Set<Long> newRuleIds = new HashSet<>();
+            // 新规则 ID 集合
+            Set<Long> newRuleIds = new HashSet<>();
 
-        // 处理每个规则
-        for (RuleDto r : rules) {
-            Long ruleId = r.getId();
-            if (ruleId != null) {
-                newRuleIds.add(ruleId);
+            // 处理每个规则
+            for (RuleDto r : rules) {
+                Long ruleId = r.getId();
+                if (ruleId != null) {
+                    newRuleIds.add(ruleId);
+                }
+
+                RulePo po = ruleMapper.toEntity(r, userId);
+                if (ruleId == null) {
+                    // 新规则，直接插入
+                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                } else if (existingRules.containsKey(ruleId)) {
+                    // 已有规则且属于当前用户，更新
+                    po.setId(ruleId);
+                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                } else {
+                    // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
+                    log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
+                    po.setId(null);
+                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                }
             }
 
-            RulePo po = ruleMapper.toEntity(r, userId);
-            if (ruleId == null) {
-                // 新规则，直接插入
-                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-            } else if (existingRules.containsKey(ruleId)) {
-                // 已有规则且属于当前用户，更新
-                po.setId(ruleId);
-                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-            } else {
-                // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
-                log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
-                po.setId(null);
-                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+            // 删除不再存在的规则
+            for (Long existingId : existingRules.keySet()) {
+                if (!newRuleIds.contains(existingId)) {
+                    ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
+                }
             }
+
+            return getRules(userId);
         }
+    }
 
-        // 删除不再存在的规则
-        for (Long existingId : existingRules.keySet()) {
-            if (!newRuleIds.contains(existingId)) {
-                ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
-            }
+    @Override
+    @Transactional
+    public List<RuleDto> addRule(Long userId, RuleDto rule) {
+        synchronized (getUserWriteLock(userId)) {
+            rule.setId(null); // new rule, let DB assign ID
+            RulePo po = ruleMapper.toEntity(rule, userId);
+            ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+            return getRules(userId);
         }
+    }
 
-        return getRules(userId);
+    @Override
+    @Transactional
+    public List<RuleDto> removeRule(Long userId, long ruleId) {
+        synchronized (getUserWriteLock(userId)) {
+            List<RulePo> existing = ruleRepo.findByUserId(userId);
+            boolean found = existing.stream().anyMatch(r -> r.getId() != null && r.getId() == ruleId);
+            if (!found) {
+                return null;
+            }
+            ruleRepo.deleteById(ruleId);
+            return existing.stream()
+                    .filter(r -> r.getId() == null || r.getId() != ruleId)
+                    .map(ruleMapper::toDto)
+                    .toList();
+        }
     }
 
     @Override
@@ -433,14 +519,29 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             java.util.regex.Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
     private void validateTemplateManifestForNuSmv(String templateName, DeviceManifest manifest) {
-        // No-mode devices (pure sensors like Weather, Clock, Temperature Sensor) have
-        // empty Modes/InitState/WorkingStates — this is a legal form, skip validation.
+        // ── Validate InternalVariable / ImpactedVariable names FIRST ──
+        // These apply to ALL templates (including no-mode sensors), because the NuSMV
+        // generation pipeline uses raw variable names (DeviceSmvDataFactory:83, :267).
+        if (manifest.getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
+                validateSmvIdentifier(templateName, "InternalVariable", iv.getName());
+            }
+        }
+        if (manifest.getImpactedVariables() != null) {
+            for (String impacted : manifest.getImpactedVariables()) {
+                validateSmvIdentifier(templateName, "ImpactedVariable", impacted);
+            }
+        }
+
+        // ── Mode-related validation ──
         boolean hasModes = manifest.getModes() != null && !manifest.getModes().isEmpty();
         boolean hasInitState = manifest.getInitState() != null && !manifest.getInitState().isBlank();
         boolean hasWorkingStates = manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
 
         if (!hasModes && !hasInitState && !hasWorkingStates) {
-            return; // no-mode device template — nothing to validate
+            // No-mode device template (pure sensor) — collision check among variables only
+            checkVariableCollisions(templateName, manifest, Collections.emptyList());
+            return;
         }
 
         // If any mode-related field is present, all three must be present
@@ -478,6 +579,75 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                                     + "' contains invalid characters. Only letters, digits and underscores are allowed.");
                 }
             }
+        }
+
+        // Check for identifier collisions (modes + variables)
+        checkVariableCollisions(templateName, manifest, manifest.getModes());
+    }
+
+    /**
+     * Check that mode names, internal variable names, and impacted variable names
+     * do not collide after case-insensitive normalization.
+     */
+    private void checkVariableCollisions(String templateName, DeviceManifest manifest, List<String> modes) {
+        Set<String> seenIdentifiers = new HashSet<>();
+        for (String mode : modes) {
+            String cleaned = mode == null ? "" : mode.replace(" ", "");
+            if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+                throw new BadRequestException(
+                        "Template '" + templateName + "': identifier collision after normalization for '" + mode + "'.");
+            }
+        }
+        if (manifest.getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
+                String cleaned = iv.getName() == null ? "" : iv.getName().replace(" ", "");
+                if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': identifier collision after normalization for InternalVariable '" + iv.getName() + "'.");
+                }
+            }
+        }
+        if (manifest.getImpactedVariables() != null) {
+            for (String impacted : manifest.getImpactedVariables()) {
+                String cleaned = impacted == null ? "" : impacted.replace(" ", "");
+                if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': identifier collision after normalization for ImpactedVariable '" + impacted + "'.");
+                }
+            }
+        }
+    }
+
+    /**
+     * Validate that a name is a legal NuSMV identifier: matches [a-zA-Z_][a-zA-Z0-9_]*
+     * and is not a NuSMV reserved word (case-insensitive).
+     * IMPORTANT: Does NOT strip spaces — validates the raw name to ensure it's used as-is in NuSMV generation.
+     */
+    private void validateSmvIdentifier(String templateName, String fieldType, String name) {
+        if (name == null || name.isBlank()) {
+            throw new BadRequestException(
+                    "Template '" + templateName + "': " + fieldType + " name must not be blank.");
+        }
+        // Reject leading/trailing whitespace and common space character
+        // (tab/newline will be caught by regex below as "invalid characters")
+        if (name.trim().length() != name.length() || name.contains(" ")) {
+            throw new BadRequestException(
+                    "Template '" + templateName + "': " + fieldType + " name '" + name
+                            + "' contains whitespace. Only letters, digits and underscores are allowed.");
+        }
+        // Validate against NuSMV identifier pattern
+        if (!SAFE_SMV_TOKEN.matcher(name).matches()) {
+            throw new BadRequestException(
+                    "Template '" + templateName + "': " + fieldType + " name '" + name
+                            + "' contains invalid characters. Only letters, digits and underscores are allowed, and must start with a letter or underscore.");
+        }
+        // Check against NuSMV reserved words (case-insensitive)
+        if (DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name)
+                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toUpperCase())
+                || DeviceSmvDataFactory.NUSMV_RESERVED_WORDS.contains(name.toLowerCase())) {
+            throw new BadRequestException(
+                    "Template '" + templateName + "': " + fieldType + " name '" + name
+                            + "' is a NuSMV reserved word and cannot be used as an identifier.");
         }
     }
 

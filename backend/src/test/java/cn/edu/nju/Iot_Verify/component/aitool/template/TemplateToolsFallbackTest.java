@@ -57,8 +57,9 @@ class TemplateToolsFallbackTest {
                 {
                   "name":"Lamp",
                   "manifest":{
-                    "Modes":["Off","On"],
-                    "InitState":"Off"
+                    "Modes":["LampState"],
+                    "InitState":"Off",
+                    "WorkingStates":[{"Name":"Off"},{"Name":"On"}]
                   }
                 }
                 """);

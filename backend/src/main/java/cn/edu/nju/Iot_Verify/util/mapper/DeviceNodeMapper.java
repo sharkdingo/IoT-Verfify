@@ -17,6 +17,8 @@ import java.util.List;
 @Component
 public class DeviceNodeMapper {
 
+    private static final String FALLBACK_STATE = "Working";
+
     /**
      * DeviceNodePo -> DeviceNodeDto
      */
@@ -34,7 +36,8 @@ public class DeviceNodeMapper {
         pos.setY(po.getPosY());
         dto.setPosition(pos);
 
-        dto.setState(po.getState());
+        String state = po.getState();
+        dto.setState(state != null && !state.isBlank() ? state : FALLBACK_STATE);
         dto.setWidth(po.getWidth());
         dto.setHeight(po.getHeight());
         dto.setCurrentStateTrust(po.getCurrentStateTrust());

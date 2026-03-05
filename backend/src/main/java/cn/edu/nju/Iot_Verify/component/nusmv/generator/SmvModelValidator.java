@@ -221,7 +221,7 @@ public class SmvModelValidator {
         }
     }
 
-    // ==================== P3: 同名 env var 冲突检测 ====================
+    // ==================== P5: 同名 env var 冲突检测 ====================
 
     private void validateEnvVarConflicts(Map<String, DeviceSmvData> deviceSmvMap) {
         Map<String, List<EnvVarSource>> envSources = new LinkedHashMap<>();
@@ -380,7 +380,7 @@ public class SmvModelValidator {
         }
     }
 
-    // ==================== P5: trust/privacy 一致性校验 ====================
+    // ==================== P3: trust/privacy 一致性校验 ====================
 
     private void validateTrustPrivacyConsistency(DeviceSmvData smv) {
         if (smv.isSensor()) return;

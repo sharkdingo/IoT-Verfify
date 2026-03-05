@@ -246,15 +246,11 @@ class SimulationServiceImplTest {
             po.setId(100L);
             return po;
         });
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
-
+        when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        // findById is still used by simulateAsync after startTaskIfStillPending to load the entity
         SimulationTaskPo task = SimulationTaskPo.builder()
-                .id(9L)
-                .userId(1L)
-                .status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(10)
-                .createdAt(LocalDateTime.now())
-                .build();
+                .id(9L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
         when(simulationTaskRepository.findById(9L)).thenReturn(Optional.of(task));
 
         service.simulateAsync(1L, 9L, singleDevice(), List.of(), 10, false, 3, false);
@@ -265,19 +261,26 @@ class SimulationServiceImplTest {
     @Test
     @SuppressWarnings("null")
     void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
-        SimulationTaskPo task = SimulationTaskPo.builder()
-                .id(10L)
-                .userId(1L)
-                .status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(10)
-                .createdAt(LocalDateTime.now())
-                .build();
-        when(simulationTaskRepository.findById(10L)).thenReturn(Optional.of(task));
         cancelledTaskIds().add(10L);
 
         service.simulateAsync(1L, 10L, singleDevice(), List.of(), 10, false, 3, false);
 
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void simulateAsync_noLongerPending_skipsGeneration() throws Exception {
+        // startTaskIfStillPending returns 0 by default (Mockito int stub),
+        // simulating a DB-level race where the task was cancelled or started by another process
+        // after the in-memory check passed.
+        service.simulateAsync(1L, 11L, singleDevice(), List.of(), 10, false, 3, false);
+
+        // Verify the atomic start was attempted.
+        verify(simulationTaskRepository).startTaskIfStillPending(
+                eq(11L), eq(SimulationTaskPo.TaskStatus.RUNNING),
+                any(LocalDateTime.class), eq(0), anyString(),
+                eq(SimulationTaskPo.TaskStatus.PENDING));
+        // Verify early return: generation should never be reached.
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 

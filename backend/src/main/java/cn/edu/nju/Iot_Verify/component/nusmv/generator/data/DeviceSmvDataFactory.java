@@ -287,7 +287,7 @@ public class DeviceSmvDataFactory {
      * NuSMV reserved words — identifiers matching these (case-insensitive) must be escaped
      * by prepending '_' to avoid syntax errors in generated SMV models.
      */
-    private static final Set<String> NUSMV_RESERVED_WORDS = Set.of(
+    public static final Set<String> NUSMV_RESERVED_WORDS = Set.of(
             "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
             "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
             "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",

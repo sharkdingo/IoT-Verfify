@@ -67,7 +67,7 @@ class ManageRuleToolTest {
         String result = tool.execute(argsJson);
 
         assertTrue(result.contains("Unsupported relation"));
-        verify(boardStorageService, never()).saveRules(anyLong(), any());
+        verify(boardStorageService, never()).addRule(anyLong(), any());
     }
 
     @Test
@@ -92,8 +92,7 @@ class ManageRuleToolTest {
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
 
-        when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(boardStorageService.saveRules(anyLong(), any())).thenReturn(List.of());
+        when(boardStorageService.addRule(anyLong(), any())).thenReturn(List.of());
 
         ManageRuleTool fallbackTool = new ManageRuleTool(boardStorageService, failingMapper);
 

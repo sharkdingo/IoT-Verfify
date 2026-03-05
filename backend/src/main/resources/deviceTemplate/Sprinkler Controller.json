@@ -31,7 +31,7 @@
 			"StartState": "",
 			"EndState": "closed",
 			"Trigger": null,
-			"s": [],
+			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		},
@@ -40,7 +40,7 @@
 			"StartState": "",
 			"EndState": "open",
 			"Trigger": null,
-			"s": [],
+			"Assignments": [],
 			"Signal": true,
 			"Description": ""
 		}

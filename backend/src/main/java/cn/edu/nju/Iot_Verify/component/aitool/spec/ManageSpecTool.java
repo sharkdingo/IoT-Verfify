@@ -181,9 +181,7 @@ public class ManageSpecTool implements AiTool {
         spec.setIfConditions(ifConditions);
         spec.setThenConditions(thenConditions);
 
-        List<SpecificationDto> existing = new ArrayList<>(safeList(boardStorageService.getSpecs(userId)));
-        existing.add(spec);
-        List<SpecificationDto> saved = boardStorageService.saveSpecs(userId, existing);
+        List<SpecificationDto> saved = boardStorageService.addSpec(userId, spec);
 
         return successJson(Map.of(
                 "message", "Specification added successfully.",
@@ -199,17 +197,15 @@ public class ManageSpecTool implements AiTool {
                     "VALIDATION_ERROR", 400);
         }
 
-        List<SpecificationDto> existing = new ArrayList<>(safeList(boardStorageService.getSpecs(userId)));
-        boolean removed = existing.removeIf(s -> specId.equals(s.getId()));
-        if (!removed) {
+        List<SpecificationDto> remaining = boardStorageService.removeSpec(userId, specId);
+        if (remaining == null) {
             return errorJson("Specification with ID '" + specId + "' not found.",
                     "NOT_FOUND", 404);
         }
 
-        List<SpecificationDto> saved = boardStorageService.saveSpecs(userId, existing);
         return successJson(Map.of(
                 "message", "Specification deleted successfully.",
-                "totalSpecs", saved.size()
+                "totalSpecs", remaining.size()
         ), "Specification deleted successfully.");
     }
 

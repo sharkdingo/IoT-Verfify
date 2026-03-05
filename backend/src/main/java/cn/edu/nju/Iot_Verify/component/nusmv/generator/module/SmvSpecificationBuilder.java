@@ -108,9 +108,12 @@ public class SmvSpecificationBuilder {
         String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
 
         switch (templateId) {
-            case "1": // always
+            case "1": // always: AG(A)
+                // Special case: when aConditions is empty but ifConditions/thenConditions exist,
+                // this template is repurposed as an implication: AG(IF -> THEN).
+                // This allows the "always" template to express invariant implications without
+                // requiring a separate template ID.
                 if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
-                    // If aConditions is empty but if/then exists, generate AG(if -> then).
                     return "CTLSPEC AG((" + ifPart + ") -> (" + thenPart + "))";
                 }
                 return "CTLSPEC AG(" + aPart + ")";
@@ -363,7 +366,7 @@ public class SmvSpecificationBuilder {
     }
 
     private String buildSimpleCondition(String left, SpecConditionDto cond) {
-        if (left == null || left.contains("null")) {
+        if (left == null || left.isBlank()) {
             throw new InvalidConditionException("invalid left-hand side: " + left);
         }
         String relation = normalizeRelation(cond.getRelation());

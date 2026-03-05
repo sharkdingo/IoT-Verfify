@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -53,14 +54,14 @@ public class SmvGenerator {
      */
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules, List<SpecificationDto> specs,
-                                   boolean isAttack, int intensity, boolean enablePrivacy) throws Exception {
+                                   boolean isAttack, int intensity, boolean enablePrivacy) throws IOException {
         return generate(userId, devices, rules, specs, isAttack, intensity, enablePrivacy, GeneratePurpose.VERIFICATION);
     }
 
     public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
                                    List<RuleDto> rules, List<SpecificationDto> specs,
                                    boolean isAttack, int intensity, boolean enablePrivacy,
-                                   GeneratePurpose purpose) throws Exception {
+                                   GeneratePurpose purpose) throws IOException {
         // 防御性边界：即使绕过 DTO 校验，也确保 intensity 在 NuSMV 合法范围内
         intensity = Math.max(0, Math.min(50, intensity));
         if (devices == null || devices.isEmpty()) {

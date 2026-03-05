@@ -224,10 +224,13 @@ public class NodeServiceImpl implements NodeService {
 
             JsonNode rootNode = objectMapper.readTree(json);
             if (rootNode.has("InitState")) {
-                return rootNode.get("InitState").asText();
+                String initState = rootNode.get("InitState").asText();
+                if (initState != null && !initState.isBlank()) {
+                    return initState;
+                }
             }
 
-            log.warn("Template {} manifest does not contain InitState", templateName);
+            log.warn("Template {} manifest has missing or blank InitState", templateName);
             return HARD_FALLBACK_STATE;
         } catch (Exception e) {
             log.error("Failed to parse template manifest for {}", templateName, e);
