@@ -1056,7 +1056,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         }
 
         int attemptedConditions = 0;
-        List<String> parts = new ArrayList<>();
+        Set<String> parts = new LinkedHashSet<>();
         for (RuleDto.Condition condition : rule.getConditions()) {
             if (condition == null || condition.getDeviceName() == null) continue;
             DeviceSmvData condSmv = DeviceSmvDataFactory.findDeviceSmvDataStrict(condition.getDeviceName(), deviceSmvMap);

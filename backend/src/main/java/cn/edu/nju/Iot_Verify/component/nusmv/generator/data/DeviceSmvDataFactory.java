@@ -479,7 +479,9 @@ public class DeviceSmvDataFactory {
     /** 清理状态名：移除分号后进行 NuSMV 标识符清洗 */
     public static String cleanStateName(String raw) {
         if (raw == null) return null;
-        return sanitizeSmvToken(raw.replace(";", ""));
+        String cleaned = raw.replace(";", "").trim();
+        if (cleaned.isEmpty() || cleaned.equals("_")) return "";
+        return sanitizeSmvToken(cleaned);
     }
 
     /** 按名称查找 API 定义 */

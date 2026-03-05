@@ -1,0 +1,251 @@
+--test1
+--IF hs.humidity>70 THEN AC.dry=true
+--当室内温湿度处于舒适区间（22-26℃，40-60%RH）时...
+--当窗户打开时，自动关闭空调以避免能源浪费
+
+MODULE AirConditioner_ac
+VAR
+	HvacMode: {auto, cool, dry, coolClean, dryClean, fanOnly, heat, heatClean, off};
+	auto_a: boolean;
+	cool_a: boolean;
+	dry_a: boolean;
+	coolClean_a: boolean;
+	dryClean_a: boolean;
+	fanOnly_a: boolean;
+	heat_a: boolean;
+	heatClean_a: boolean;
+	off_a: boolean;
+	temperature_rate: -1..1;
+	humidity_rate: -1..0;
+	trust_HvacMode_auto: {untrusted, trusted};
+	trust_HvacMode_cool: {untrusted, trusted};
+	trust_HvacMode_dry: {untrusted, trusted};
+	trust_HvacMode_coolClean: {untrusted, trusted};
+	trust_HvacMode_dryClean: {untrusted, trusted};
+	trust_HvacMode_fanOnly: {untrusted, trusted};
+	trust_HvacMode_heat: {untrusted, trusted};
+	trust_HvacMode_heatClean: {untrusted, trusted};
+	trust_HvacMode_off: {untrusted, trusted};
+ASSIGN
+	init(HvacMode) := auto;
+	init(auto_a) := FALSE;
+	init(cool_a) := FALSE;
+	init(dry_a) := FALSE;
+	init(coolClean_a) := FALSE;
+	init(dryClean_a) := FALSE;
+	init(fanOnly_a) := FALSE;
+	init(heat_a) := FALSE;
+	init(heatClean_a) := FALSE;
+	init(off_a) := FALSE;
+	init(temperature_rate) := 0;
+	init(humidity_rate) := 0;
+	init(trust_HvacMode_auto) := trusted;
+	init(trust_HvacMode_cool) := trusted;
+	init(trust_HvacMode_dry) := trusted;
+	init(trust_HvacMode_coolClean) := trusted;
+	init(trust_HvacMode_dryClean) := trusted;
+	init(trust_HvacMode_fanOnly) := trusted;
+	init(trust_HvacMode_heat) := trusted;
+	init(trust_HvacMode_heatClean) := trusted;
+	init(trust_HvacMode_off) := trusted;
+MODULE HumiditySensor_hs
+FROZENVAR
+	trust_humidity: {trusted, untrusted};
+VAR
+	humidity: 0..100;
+ASSIGN
+	init(trust_humidity) := trusted;
+MODULE TemperatureSensor_ts
+FROZENVAR
+	trust_temperature: {trusted, untrusted};
+VAR
+	temperature: 0..100;
+ASSIGN
+	init(trust_temperature) := trusted;
+MODULE Window_window
+VAR
+	WindowState: {closed, open};
+	contact: {closed, open};
+	close_a: boolean;
+	open_a: boolean;
+	trust_WindowState_closed: {untrusted, trusted};
+	trust_WindowState_open: {untrusted, trusted};
+	trust_contact: {untrusted, trusted};
+ASSIGN
+	init(WindowState) := closed;
+	init(contact) := closed;
+	init(close_a) := FALSE;
+	init(open_a) := FALSE;
+	init(trust_WindowState_closed) := trusted;
+	init(trust_WindowState_open) := trusted;
+	init(trust_contact) := trusted;
+MODULE main
+VAR
+	ac: AirConditioner_ac;
+	hs: HumiditySensor_hs;
+	ts: TemperatureSensor_ts;
+	window: Window_window;
+	a_humidity: 0..100;
+	a_temperature: 0..100;
+ASSIGN
+	init(a_humidity) := 0;
+	init(a_temperature) := 0;
+	next(ac.HvacMode) :=
+	case
+		next(ts.temperature)=8: cool;
+		next(ts.temperature)>=22 & next(ts.temperature)<=26 & next(hs.humidity)>=40 & next(hs.humidity)<=60: auto;
+		next(window.contact)=open: off;
+		TRUE: ac.HvacMode;
+	esac;
+	next(window.WindowState) :=
+	case
+		TRUE: window.WindowState;
+	esac;
+	next(a_humidity) :=
+	case
+		a_humidity=100-(ac.humidity_rate): {max(0, min(100, toint(a_humidity)-1+ac.humidity_rate)), max(0, min(100, a_humidity+ac.humidity_rate))};
+		a_humidity>100-(ac.humidity_rate): {100};
+		a_humidity=0-(ac.humidity_rate): {max(0, min(100, a_humidity+ac.humidity_rate)), max(0, min(100, a_humidity+1+ac.humidity_rate))};
+		a_humidity<0-(ac.humidity_rate): {0};
+		TRUE: {max(0, min(100, a_humidity - 1+ac.humidity_rate)), max(0, min(100, a_humidity+ac.humidity_rate)), max(0, min(100, a_humidity + 1+ac.humidity_rate))};
+	esac;
+	next(a_temperature) :=
+	case
+		a_temperature=100-(ac.temperature_rate): {max(0, min(100, toint(a_temperature)-1+ac.temperature_rate)), max(0, min(100, a_temperature+ac.temperature_rate))};
+		a_temperature>100-(ac.temperature_rate): {100};
+		a_temperature=0-(ac.temperature_rate): {max(0, min(100, a_temperature+ac.temperature_rate)), max(0, min(100, a_temperature+1+ac.temperature_rate))};
+		a_temperature<0-(ac.temperature_rate): {0};
+		TRUE: {max(0, min(100, a_temperature - 1+ac.temperature_rate)), max(0, min(100, a_temperature+ac.temperature_rate)), max(0, min(100, a_temperature + 1+ac.temperature_rate))};
+	esac;
+	next(ac.auto_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=auto: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.cool_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=cool: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.dry_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=dry: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.coolClean_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=coolClean: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.dryClean_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=dryClean: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.fanOnly_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=fanOnly: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.heat_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=heat: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.heatClean_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=heatClean: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.off_a) :=
+	case
+		ac.HvacMode=_ & next(ac.HvacMode)=off: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(window.close_a) :=
+	case
+		window.WindowState=_ & next(window.WindowState)=closed: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(window.open_a) :=
+	case
+		window.WindowState=_ & next(window.WindowState)=open: TRUE;
+		TRUE: FALSE;
+	esac;
+	next(ac.trust_HvacMode_auto) :=
+	case
+		ts.temperature>=22 & ts.temperature<=26 & hs.humidity>=40 & hs.humidity<=60 & (ts.trust_temperature=trusted & ts.trust_temperature=trusted & hs.trust_humidity=trusted & hs.trust_humidity=trusted): trusted;
+		ts.temperature>=22 & ts.temperature<=26 & hs.humidity>=40 & hs.humidity<=60: untrusted;
+		TRUE: ac.trust_HvacMode_auto;
+	esac;
+	next(ac.trust_HvacMode_cool) :=
+	case
+		ts.temperature=8 & (ts.trust_temperature=trusted): trusted;
+		ts.temperature=8: untrusted;
+		TRUE: ac.trust_HvacMode_cool;
+	esac;
+	next(ac.trust_HvacMode_dry) :=
+	case
+		TRUE: ac.trust_HvacMode_dry;
+	esac;
+	next(ac.trust_HvacMode_coolClean) :=
+	case
+		TRUE: ac.trust_HvacMode_coolClean;
+	esac;
+	next(ac.trust_HvacMode_dryClean) :=
+	case
+		TRUE: ac.trust_HvacMode_dryClean;
+	esac;
+	next(ac.trust_HvacMode_fanOnly) :=
+	case
+		TRUE: ac.trust_HvacMode_fanOnly;
+	esac;
+	next(ac.trust_HvacMode_heat) :=
+	case
+		TRUE: ac.trust_HvacMode_heat;
+	esac;
+	next(ac.trust_HvacMode_heatClean) :=
+	case
+		TRUE: ac.trust_HvacMode_heatClean;
+	esac;
+	next(ac.trust_HvacMode_off) :=
+	case
+		window.contact=open & (window.trust_contact=trusted): trusted;
+		window.contact=open: untrusted;
+		TRUE: ac.trust_HvacMode_off;
+	esac;
+	next(window.trust_WindowState_closed) :=
+	case
+		TRUE: window.trust_WindowState_closed;
+	esac;
+	next(window.trust_WindowState_open) :=
+	case
+		TRUE: window.trust_WindowState_open;
+	esac;
+	next(window.trust_contact) := window.trust_contact;
+	next(ac.temperature_rate) :=
+	case
+		ac.HvacMode=cool: -1;
+		ac.HvacMode=coolClean: -1;
+		ac.HvacMode=heat: 1;
+		ac.HvacMode=heatClean: 1;
+		TRUE: 0;
+	esac;
+	next(ac.humidity_rate) :=
+	case
+		ac.HvacMode=dry: -1;
+		ac.HvacMode=dryClean: -1;
+		ac.HvacMode=heat: -1;
+		TRUE: 0;
+	esac;
+	hs.humidity := a_humidity;
+	ts.temperature := a_temperature;
+	next(window.contact) :=
+	case
+		window.WindowState=closed: closed;
+		window.WindowState=open: open;
+		TRUE: {closed, open};
+	esac;
+-- Specifications
+	CTLSPEC AG(a_temperature<25)
+	CTLSPEC AG(a_humidity<=30)
