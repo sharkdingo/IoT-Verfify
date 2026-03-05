@@ -94,4 +94,14 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
                                 @Param("cancelledStatus") SimulationTaskPo.TaskStatus cancelledStatus,
                                 @Param("completedAt") LocalDateTime completedAt,
                                 @Param("activeStatuses") List<SimulationTaskPo.TaskStatus> activeStatuses);
+
+    /**
+     * Atomically update progress only if the task is still active (PENDING or RUNNING).
+     * Prevents overwriting progress on terminal-state tasks.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE SimulationTaskPo t SET t.progress = :progress "
+         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
+    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
 }

@@ -295,4 +295,190 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         dto.setManifest(manifest);
         return dto;
     }
+
+    // ======================== FIX-1: validateSmvIdentifier + checkVariableCollisions ========================
+
+    @Test
+    void addDeviceTemplate_internalVarWithInvalidChars_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "temp-value", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("invalid characters");
+        verify(deviceTemplateRepo, never()).saveAndFlush(anyTemplatePo());
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarWithDigitPrefix_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "3temp", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("invalid characters");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarWithReservedWord_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "MODULE", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("reserved word");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarReservedWordCaseInsensitive_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "Define", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("reserved word");
+    }
+
+    @Test
+    void addDeviceTemplate_impactedVarWithInvalidChars_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "hum!dity");
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("invalid characters");
+    }
+
+    @Test
+    void addDeviceTemplate_impactedVarReservedWord_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "NEXT");
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("reserved word");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarCollidesWithMode_shouldReject() {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of("Power"));
+        manifest.setInitState("on");
+        DeviceManifest.WorkingState on = new DeviceManifest.WorkingState();
+        on.setName("on");
+        DeviceManifest.WorkingState off = new DeviceManifest.WorkingState();
+        off.setName("off");
+        manifest.setWorkingStates(List.of(on, off));
+        // InternalVariable name "power" collides with mode "Power" (case-insensitive)
+        manifest.setInternalVariables(List.of(
+                DeviceManifest.InternalVariable.builder()
+                        .name("power").isInside(true).lowerBound(0).upperBound(100).build()));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Collider");
+        dto.setManifest(manifest);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+    }
+
+    @Test
+    void addDeviceTemplate_impactedVarCollidesWithInternalVar_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "temperature", null);
+        // Add ImpactedVariable with same name (case-insensitive)
+        dto.getManifest().setImpactedVariables(List.of("Temperature"));
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+    }
+
+    @Test
+    void addDeviceTemplate_noModeWithImpactedVarCollision_shouldReject() {
+        // No-mode sensor with InternalVariable and ImpactedVariable that collide
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        manifest.setInternalVariables(List.of(
+                DeviceManifest.InternalVariable.builder()
+                        .name("humidity").isInside(false).lowerBound(0).upperBound(100).build()));
+        manifest.setImpactedVariables(List.of("Humidity"));
+
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName("Sensor");
+        dto.setManifest(manifest);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+    }
+
+    @Test
+    void addDeviceTemplate_blankInternalVarName_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "  ", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("must not be blank");
+    }
+
+    @Test
+    void addDeviceTemplate_internalVarWithSpace_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", "temp value", null);
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("whitespace");
+    }
+
+    @Test
+    void addDeviceTemplate_impactedVarWithSpace_shouldReject() {
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "hum idity");
+
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
+                service.addDeviceTemplate(1L, dto));
+
+        assertEquals(400, ex.getCode());
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("whitespace");
+    }
+
+    /**
+     * Helper: build a no-mode template with an optional InternalVariable and/or ImpactedVariable.
+     */
+    private DeviceTemplateDto buildTemplateWithVar(String name, String internalVarName, String impactedVarName) {
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setModes(List.of());
+        manifest.setInitState("");
+        manifest.setWorkingStates(List.of());
+        if (internalVarName != null) {
+            manifest.setInternalVariables(List.of(
+                    DeviceManifest.InternalVariable.builder()
+                            .name(internalVarName).isInside(true).lowerBound(0).upperBound(100).build()));
+        }
+        if (impactedVarName != null) {
+            manifest.setImpactedVariables(List.of(impactedVarName));
+        }
+        DeviceTemplateDto dto = new DeviceTemplateDto();
+        dto.setName(name);
+        dto.setManifest(manifest);
+        return dto;
+    }
 }

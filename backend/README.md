@@ -36,7 +36,7 @@ IoT-Verify 是一个智能家居模拟与形式化验证平台，核心功能包
 - Spring Boot 3.5.7 / Java 17
 - MySQL + Redis
 - JWT 认证
-- NuSMV 2.x 模型检测器（已测试 2.5–2.7，不兼容 nuXmv）
+- NuSMV 2.x 模型检测器（需要 2.6+，已测试 2.6–2.7，不兼容 nuXmv）
 - 火山引擎 Ark（AI 助手）
 
 ---
@@ -291,7 +291,7 @@ public GenerateResult generate(Long userId, List<DeviceVerificationDto> devices,
 
 静态工具方法：
 - `cleanStateName(raw)` — 移除分号，然后通过 `sanitizeSmvToken()` 清洗（移除空格、非法字符替换为 `_`、数字开头加 `_` 前缀）
-- `sanitizeSmvToken(raw)` — NuSMV 标识符集中清洗函数（模式名/状态名/变量标识）：空格清理、非法字符替换、数字前缀处理、保留字大小写无关转义（含 `W`）
+- `sanitizeSmvToken(raw)` — NuSMV 标识符集中清洗函数（模式名/状态名）：空格清理、非法字符替换、数字前缀处理、保留字大小写无关转义（含 `W`）。注意：InternalVariable/ImpactedVariable 名称不经过此函数清洗，而是在入库阶段由 `validateTemplateManifestForNuSmv()` 严格拒绝非法值（因其被多处交叉引用，部分清洗会导致 `.equals()` 匹配断裂）。
 - `findDeviceSmvData(name, map)` — 兼容查找（先按 varName，再按 templateName）
 - `findDeviceSmvDataStrict(name, map)` — 严格查找；当 templateName 匹配到多个实例时抛出 `SmvGenerationException`（`AMBIGUOUS_DEVICE_REFERENCE`）
 - `toVarName(deviceId)` — 转为安全变量名（含数字前缀与保留字防御）
@@ -625,7 +625,7 @@ public enum PropertyDimension {
 - JDK 17+
 - MySQL 8.0+
 - Redis 7.0+（仅用于 JWT 黑名单；不可用时 fail-open 降级——登录/验证等流程不受阻，但登出撤销语义会失效：黑名单写入/查询失败时已登出的 token 仍可继续使用直至过期）
-- NuSMV 2.x (已测试 2.5–2.7，需配置路径)
+- NuSMV 2.x (需要 2.6+，已测试 2.6–2.7，需配置路径)
 - `commons-pool2`（Lettuce 连接池，已在 pom.xml 中声明）
 
 ### 模板前置条件（重要）
@@ -713,7 +713,7 @@ java -jar target/Iot-Verify-0.0.1-SNAPSHOT.jar
 | 模拟异步任务 | Done | `SimulationTaskPo/Repository` + `/api/verify/simulate/async` + `/api/verify/simulations/tasks/*` |
 | 线程池统一配置 | Done | `ThreadPoolConfig` + `ThreadConfig` |
 | 输入校验强化 | Done | `SmvDeviceModuleBuilder.validateInternalInitValue()` + `SmvMainModuleBuilder.resolveEnvVarInitValues()` / `validateEnvVarInitValue()` + `SmvSpecificationBuilder.buildVariableCondition()` / `validateApiSignalExists()` / `validateApiBooleanRelation()` + `SpecConditionDto @Pattern` |
-| NuSMV 标识符清洗 | Done | `DeviceSmvDataFactory.sanitizeSmvToken()` — 集中处理空格/非法字符/数字前缀，并对保留字做大小写无关转义（含 `W`）；`toVarName()` 同步防御；`computeIdentifiers()` 对 varName/base/suffix 均做数字前缀守卫和保留字转义 |
+| NuSMV 标识符清洗 | Done | `DeviceSmvDataFactory.sanitizeSmvToken()` — 模式名/状态名集中清洗（空格/非法字符/数字前缀/保留字转义）；InternalVariable/ImpactedVariable 名称在入库阶段由 `validateTemplateManifestForNuSmv()` 严格拒绝（不经过生成期清洗）；`toVarName()` 同步防御；`computeIdentifiers()` 对 varName/base/suffix 均做数字前缀守卫和保留字转义 |
 | 模板 NuSMV 预检 | Done | `BoardStorageServiceImpl.validateTemplateManifestForNuSmv()` + `runTemplateNuSmvPrecheck()` |
 | AI 工具安全强化 | Done | JSON 参数解析 400 错误、`ServiceUnavailableException` 503 错误、内部异常信息不泄露、`AddNodeTool` null-safe 数值解析（`parseDoubleOrNull` / `parseIntOrNull`） |
 | AI 工具 Trace 管理 | Done | `GetTraceTool` + `DeleteTraceTool` + `ListSimulationTracesTool` + `GetSimulationTraceTool` + `DeleteSimulationTraceTool` |

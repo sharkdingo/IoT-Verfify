@@ -541,11 +541,8 @@ public class VerificationServiceImpl implements VerificationService {
         Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
         taskProgress.put(requiredTaskId, clamped);
-        // Persist to DB for cross-instance visibility
-        taskRepository.findById(requiredTaskId).ifPresent(task -> {
-            task.setProgress(clamped);
-            taskRepository.save(task);
-        });
+        // Atomic DB update — only updates if task is still PENDING or RUNNING
+        taskRepository.updateProgressIfActive(requiredTaskId, clamped);
         log.debug("Task {} progress: {}% - {}", requiredTaskId, progress, message);
     }
 

@@ -1422,9 +1422,13 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
             String varName = smv.getVarName();
 
+            List<DeviceManifest.InternalVariable> internalVars =
+                    smv.getManifest().getInternalVariables() != null
+                            ? smv.getManifest().getInternalVariables() : Collections.emptyList();
+
             for (String varName2 : smv.getImpactedVariables()) {
                 boolean isEnum = false;
-                for (DeviceManifest.InternalVariable var : smv.getManifest().getInternalVariables()) {
+                for (DeviceManifest.InternalVariable var : internalVars) {
                     if (var.getName().equals(varName2) && var.getValues() != null && !var.getValues().isEmpty()) {
                         isEnum = true;
                         break;
@@ -1456,8 +1460,17 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                         content.append(varName).append(".").append(smv.getModes().get(c))
                                                .append("=").append(DeviceSmvDataFactory.cleanStateName(rawSeg));
                                     }
-                                    if (firstCond) continue; // all segments empty 閿?skip this CASE branch
-                                    content.append(": ").append(dynamic.getChangeRate()).append(";\n");
+                                    if (firstCond) continue; // all segments empty — skip this CASE branch
+                                    String rawRate = dynamic.getChangeRate();
+                                    int parsedRate;
+                                    try {
+                                        parsedRate = Integer.parseInt(rawRate != null ? rawRate.trim() : "");
+                                    } catch (NumberFormatException e) {
+                                        log.warn("Device '{}': Dynamics.ChangeRate '{}' is not a valid integer, skipping",
+                                                varName, rawRate);
+                                        continue;
+                                    }
+                                    content.append(": ").append(parsedRate).append(";\n");
                                 } else {
                                     log.warn("Device '{}': has ImpactedVariable '{}' with Dynamics but no modes, skipping rate condition for state '{}'",
                                             varName, varName2, state.getName());

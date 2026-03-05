@@ -216,9 +216,7 @@ public class ManageRuleTool implements AiTool {
                 .command(command)
                 .build();
 
-        List<RuleDto> existing = new ArrayList<>(safeList(boardStorageService.getRules(userId)));
-        existing.add(newRule);
-        List<RuleDto> saved = boardStorageService.saveRules(userId, existing);
+        List<RuleDto> saved = boardStorageService.addRule(userId, newRule);
 
         return successJson(Map.of(
                 "message", "Rule added successfully.",
@@ -237,18 +235,16 @@ public class ManageRuleTool implements AiTool {
                     "VALIDATION_ERROR", 400);
         }
 
-        List<RuleDto> existing = new ArrayList<>(safeList(boardStorageService.getRules(userId)));
-        boolean removed = existing.removeIf(r -> r.getId() != null && r.getId().equals(ruleId));
+        List<RuleDto> remaining = boardStorageService.removeRule(userId, ruleId);
 
-        if (!removed) {
+        if (remaining == null) {
             return errorJson("Rule with ID " + ruleId + " not found.",
                     "NOT_FOUND", 404);
         }
 
-        List<RuleDto> saved = boardStorageService.saveRules(userId, existing);
         return successJson(Map.of(
                 "message", "Rule deleted successfully.",
-                "totalRules", saved.size()
+                "totalRules", remaining.size()
         ), "Rule deleted successfully.");
     }
 
@@ -292,10 +288,6 @@ public class ManageRuleTool implements AiTool {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? List.of() : list;
     }
 
     private String errorJson(String message, String errorCode, int status) {

@@ -2392,4 +2392,104 @@ class SmvGeneratorFixesTest {
         // Negative intensity clamped to 0: no expansion
         assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, -100));
     }
+
+    // ======================== NPE guard: ImpactedVariables without InternalVariables ========================
+
+    @Test
+    @DisplayName("mainBuilder: ImpactedVariables present but InternalVariables null — should not NPE and should generate _rate transition")
+    void mainBuilder_impactedVarsWithoutInternalVars_generatesRate() {
+        // Manifest with ImpactedVariables but NO InternalVariables (null)
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .initState("on")
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("3").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("temperature").changeRate("0").build()))
+                                .build()))
+                .internalVariables(null)       // explicitly null
+                .impactedVariables(List.of("temperature"))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "Heater",
+                List.of("Power"),
+                Map.of("Power", List.of("on", "off")),
+                List.of(),   // empty variables list (matches null internalVariables)
+                manifest);
+        smv.getImpactedVariables().add("temperature");
+        smv.setCurrentState("on");
+        smv.getCurrentModeStates().put("Power", "on");
+
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("dev_1");
+        device.setTemplateName("Heater");
+        device.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        // Should NOT throw NPE, should produce next(dev_1.temperature_rate) transition
+        String result = assertDoesNotThrow(() ->
+                mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false));
+
+        assertTrue(result.contains("next(dev_1.temperature_rate)"),
+                "Expected _rate transition for ImpactedVariable 'temperature', got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("FIX-2: non-integer ChangeRate is skipped but _rate transition still generated with TRUE: 0 fallback")
+    void mainBuilder_nonIntegerChangeRate_skippedGracefully() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .initState("on")
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("humidity").changeRate("abc").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("humidity").changeRate("2").build()))
+                                .build()))
+                .internalVariables(List.of(numericVar("temp", true, 0, 50)))
+                .impactedVariables(List.of("humidity"))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "Heater",
+                List.of("Power"),
+                Map.of("Power", List.of("on", "off")),
+                List.of(numericVar("temp", true, 0, 50)),
+                manifest);
+        smv.getImpactedVariables().add("humidity");
+        smv.setCurrentState("on");
+        smv.getCurrentModeStates().put("Power", "on");
+
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("dev_1");
+        device.setTemplateName("Heater");
+        device.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        String result = assertDoesNotThrow(() ->
+                mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false));
+
+        // _rate transition should still be generated (not skipped entirely)
+        assertTrue(result.contains("next(dev_1.humidity_rate)"),
+                "Expected _rate transition block even with non-integer ChangeRate, got:\n" + result);
+        // The valid "off" state with ChangeRate "2" should produce a CASE branch
+        assertTrue(result.contains(": 2;"),
+                "Expected valid ChangeRate '2' to appear as CASE branch, got:\n" + result);
+        // The non-integer "abc" branch should be skipped — no "abc" in output
+        assertFalse(result.contains("abc"),
+                "Non-integer ChangeRate 'abc' should NOT appear in generated SMV, got:\n" + result);
+        // TRUE: 0 fallback should always be present
+        assertTrue(result.contains("TRUE: 0;"),
+                "Expected TRUE: 0 fallback in _rate transition, got:\n" + result);
+    }
 }

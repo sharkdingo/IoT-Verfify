@@ -246,17 +246,12 @@ class SimulationServiceImplTest {
             po.setId(100L);
             return po;
         });
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
-
-        SimulationTaskPo task = SimulationTaskPo.builder()
-                .id(9L)
-                .userId(1L)
-                .status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(10)
-                .createdAt(LocalDateTime.now())
-                .build();
-        when(simulationTaskRepository.findById(9L)).thenReturn(Optional.of(task));
         when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        // findById is still used by simulateAsync after startTaskIfStillPending to load the entity
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(9L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        when(simulationTaskRepository.findById(9L)).thenReturn(Optional.of(task));
 
         service.simulateAsync(1L, 9L, singleDevice(), List.of(), 10, false, 3, false);
 
@@ -266,15 +261,6 @@ class SimulationServiceImplTest {
     @Test
     @SuppressWarnings("null")
     void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
-        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenAnswer(inv -> Objects.requireNonNull(inv.getArgument(0, SimulationTaskPo.class)));
-        SimulationTaskPo task = SimulationTaskPo.builder()
-                .id(10L)
-                .userId(1L)
-                .status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(10)
-                .createdAt(LocalDateTime.now())
-                .build();
-        when(simulationTaskRepository.findById(10L)).thenReturn(Optional.of(task));
         cancelledTaskIds().add(10L);
 
         service.simulateAsync(1L, 10L, singleDevice(), List.of(), 10, false, 3, false);

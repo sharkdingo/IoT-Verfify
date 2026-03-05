@@ -529,11 +529,8 @@ public class SimulationServiceImpl implements SimulationService {
         Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
         taskProgress.put(requiredTaskId, clamped);
-        // Persist to DB for cross-instance visibility
-        simulationTaskRepository.findById(requiredTaskId).ifPresent(task -> {
-            task.setProgress(clamped);
-            simulationTaskRepository.save(task);
-        });
+        // Atomic DB update — only updates if task is still PENDING or RUNNING
+        simulationTaskRepository.updateProgressIfActive(requiredTaskId, clamped);
         log.debug("Simulation task {} progress: {}% - {}", requiredTaskId, progress, message);
     }
 

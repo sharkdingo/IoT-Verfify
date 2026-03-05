@@ -19,9 +19,17 @@ public interface BoardStorageService {
 
     List<SpecificationDto> getSpecs(Long userId);
     List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs);
+    /** Atomically add a single spec under user-level lock. */
+    List<SpecificationDto> addSpec(Long userId, SpecificationDto spec);
+    /** Atomically remove a single spec by ID under user-level lock. Returns remaining specs, or null if not found. */
+    List<SpecificationDto> removeSpec(Long userId, String specId);
 
     List<RuleDto> getRules(Long userId);
     List<RuleDto> saveRules(Long userId, List<RuleDto> rules);
+    /** Atomically add a single rule under user-level lock. */
+    List<RuleDto> addRule(Long userId, RuleDto rule);
+    /** Atomically remove a single rule by ID under user-level lock. Returns remaining rules, or null if not found. */
+    List<RuleDto> removeRule(Long userId, long ruleId);
 
     BoardLayoutDto getLayout(Long userId);
     BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout);

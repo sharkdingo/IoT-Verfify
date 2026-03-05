@@ -1,19 +1,19 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年3月4日
-> **适用版本**: 统一 VerificationService + Per-Spec 结果 + DTO 拆分 + PropertyDimension + 随机模拟（同步/异步）+ 输入校验强化 + NuSMV 标识符清洗 + 模板预检 + 进度持久化 + AI 工具 Trace 管理 + 设备节点用户隔离 + SmvBoundsUtils 边界集中化 + transition clamp 闭环 + 取消安全原子化 + 超时下界守卫 + AI 工具 Null-Safe 解析 + ArkAiClient 解析预检
+> **最后更新**: 2026年3月5日
+> **版本**: v2.1 (标识符清洗 + 边界集中化 + 原子化取消安全 + 用户隔离)
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
 
-> **NuSMV 版本要求**: 本系统仅支持 NuSMV 2.x（已测试 2.5–2.7）。输出解析依赖 NuSMV 标准英文输出格式（`-- specification ... is true/false`、`Trace Type: Simulation`、`NuSMV >` 提示符等）。不兼容 nuXmv 或其他变体。
+> **NuSMV 版本要求**: 本系统仅支持 NuSMV 2.x（需要 2.6+，已测试 2.6–2.7）。输出解析依赖 NuSMV 标准英文输出格式（`-- specification ... is true/false`、`Trace Type: Simulation`、`NuSMV >` 提示符等）。不兼容 nuXmv 或其他变体。
 >
 > **模板前置条件（重要）**:
 > - 运行时模板来源是”当前用户模板表”（DB），不是直接读取 `resources/deviceTemplate`。
 > - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为”重置模板”：先删除该用户现有模板，再导入默认模板）。
 > - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
 > - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
-> - 创建自定义模板时会执行 NuSMV 预检（probe generate）：模式名/状态名必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），预检失败返回 400/500。
-> - 模式名、状态名、变量标识统一通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀、保留字大小写无关转义（含 `W`）；设备 ID 通过 `toVarName()` 做同级防御。
+> - 创建自定义模板时会执行 NuSMV 预检（probe generate）：模式名/状态名/InternalVariable 名/ImpactedVariable 名必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），且不能是 NuSMV 保留字，不同类型标识符归一化后不能碰撞。预检失败返回 400/500。
+> - 模式名、状态名在 SMV 生成阶段通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀、保留字大小写无关转义（含 `W`）；设备 ID 通过 `toVarName()` 做同级防御。InternalVariable/ImpactedVariable 名称**不经过**生成期清洗（因其被多处交叉引用，部分清洗会导致 `.equals()` 匹配断裂），而是在入库阶段由 `validateTemplateManifestForNuSmv()` 严格拒绝非法值。
 
 ---
 
@@ -220,10 +220,11 @@
 │                          ↓                                  │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ SmvModelValidator.validate()                         │   │
-│  │  P1: Trigger.Attribute 合法性                         │   │
-│  │  P2: 多模式 EndState 分号段数匹配                      │   │
-│  │  P3: 环境变量跨设备范围冲突                             │   │
-│  │  P5: trust/privacy 一致性                             │   │
+│  │  P1: Trigger.Attribute 合法性 + Trigger.Relation     │   │
+│  │  P2: API/Transition StartState/EndState 格式与语义   │   │
+│  │  P3: trust/privacy 一致性                            │   │
+│  │  P4: trust/privacy 值合法性                          │   │
+│  │  P5: 环境变量跨设备范围冲突                           │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                          ↓                                  │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -984,7 +985,11 @@ Trace Type: Counterexample
 
 ### 解析逻辑要点
 
-- 兼容 `State X.Y:` 与 `-> State: X.Y <-` 两种状态行格式
+- 兼容多种 NuSMV 状态行格式：
+  - `State X.Y:` (旧格式)
+  - `-> State: X.Y <-` (新格式)
+  - `State: X.Y`, `-> State X.Y <-` 等变体
+  - 正则表达式兼容可选空白和分隔符
 - `device.var = value` 格式匹配设备内部变量
 - `a_varName = value` 及其他裸变量（如 `intensity = value`）匹配环境/全局变量
 - 自动填充 `TraceDeviceDto.templateName` 与 `TraceDeviceDto.deviceLabel`
@@ -1004,10 +1009,10 @@ Trace Type: Counterexample
 | 编号 | 校验内容 | 失败行为 |
 |------|---------|---------|
 | P1 | Trigger.Attribute 必须在 modes + internalVariables 中，且 Trigger.Relation 归一化后必须为 `=`/`!=`/`>`/`>=`/`<`/`<=` | 抛出 `illegalTriggerAttribute` / `illegalTriggerRelation` |
-| P2 | 多模式设备的 Transition.EndState 分号段数必须等于模式数 | 抛出 `invalidStateFormat` |
-| P3 | 同名环境变量（IsInside=false）在不同设备模板中的范围/枚举值必须一致 | 抛出 `envVarConflict` |
-| P4 | Transition trigger 引用环境变量（IsInside=false）时，生成阶段自动使用 `a_<attr>` 引用而非 `device.<attr>`，避免引用未声明的设备内部变量 | 生成阶段内联处理（`SmvMainModuleBuilder.appendEnvTransitions` / `appendInternalVariableTransitions`），非前置校验 |
-| P5 | 同一 (mode, stateName) 在不同 WorkingState 中的 trust/privacy 值必须一致 | 抛出 `trustPrivacyConflict` |
+| P2 | API/Transition 的 StartState/EndState 格式与语义校验：<br>• 多模式设备：分号段数必须等于模式数<br>• 单模式设备：不能包含分号<br>• 状态值必须在对应 mode 的合法状态列表中 | 抛出 `invalidStateFormat` |
+| P3 | 同一 (mode, stateName) 在不同 WorkingState 中的 trust/privacy 值必须一致 | 抛出 `trustPrivacyConflict` |
+| P4 | trust/privacy 值合法性：所有 trust 值必须为 `trusted`/`untrusted`，所有 privacy 值必须为 `public`/`private`（大小写不敏感，会归一化）。适用于实例级、模板级、Content privacy | 抛出 `SmvGenerationException.smvGenerationError()` (errorCategory=`SMV_GENERATION_ERROR`, 消息前缀 `[INVALID_PROPERTY_VALUE]`) |
+| P5 | 同名环境变量（IsInside=false）在不同设备模板中的范围/枚举值必须一致 | 抛出 `envVarConflict` |
 
 软性校验（仅 warn，不阻断）：
 - 用户传入的变量名不存在于模板中
@@ -1022,6 +1027,7 @@ Trace Type: Counterexample
 - Spec 条件解析失败（不支持 relation、空 value、无法解析 key、不支持 targetType 等）时，降级输出 `CTLSPEC FALSE -- invalid spec: ...`。
 - 同名环境变量的用户初值在不同设备间冲突时，抛出 `envVarConflict`。
 - 对默认范围 `0..100` 的环境变量，非整数初值会被忽略，越界值会被 clamp。
+- **Transition trigger 环境变量引用重写**：生成阶段（`SmvMainModuleBuilder.appendEnvTransitions` / `appendInternalVariableTransitions`）自动使用 `a_<attr>` 引用而非 `device.<attr>`，避免引用未声明的设备内部变量（非前置校验）。
 
 ---
 
@@ -1138,8 +1144,8 @@ Trace Type: Counterexample
 下列链路在当前后端实现中是闭合的：
 
 1. **输入约束闭环**：DTO 校验（`@NotNull/@NotEmpty/@Pattern/@Min/@Max/@Size`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。`@NotEmpty` 替代设备列表的 `@NotNull`（拒绝空列表），`@Size(max=10000)` 限制聊天内容，`@NotNull` 覆盖 `BoardStorageController` 所有 `@RequestBody`。
-2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失返回 `null`（调用方 `buildDeviceSmvMap()` 记录 WARN 日志并跳过该设备）。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名必须为合法标识符。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
-3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。NuSMV 标识符通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），`toVarName()` 对设备 ID 做同级防御，`computeIdentifiers()` 对 varName、moduleName 前缀（base，来自 templateName）和 moduleName 后缀（suffix）均做数字前缀守卫和保留字转义；trust/privacy 通过”入口归一化 + 校验 + emit 再归一化”三层闭环落地。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失返回 `null`（调用方 `buildDeviceSmvMap()` 记录 WARN 日志并跳过该设备）。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名/InternalVariable 名/ImpactedVariable 名必须为合法标识符且不能是保留字，不同类型标识符归一化后不能碰撞。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
+3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。模式名/状态名通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），InternalVariable/ImpactedVariable 名称不经过生成期清洗（因其被多处交叉引用，部分清洗会导致 `.equals()` 匹配断裂），而是在入库阶段严格拒绝非法值。`toVarName()` 对设备 ID 做同级防御，`computeIdentifiers()` 对 varName、moduleName 前缀（base，来自 templateName）和 moduleName 后缀（suffix）均做数字前缀守卫和保留字转义；trust/privacy 通过”入口归一化 + 校验 + emit 再归一化”三层闭环落地。
 4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时（由 `NusmvConfig.timeoutMs` 统一配置，`@Min(100)` 启动校验，通过 YAML `${NUSMV_TIMEOUT_MS:120000}` 支持环境变量覆盖）、并发闸门、busy 返回、stdout/stderr 处理。
 5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度（进度持久化到 DB，三级回退链：内存 → DB 列 → 终态推断）、同步/异步统一错误语义。
 6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 使用原子条件 UPDATE（`WHERE status <> CANCELLED`）消除 TOCTOU 竞态，返回受影响行数（0 = 已取消）。
@@ -1161,8 +1167,8 @@ Trace Type: Counterexample
 
 ### NuSMV 生成链路
 
-- **标识符安全**（`DeviceSmvDataFactory`）
-  `sanitizeSmvToken()` 现已支持 NuSMV 保留字大小写无关转义（含 `W`），并保留空格清理、非法字符替换、数字前缀处理。`toVarName()` 也同步具备数字前缀与保留字防御。`computeIdentifiers()` 对 `result`（varName）、`base`（moduleName 前缀，来自 templateName）和 `suffix`（moduleName 后缀）均做数字前缀守卫和保留字转义，确保生成的标识符是合法 NuSMV 符号。
+- **标识符安全**（`DeviceSmvDataFactory` + `BoardStorageServiceImpl`）
+  `sanitizeSmvToken()` 现已支持 NuSMV 保留字大小写无关转义（含 `W`），并保留空格清理、非法字符替换、数字前缀处理，用于模式名/状态名的生成期清洗。`toVarName()` 也同步具备数字前缀与保留字防御。`computeIdentifiers()` 对 `result`（varName）、`base`（moduleName 前缀，来自 templateName）和 `suffix`（moduleName 后缀）均做数字前缀守卫和保留字转义，确保生成的标识符是合法 NuSMV 符号。InternalVariable/ImpactedVariable 名称在入库阶段由 `validateTemplateManifestForNuSmv()` 严格校验（正则 + 保留字 + 碰撞检测），不经过生成期 `sanitizeSmvToken()` 清洗。
 - **trust/privacy 三层防御**（Factory + Validator + Builder）
   入口归一化：`normalizeTrustPrivacy()` (`trim + lowercase`)；
   校验层：`SmvModelValidator.validatePropertyValues()` 覆盖实例值、content privacy、manifest variable trust/privacy、workingState privacy；

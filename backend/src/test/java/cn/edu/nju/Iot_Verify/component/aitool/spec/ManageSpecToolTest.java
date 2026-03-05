@@ -74,7 +74,7 @@ class ManageSpecToolTest {
         String result = tool.execute(argsJson);
 
         assertTrue(result.contains("Unsupported templateId"));
-        verify(boardStorageService, never()).saveSpecs(anyLong(), any());
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
     }
 
     @Test
@@ -92,8 +92,10 @@ class ManageSpecToolTest {
         node.setPosition(position);
 
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(boardStorageService.saveSpecs(eq(1L), any())).thenAnswer(invocation -> invocation.getArgument(1));
+        when(boardStorageService.addSpec(eq(1L), any(SpecificationDto.class))).thenAnswer(invocation -> {
+            SpecificationDto s = invocation.getArgument(1);
+            return List.of(s);
+        });
 
         String argsJson = """
                 {
@@ -114,14 +116,11 @@ class ManageSpecToolTest {
         String result = tool.execute(argsJson);
         assertTrue(result.contains("Specification added successfully."));
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<SpecificationDto>> captor =
-                ArgumentCaptor.forClass((Class<List<SpecificationDto>>) (Class<?>) List.class);
-        verify(boardStorageService).saveSpecs(eq(1L), captor.capture());
-        List<SpecificationDto> savedSpecs = captor.getValue();
-        assertEquals(1, savedSpecs.size());
-        assertEquals("ac_1", savedSpecs.get(0).getAConditions().get(0).getDeviceId());
-        assertEquals("LivingRoomAC", savedSpecs.get(0).getAConditions().get(0).getDeviceLabel());
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto savedSpec = captor.getValue();
+        assertEquals("ac_1", savedSpec.getAConditions().get(0).getDeviceId());
+        assertEquals("LivingRoomAC", savedSpec.getAConditions().get(0).getDeviceLabel());
     }
 
     @Test
@@ -155,7 +154,7 @@ class ManageSpecToolTest {
         String result = tool.execute(argsJson);
 
         assertTrue(result.contains("ambiguous deviceLabel"));
-        verify(boardStorageService, never()).saveSpecs(anyLong(), any());
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
     }
 
     @Test
@@ -190,7 +189,7 @@ class ManageSpecToolTest {
         String result = tool.execute(argsJson);
 
         assertTrue(result.contains("inconsistent deviceId/deviceLabel"));
-        verify(boardStorageService, never()).saveSpecs(anyLong(), any());
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
     }
 
     @Test
@@ -221,8 +220,10 @@ class ManageSpecToolTest {
         node.setId("ac_1");
         node.setLabel("LivingRoomAC");
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(boardStorageService.saveSpecs(eq(1L), any())).thenAnswer(invocation -> invocation.getArgument(1));
+        when(boardStorageService.addSpec(eq(1L), any(SpecificationDto.class))).thenAnswer(invocation -> {
+            SpecificationDto s = invocation.getArgument(1);
+            return List.of(s);
+        });
 
         String argsJson = """
                 {
