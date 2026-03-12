@@ -21,7 +21,6 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -99,7 +98,8 @@ class NodeServiceImplMutationTest {
 
         nodeService.addNode(1L, "Weather", "weather_1", null, null, null, null, null);
 
-        verify(nodeRepo).save(argThat(po -> "Working".equals(po.getState())));
+        verify(nodeRepo).save(expectedSavedNode("weather_1", 1L));
+        assertEquals("Working", savedNode().getState());
     }
 
     @Test
@@ -114,7 +114,8 @@ class NodeServiceImplMutationTest {
 
         nodeService.addNode(1L, "Light", "light_1", null, null, null, null, null);
 
-        verify(nodeRepo).save(argThat(po -> "on".equals(po.getState())));
+        verify(nodeRepo).save(expectedSavedNode("light_1", 1L));
+        assertEquals("on", savedNode().getState());
     }
 
     @Test
@@ -130,6 +131,16 @@ class NodeServiceImplMutationTest {
 
         nodeService.addNode(1L, "Custom", "custom_1", null, null, null, null, null);
 
-        verify(nodeRepo).save(argThat(po -> "Working".equals(po.getState())));
+        verify(nodeRepo).save(expectedSavedNode("custom_1", 1L));
+        assertEquals("Working", savedNode().getState());
+    }
+
+    private @NonNull DeviceNodePo savedNode() {
+        return Objects.requireNonNull((DeviceNodePo) org.mockito.Mockito.mockingDetails(nodeRepo).getInvocations().stream()
+                        .filter(invocation -> invocation.getMethod().getName().equals("save"))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("save should be invoked once"))
+                        .getArgument(0),
+                "saved node should not be null");
     }
 }

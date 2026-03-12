@@ -1,0 +1,342 @@
+{
+  "title": "IoT Device Template Schema",
+  "description": "Comprehensive schema for IoT device templates with NuSMV validation constraints. NOTE: This schema serves as design documentation and offline validation reference. Runtime validation is enforced through DTO annotations and BoardStorageServiceImpl.validateTemplateManifestForNuSmv().",
+  "type": "object",
+  "required": ["Name"],
+  "properties": {
+    "Name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Device template name (will be sanitized for NuSMV)",
+      "pattern": "^[^\\x00-\\x1F]+$"
+    },
+    "Description": {
+      "type": "string",
+      "description": "Human-readable description of the device"
+    },
+    "Modes": {
+      "type": "array",
+      "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode'])",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+        "not": {
+          "enum": [
+            "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
+            "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
+            "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",
+            "MIRROR", "INVARSPEC", "COMPUTE",
+            "case", "esac", "next", "init", "self",
+            "TRUE", "FALSE", "boolean", "integer", "word", "signed", "unsigned",
+            "process", "array", "of", "mod", "union", "in", "xor", "xnor",
+            "abs", "max", "min", "count", "toint", "typeof",
+            "swconst", "wordconst", "uwconst", "resize", "extend",
+            "signed_word", "unsigned_word",
+            "EX", "AX", "EF", "AF", "EG", "AG",
+            "E", "F", "O", "G", "H", "X", "Y", "Z", "W", "A", "U", "S", "V", "T",
+            "BU", "EBF", "ABF", "EBG", "ABG"
+          ]
+        }
+      },
+      "uniqueItems": true
+    },
+    "InitState": {
+      "type": "string",
+      "description": "Initial state. For single-mode: 'stateName'. For multi-mode: 'mode1State;mode2State'. Empty string or '_' for wildcards allowed.",
+      "examples": ["off", "auto", "auto;cool", ";heat", "on;_"]
+    },
+    "WorkingStates": {
+      "type": "array",
+      "description": "All possible working states of the device",
+      "items": {
+        "type": "object",
+        "required": ["Name"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "State name. For multi-mode: semicolon-separated (e.g., 'auto;cool'). Spaces will be sanitized to underscores.",
+            "examples": ["on", "off", "auto;cool", "circulate;heat"]
+          },
+          "Dynamics": {
+            "type": "array",
+            "description": "Variable changes in this state. Can be empty array if no changes. Each item must have either ChangeRate or Value.",
+            "items": {
+              "type": "object",
+              "required": ["VariableName"],
+              "properties": {
+                "VariableName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ChangeRate": {
+                  "type": "string",
+                  "pattern": "^-?\\d+$",
+                  "description": "Integer change rate per time unit (mutually exclusive with Value)"
+                },
+                "Value": {
+                  "type": "string",
+                  "description": "Direct value assignment (mutually exclusive with ChangeRate)"
+                }
+              },
+              "oneOf": [
+                {
+                  "required": ["ChangeRate"],
+                  "not": {"required": ["Value"]}
+                },
+                {
+                  "required": ["Value"],
+                  "not": {"required": ["ChangeRate"]}
+                }
+              ]
+            }
+          },
+          "Invariant": {
+            "type": "string",
+            "description": "State invariant condition (NuSMV expression)",
+            "default": "true"
+          },
+          "Description": {
+            "type": "string"
+          },
+          "Trust": {
+            "type": "string",
+            "enum": ["trusted", "untrusted", "Trusted", "Untrusted"],
+            "description": "Trust level (will be normalized to lowercase)"
+          },
+          "Privacy": {
+            "type": "string",
+            "enum": ["private", "public", "Private", "Public"],
+            "description": "Privacy level (will be normalized to lowercase)"
+          }
+        }
+      }
+    },
+    "InternalVariables": {
+      "type": "array",
+      "description": "Device internal variables and environment variables",
+      "items": {
+        "type": "object",
+        "required": ["Name"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "description": "Variable name (must be valid NuSMV identifier)",
+            "not": {
+              "pattern": "^(MODULE|VAR|IVAR|FROZENVAR|DEFINE|CONSTANTS|ASSIGN|INIT|TRANS|INVAR|SPEC|CTLSPEC|LTLSPEC|case|esac|next|init|self|TRUE|FALSE|boolean|integer|word|process|array|of|mod|union|in|xor|xnor|EX|AX|EF|AF|EG|AG)$"
+            }
+          },
+          "Description": {
+            "type": "string"
+          },
+          "IsInside": {
+            "type": "boolean",
+            "description": "true = device-internal variable, false = environment variable (shared across devices)",
+            "default": true
+          },
+          "PublicVisible": {
+            "type": "boolean",
+            "description": "Whether variable is visible to external observers"
+          },
+          "Trust": {
+            "type": "string",
+            "enum": ["trusted", "untrusted", "Trusted", "Untrusted"]
+          },
+          "Privacy": {
+            "type": "string",
+            "enum": ["private", "public", "Private", "Public"]
+          },
+          "Values": {
+            "type": "array",
+            "description": "Enumerated values (mutually exclusive with LowerBound/UpperBound). Spaces in values will be sanitized.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "LowerBound": {
+            "type": "integer",
+            "description": "Minimum value for integer range (requires UpperBound)"
+          },
+          "UpperBound": {
+            "type": "integer",
+            "description": "Maximum value for integer range. Attack mode scaling is handled automatically by SmvBoundsUtils.resolveEffectiveUpperBound()."
+          },
+          "NaturalChangeRate": {
+            "type": "string",
+            "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$",
+            "description": "Natural change rate: single value '1' or range '[-1, 1]'"
+          }
+        },
+        "oneOf": [
+          {
+            "required": ["Values"],
+            "not": {
+              "anyOf": [
+                {"required": ["LowerBound"]},
+                {"required": ["UpperBound"]}
+              ]
+            }
+          },
+          {
+            "required": ["LowerBound", "UpperBound"],
+            "not": {
+              "required": ["Values"]
+            }
+          },
+          {
+            "not": {
+              "anyOf": [
+                {"required": ["Values"]},
+                {"required": ["LowerBound"]},
+                {"required": ["UpperBound"]}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ImpactedVariables": {
+      "type": "array",
+      "description": "List of environment variables this device can affect",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "Transitions": {
+      "type": "array",
+      "description": "Automatic state transitions triggered by conditions",
+      "items": {
+        "type": "object",
+        "required": ["Name"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Transition name (will be sanitized for signal variables)"
+          },
+          "StartState": {
+            "type": "string",
+            "description": "Starting state. Empty string '' means 'from any state'. '_' is wildcard. For multi-mode: semicolon-separated."
+          },
+          "EndState": {
+            "type": "string",
+            "description": "Target state (optional for internal variable transitions). For multi-mode: semicolon-separated. Partial changes like ';cool' allowed."
+          },
+          "Trigger": {
+            "type": ["object", "null"],
+            "description": "Condition that triggers this transition",
+            "required": ["Attribute", "Relation", "Value"],
+            "properties": {
+              "Attribute": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Variable or mode name to check"
+              },
+              "Relation": {
+                "type": "string",
+                "enum": ["=", "!=", ">", "<", ">=", "<="],
+                "description": "Comparison operator"
+              },
+              "Value": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Value to compare against (spaces will be removed)"
+              }
+            }
+          },
+          "Assignments": {
+            "type": "array",
+            "description": "Variable assignments when transition occurs",
+            "items": {
+              "type": "object"
+            }
+          },
+          "Signal": {
+            "type": "boolean",
+            "description": "If true, creates a boolean signal variable for this transition",
+            "default": false
+          },
+          "Description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "APIs": {
+      "type": "array",
+      "description": "External APIs that can be called to control the device",
+      "items": {
+        "type": "object",
+        "required": ["Name", "EndState"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_ ]*$",
+            "description": "API name (will be sanitized for signal variables, appended with '_a')"
+          },
+          "StartState": {
+            "type": "string",
+            "description": "Required starting state. Empty string '' means 'from any state' (common pattern). '_' is wildcard. For multi-mode: semicolon-separated."
+          },
+          "EndState": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Target state after API call. For multi-mode: semicolon-separated. Partial changes like ';cool' or 'auto;' allowed."
+          },
+          "Trigger": {
+            "type": "null",
+            "description": "Always null for APIs (triggers are for Transitions)"
+          },
+          "Assignments": {
+            "type": "array",
+            "description": "Variable assignments when API is called",
+            "items": {
+              "type": "object"
+            }
+          },
+          "Signal": {
+            "type": "boolean",
+            "description": "If true, creates a boolean signal variable '<name>_a' for this API",
+            "default": false
+          },
+          "Description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Contents": {
+      "type": "array",
+      "description": "Content/data items managed by the device",
+      "items": {
+        "type": "object",
+        "required": ["Name"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "Privacy": {
+            "type": "string",
+            "enum": ["private", "public", "Private", "Public"],
+            "default": "public"
+          },
+          "IsChangeable": {
+            "type": "boolean",
+            "description": "Whether content can be modified",
+            "default": false
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state. 2) Spaces in Mode/State names are removed (not replaced with underscores); other invalid characters replaced with underscores. 3) NuSMV reserved words will be escaped with '_' prefix. 4) Trust/Privacy values normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var)."
+}

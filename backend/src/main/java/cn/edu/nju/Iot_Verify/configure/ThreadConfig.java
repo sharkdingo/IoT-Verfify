@@ -5,6 +5,7 @@ import org.slf4j.MDC;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskDecorator;
+import org.springframework.lang.NonNull;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -77,6 +78,7 @@ public class ThreadConfig {
         return executor;
     }
 
+    @NonNull
     private TaskDecorator contextPropagatingDecorator() {
         return runnable -> {
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();

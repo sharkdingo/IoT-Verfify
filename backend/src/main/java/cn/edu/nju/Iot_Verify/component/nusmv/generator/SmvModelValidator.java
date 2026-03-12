@@ -171,21 +171,24 @@ public class SmvModelValidator {
 
         if (manifest.getApis() != null) {
             for (DeviceManifest.API api : manifest.getApis()) {
-                validateStateString(smv, api.getName(), "API", api.getStartState(), multiMode, modeCount);
-                validateStateString(smv, api.getName(), "API", api.getEndState(), multiMode, modeCount);
+                validateStateString(smv, api.getName(), "API", api.getStartState(), multiMode, modeCount, true);
+                validateStateString(smv, api.getName(), "API", api.getEndState(), multiMode, modeCount, false);
             }
         }
         if (manifest.getTransitions() != null) {
             for (DeviceManifest.Transition trans : manifest.getTransitions()) {
-                validateStateString(smv, trans.getName(), "Transition", trans.getStartState(), multiMode, modeCount);
-                validateStateString(smv, trans.getName(), "Transition", trans.getEndState(), multiMode, modeCount);
+                validateStateString(smv, trans.getName(), "Transition", trans.getStartState(), multiMode, modeCount, true);
+                validateStateString(smv, trans.getName(), "Transition", trans.getEndState(), multiMode, modeCount, false);
             }
         }
     }
 
     private void validateStateString(DeviceSmvData smv, String itemName, String itemType,
-                                     String stateStr, boolean multiMode, int modeCount) {
+                                     String stateStr, boolean multiMode, int modeCount, boolean isStartState) {
         if (stateStr == null || stateStr.isBlank()) return;
+
+        // Special case: StartState="_" is a global wildcard for all modes
+        if (isStartState && stateStr.trim().equals("_")) return;
 
         if (!multiMode) {
             if (stateStr.contains(";")) {
@@ -194,7 +197,8 @@ public class SmvModelValidator {
             }
             if (!smv.getModes().isEmpty()) {
                 String mode = smv.getModes().get(0);
-                String clean = DeviceSmvDataFactory.cleanStateName(stateStr);
+                String clean = isStartState ? DeviceSmvDataFactory.cleanStartState(stateStr)
+                                            : DeviceSmvDataFactory.cleanStateName(stateStr);
                 List<String> legal = smv.getModeStates().get(mode);
                 if (legal != null && !legal.isEmpty() && !clean.isEmpty() && !legal.contains(clean)) {
                     throw SmvGenerationException.invalidStateFormat(smv.getVarName(), itemType, itemName, clean,
@@ -210,6 +214,8 @@ public class SmvModelValidator {
             for (int i = 0; i < parts.length; i++) {
                 String rawSeg = parts[i].trim();
                 if (rawSeg.isEmpty()) continue;
+                // For StartState, "_" is treated as wildcard and skipped
+                if (isStartState && rawSeg.equals("_")) continue;
                 String seg = DeviceSmvDataFactory.cleanStateName(rawSeg);
                 String mode = smv.getModes().get(i);
                 List<String> legal = smv.getModeStates().get(mode);

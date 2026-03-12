@@ -12,7 +12,11 @@
 > - 默认模板由 `resources/deviceTemplate/*.json` 初始化到 DB（注册后自动导入；`POST /api/board/templates/reload` 为”重置模板”：先删除该用户现有模板，再导入默认模板）。
 > - 若请求中的 `templateName` 在当前用户模板中不存在，SMV 生成会失败（`SmvGenerationException`）。
 > - 规则/规格里的设备引用优先按 `varName` 解析；按 `templateName` 回退时仅允许唯一匹配，若命中多个实例会抛 `AMBIGUOUS_DEVICE_REFERENCE`。
-> - 创建自定义模板时会执行 NuSMV 预检（probe generate）：模式名/状态名/InternalVariable 名/ImpactedVariable 名必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），且不能是 NuSMV 保留字，不同类型标识符归一化后不能碰撞。预检失败返回 400/500。
+> - 创建自定义模板时会执行 NuSMV 预检（probe generate）：
+>   - **InternalVariable 名/ImpactedVariable 名**必须为合法 NuSMV 标识符（`[a-zA-Z_][a-zA-Z0-9_]*`），且不能是 NuSMV 保留字（入库时严格拒绝）。
+>   - **模式名/状态名**必须符合标识符格式（允许空格），在 SMV 生成阶段通过 `sanitizeSmvToken()` 自动清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀、保留字大小写无关转义（含 `W`）。
+>   - 不同类型标识符归一化后不能碰撞（Mode vs InternalVariable vs ImpactedVariable），但 InternalVariable 与 ImpactedVariable 允许同名（常见模式：设备内部变量影响同名环境变量）。
+>   - 预检失败返回 400/500。
 > - 模式名、状态名在 SMV 生成阶段通过 `sanitizeSmvToken()` 清洗：移除空格、非字母数字字符替换为 `_`、数字开头加 `_` 前缀、保留字大小写无关转义（含 `W`）；设备 ID 通过 `toVarName()` 做同级防御。InternalVariable/ImpactedVariable 名称**不经过**生成期清洗（因其被多处交叉引用，部分清洗会导致 `.equals()` 匹配断裂），而是在入库阶段由 `validateTemplateManifestForNuSmv()` 严格拒绝非法值。
 
 ---
@@ -261,8 +265,8 @@
 
 失败闭环说明（关键）：
 
-- **模板缺失/模板非法**：在 `DeviceSmvDataFactory.buildDeviceSmvMap()` 阶段失败，直接返回错误，不进入 NuSMV 执行。
-- **规则条件无法解析**：规则 guard 置为 `FALSE`（fail-closed），避免“无效条件变无条件触发”。
+- **模板缺失/模板非法**：在 `DeviceSmvDataFactory.buildDeviceSmvMap()` 阶段收集所有缺失模板的设备，最后统一抛出 `SmvGenerationException.multipleDevicesFailed()` 异常，不进入 NuSMV 执行。
+- **规则条件无法解析**：规则 guard 置为 `FALSE`（fail-closed），避免”无效条件变无条件触发”。
 - **规格条件无法解析**：一般降级为 `CTLSPEC FALSE -- invalid spec: ...`（fail-closed），保持 spec 数量与结果可对齐。
 - **设备引用歧义**：不会降级为占位；直接抛 `AMBIGUOUS_DEVICE_REFERENCE`，请求失败并返回明确错误。
 - **NuSMV 结果数量与规格数量不一致**：验证结果标记为不安全（fail-closed）。
@@ -1144,7 +1148,7 @@ Trace Type: Counterexample
 下列链路在当前后端实现中是闭合的：
 
 1. **输入约束闭环**：DTO 校验（`@NotNull/@NotEmpty/@Pattern/@Min/@Max/@Size`） + 生成阶段 fail-closed（规则/spec 条件解析失败不会静默放过）。`@NotEmpty` 替代设备列表的 `@NotNull`（拒绝空列表），`@Size(max=10000)` 限制聊天内容，`@NotNull` 覆盖 `BoardStorageController` 所有 `@RequestBody`。
-2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB，缺失返回 `null`（调用方 `buildDeviceSmvMap()` 记录 WARN 日志并跳过该设备）。创建自定义模板时执行 NuSMV 预检（probe generate），模式名/状态名/InternalVariable 名/ImpactedVariable 名必须为合法标识符且不能是保留字，不同类型标识符归一化后不能碰撞。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
+2. **模板闭环**：目录模板（resources）先入库，运行时按 `userId + templateName` 读取 DB。若模板缺失，`loadManifest()` 返回 `null`，调用方 `buildDeviceSmvMap()` 收集所有缺失设备并最终抛出 `SmvGenerationException.multipleDevicesFailed()`。创建自定义模板时执行 NuSMV 预检（probe generate）：InternalVariable 名/ImpactedVariable 名必须为合法标识符且不能是保留字；模式名/状态名在生成阶段自动清洗；不同类型标识符归一化后不能碰撞（Mode vs InternalVariable vs ImpactedVariable），但 InternalVariable 与 ImpactedVariable 允许同名（常见模式）。`loadManifest()` 异常分类明确：`BaseException` 直接重抛，JSON 解析 → `MANIFEST_PARSE_ERROR`，其他 → `TEMPLATE_LOAD_ERROR`。
 3. **建模闭环**：`DeviceSmvDataFactory` → `SmvModelValidator(P1-P5)` → `SmvDevice/Main/SpecificationBuilder` 产出完整 `model.smv`。模式名/状态名通过 `sanitizeSmvToken()` 集中清洗（空格/非法字符/数字前缀/保留字大小写无关转义），InternalVariable/ImpactedVariable 名称不经过生成期清洗（因其被多处交叉引用，部分清洗会导致 `.equals()` 匹配断裂），而是在入库阶段严格拒绝非法值。`toVarName()` 对设备 ID 做同级防御，`computeIdentifiers()` 对 varName、moduleName 前缀（base，来自 templateName）和 moduleName 后缀（suffix）均做数字前缀守卫和保留字转义；trust/privacy 通过”入口归一化 + 校验 + emit 再归一化”三层闭环落地。
 4. **执行闭环**：`NusmvExecutor` 支持批处理验证与交互模拟，含超时（由 `NusmvConfig.timeoutMs` 统一配置，`@Min(100)` 启动校验，通过 YAML `${NUSMV_TIMEOUT_MS:120000}` 支持环境变量覆盖）、并发闸门、busy 返回、stdout/stderr 处理。
 5. **结果闭环（验证）**：per-spec 结果解析、反例解析、trace 持久化、任务状态与进度（进度持久化到 DB，三级回退链：内存 → DB 列 → 终态推断）、同步/异步统一错误语义。

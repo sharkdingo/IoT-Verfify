@@ -45,7 +45,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -61,7 +60,7 @@ class SimulationServiceImplTest {
     @Mock private SmvTraceParser smvTraceParser;
     @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
-    @Mock private SimulationTraceRepository simulationTraceRepository;
+    private SimulationTraceRepository simulationTraceRepository;
     @Mock private SimulationTaskRepository simulationTaskRepository;
     @Mock private SimulationTraceMapper simulationTraceMapper;
     @Mock private SimulationTaskMapper simulationTaskMapper;
@@ -69,9 +68,23 @@ class SimulationServiceImplTest {
     private SimulationServiceImpl service;
     private ThreadPoolTaskExecutor syncSimulationExecutor;
     private Method doSimulate;
+    private long nextSimulationTraceId;
 
     @BeforeEach
     void setUp() throws Exception {
+        nextSimulationTraceId = 1L;
+        simulationTraceRepository = mock(SimulationTraceRepository.class, withSettings().defaultAnswer(invocation -> {
+            if ("save".equals(invocation.getMethod().getName())
+                    && invocation.getArguments().length == 1
+                    && invocation.getArgument(0) instanceof SimulationTracePo po) {
+                if (po.getId() == null) {
+                    po.setId(nextSimulationTraceId++);
+                }
+                return po;
+            }
+            return org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation);
+        }));
+
         syncSimulationExecutor = new ThreadPoolTaskExecutor();
         syncSimulationExecutor.setCorePoolSize(1);
         syncSimulationExecutor.setMaxPoolSize(1);
@@ -231,7 +244,6 @@ class SimulationServiceImplTest {
     }
 
     @Test
-    @SuppressWarnings("null")
     void simulateAsync_success_writesResultJson() throws Exception {
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
@@ -241,11 +253,6 @@ class SimulationServiceImplTest {
                 .thenReturn(SimulationOutput.success("trace", "raw"));
         when(smvTraceParser.parseCounterexampleStates(any(), any()))
                 .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
-        when(simulationTraceRepository.save(any(SimulationTracePo.class))).thenAnswer(inv -> {
-            SimulationTracePo po = Objects.requireNonNull(inv.getArgument(0, SimulationTracePo.class));
-            po.setId(100L);
-            return po;
-        });
         when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
         // findById is still used by simulateAsync after startTaskIfStillPending to load the entity
         SimulationTaskPo task = SimulationTaskPo.builder()
@@ -259,7 +266,6 @@ class SimulationServiceImplTest {
     }
 
     @Test
-    @SuppressWarnings("null")
     void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
         cancelledTaskIds().add(10L);
 
@@ -350,7 +356,6 @@ class SimulationServiceImplTest {
     // ==================== simulateAndSave tests ====================
 
     @Test
-    @SuppressWarnings("null")
     void simulateAndSave_success_savesPoAndReturnsDto() throws Exception {
         // Arrange: make simulate() produce a valid result via doSimulate
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
@@ -366,13 +371,6 @@ class SimulationServiceImplTest {
 
         SimulationTraceDto expectedDto = SimulationTraceDto.builder()
                 .id(1L).steps(1).requestedSteps(5).build();
-        AtomicReference<SimulationTracePo> savedPoRef = new AtomicReference<>();
-        when(simulationTraceRepository.save(any(SimulationTracePo.class))).thenAnswer(inv -> {
-            SimulationTracePo po = Objects.requireNonNull(inv.getArgument(0, SimulationTracePo.class));
-            savedPoRef.set(po);
-            po.setId(1L);
-            return po;
-        });
         when(simulationTraceMapper.toDto(any())).thenReturn(expectedDto);
 
         SimulationRequestDto request = new SimulationRequestDto();
@@ -384,8 +382,8 @@ class SimulationServiceImplTest {
 
         // Assert
         assertEquals(expectedDto, result);
-        SimulationTracePo savedPo = Objects.requireNonNull(savedPoRef.get());
-        verify(simulationTraceRepository).save(savedPo);
+        SimulationTracePo savedPo = lastSavedSimulationTrace();
+        verify(simulationTraceRepository).save(Objects.requireNonNull(savedPo));
         assertEquals(1L, savedPo.getUserId());
         assertEquals(5, savedPo.getRequestedSteps());
         assertEquals(1, savedPo.getSteps());
@@ -509,7 +507,7 @@ class SimulationServiceImplTest {
         assertTrue(result);
         verify(simulationTaskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(SimulationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
-        verify(simulationTaskRepository, never()).save(any());
+        assertFalse(wasSimulationTaskSaveCalled());
     }
 
     @Test
@@ -535,7 +533,7 @@ class SimulationServiceImplTest {
                 eq(70L), any(), any(), anyInt(), any(),
                 any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
-        verify(simulationTaskRepository, never()).save(any());
+        assertFalse(wasSimulationTaskSaveCalled());
     }
 
     @Test
@@ -559,6 +557,21 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository).failTaskIfNotCancelled(
                 eq(71L), any(), any(), any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
-        verify(simulationTaskRepository, never()).save(any());
+        assertFalse(wasSimulationTaskSaveCalled());
+    }
+
+    private boolean wasSimulationTaskSaveCalled() {
+        return mockingDetails(simulationTaskRepository).getInvocations().stream()
+                .anyMatch(invocation -> invocation.getMethod().getName().equals("save"));
+    }
+
+    private SimulationTracePo lastSavedSimulationTrace() {
+        SimulationTracePo lastSaved = null;
+        for (org.mockito.invocation.Invocation invocation : mockingDetails(simulationTraceRepository).getInvocations()) {
+            if ("save".equals(invocation.getMethod().getName())) {
+                lastSaved = invocation.getArgument(0, SimulationTracePo.class);
+            }
+        }
+        return Objects.requireNonNull(lastSaved, "simulation trace should be saved");
     }
 }

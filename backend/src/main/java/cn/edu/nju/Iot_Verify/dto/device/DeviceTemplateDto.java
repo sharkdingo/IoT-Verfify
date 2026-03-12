@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -47,6 +48,7 @@ public class DeviceTemplateDto {
         private List<String> modes;
 
         @JsonProperty("InternalVariables")
+        @Valid
         private List<InternalVariable> internalVariables;
 
         @JsonProperty("ImpactedVariables")
@@ -56,6 +58,7 @@ public class DeviceTemplateDto {
         private String initState;
 
         @JsonProperty("WorkingStates")
+        @Valid
         private List<WorkingState> workingStates;
 
         @JsonProperty("Transitions")
@@ -102,6 +105,19 @@ public class DeviceTemplateDto {
 
             @JsonProperty("Values")
             private List<String> values;
+
+            @AssertTrue(message = "InternalVariable must have either Values OR (LowerBound+UpperBound) OR neither, not both")
+            private boolean isValidVariableDefinition() {
+                boolean hasValues = values != null && !values.isEmpty();
+                boolean hasLower = lowerBound != null;
+                boolean hasUpper = upperBound != null;
+                boolean hasAnyBound = hasLower || hasUpper;
+                boolean hasFullRange = hasLower && hasUpper;
+                // Forbid: Values + any bound, or only one bound without the other
+                if (hasValues && hasAnyBound) return false;
+                if (hasAnyBound && !hasFullRange) return false;
+                return true;
+            }
         }
 
         @Data
@@ -126,6 +142,7 @@ public class DeviceTemplateDto {
             private String invariant;
 
             @JsonProperty("Dynamics")
+            @Valid
             private List<Dynamic> dynamics;
         }
 
@@ -143,6 +160,14 @@ public class DeviceTemplateDto {
 
             @JsonProperty("ChangeRate")
             private String changeRate;
+
+            @AssertTrue(message = "Dynamic must have either ChangeRate OR Value, not both or neither")
+            private boolean isValidDynamic() {
+                boolean hasChangeRate = changeRate != null && !changeRate.isBlank();
+                boolean hasValue = value != null && !value.isBlank();
+                // XOR: exactly one must be true
+                return hasChangeRate != hasValue;
+            }
         }
 
         @Data

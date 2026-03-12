@@ -480,6 +480,17 @@ public class DeviceSmvDataFactory {
     public static String cleanStateName(String raw) {
         if (raw == null) return null;
         String cleaned = raw.replace(";", "").trim();
+        if (cleaned.isEmpty()) return "";
+        return sanitizeSmvToken(cleaned);
+    }
+
+    /**
+     * 清理 StartState：将空字符串和 "_" 视为通配符（任意状态）
+     * 用于 API/Transition 的 StartState，表示"可从任意状态触发"
+     */
+    public static String cleanStartState(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw.replace(";", "").trim();
         if (cleaned.isEmpty() || cleaned.equals("_")) return "";
         return sanitizeSmvToken(cleaned);
     }

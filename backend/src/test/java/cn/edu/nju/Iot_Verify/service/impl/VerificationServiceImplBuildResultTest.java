@@ -283,7 +283,6 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
-    @SuppressWarnings("null")
     void verifyAsync_success_writesResultJson() throws Exception {
         File smv = createTempModelFile();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
@@ -430,7 +429,7 @@ class VerificationServiceImplBuildResultTest {
         assertTrue(result);
         verify(taskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(VerificationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
-        verify(taskRepository, never()).save(any());
+        assertFalse(wasTaskSaveCalled());
     }
 
     @Test
@@ -456,7 +455,7 @@ class VerificationServiceImplBuildResultTest {
                 eq(70L), any(), any(), anyBoolean(), anyInt(),
                 any(), any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
-        verify(taskRepository, never()).save(any());
+        assertFalse(wasTaskSaveCalled());
     }
 
     @Test
@@ -479,6 +478,11 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository).failTaskIfNotCancelled(
                 eq(71L), any(), any(), any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
-        verify(taskRepository, never()).save(any());
+        assertFalse(wasTaskSaveCalled());
+    }
+
+    private boolean wasTaskSaveCalled() {
+        return mockingDetails(taskRepository).getInvocations().stream()
+                .anyMatch(invocation -> invocation.getMethod().getName().equals("save"));
     }
 }

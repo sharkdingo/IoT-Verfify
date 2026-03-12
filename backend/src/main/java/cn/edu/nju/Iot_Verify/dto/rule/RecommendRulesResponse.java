@@ -6,9 +6,6 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
-import java.util.Map;
-
-import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 
 /**
  * 规则推荐响应 DTO

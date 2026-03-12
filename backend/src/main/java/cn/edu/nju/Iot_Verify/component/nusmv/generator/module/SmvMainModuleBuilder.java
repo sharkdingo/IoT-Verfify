@@ -240,7 +240,7 @@ public class SmvMainModuleBuilder {
                             String endState = getStateForMode(matchedApi.getEndState(), modeIdx);
                             if (endState == null || endState.isEmpty()) continue;
 
-                            String startState = getStateForMode(matchedApi.getStartState(), modeIdx);
+                            String startState = getStateForMode(matchedApi.getStartState(), modeIdx, true);
 
                             content.append("\t\t");
                             appendRuleConditions(content, rule, deviceSmvMap, true, varName);
@@ -269,7 +269,7 @@ public class SmvMainModuleBuilder {
                                 String triggerValue = trigger.getValue() != null ? trigger.getValue().replace(" ", "") : "";
                                 String triggerRelation = normalizeTriggerRelationOrThrow(
                                         smv.getVarName(), "Transition '" + trans.getName() + "'", trigger.getRelation());
-                                String startState = getStateForMode(trans.getStartState(), modeIdx);
+                                String startState = getStateForMode(trans.getStartState(), modeIdx, true);
 
                                 content.append("\t\t");
                                 if (startState != null && !startState.isEmpty()) {
@@ -704,7 +704,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                     // P1-1: prepend StartState guard condition if present
                                     if (trans.getStartState() != null && transSmv.getModes() != null && !transSmv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < transSmv.getModes().size(); mi++) {
-                                            String ss = getStateForMode(trans.getStartState(), mi);
+                                            String ss = getStateForMode(trans.getStartState(), mi, true);
                                             if (ss != null && !ss.isEmpty()) {
                                                 content.append(transSmv.getVarName()).append(".").append(transSmv.getModes().get(mi))
                                                        .append("=").append(ss).append(" & ");
@@ -869,7 +869,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     if (modeIdx >= 0 && modeIdx < smv.getModes().size()) {
                         String mode = smv.getModes().get(modeIdx);
                         String cleanEndState = getStateForMode(endState, modeIdx);
-                        String cleanStartState = startState != null ? getStateForMode(startState, modeIdx) : "";
+                        String cleanStartState = startState != null ? getStateForMode(startState, modeIdx, true) : "";
                         if (cleanEndState == null || cleanEndState.isEmpty()) continue;
                         if (cleanStartState == null) cleanStartState = "";
 
@@ -886,7 +886,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                 } else if (smv.getModes() != null && smv.getModes().size() == 1) {
                     String stateVar = smv.getModes().get(0);
                     String cleanEnd = DeviceSmvDataFactory.cleanStateName(endState);
-                    String cleanStart = (startState != null) ? DeviceSmvDataFactory.cleanStateName(startState) : "";
+                    String cleanStart = (startState != null) ? DeviceSmvDataFactory.cleanStartState(startState) : "";
                     if (cleanEnd == null || cleanEnd.isEmpty()) {
                         log.warn("API signal '{}' on device '{}' has empty endState and cannot derive transition pulse",
                                 api.getName(), varName);
@@ -933,7 +933,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     if (modeIdx >= 0 && modeIdx < smv.getModes().size()) {
                         String mode = smv.getModes().get(modeIdx);
                         String cleanEnd = getStateForMode(endState, modeIdx);
-                        String cleanStart = startState != null ? getStateForMode(startState, modeIdx) : null;
+                        String cleanStart = startState != null ? getStateForMode(startState, modeIdx, true) : null;
 
                         if (cleanEnd != null && !cleanEnd.isEmpty()) {
                             content.append("\t\t");
@@ -1551,7 +1551,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                     content.append("\t\t");
                                     if (trans.getStartState() != null && smv.getModes() != null && !smv.getModes().isEmpty()) {
                                         for (int mi = 0; mi < smv.getModes().size(); mi++) {
-                                            String ss = getStateForMode(trans.getStartState(), mi);
+                                            String ss = getStateForMode(trans.getStartState(), mi, true);
                                             if (ss != null && !ss.isEmpty()) {
                                                 content.append(varName).append(".").append(smv.getModes().get(mi))
                                                        .append("=").append(ss).append(" & ");
@@ -1684,11 +1684,20 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
      * Extract the state segment at modeIndex from a semicolon-separated state tuple.
      */
     private String getStateForMode(String multiModeState, int modeIndex) {
+        return getStateForMode(multiModeState, modeIndex, false);
+    }
+
+    /**
+     * Extract state value for a specific mode from multi-mode state string.
+     * @param allowWildcard if true, treats "_" as wildcard (returns null); used for StartState
+     */
+    private String getStateForMode(String multiModeState, int modeIndex, boolean allowWildcard) {
         if (multiModeState == null) return null;
         String[] states = multiModeState.split(";");
         if (modeIndex < states.length) {
             String raw = states[modeIndex].trim();
             if (raw.isEmpty()) return null;
+            if (allowWildcard && raw.equals("_")) return null;
             return DeviceSmvDataFactory.cleanStateName(raw);
         }
         return null;

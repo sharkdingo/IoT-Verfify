@@ -504,7 +504,7 @@ public class VerificationServiceImpl implements VerificationService {
     public void deleteTrace(Long userId, Long traceId) {
         TracePo trace = traceRepository.findByIdAndUserId(traceId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Trace", traceId));
-        traceRepository.delete(trace);
+        traceRepository.delete(Objects.requireNonNull(trace));
     }
 
     @Override

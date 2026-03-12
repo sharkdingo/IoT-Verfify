@@ -192,9 +192,6 @@ public class RecommendRulesTool implements AiTool {
 
             log.info("Generating AI-based rule recommendations for user {}: {} devices, max {} recommendations, category: {}",
                     userId, devices.size(), maxRecommendations, category);
-
-            // 构建详细的设备信息字符串供 AI 分析
-            String deviceInfoJson = buildDeviceInfoJson(devices);
             
             // 构建现有规则的简要信息
             String existingRulesInfo = buildExistingRulesInfo(existingRules);

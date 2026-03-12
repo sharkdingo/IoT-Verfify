@@ -33,6 +33,7 @@ import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -345,7 +346,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
     @Test
     void addDeviceTemplate_impactedVarWithInvalidChars_shouldReject() {
-        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "hum!dity");
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "humidity!");
 
         BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 service.addDeviceTemplate(1L, dto));
@@ -388,25 +389,38 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 service.addDeviceTemplate(1L, dto));
 
         assertEquals(400, ex.getCode());
-        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collides with mode name");
     }
 
     @Test
-    void addDeviceTemplate_impactedVarCollidesWithInternalVar_shouldReject() {
+    void addDeviceTemplate_impactedVarCollidesWithInternalVar_shouldAllow() throws Exception {
+        // CHANGED: InternalVariable and ImpactedVariable with same name is now ALLOWED
+        // This is a common pattern (e.g., Thermostat, Water Heater, Window, Garage Door)
         DeviceTemplateDto dto = buildTemplateWithVar("T1", "temperature", null);
-        // Add ImpactedVariable with same name (case-insensitive)
         dto.getManifest().setImpactedVariables(List.of("Temperature"));
 
-        BadRequestException ex = assertThrows(BadRequestException.class, () ->
-                service.addDeviceTemplate(1L, dto));
+        when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "T1")).thenReturn(false);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
+            po.setId(300L);
+            return po;
+        });
+        File precheckFile = File.createTempFile("template-precheck-", ".smv");
+        when(smvGenerator.generate(
+                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                any(SmvGenerator.GeneratePurpose.class)))
+                .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
-        assertEquals(400, ex.getCode());
-        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+        // Should succeed now
+        DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
+        assertNotNull(result);
+        assertEquals("300", result.getId());
+        assertFalse(precheckFile.exists());
     }
 
     @Test
-    void addDeviceTemplate_noModeWithImpactedVarCollision_shouldReject() {
-        // No-mode sensor with InternalVariable and ImpactedVariable that collide
+    void addDeviceTemplate_noModeWithImpactedVarCollision_shouldAllow() throws Exception {
+        // CHANGED: InternalVariable and ImpactedVariable with same name is now ALLOWED
         DeviceManifest manifest = new DeviceManifest();
         manifest.setModes(List.of());
         manifest.setInitState("");
@@ -420,11 +434,23 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         dto.setName("Sensor");
         dto.setManifest(manifest);
 
-        BadRequestException ex = assertThrows(BadRequestException.class, () ->
-                service.addDeviceTemplate(1L, dto));
+        when(deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(1L, "Sensor")).thenReturn(false);
+        when(deviceTemplateRepo.saveAndFlush(anyTemplatePo())).thenAnswer(inv -> {
+            DeviceTemplatePo po = Objects.requireNonNull(inv.getArgument(0, DeviceTemplatePo.class));
+            po.setId(301L);
+            return po;
+        });
+        File precheckFile = File.createTempFile("template-precheck-", ".smv");
+        when(smvGenerator.generate(
+                anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(),
+                any(SmvGenerator.GeneratePurpose.class)))
+                .thenReturn(new SmvGenerator.GenerateResult(precheckFile, Map.of()));
 
-        assertEquals(400, ex.getCode());
-        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("collision");
+        // Should succeed now
+        DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
+        assertNotNull(result);
+        assertEquals("301", result.getId());
+        assertFalse(precheckFile.exists());
     }
 
     @Test
@@ -451,7 +477,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
     @Test
     void addDeviceTemplate_impactedVarWithSpace_shouldReject() {
-        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "hum idity");
+        DeviceTemplateDto dto = buildTemplateWithVar("T1", null, "humidity bad");
 
         BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 service.addDeviceTemplate(1L, dto));

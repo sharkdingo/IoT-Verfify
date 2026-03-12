@@ -19,9 +19,10 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.lang.NonNull;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -29,18 +30,16 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,7 +56,6 @@ class ChatServiceImplToolLoopControlTest {
     private AiToolManager aiToolManager;
     @Mock
     private ChatMapper chatMapper;
-    @Mock
     private TransactionTemplate transactionTemplate;
 
     private ChatServiceImpl service;
@@ -66,11 +64,12 @@ class ChatServiceImplToolLoopControlTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        lenient().doAnswer(invocation -> {
-            Consumer<org.springframework.transaction.TransactionStatus> action = invocation.getArgument(0);
-            action.accept(null);
-            return null;
-        }).when(transactionTemplate).executeWithoutResult(any());
+        transactionTemplate = new TransactionTemplate() {
+            @Override
+            public void executeWithoutResult(@NonNull Consumer<TransactionStatus> action) {
+                action.accept(mock(TransactionStatus.class));
+            }
+        };
 
         service = new ChatServiceImpl(
                 sessionRepo,
@@ -172,7 +171,6 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    @SuppressWarnings("null")
     void executeToolLoop_whenFunctionNameMissing_shouldPersistStructuredErrorAndSkipToolExecution() throws Exception {
         when(arkAiClient.checkIntent(anyList(), anyList()))
                 .thenReturn(toolCallResult("   ", "{}"))
@@ -184,12 +182,16 @@ class ChatServiceImplToolLoopControlTest {
         verify(aiToolManager, never()).execute(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
         assertTrue(commandSet.isEmpty());
 
-        ArgumentCaptor<ChatMessagePo> captor = ArgumentCaptor.forClass(ChatMessagePo.class);
-        verify(messageRepo, times(2)).saveAndFlush(captor.capture());
-        ChatMessagePo toolMsg = captor.getAllValues().stream()
+        List<ChatMessagePo> persistedMessages = org.mockito.Mockito.mockingDetails(messageRepo).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("saveAndFlush"))
+                .map(invocation -> invocation.getArgument(0, ChatMessagePo.class))
+                .filter(Objects::nonNull)
+                .toList();
+        assertEquals(2, persistedMessages.size());
+        ChatMessagePo toolMsg = Objects.requireNonNull(persistedMessages.stream()
                 .filter(m -> "tool".equalsIgnoreCase(m.getRole()))
                 .findFirst()
-                .orElseThrow();
+                .orElseThrow());
 
         ObjectMapper mapper = new ObjectMapper();
         JsonNode persisted = mapper.readTree(toolMsg.getContent());
@@ -265,4 +267,5 @@ class ChatServiceImplToolLoopControlTest {
         result.setChoices(List.of(choice));
         return result;
     }
+
 }

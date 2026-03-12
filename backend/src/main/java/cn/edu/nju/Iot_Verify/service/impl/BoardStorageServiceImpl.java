@@ -588,31 +588,62 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     /**
      * Check that mode names, internal variable names, and impacted variable names
      * do not collide after case-insensitive normalization.
+     *
+     * IMPORTANT: InternalVariable and ImpactedVariable are allowed to have the same name,
+     * as this represents a common pattern where a device's internal variable affects
+     * an environment variable of the same name (e.g., thermostat.temperature -> temperature).
+     * This aligns with default templates like Thermostat, Water Heater, Window, and Garage Door.
      */
     private void checkVariableCollisions(String templateName, DeviceManifest manifest, List<String> modes) {
-        Set<String> seenIdentifiers = new HashSet<>();
+        // Track modes separately - they must not collide with each other
+        Set<String> modeNames = new HashSet<>();
         for (String mode : modes) {
             String cleaned = mode == null ? "" : mode.replace(" ", "");
-            if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+            if (!cleaned.isEmpty() && !modeNames.add(cleaned.toLowerCase())) {
                 throw new BadRequestException(
-                        "Template '" + templateName + "': identifier collision after normalization for '" + mode + "'.");
+                        "Template '" + templateName + "': duplicate mode name after normalization: '" + mode + "'.");
             }
         }
+
+        // Track internal variables - they must not collide with modes or each other
+        Set<String> internalVarNames = new HashSet<>();
         if (manifest.getInternalVariables() != null) {
             for (DeviceManifest.InternalVariable iv : manifest.getInternalVariables()) {
                 String cleaned = iv.getName() == null ? "" : iv.getName().replace(" ", "");
-                if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+                if (cleaned.isEmpty()) continue;
+
+                String normalized = cleaned.toLowerCase();
+                if (modeNames.contains(normalized)) {
                     throw new BadRequestException(
-                            "Template '" + templateName + "': identifier collision after normalization for InternalVariable '" + iv.getName() + "'.");
+                            "Template '" + templateName + "': InternalVariable '" + iv.getName()
+                            + "' collides with mode name.");
+                }
+                if (!internalVarNames.add(normalized)) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': duplicate InternalVariable name after normalization: '"
+                            + iv.getName() + "'.");
                 }
             }
         }
+
+        // Track impacted variables - they must not collide with modes or each other
+        // BUT they CAN collide with internal variables (common pattern: device internal var affects env var)
+        Set<String> impactedVarNames = new HashSet<>();
         if (manifest.getImpactedVariables() != null) {
             for (String impacted : manifest.getImpactedVariables()) {
                 String cleaned = impacted == null ? "" : impacted.replace(" ", "");
-                if (!cleaned.isEmpty() && !seenIdentifiers.add(cleaned.toLowerCase())) {
+                if (cleaned.isEmpty()) continue;
+
+                String normalized = cleaned.toLowerCase();
+                if (modeNames.contains(normalized)) {
                     throw new BadRequestException(
-                            "Template '" + templateName + "': identifier collision after normalization for ImpactedVariable '" + impacted + "'.");
+                            "Template '" + templateName + "': ImpactedVariable '" + impacted
+                            + "' collides with mode name.");
+                }
+                if (!impactedVarNames.add(normalized)) {
+                    throw new BadRequestException(
+                            "Template '" + templateName + "': duplicate ImpactedVariable name after normalization: '"
+                            + impacted + "'.");
                 }
             }
         }

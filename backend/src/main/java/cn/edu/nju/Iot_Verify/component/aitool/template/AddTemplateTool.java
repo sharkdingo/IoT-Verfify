@@ -59,8 +59,8 @@ public class AddTemplateTool implements AiTool {
                 "description", "Full device manifest JSON defining the device behavior. " +
                         "For stateful devices, must include: Name, Description, Modes (array of mode dimension names), InitState (semicolon-separated for multi-mode), " +
                         "WorkingStates (array of {Name, Description, Trust, Privacy, Dynamics[]}), " +
-                        "Transitions (array of {Name, StartState, EndState, Trigger{Attribute,Relation,Value}, Signal, Assignments[{Attribute,Value}]}), " +
-                        "APIs (array of {Name, Description, StartState, EndState, Signal, Trigger{Attribute,Relation,Value}, Assignments[{Attribute,Value}]}). " +
+                        "Transitions (array of {Name, StartState (optional), EndState (optional for internal variable transitions), Trigger{Attribute,Relation,Value}, Signal, Assignments[{Attribute,Value}]}), " +
+                        "APIs (array of {Name, Description, StartState (optional, empty or '_' means from any state), EndState, Signal, Trigger{Attribute,Relation,Value}, Assignments[{Attribute,Value}]}). " +
                         "For stateless sensors (no modes), Modes/InitState/WorkingStates can all be empty. " +
                         "Optional: InternalVariables, ImpactedVariables, Contents."
         ));
