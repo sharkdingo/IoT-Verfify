@@ -22,7 +22,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 规则重复检查工具
@@ -368,7 +367,7 @@ public class CheckDuplicateRuleTool implements AiTool {
 
             // 如果 AI 返回了重复的规则 ID，验证它是否有效
             if (isDuplicate && duplicateWith != null && !duplicateWith.isBlank()) {
-                final String targetId = duplicateWith;
+                Long targetId = parseLongSafely(duplicateWith);
                 boolean validId = existingRules.stream()
                         .anyMatch(r -> r.getId() != null && r.getId().equals(targetId));
                 if (!validId) {
@@ -408,6 +407,14 @@ public class CheckDuplicateRuleTool implements AiTool {
 
     private <T> List<T> safeList(List<T> list) {
         return list == null ? Collections.emptyList() : list;
+    }
+
+    private Long parseLongSafely(String value) {
+        try {
+            return value == null ? null : Long.valueOf(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private String errorJson(String message, String errorCode, int status) {
