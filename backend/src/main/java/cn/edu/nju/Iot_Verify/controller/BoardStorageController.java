@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.controller;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
+import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -44,6 +45,7 @@ public class BoardStorageController {
     private final RecommendRulesTool recommendRulesTool;
     private final RecommendRelatedDevicesTool recommendRelatedDevicesTool;
     private final CheckDuplicateRuleTool checkDuplicateRuleTool;
+    private final RecommendSpecificationsTool recommendSpecificationsTool;
     private final ObjectMapper objectMapper;
 
     @GetMapping("/nodes")
@@ -212,6 +214,37 @@ public class BoardStorageController {
             throw e;
         } catch (Exception e) {
             throw new InternalServerException("Failed to process duplicate rule check", e);
+        }
+    }
+
+    /**
+     * 获取规约推荐
+     * @param userId 用户ID
+     * @param maxRecommendations 最大推荐数量
+     * @param category 分类筛选
+     * @return 规约推荐列表
+     */
+    @GetMapping("/specs/recommend")
+    public Result<Map<String, Object>> recommendSpecs(
+            @CurrentUser Long userId,
+            @RequestParam(defaultValue = "5") Integer maxRecommendations,
+            @RequestParam(defaultValue = "all") String category) {
+
+        try {
+            String args = objectMapper.writeValueAsString(Map.of(
+                    "maxRecommendations", maxRecommendations,
+                    "category", category));
+            String result = recommendSpecificationsTool.execute(args);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
+            throwIfToolError(resultMap);
+
+            return Result.success(resultMap);
+        } catch (BaseException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new InternalServerException("Failed to process specification recommendations", e);
         }
     }
 

@@ -5,7 +5,7 @@ import { router } from '../router';
 
 const api = axios.create({
   baseURL: 'http://localhost:8080/api',
-  timeout: 60000,
+  timeout: 100000,
   headers: {
     'Content-Type': 'application/json'
   }

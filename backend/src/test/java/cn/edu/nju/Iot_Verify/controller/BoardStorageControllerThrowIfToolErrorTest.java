@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.controller;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
+import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
@@ -33,6 +34,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
     @Mock private RecommendRulesTool recommendRulesTool;
     @Mock private RecommendRelatedDevicesTool recommendRelatedDevicesTool;
     @Mock private CheckDuplicateRuleTool checkDuplicateRuleTool;
+    @Mock private RecommendSpecificationsTool recommendSpecificationsTool;
 
     private BoardStorageController controller;
     private RuleDto dummyRule;
@@ -41,7 +43,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
     void setUp() {
         controller = new BoardStorageController(
                 boardService, recommendRulesTool, recommendRelatedDevicesTool,
-                checkDuplicateRuleTool, new ObjectMapper());
+                checkDuplicateRuleTool, recommendSpecificationsTool, new ObjectMapper());
         dummyRule = new RuleDto();
         dummyRule.setConditions(List.of());
         dummyRule.setCommand(new RuleDto.Command("dev", "on", null, null));

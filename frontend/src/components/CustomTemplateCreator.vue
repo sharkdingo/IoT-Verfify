@@ -2,6 +2,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage as ElMessageRaw } from 'element-plus'
+import boardApi from '@/api/board'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
@@ -208,40 +209,10 @@ const createCustomTemplate = async () => {
     // Call API to create template
     console.log('Creating custom template:', { name: customTemplateForm.name, manifest })
 
-    const token = localStorage.getItem('iot_verify_token')
-    console.log('Token exists:', !!token)
-    console.log('Token value:', token ? token.substring(0, 20) + '...' : 'null')
-
-    if (!token) {
-      ElMessage({
-      message: 'Please login first',
-      type: 'error',
-      center: true
+    const result = await boardApi.addDeviceTemplate({
+      name: customTemplateForm.name,
+      manifest
     })
-      return
-    }
-
-    const response = await fetch('/api/board/templates', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        name: customTemplateForm.name,
-        manifest
-      })
-    })
-
-    console.log('API response status:', response.status)
-    console.log('API response ok:', response.ok)
-
-    if (!response.ok) {
-      const errorMessage = await handleApiError(response, 'Create custom template')
-      throw new Error(errorMessage)
-    }
-
-    const newTemplate = await response.json()
 
     ElMessage({
       message: 'Template created',
@@ -265,7 +236,7 @@ const createCustomTemplate = async () => {
     // Emit event to refresh templates
     emit('refresh-templates')
 
-    return newTemplate.data
+    return result
   } catch (error) {
     console.error('Failed to create custom template:', error)
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
@@ -374,34 +345,11 @@ const createTemplateFromJson = async (jsonData: any) => {
     console.log('Built manifest:', manifest)
 
     // Send to backend
-    const token = localStorage.getItem('iot_verify_token')
-    if (!token) {
-      ElMessage({
-      message: 'Please login first',
-      type: 'error',
-      center: true
-    })
-      return
-    }
-
-    const response = await fetch('/api/board/templates', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        name: jsonData.Name,
-        manifest: manifest
-      })
+    const result = await boardApi.addDeviceTemplate({
+      name: jsonData.Name,
+      manifest: manifest
     })
 
-    if (!response.ok) {
-      const errorMessage = await handleApiError(response, 'Create template from JSON')
-      throw new Error(errorMessage)
-    }
-
-    const result = await response.json()
     console.log('Template created successfully:', result)
 
     ElMessage({

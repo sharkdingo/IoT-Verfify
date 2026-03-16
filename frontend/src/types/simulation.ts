@@ -52,17 +52,17 @@ export interface SimulationTrustPrivacy {
   privacy?: string
 }
 
-// 模拟记录摘要 (列表用)
+// 模拟记录摘要 (列表用) — SimulationTraceSummaryDto 不返回 userId
 export interface SimulationTraceSummary {
   id: number
-  userId: number
   requestedSteps: number
   steps: number
   createdAt: string
 }
 
-// 模拟记录详情
+// 模拟记录详情 — SimulationTraceDto 返回 userId
 export interface SimulationTrace extends SimulationTraceSummary {
+  userId?: number          // 详情接口返回，摘要不返回，标可选
   states: SimulationState[]
   logs: string[]
   nusmvOutput: string
@@ -75,7 +75,7 @@ export type SimulationTaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED
 // 模拟任务
 export interface SimulationTask {
   id: number
-  userId: number
+  // userId 已删除 — 后端不返回
   status: SimulationTaskStatus
   requestedSteps: number
   steps: number
@@ -85,6 +85,7 @@ export interface SimulationTask {
   startedAt?: string
   completedAt?: string
   processingTimeMs?: number
+  progress?: number       // 新增：0-100 进度
   simulationTraceId?: number
 }
 

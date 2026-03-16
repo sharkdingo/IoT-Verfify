@@ -171,13 +171,11 @@ watch(selectedStateIndex, () => {
             
             <!-- 进度条 -->
             <div 
-              v-if="selectedStateIndex > 0"
+              v-if="selectedStateIndex > 0 && totalStates > 1"
               class="absolute top-1/2 h-3 bg-indigo-500 rounded transition-all duration-300 -translate-y-1/2"
               :style="{ 
                 left: '8px',
-                width: totalStates > 1 
-                  ? `${(selectedStateIndex / (totalStates - 1)) * (100 - 16)}%`
-                  : '0%'
+                width: `calc((100% - 16px) * ${selectedStateIndex / (totalStates - 1)})`
               }"
             ></div>
             

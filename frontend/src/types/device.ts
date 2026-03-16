@@ -57,7 +57,7 @@ export interface DeviceManifest {
 }
 
 export interface DeviceTemplate {
-    id: string
+    id?: number      // 后端 Long；创建时无 id，响应中才有
     name: string
     manifest: DeviceManifest
 }

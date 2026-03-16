@@ -11,9 +11,6 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AIContextBubble: typeof import('./src/components/AIContextBubble.vue')['default']
-    AIInsightBubble: typeof import('./src/components/AIInsightBubble.vue')['default']
-    AISettings: typeof import('./src/components/AISettings.vue')['default']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
     ChatView: typeof import('./src/components/ChatView.vue')['default']
     CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
@@ -26,10 +23,13 @@ declare module 'vue' {
     ElDialog: typeof import('element-plus/es')['ElDialog']
     ElForm: typeof import('element-plus/es')['ElForm']
     ElHeader: typeof import('element-plus/es')['ElHeader']
+    ElIcon: typeof import('element-plus/es')['ElIcon']
     ElInput: typeof import('element-plus/es')['ElInput']
     ElMain: typeof import('element-plus/es')['ElMain']
     ElResult: typeof import('element-plus/es')['ElResult']
     ElRow: typeof import('element-plus/es')['ElRow']
+    ElTag: typeof import('element-plus/es')['ElTag']
+    FixResultDialog: typeof import('./src/components/FixResultDialog.vue')['default']
     Header: typeof import('./src/components/Header.vue')['default']
     LogoutConfirm: typeof import('./src/components/LogoutConfirm.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

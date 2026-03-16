@@ -41,6 +41,7 @@ import ControlCenter from '../components/ControlCenter.vue'
 import SystemInspector from '../components/SystemInspector.vue'
 import RuleBuilderDialog from '../components/RuleBuilderDialog.vue'
 import SimulationTimeline from '../components/SimulationTimeline.vue'
+import FixResultDialog from '../components/FixResultDialog.vue'
 
 // Styles
 import '../styles/board.css'
@@ -1303,6 +1304,11 @@ const fetchRuleRecommendations = async () => {
     ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
     return
   }
+  // 互斥检查：如果规约推荐面板正在显示
+  if (showSpecRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
+    return
+  }
   
   isRecommendingRules.value = true
   showRecommendationPanel.value = true
@@ -1338,6 +1344,11 @@ const deviceRecommendations = ref<any[]>([])
 const showDeviceRecommendationPanel = ref(false)
 const deviceRecommendationAbortController = ref<AbortController | null>(null)
 
+// ==== Specification Recommendation Logic ====
+const isRecommendingSpecs = ref(false)
+const specRecommendations = ref<any[]>([])
+const showSpecRecommendationPanel = ref(false)
+
 const fetchDeviceRecommendations = async () => {
   // 如果正在推荐中，点击按钮则停止推荐
   if (isRecommendingDevices.value) {
@@ -1360,6 +1371,10 @@ const fetchDeviceRecommendations = async () => {
   }
   if (showRecommendationPanel.value) {
     ElMessage.warning({ message: 'Please close the rule recommendation panel first', type: 'warning' })
+    return
+  }
+  if (showSpecRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
     return
   }
   if (isAnimationLocked.value) {
@@ -1399,6 +1414,86 @@ const closeDeviceRecommendationPanel = () => {
     isRecommendingDevices.value = false
   }
   showDeviceRecommendationPanel.value = false
+}
+
+// 获取规约推荐
+const fetchSpecRecommendations = async () => {
+  // 如果正在推荐中，点击按钮则停止推荐
+  if (isRecommendingSpecs.value) {
+    isRecommendingSpecs.value = false
+    ElMessage.info('Specification recommendation cancelled')
+    return
+  }
+  
+  // 互斥检查
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    return
+  }
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    return
+  }
+  if (showRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the rule recommendation panel first', type: 'warning' })
+    return
+  }
+  if (showDeviceRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the device recommendation panel first', type: 'warning' })
+    return
+  }
+  if (isAnimationLocked.value) {
+    ElMessage.warning({ message: 'Animation is running, please wait', type: 'warning' })
+    return
+  }
+  
+  isRecommendingSpecs.value = true
+  showSpecRecommendationPanel.value = true
+  
+  try {
+    const response = await boardApi.recommendSpecifications(5, 'all')
+    specRecommendations.value = response.recommendations || []
+  } catch (error: any) {
+    console.error('Failed to fetch specification recommendations:', error)
+    ElMessage.error('Failed to fetch specification recommendations')
+  } finally {
+    isRecommendingSpecs.value = false
+  }
+}
+
+// 关闭规约推荐面板
+const closeSpecRecommendationPanel = () => {
+  isRecommendingSpecs.value = false
+  showSpecRecommendationPanel.value = false
+}
+
+// 应用规约推荐 - 将推荐的规约添加到画布
+const applySpecRecommendation = async (recommendation: any) => {
+  // 构建规约数据
+  const newSpec = {
+    id: 'spec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+    templateId: recommendation.templateId || 'custom',
+    templateLabel: recommendation.templateLabel || 'Custom Specification',
+    aConditions: recommendation.aConditions || [],
+    ifConditions: recommendation.ifConditions || [],
+    thenConditions: recommendation.thenConditions || []
+  }
+  
+  // 获取现有规约
+  const currentSpecs = [...specifications.value]
+  currentSpecs.push(newSpec)
+  
+  try {
+    await boardApi.saveSpecs(currentSpecs)
+    specifications.value = currentSpecs
+    ElMessage.success('Specification added successfully')
+    
+    // 关闭面板
+    closeSpecRecommendationPanel()
+  } catch (error) {
+    console.error('Failed to save specification:', error)
+    ElMessage.error('Failed to save specification')
+  }
 }
 
 // 应用设备推荐 - 将推荐的设备添加到画布
@@ -1532,9 +1627,27 @@ const asyncSimulationTask = ref<{
 // Floating panel visibility state
 const showSimulationPanel = ref(false)
 
+// Fix dialog 状态
+const showFixDialog = ref(false)
+const fixTraceId = ref<number | null>(null)
+const fixViolatedSpecId = ref<string>('')
+
+// 打开 Fix 弹窗
+const openFixDialog = (traceId: number, violatedSpecId: string) => {
+  fixTraceId.value = traceId
+  fixViolatedSpecId.value = violatedSpecId
+  showFixDialog.value = true
+}
+
+// Fix 应用后的回调
+const handleFixApplied = () => {
+  // 刷新验证结果或其他必要操作
+  ElMessage.success('修复已应用')
+}
+
 // 面板互斥切换函数
 const togglePanel = (panel: 'simulation' | 'verification') => {
-  // 互斥检查：如果 Rule Recommendations 或 Device Recommendations 面板正在显示，则不允许打开模拟/验证面板
+  // 互斥检查：如果 Rule Recommendations 或 Device Recommendations 或 Specification Recommendations 面板正在显示，则不允许打开模拟/验证面板
   if (showRecommendationPanel.value) {
     ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
     return
@@ -1542,6 +1655,11 @@ const togglePanel = (panel: 'simulation' | 'verification') => {
   
   if (showDeviceRecommendationPanel.value) {
     ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
+    return
+  }
+  
+  if (showSpecRecommendationPanel.value) {
+    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
     return
   }
   
@@ -2388,10 +2506,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('simulation')"
-          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel"
+          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel) 
+            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel) 
               ? 'bg-indigo-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-indigo-500 hover:bg-indigo-600'
           ]"
@@ -2417,10 +2535,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('verification')"
-          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel"
+          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel)
+            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
               ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-green-500 hover:bg-green-600'
           ]"
@@ -2447,10 +2565,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchRuleRecommendations"
-          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel)"
+          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel))
+            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel))
               ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingRules
                 ? 'bg-red-500 hover:bg-red-600'
@@ -2476,10 +2594,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchDeviceRecommendations"
-          :disabled="!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked)"
+          :disabled="!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked))
+            (!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
               ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingDevices
                 ? 'bg-red-500 hover:bg-red-600'
@@ -2492,6 +2610,35 @@ const closeResultDialog = () => {
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
             {{ isRecommendingDevices ? 'Stop' : 'Device Recommendations' }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Recommend Specifications Button (Circle) -->
+      <div class="relative group">
+        <!-- Pulse animation when loading -->
+        <div 
+          v-if="isRecommendingSpecs"
+          class="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-75"
+        ></div>
+        <button
+          @click="fetchSpecRecommendations"
+          :disabled="!isRecommendingSpecs && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
+          :class="[
+            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            (!isRecommendingSpecs && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
+              ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100' 
+              : isRecommendingSpecs
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-red-500 hover:bg-red-600'
+          ]"
+          :title="isRecommendingSpecs ? 'Stop' : 'Specification Recommendations'"
+        >
+          <span v-if="isRecommendingSpecs" class="material-symbols-outlined text-xl">stop</span>
+          <span v-else class="material-symbols-outlined text-xl">verified</span>
+          <!-- Tooltip -->
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ isRecommendingSpecs ? 'Stop' : 'Specification Recommendations' }}
           </span>
         </button>
       </div>
@@ -2860,6 +3007,120 @@ const closeResultDialog = () => {
               >
                 <span class="material-symbols-outlined text-sm">add</span>
                 Add This Device
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Specification Recommendation Panel -->
+    <div 
+      v-if="showSpecRecommendationPanel"
+      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+    >
+      <!-- Recommendation Header with gradient -->
+      <div class="relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-red-500 to-rose-600"></div>
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMtOS45NDEgMC0xOCA4LjA1OS0xOCAxOHM4LjA1OSAxOCAxOCAxOCAxOC04LjA1OSAxOC0xOC04LjA1OS0xOC0xOC0xOHptMCAzMmMtNy43MzIgMC0xNC02LjI2OC0xNC0xNHM2LjI2OC0xNCAxNC0xNCAxNCA2LjI2OCAxNCAxNC02LjI2OCAxNC0xNCAxNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
+        <div class="relative flex items-center justify-between p-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-red-500 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-lg">
+              <span class="material-symbols-outlined text-white text-xl">verified</span>
+            </div>
+            <div>
+              <h3 class="text-black font-bold text-base">Specification Recommendations</h3>
+              <p class="text-black/70 text-xs">AI-powered specification suggestions</p>
+            </div>
+          </div>
+          <button 
+            @click="closeSpecRecommendationPanel"
+            class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Recommendation Content -->
+      <div class="p-3 space-y-3 bg-gradient-to-b from-white to-red-50/30 max-h-[500px] overflow-y-auto">
+        <!-- Loading State -->
+        <div v-if="isRecommendingSpecs" class="flex flex-col items-center justify-center py-10">
+          <div class="relative">
+            <span class="material-symbols-outlined text-red-500 text-5xl animate-spin">sync</span>
+            <div class="absolute inset-0 bg-red-400 rounded-full animate-ping opacity-20"></div>
+          </div>
+          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your system...</p>
+          <p class="text-slate-400 text-xs mt-1">Generating formal specifications</p>
+        </div>
+
+        <!-- Empty State -->
+        <div v-else-if="specRecommendations.length === 0" class="flex flex-col items-center justify-center py-10">
+          <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined text-slate-300 text-3xl">verified</span>
+          </div>
+          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered specification suggestions</p>
+        </div>
+
+        <!-- Recommendations List -->
+        <div v-else class="space-y-3">
+          <!-- Header with count -->
+          <div class="flex items-center justify-between px-1">
+            <span class="text-xs font-medium text-slate-500">{{ specRecommendations.length }} specifications recommended</span>
+            <button 
+              @click="fetchSpecRecommendations"
+              class="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1"
+            >
+              <span class="material-symbols-outlined text-sm">refresh</span>
+              Refresh
+            </button>
+          </div>
+
+          <div 
+            v-for="(rec, index) in specRecommendations" 
+            :key="index"
+            class="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden group"
+          >
+            <!-- Card Header -->
+            <div class="p-3 pb-2">
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <!-- Specification Icon -->
+                  <div class="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+                    <span class="material-symbols-outlined text-red-600">verified</span>
+                  </div>
+                  <div>
+                    <h4 class="text-sm font-bold text-slate-800">{{ rec.templateLabel || 'Custom Specification' }}</h4>
+                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
+                  </div>
+                </div>
+                <!-- Confidence Badge -->
+                <div v-if="rec.confidence" class="px-2 py-1 bg-red-100 rounded-full">
+                  <span class="text-xs font-medium text-red-700">{{ Math.round(rec.confidence * 100) }}%</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Priority -->
+            <div class="px-3 pb-2">
+              <p class="text-xs text-slate-600">
+                Priority: <span :class="{
+                  'text-red-600': rec.priority === 'high',
+                  'text-amber-600': rec.priority === 'medium',
+                  'text-green-600': rec.priority === 'low'
+                }">{{ rec.priority || 'medium' }}</span>
+              </p>
+            </div>
+
+            <!-- Action Button -->
+            <div class="px-3 pb-3">
+              <button 
+                @click="applySpecRecommendation(rec)"
+                class="w-full py-2 px-4 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <span class="material-symbols-outlined text-sm">add</span>
+                Add This Specification
               </button>
             </div>
           </div>
@@ -3453,20 +3714,31 @@ const closeResultDialog = () => {
             <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
               <div class="flex items-center justify-between mb-1">
                 <div class="text-xs font-bold text-red-600">Violation #{{ Number(i) + 1 }}</div>
-                <button
-                  @click="selectAndPlayTrace(Number(i))"
-                  :disabled="simulationAnimationState.visible"
-                  :class="[
-                    'px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1',
-                    simulationAnimationState.visible 
-                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
-                      : 'bg-red-500 hover:bg-red-600 text-white'
-                  ]"
-                >
-                  <span class="material-symbols-outlined text-xs">play_arrow</span>
-                  View Trace
-                  <span v-if="simulationAnimationState.visible" class="text-[10px]">(Active)</span>
-                </button>
+                <div class="flex gap-1">
+                  <button
+                    @click="openFixDialog(trace.id, trace.violatedSpecId)"
+                    class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors flex items-center gap-1"
+                    :disabled="simulationAnimationState.visible"
+                    :class="simulationAnimationState.visible ? 'bg-slate-300 cursor-not-allowed' : ''"
+                  >
+                    <span class="material-symbols-outlined text-xs">build</span>
+                    Fix
+                  </button>
+                  <button
+                    @click="selectAndPlayTrace(Number(i))"
+                    :disabled="simulationAnimationState.visible"
+                    :class="[
+                      'px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1',
+                      simulationAnimationState.visible 
+                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                        : 'bg-red-500 hover:bg-red-600 text-white'
+                    ]"
+                  >
+                    <span class="material-symbols-outlined text-xs">play_arrow</span>
+                    View Trace
+                    <span v-if="simulationAnimationState.visible" class="text-[10px]">(Active)</span>
+                  </button>
+                </div>
               </div>
               <div class="text-xs font-bold text-slate-600 mb-1">Spec: {{ trace.violatedSpecId }}</div>
               <div v-if="trace.violatedSpecJson" class="text-xs font-mono text-slate-700 bg-slate-50 p-2 rounded mt-1">
@@ -3566,15 +3838,13 @@ const closeResultDialog = () => {
           >
             <!-- Progress line background -->
             <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
-            <!-- Red progress bar - only show when not at last state -->
+            <!-- Red progress bar - from start to current node -->
             <div 
-              v-if="traceAnimationState.selectedStateIndex > 0"
+              v-if="traceAnimationState.selectedStateIndex > 0 && totalStates > 1"
               class="absolute top-1/2 h-3 bg-red-500 rounded transition-all duration-300 -translate-y-1/2"
               :style="{ 
                 left: '8px',
-                width: totalStates > 1 
-                  ? `${(traceAnimationState.selectedStateIndex / (totalStates - 1)) * (100 - 16)}%`
-                  : '0%'
+                width: `calc((100% - 16px) * ${traceAnimationState.selectedStateIndex / (totalStates - 1)})`
               }"
             ></div>
             
@@ -3610,5 +3880,14 @@ const closeResultDialog = () => {
     :states="savedSimulationStates"
     @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"
+  />
+
+  <!-- Fix Result Dialog 组件 -->
+  <FixResultDialog
+    :visible="showFixDialog"
+    :trace-id="fixTraceId || 0"
+    :violated-spec-id="fixViolatedSpecId"
+    @update:visible="showFixDialog = $event"
+    @applied="handleFixApplied"
   />
 </template>

@@ -207,6 +207,9 @@ export default {
     reloadDeviceTemplates: async (): Promise<number> => {
         return unpack<number>(await api.post('/board/templates/reload'));
     },
+    deleteDeviceTemplate: async (id: number): Promise<void> => {
+        return unpack<void>(await api.delete(`/board/templates/${id}`));
+    },
 
     // ==== 验证 ====
     verify: async (req: VerificationRequest): Promise<VerificationResult> => {
@@ -257,10 +260,38 @@ export default {
             templates: templates.map(t => ({
                 name: t.manifest.Name,
                 description: t.manifest.Description,
-                variables: t.manifest.Variables || [],
-                apis: t.manifest.APIs || [],
-                workingStates: t.manifest.WorkingStates || []
+                variables: (t.manifest.InternalVariables || []).map((v: any) => v.Name),
+                apis: (t.manifest.APIs || []).map((a: any) => ({ name: a.Name, description: a.Description || '' })),
+                workingStates: (t.manifest.WorkingStates || []).map((s: any) => s.Name)
             }))
         }, { signal }));
+    },
+
+    // ==== 规约推荐 ====
+    recommendSpecifications: async (
+        maxRecommendations: number = 5,
+        category: string = 'all'
+    ): Promise<{ message: string; count: number; recommendations: any[] }> => {
+        return unpack<{ message: string; count: number; recommendations: any[] }>(await api.get('/board/specs/recommend', {
+            params: { maxRecommendations, category }
+        }));
+    },
+
+    // ==== 故障定位与修复 ====
+    /**
+     * 获取 Trace 的故障规则定位
+     */
+    getFaultRules: async (traceId: number): Promise<any[]> => {
+        return unpack<any[]>(await api.get(`/verify/traces/${traceId}/fault-rules`));
+    },
+
+    /**
+     * 获取 Trace 的修复建议
+     */
+    fixTrace: async (traceId: number, request?: {
+        strategies?: string[],
+        preferredRanges?: Record<string, any>
+    }): Promise<any> => {
+        return unpack<any>(await api.post(`/verify/traces/${traceId}/fix`, request || {}));
     }
 }

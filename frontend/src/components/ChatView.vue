@@ -162,9 +162,7 @@ const startListening = () => {
   }
 };
 
-const toggleChat = () => {
-  chatStore.toggleChat();
-};
+
 
 // 监听 visible 变化，执行相应逻辑
 watch(visible, (newVal) => {

@@ -14,6 +14,7 @@ import type {
 } from '@/types/spec'
 import { getCachedManifestForNode } from '@/utils/templateCache'
 import { getDefaultDeviceIcon } from '@/utils/device'
+import boardApi from '@/api/board'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
@@ -790,29 +791,18 @@ const handleImportTemplate = async (event: Event) => {
 
   try {
     const text = await file.text()
-    const templateData = JSON.parse(text)
-    
-    const token = localStorage.getItem('iot_verify_token')
-    const response = await fetch('/api/device-templates/import', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': token ? `Bearer ${token}` : ''
-      },
-      body: JSON.stringify(templateData)
+    const manifest = JSON.parse(text)
+    // 后端要求 { name, manifest } 包装；id 由数据库生成，不传
+    await boardApi.addDeviceTemplate({
+      name: manifest.Name,
+      manifest: manifest
     })
-
-    if (response.ok) {
-      ElMessage.success({ message: 'Template imported successfully', type: 'success' })
-      emit('refresh-templates')
-    } else {
-      const error = await response.text()
-      ElMessage.error({ message: `Import failed: ${error}`, type: 'error' })
-    }
-  } catch (error) {
-    ElMessage.error({ message: 'Invalid JSON file', type: 'error' })
+    ElMessage.success({ message: 'Template imported successfully', type: 'success' })
+    emit('refresh-templates')
+  } catch (error: any) {
+    ElMessage.error({ message: error?.message || 'Invalid JSON file', type: 'error' })
   }
-  
+
   // 清空 input 以便重新选择同一文件
   target.value = ''
 }
@@ -836,37 +826,19 @@ const confirmDeleteTemplate = async () => {
   })
 
   try {
-    const token = localStorage.getItem('iot_verify_token')
-    console.log('Token exists:', !!token)
-
-    // Ensure templateId is a valid string
-    const templateId = String(templateToDelete.value.id).trim()
-    console.log('Template ID to delete:', templateId)
-
-    if (!templateId || templateId === 'undefined' || templateId === 'null') {
+    // Ensure templateId is a valid number
+    const templateId = Number(templateToDelete.value.id)
+    if (!templateId || isNaN(templateId)) {
       throw new Error('Invalid template ID')
     }
 
-    const response = await fetch(`/api/board/templates/${templateId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+    await boardApi.deleteDeviceTemplate(templateId)
+
+    ElMessage({
+      message: 'Template deleted',
+      type: 'success',
+      center: true
     })
-
-    console.log('Delete response status:', response.status)
-    console.log('Delete response ok:', response.ok)
-
-    if (!response.ok) {
-      const errorMessage = await handleApiError(response, 'Delete template')
-      throw new Error(errorMessage)
-    }
-
-      ElMessage({
-        message: 'Template deleted',
-        type: 'success',
-        center: true
-      })
     emit('refresh-templates')
     showDeleteConfirmDialog.value = false
     templateToDelete.value = null
