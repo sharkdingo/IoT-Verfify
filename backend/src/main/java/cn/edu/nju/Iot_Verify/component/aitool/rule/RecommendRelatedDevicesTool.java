@@ -1,11 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,7 +13,6 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -27,11 +24,9 @@ import java.util.*;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class RecommendRelatedDevicesTool implements AiTool {
+public class RecommendRelatedDevicesTool extends AbstractAiTool {
 
     private final ArkAiClient arkAiClient;
-    private final ObjectMapper objectMapper;
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)设备推荐助手。你的任务是分析用户画布中现有的设备，
@@ -66,6 +61,11 @@ public class RecommendRelatedDevicesTool implements AiTool {
 - 最多返回5个推荐
 """;
 
+    public RecommendRelatedDevicesTool(ArkAiClient arkAiClient, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.arkAiClient = arkAiClient;
+    }
+
     @Override
     public String getName() {
         return "recommend_related_devices";
@@ -79,9 +79,9 @@ public class RecommendRelatedDevicesTool implements AiTool {
                 "type", "array",
                 "description", "List of current devices on the board"
         ));
-        
+
         props.put("templates", Map.of(
-                "type", "array", 
+                "type", "array",
                 "description", "List of available device templates"
         ));
 
@@ -100,27 +100,21 @@ public class RecommendRelatedDevicesTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
-        // 统一使用 board 推荐逻辑
-        return executeBoardRecommendations(argsJson);
-    }
-
     /**
-     * 根据画布中所有设备推荐新设备
+     * 根据画布中所有设备推荐新设备（公开入口，保留原有签名供外部调用）
      */
     public String executeBoardRecommendations(String argsJson) {
-        try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
+        // Delegate to the standard execute() flow (auth + doExecute)
+        return execute(argsJson);
+    }
 
+    protected String doExecute(Long userId, String argsJson) {
+        try {
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
 
             // 获取前端传来的设备列表和模板列表
@@ -196,7 +190,7 @@ public class RecommendRelatedDevicesTool implements AiTool {
                 Map<String, Object> templateMap = new LinkedHashMap<>();
                 templateMap.put("name", template.path("name").asText(""));
                 templateMap.put("description", template.path("description").asText(""));
-                
+
                 // 处理变量
                 JsonNode variablesNode = template.path("variables");
                 if (!variablesNode.isMissingNode() && variablesNode.isArray()) {
@@ -206,7 +200,7 @@ public class RecommendRelatedDevicesTool implements AiTool {
                     }
                     templateMap.put("variables", vars);
                 }
-                
+
                 // 处理 APIs
                 JsonNode apisNode = template.path("apis");
                 if (!apisNode.isMissingNode() && apisNode.isArray()) {
@@ -219,7 +213,7 @@ public class RecommendRelatedDevicesTool implements AiTool {
                     }
                     templateMap.put("apis", apis);
                 }
-                
+
                 // 处理工作状态
                 JsonNode statesNode = template.path("workingStates");
                 if (!statesNode.isMissingNode() && statesNode.isArray()) {
@@ -229,7 +223,7 @@ public class RecommendRelatedDevicesTool implements AiTool {
                     }
                     templateMap.put("workingStates", states);
                 }
-                
+
                 templatesList.add(templateMap);
             }
             return objectMapper.writeValueAsString(templatesList);
@@ -253,23 +247,25 @@ public class RecommendRelatedDevicesTool implements AiTool {
                 .maxTokens(4000)
                 .build();
 
+        ChatCompletionResult result;
         try {
             log.info("Calling Ark AI for board device recommendations...");
-            ChatCompletionResult result = arkAiClient.getArkService().createChatCompletion(request);
-            if (result.getChoices() == null || result.getChoices().isEmpty()) {
-                return "{\"recommendations\": []}";
-            }
-            
-            ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-            if (responseMsg == null || responseMsg.getContent() == null) {
-                return "{\"recommendations\": []}";
-            }
-            
-            return responseMsg.getContent().toString();
+            result = arkAiClient.getArkService().createChatCompletion(request);
         } catch (Exception e) {
             log.error("Failed to call Ark AI for board recommendations", e);
-            throw new RuntimeException("AI service unavailable: " + e.getMessage());
+            throw ServiceUnavailableException.aiService();
         }
+
+        if (result.getChoices() == null || result.getChoices().isEmpty()) {
+            return "{\"recommendations\": []}";
+        }
+
+        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
+        if (responseMsg == null || responseMsg.getContent() == null) {
+            return "{\"recommendations\": []}";
+        }
+
+        return responseMsg.getContent().toString();
     }
 
     private String parseBoardRecommendationsResponse(String aiResponse, JsonNode availableTemplatesNode, JsonNode currentDevicesNode) {
@@ -285,13 +281,13 @@ public class RecommendRelatedDevicesTool implements AiTool {
             if (cleanedResponse.endsWith("```")) {
                 cleanedResponse = cleanedResponse.substring(0, cleanedResponse.lastIndexOf("```")).trim();
             }
-            
+
             // 构建可用模板名称映射
             Set<String> availableTemplateNames = new HashSet<>();
             for (JsonNode t : availableTemplatesNode) {
                 availableTemplateNames.add(t.path("name").asText("").toLowerCase());
             }
-            
+
             // 获取当前设备模板名称列表（用于排除已存在的设备）
             Set<String> existingDeviceTemplateNames = new HashSet<>();
             if (!currentDevicesNode.isMissingNode() && currentDevicesNode.isArray()) {
@@ -303,51 +299,51 @@ public class RecommendRelatedDevicesTool implements AiTool {
                 }
             }
             log.info("Existing device templates: {}", existingDeviceTemplateNames);
-            
+
             // 解析 JSON
             JsonNode root = objectMapper.readTree(cleanedResponse);
-            
+
             JsonNode recommendationsNode = root.path("recommendations");
             if (recommendationsNode.isMissingNode() || !recommendationsNode.isArray()) {
                 recommendationsNode = root;
             }
-            
+
             List<Map<String, Object>> recommendations = new ArrayList<>();
             Set<String> addedTemplates = new HashSet<>();
             int count = 0;
-            
+
             for (JsonNode rec : recommendationsNode) {
                 if (count >= 5) break;
-                
+
                 try {
                     String templateName = rec.path("templateName").asText();
                     if (templateName == null || templateName.isBlank()) {
                         continue;
                     }
-                    
+
                     // 检查模板是否存在于系统中
                     if (!availableTemplateNames.contains(templateName.toLowerCase())) {
                         log.debug("Template {} not found in available templates", templateName);
                         continue;
                     }
-                    
+
                     // 排除已存在的设备
                     if (existingDeviceTemplateNames.contains(templateName.toLowerCase())) {
                         log.debug("Template {} already exists on board, skipping", templateName);
                         continue;
                     }
-                    
+
                     // 避免重复推荐
                     if (addedTemplates.contains(templateName.toLowerCase())) {
                         continue;
                     }
-                    
+
                     Map<String, Object> recommendation = new LinkedHashMap<>();
                     recommendation.put("templateName", templateName);
                     recommendation.put("description", rec.path("description").asText(""));
                     recommendation.put("reason", rec.path("reason").asText(""));
                     recommendation.put("confidence", rec.path("confidence").asDouble(0.5));
-                    
+
                     recommendations.add(recommendation);
                     addedTemplates.add(templateName.toLowerCase());
                     count++;
@@ -365,14 +361,10 @@ public class RecommendRelatedDevicesTool implements AiTool {
             result.put("recommendations", recommendations);
 
             return objectMapper.writeValueAsString(result);
-            
+
         } catch (Exception e) {
             log.error("Failed to parse AI response", e);
             return "{\"message\":\"Failed to parse recommendations\",\"recommendations\":[]}";
         }
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -21,7 +21,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -35,7 +34,7 @@ import static org.mockito.Mockito.when;
 class SimulationAsyncToolsTest {
 
     @Mock
-    private BoardDataHelper boardDataHelper;
+    private BoardDataConverter boardDataConverter;
     @Mock
     private BoardStorageService boardStorageService;
     @Mock
@@ -49,7 +48,7 @@ class SimulationAsyncToolsTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        simulateModelAsyncTool = new SimulateModelAsyncTool(boardDataHelper, boardStorageService, simulationService, objectMapper);
+        simulateModelAsyncTool = new SimulateModelAsyncTool(boardDataConverter, boardStorageService, simulationService, objectMapper);
         simulateTaskStatusTool = new SimulateTaskStatusTool(simulationService, objectMapper);
         cancelSimulateTaskTool = new CancelSimulateTaskTool(simulationService, objectMapper);
         UserContextHolder.setUserId(1L);
@@ -62,7 +61,7 @@ class SimulationAsyncToolsTest {
 
     @Test
     void simulateModelAsync_withoutDevices_shouldFailFast() throws Exception {
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of());
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of());
 
         String result = simulateModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
@@ -79,7 +78,7 @@ class SimulationAsyncToolsTest {
         device.setVarName("dev_1");
         device.setTemplateName("Light");
 
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(simulationService.createTask(1L, 10)).thenReturn(200L);
 
@@ -88,7 +87,7 @@ class SimulationAsyncToolsTest {
 
         assertTrue(result.contains("taskId"));
         assertEquals("PENDING", json.path("taskStatus").asText());
-        verify(simulationService).simulateAsync(anyLong(), anyLong(), any(), any(), anyInt(), anyBoolean(), anyInt(), anyBoolean());
+        verify(simulationService).simulateAsync(anyLong(), anyLong(), any());
     }
 
     @Test
@@ -97,11 +96,11 @@ class SimulationAsyncToolsTest {
         device.setVarName("dev_1");
         device.setTemplateName("Light");
 
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(simulationService.createTask(1L, 10)).thenReturn(201L);
         doThrow(new TaskRejectedException("busy")).when(simulationService)
-                .simulateAsync(anyLong(), anyLong(), any(), any(), anyInt(), anyBoolean(), anyInt(), anyBoolean());
+                .simulateAsync(anyLong(), anyLong(), any());
 
         String result = simulateModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);

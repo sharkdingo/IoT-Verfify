@@ -1,17 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -19,11 +16,14 @@ import java.util.*;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class ListTracesTool implements AiTool {
+public class ListTracesTool extends AbstractAiTool {
 
     private final VerificationService verificationService;
-    private final ObjectMapper objectMapper;
+
+    public ListTracesTool(VerificationService verificationService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.verificationService = verificationService;
+    }
 
     @Override
     public String getName() {
@@ -49,13 +49,8 @@ public class ListTracesTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             List<TraceDto> traces = verificationService.getUserTraces(userId);
             if (traces.isEmpty()) {
                 return objectMapper.writeValueAsString(Map.of(
@@ -87,9 +82,5 @@ public class ListTracesTool implements AiTool {
             log.error("list_traces failed", e);
             return errorJson("Failed to list traces.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

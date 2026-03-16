@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -23,6 +24,7 @@ import java.util.List;
  * 注意：Trace 会自动保存（当检测到违规时），无需前端传入 saveTrace 参数
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class VerificationRequestDto {
     /**
      * 设备验证数据列表（仅包含验证所需字段，不含 UI 布局信息）

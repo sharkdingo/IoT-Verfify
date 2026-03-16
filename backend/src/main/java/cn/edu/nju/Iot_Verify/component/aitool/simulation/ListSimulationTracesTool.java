@@ -1,17 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -22,11 +19,15 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class ListSimulationTracesTool implements AiTool {
+public class ListSimulationTracesTool extends AbstractAiTool {
 
     private final SimulationService simulationService;
-    private final ObjectMapper objectMapper;
+
+    public ListSimulationTracesTool(SimulationService simulationService,
+                                    ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.simulationService = simulationService;
+    }
 
     @Override
     public String getName() {
@@ -50,13 +51,8 @@ public class ListSimulationTracesTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             List<SimulationTraceSummaryDto> traces = simulationService.getUserSimulations(userId);
             if (traces == null) {
                 traces = List.of();
@@ -91,9 +87,5 @@ public class ListSimulationTracesTool implements AiTool {
             log.error("list_simulation_traces failed", e);
             return errorJson("Failed to list simulation traces.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

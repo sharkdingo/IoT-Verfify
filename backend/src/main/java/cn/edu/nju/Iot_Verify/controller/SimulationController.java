@@ -13,49 +13,36 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @Slf4j
+@Validated
 @RestController
-@RequestMapping("/api/verify")
+@RequestMapping("/api/simulate")
 @RequiredArgsConstructor
 public class SimulationController {
 
     private final SimulationService simulationService;
 
-    @PostMapping("/simulate")
+    @PostMapping
     public Result<SimulationResultDto> simulate(
             @CurrentUser Long userId,
             @Valid @RequestBody SimulationRequestDto request) {
-        SimulationResultDto result = simulationService.simulate(
-                userId,
-                request.getDevices(),
-                request.getRules(),
-                request.getSteps(),
-                request.isAttack(),
-                request.getIntensity(),
-                request.isEnablePrivacy());
+        SimulationResultDto result = simulationService.simulate(userId, request);
         return Result.success(result);
     }
 
-    @PostMapping("/simulate/async")
+    @PostMapping("/async")
     public Result<Long> simulateAsync(
             @CurrentUser Long userId,
             @Valid @RequestBody SimulationRequestDto request) {
         Long taskId = simulationService.createTask(userId, request.getSteps());
 
         try {
-            simulationService.simulateAsync(
-                    userId,
-                    taskId,
-                    request.getDevices(),
-                    request.getRules(),
-                    request.getSteps(),
-                    request.isAttack(),
-                    request.getIntensity(),
-                    request.isEnablePrivacy());
+            simulationService.simulateAsync(userId, taskId, request);
         } catch (TaskRejectedException e) {
             log.warn("Simulation task {} rejected: thread pool full", taskId);
             simulationService.failTaskById(taskId, "Server busy, please try again later");
@@ -65,47 +52,47 @@ public class SimulationController {
         return Result.success(taskId);
     }
 
-    @GetMapping("/simulations/tasks/{id}")
+    @GetMapping("/tasks/{id}")
     public Result<SimulationTaskDto> getTask(
             @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(simulationService.getTask(userId, id));
     }
 
-    @GetMapping("/simulations/tasks/{id}/progress")
+    @GetMapping("/tasks/{id}/progress")
     public Result<Integer> getTaskProgress(
             @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(simulationService.getTaskProgress(userId, id));
     }
 
-    @PostMapping("/simulations/tasks/{id}/cancel")
+    @PostMapping("/tasks/{id}/cancel")
     public Result<Boolean> cancelTask(
             @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(simulationService.cancelTask(userId, id));
     }
 
-    @PostMapping("/simulations")
+    @PostMapping("/traces")
     public Result<SimulationTraceDto> simulateAndSave(
             @CurrentUser Long userId,
             @Valid @RequestBody SimulationRequestDto request) {
         return Result.success(simulationService.simulateAndSave(userId, request));
     }
 
-    @GetMapping("/simulations")
+    @GetMapping("/traces")
     public Result<List<SimulationTraceSummaryDto>> getSimulations(@CurrentUser Long userId) {
         return Result.success(simulationService.getUserSimulations(userId));
     }
 
-    @GetMapping("/simulations/{id}")
+    @GetMapping("/traces/{id}")
     public Result<SimulationTraceDto> getSimulation(
             @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(simulationService.getSimulation(userId, id));
     }
 
-    @DeleteMapping("/simulations/{id}")
+    @DeleteMapping("/traces/{id}")
     public Result<Void> deleteSimulation(
             @CurrentUser Long userId,
             @PathVariable Long id) {

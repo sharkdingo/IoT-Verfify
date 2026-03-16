@@ -1,18 +1,15 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -21,11 +18,15 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class SimulateTaskStatusTool implements AiTool {
+public class SimulateTaskStatusTool extends AbstractAiTool {
 
     private final SimulationService simulationService;
-    private final ObjectMapper objectMapper;
+
+    public SimulateTaskStatusTool(SimulationService simulationService,
+                                  ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.simulationService = simulationService;
+    }
 
     @Override
     public String getName() {
@@ -51,18 +52,13 @@ public class SimulateTaskStatusTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             if (!args.has("taskId") || !args.path("taskId").canConvertToLong()) {
                 return errorJson("'taskId' is required.", "VALIDATION_ERROR", 400);
@@ -75,11 +71,11 @@ public class SimulateTaskStatusTool implements AiTool {
             SimulationTaskDto task = simulationService.getTask(userId, taskId);
             int progress = simulationService.getTaskProgress(userId, taskId);
 
-            return objectMapper.writeValueAsString(Map.of(
+            return successJson(Map.of(
                     "taskId", taskId,
                     "progress", progress,
                     "task", task
-            ));
+            ), "Simulation task status retrieved.");
         } catch (ServiceUnavailableException e) {
             log.warn("simulate_task_status busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -91,13 +87,5 @@ public class SimulateTaskStatusTool implements AiTool {
             return errorJson("Failed to query simulation task.",
                     "INTERNAL_ERROR", 500);
         }
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return errorJson(message, errorCode, status, Map.of());
-    }
-
-    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
     }
 }

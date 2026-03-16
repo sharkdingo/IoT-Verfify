@@ -8,8 +8,10 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -84,7 +86,7 @@ class VerificationServiceImplBuildResultTest {
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
                 NusmvResult.class, List.class, List.class, List.class,
-                Long.class, Long.class, List.class, Map.class);
+                Long.class, Long.class, List.class, Map.class, String.class);
         buildVerificationResult.setAccessible(true);
     }
 
@@ -98,7 +100,7 @@ class VerificationServiceImplBuildResultTest {
                                          List<SpecificationDto> specs,
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
-                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of());
+                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null);
     }
 
     private List<DeviceVerificationDto> singleDevice() {
@@ -132,7 +134,7 @@ class VerificationServiceImplBuildResultTest {
 
     @SuppressWarnings("unchecked")
     private Set<Long> cancelledTaskIds() throws Exception {
-        Field f = VerificationServiceImpl.class.getDeclaredField("cancelledTasks");
+        Field f = AbstractAsyncTaskService.class.getDeclaredField("cancelledTasks");
         f.setAccessible(true);
         return (Set<Long>) f.get(service);
     }
@@ -243,8 +245,7 @@ class VerificationServiceImplBuildResultTest {
 
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
                 () -> service.verify(
-                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                        false, 0, false));
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
         assertTrue(ex.getMessage().contains("busy"));
     }
 
@@ -259,8 +260,7 @@ class VerificationServiceImplBuildResultTest {
 
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
                 () -> service.verify(
-                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                        false, 0, false));
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
         assertTrue(ex.getMessage().contains("busy"));
         assertEquals(503, readResultCode(smv));
         JsonNode request = readRequestJson(smv);
@@ -277,8 +277,7 @@ class VerificationServiceImplBuildResultTest {
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
                 () -> service.verify(
-                        1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                        false, 0, false));
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
         assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
     }
 
@@ -298,8 +297,7 @@ class VerificationServiceImplBuildResultTest {
         when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
 
         service.verifyAsync(
-                1L, 7L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                false, 0, false);
+                1L, 7L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
 
         assertEquals(200, readResultCode(smv));
         JsonNode request = readRequestJson(smv);
@@ -313,8 +311,7 @@ class VerificationServiceImplBuildResultTest {
         cancelledTaskIds().add(8L);
 
         service.verifyAsync(
-                1L, 8L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                false, 0, false);
+                1L, 8L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
 
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -325,8 +322,7 @@ class VerificationServiceImplBuildResultTest {
         // simulating a DB-level race where the task was cancelled or started by another process
         // after the in-memory check passed.
         service.verifyAsync(
-                1L, 11L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                false, 0, false);
+                1L, 11L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
 
         // Verify the atomic start was attempted.
         verify(taskRepository).startTaskIfStillPending(
@@ -351,8 +347,7 @@ class VerificationServiceImplBuildResultTest {
         });
 
         VerificationResultDto result = service.verify(
-                1L, singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")),
-                false, 0, false);
+                1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
 
         assertFalse(result.isSafe());
         assertTrue(result.getCheckLogs().stream().anyMatch(log -> log.contains("timed out")));
@@ -484,5 +479,18 @@ class VerificationServiceImplBuildResultTest {
     private boolean wasTaskSaveCalled() {
         return mockingDetails(taskRepository).getInvocations().stream()
                 .anyMatch(invocation -> invocation.getMethod().getName().equals("save"));
+    }
+
+    private VerificationRequestDto makeRequest(List<DeviceVerificationDto> devices, List<RuleDto> rules,
+                                                List<SpecificationDto> specs, boolean isAttack,
+                                                int intensity, boolean enablePrivacy) {
+        VerificationRequestDto r = new VerificationRequestDto();
+        r.setDevices(devices);
+        r.setRules(rules);
+        r.setSpecs(specs);
+        r.setAttack(isAttack);
+        r.setIntensity(intensity);
+        r.setEnablePrivacy(enablePrivacy);
+        return r;
     }
 }

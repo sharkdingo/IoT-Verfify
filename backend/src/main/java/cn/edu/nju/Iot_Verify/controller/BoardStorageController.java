@@ -8,9 +8,18 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
-import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -108,7 +117,7 @@ public class BoardStorageController {
     }
 
     @DeleteMapping("/templates/{id}")
-    public Result<Void> deleteTemplate(@CurrentUser Long userId, @PathVariable String id) {
+    public Result<Void> deleteTemplate(@CurrentUser Long userId, @PathVariable Long id) {
         boardService.deleteDeviceTemplate(userId, id);
         return Result.success();
     }
@@ -131,22 +140,22 @@ public class BoardStorageController {
             @CurrentUser Long userId,
             @RequestParam(defaultValue = "5") Integer maxRecommendations,
             @RequestParam(defaultValue = "all") String category) {
-        
+
         try {
-            if (userId == null) {
-                return Result.unauthorized("User not logged in");
-            }
-            
-            String args = String.format("{\"maxRecommendations\": %d, \"category\": \"%s\"}", maxRecommendations, category);
+            String args = objectMapper.writeValueAsString(Map.of(
+                    "maxRecommendations", maxRecommendations,
+                    "category", category));
             String result = recommendRulesTool.execute(args);
-            
+
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
-            
+            throwIfToolError(resultMap);
+
             return Result.success(resultMap);
-            
+        } catch (BaseException e) {
+            throw e;
         } catch (Exception e) {
-            return Result.error(500, "Error: " + e.getMessage());
+            throw new InternalServerException("Failed to process rule recommendations", e);
         }
     }
 
@@ -160,24 +169,20 @@ public class BoardStorageController {
     public Result<Map<String, Object>> recommendDevices(
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody Map<String, Object> requestBody) {
-        
+
         try {
-            if (userId == null) {
-                return Result.unauthorized("User not logged in");
-            }
-            
-            // 构建参数 JSON
             String argsJson = objectMapper.writeValueAsString(requestBody);
             String result = recommendRelatedDevicesTool.executeBoardRecommendations(argsJson);
-            
+
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
-            
+            throwIfToolError(resultMap);
+
             return Result.success(resultMap);
-            
+        } catch (BaseException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Error in recommendDevices", e);
-            return Result.error(500, "Error: " + e.getMessage());
+            throw new InternalServerException("Failed to process device recommendations", e);
         }
     }
 
@@ -192,23 +197,45 @@ public class BoardStorageController {
     public Result<Map<String, Object>> checkDuplicateRule(
             @CurrentUser Long userId,
             @NotNull @Valid @RequestBody RuleDto rule) {
-        
+
         try {
-            if (userId == null) {
-                return Result.unauthorized("User not logged in");
-            }
-            
             String ruleJson = objectMapper.writeValueAsString(rule);
             String args = String.format("{\"newRule\": %s}", ruleJson);
             String result = checkDuplicateRuleTool.execute(args);
-            
+
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
-            
+            throwIfToolError(resultMap);
+
             return Result.success(resultMap);
-            
+        } catch (BaseException e) {
+            throw e;
         } catch (Exception e) {
-            return Result.error(500, "Error: " + e.getMessage());
+            throw new InternalServerException("Failed to process duplicate rule check", e);
+        }
+    }
+
+    /**
+     * Check if a Tool response is an error JSON and throw the appropriate exception.
+     * Tool error format: {"error":"...", "errorCode":"...", "status": <int>}
+     */
+    private void throwIfToolError(Map<String, Object> resultMap) {
+        if (!resultMap.containsKey("errorCode")) {
+            return;
+        }
+        String message = String.valueOf(resultMap.getOrDefault("error", "AI tool error"));
+        Object statusObj = resultMap.get("status");
+        int status = (statusObj instanceof Number n) ? n.intValue() : 500;
+
+        switch (status) {
+            case 400 -> throw new BadRequestException(message);
+            case 401 -> throw new UnauthorizedException(message);
+            case 403 -> throw new ForbiddenException(message);
+            case 404 -> throw new ResourceNotFoundException(message);
+            case 409 -> throw new ConflictException(message);
+            case 422 -> throw new ValidationException(message);
+            case 503 -> throw new ServiceUnavailableException(message);
+            default  -> throw new InternalServerException(message);
         }
     }
 }

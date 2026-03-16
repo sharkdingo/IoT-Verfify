@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.util;
 
+import cn.edu.nju.Iot_Verify.configure.JwtConfig;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -8,7 +9,6 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
@@ -26,26 +26,22 @@ public class JwtUtil {
     private static final String INSECURE_DEFAULT_PREFIX = "iot-verify-secret-key";
     private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
 
-    @Value("${jwt.secret}")
-    private String secret;
-
-    @Value("${jwt.expiration}")
-    private Long expiration;
-
+    private final JwtConfig config;
     private final Environment environment;
 
     private SecretKey signingKey;
 
-    public JwtUtil(Environment environment) {
+    public JwtUtil(JwtConfig config, Environment environment) {
+        this.config = config;
         this.environment = environment;
     }
 
     @PostConstruct
     public void init() {
-        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+        byte[] keyBytes = config.getSecret().getBytes(StandardCharsets.UTF_8);
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
 
-        if (secret.startsWith(INSECURE_DEFAULT_PREFIX) && isProductionProfile()) {
+        if (config.getSecret().startsWith(INSECURE_DEFAULT_PREFIX) && isProductionProfile()) {
             log.warn("JWT secret is still using the insecure default value — "
                     + "configure jwt.secret (or JWT_SECRET env) for production!");
         }
@@ -66,7 +62,7 @@ public class JwtUtil {
 
     public String generateToken(Long userId, String phone) {
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + expiration);
+        Date expiryDate = new Date(now.getTime() + config.getExpiration());
 
         return Jwts.builder()
                 .setSubject(String.valueOf(userId))

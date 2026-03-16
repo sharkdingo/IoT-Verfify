@@ -1,6 +1,6 @@
 # NuSMV 模块用户指南
 
-> **最后更新**: 2026年3月5日
+> **最后更新**: 2026年3月15日
 > **版本**: v2.1 (标识符清洗 + 边界集中化 + 原子化取消安全 + 用户隔离)
 
 本文档面向**使用者**，介绍如何通过 API 进入 NuSMV 验证流程，以及用户输入如何影响最终生成的 SMV 模型。
@@ -77,13 +77,13 @@
 |------|------|--------|----------|
 | 同步验证 | `POST /api/verify` | `VerificationResultDto` | 小规模模型，快速验证 |
 | 异步验证 | `POST /api/verify/async` | `taskId (Long)` | 大规模模型，后台执行 |
-| 随机模拟 | `POST /api/verify/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为（不落库） |
-| 异步模拟 | `POST /api/verify/simulate/async` | `taskId (Long)` | 大规模模拟，后台执行 |
-| 模拟并持久化 | `POST /api/verify/simulations` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
+| 随机模拟 | `POST /api/simulate` | `SimulationResultDto` | 观察模型 N 步随机行为（不落库） |
+| 异步模拟 | `POST /api/simulate/async` | `taskId (Long)` | 大规模模拟，后台执行 |
+| 模拟并持久化 | `POST /api/simulate/traces` | `SimulationTraceDto` | 模拟并保存记录，支持后续查询/删除 |
 
-异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/verify/simulations/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
+异步验证通过 `GET /api/verify/tasks/{id}` / `.../progress` 轮询；异步模拟通过 `GET /api/simulate/tasks/{id}` / `.../progress` 轮询，两个任务都支持 `.../cancel` 取消。
 
-同步 `POST /api/verify` 与 `POST /api/verify/simulate` 会透传 `SmvGenerationException`（响应 `data.errorCategory` 保留类别，并兼容 `[errorCategory] message` 文本），不会统一降级为通用 internal error。
+同步 `POST /api/verify` 与 `POST /api/simulate` 会透传 `SmvGenerationException`（响应 `data.errorCategory` 保留类别，并兼容 `[errorCategory] message` 文本），不会统一降级为通用 internal error。
 
 ---
 
@@ -1042,7 +1042,7 @@ Trace Type: Counterexample
 ### 10.1 模拟流程
 
 ```
-用户 → POST /api/verify/simulate (SimulationRequestDto)
+用户 → POST /api/simulate (SimulationRequestDto)
   │
   ├─ SimulationController.simulate()
   │     └─ simulationService.simulate(userId, devices, rules, steps, isAttack, intensity, enablePrivacy)
@@ -1108,7 +1108,7 @@ Trace Type: Counterexample
 | 取消回收策略 | 同步请求超时 `future.cancel(true)` 后，会调用线程池 `purge()` 以更快清理已取消的排队任务 |
 | 全局并发闸门 | `NusmvExecutor` 使用 `Semaphore` 控制 NuSMV 进程总并发（`nusmv.max-concurrent`），验证与模拟共享 |
 | 许可等待超时 | 获取并发许可超时由 `nusmv.acquire-permit-timeout-ms` 控制，超时返回 busy（调用层转换为 `503` 或任务失败） |
-| 持久化（可选） | `POST /api/verify/simulate` 不落库；`POST /api/verify/simulations` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
+| 持久化（可选） | `POST /api/simulate` 不落库；`POST /api/simulate/traces` 执行模拟并持久化到 `simulation_trace` 表，支持后续查询/删除 |
 | 调试产物 | 验证/模拟在生成 `model.smv` 后会先在同目录写 `request.json`（请求快照）；`NusmvExecutor` 会将原始输出写到 `output.txt`；流程产出结果对象时会写 `result.json` |
 | `result.json` 语义 | `result.json` 外层 `code/message` 不固定 `200`：成功 `200/success`，busy 类失败 `503`，模拟日志命中 `timed out` 时 `504`，其余失败 `500` |
 | 失败前置说明 | 若请求在生成 `model.smv` 之前就失败（如输入前置校验失败），不会产生 `request.json/result.json` |
@@ -1126,18 +1126,22 @@ Trace Type: Counterexample
 | `GET` | `/api/verify/tasks/{id}` | 获取异步验证任务状态 |
 | `GET` | `/api/verify/tasks/{id}/progress` | 获取验证任务进度 (0-100) |
 | `POST` | `/api/verify/tasks/{id}/cancel` | 取消异步验证任务 |
-| `POST` | `/api/verify/simulate` | 随机模拟 N 步（不落库），返回 `SimulationResultDto` |
-| `POST` | `/api/verify/simulate/async` | 异步随机模拟，返回 `taskId` |
-| `GET` | `/api/verify/simulations/tasks/{id}` | 获取模拟异步任务状态 |
-| `GET` | `/api/verify/simulations/tasks/{id}/progress` | 获取模拟任务进度 (0-100) |
-| `POST` | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟异步任务 |
-| `POST` | `/api/verify/simulations` | 随机模拟 N 步并持久化，返回 `SimulationTraceDto` |
-| `GET` | `/api/verify/simulations` | 获取当前用户所有模拟记录（摘要） |
-| `GET` | `/api/verify/simulations/{id}` | 获取单条模拟记录（含完整 states） |
-| `DELETE` | `/api/verify/simulations/{id}` | 删除单条模拟记录 |
+| `POST` | `/api/simulate` | 随机模拟 N 步（不落库），返回 `SimulationResultDto` |
+| `POST` | `/api/simulate/async` | 异步随机模拟，返回 `taskId` |
+| `GET` | `/api/simulate/tasks/{id}` | 获取模拟异步任务状态 |
+| `GET` | `/api/simulate/tasks/{id}/progress` | 获取模拟任务进度 (0-100) |
+| `POST` | `/api/simulate/tasks/{id}/cancel` | 取消模拟异步任务 |
+| `POST` | `/api/simulate/traces` | 随机模拟 N 步并持久化，返回 `SimulationTraceDto` |
+| `GET` | `/api/simulate/traces` | 获取当前用户所有模拟记录（摘要） |
+| `GET` | `/api/simulate/traces/{id}` | 获取单条模拟记录（含完整 states） |
+| `DELETE` | `/api/simulate/traces/{id}` | 删除单条模拟记录 |
 | `GET` | `/api/verify/traces` | 获取用户所有 Trace |
 | `GET` | `/api/verify/traces/{id}` | 获取单个 Trace |
 | `DELETE` | `/api/verify/traces/{id}` | 删除 Trace |
+| `GET` | `/api/verify/traces/{id}/fault-rules` | 故障定位（识别反例中被触发的规则） |
+| `POST` | `/api/verify/traces/{id}/fix` | 修复建议（定位故障规则并尝试修复策略） |
+
+Fix 端点的请求体（`FixRequestDto`）为**可选**：省略或传 `null` 时使用默认策略（parameter → condition → disable）。可指定 `strategies`（策略列表）和 `preferredRanges`（首选参数范围，key 格式 `r{ruleIdx}_c{condIdx}`，value 含 `lower`/`upper` 整数）。AI 工具 `fix_violation` 提供相同功能（traceId 必填，strategies 和 preferredRanges 可选）。
 
 所有端点需要 JWT 认证（`Authorization: Bearer <token>`），用户 ID 通过 `@CurrentUser` 注解自动注入。
 
@@ -1155,6 +1159,7 @@ Trace Type: Counterexample
 6. **结果闭环（模拟）**：轨迹解析、`steps` 与 `requestedSteps` 对照（`steps = states.size() - 1`，可能小于 `requestedSteps`）、可选持久化、异步任务生命周期管理。跨实例取消安全：`completeTask`/`failTask` 使用原子条件 UPDATE（`WHERE status <> CANCELLED`）消除 TOCTOU 竞态，返回受影响行数（0 = 已取消）。
 7. **可观测性闭环**：`model.smv` / `request.json` / `output.txt` / `result.json`（验证与模拟主路径）可用于回放与排障，取消早退路径需结合任务状态排查。
 8. **数值边界闭环**：环境变量与内部变量的 `next()` 候选表达式统一使用 `max(lower, min(upper, expr))` 夹紧，覆盖 WITH-rate / no-rate 的边界分支与 TRUE 分支，防止算术结果超出 NuSMV VAR 声明区间。攻击模式下上界扩展公式集中在 `SmvBoundsUtils.resolveEffectiveUpperBound()`，由 `SmvDeviceModuleBuilder`（VAR 声明）和 `SmvMainModuleBuilder`（transition clamp 范围）共享，确保声明区间与转换夹紧区间一致。
+9. **修复闭环（Fix Pipeline）**：`FixServiceImpl` → `RuleFixer` → 三策略（parameter/condition/disable）链式执行。全局软超时由 `FixConfig.fixTimeoutMs`（默认 300s，`@Min(1000)`）控制，`FixContext.isExpired()` 在策略循环入口、`forwardVerify()` 入口及各策略内部循环处检查 deadline；超时后 summary 追加 "(fix timed out; results may be partial)"。模板漂移检测：`DeviceTemplatePo.updatedAt`（`@PrePersist`/`@PreUpdate`）对比 `trace.createdAt`，漂移时 summary 追加 WARNING。已知限制：软超时——deadline 过后最多多执行 1 次在途 NuSMV 调用（上限 = `nusmv.timeout-ms`）。
 
 仍需依赖的运行前提：
 

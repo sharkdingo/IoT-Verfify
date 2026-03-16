@@ -1,7 +1,5 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
-import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
@@ -18,25 +16,13 @@ public interface SimulationService {
     /**
      * 执行模拟（不落库）
      */
-    SimulationResultDto simulate(Long userId,
-                                  List<DeviceVerificationDto> devices,
-                                  List<RuleDto> rules,
-                                  int steps,
-                                  boolean isAttack,
-                                  int intensity,
-                                  boolean enablePrivacy);
+    SimulationResultDto simulate(Long userId, SimulationRequestDto request);
 
     Long createTask(Long userId, int requestedSteps);
 
     void failTaskById(Long taskId, String errorMessage);
 
-    void simulateAsync(Long userId, Long taskId,
-                       List<DeviceVerificationDto> devices,
-                       List<RuleDto> rules,
-                       int steps,
-                       boolean isAttack,
-                       int intensity,
-                       boolean enablePrivacy);
+    void simulateAsync(Long userId, Long taskId, SimulationRequestDto request);
 
     SimulationTaskDto getTask(Long userId, Long taskId);
 

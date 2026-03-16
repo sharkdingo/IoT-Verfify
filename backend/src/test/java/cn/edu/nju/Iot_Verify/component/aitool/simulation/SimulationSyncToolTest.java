@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -20,8 +20,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -33,7 +31,7 @@ import static org.mockito.Mockito.when;
 class SimulationSyncToolTest {
 
     @Mock
-    private BoardDataHelper boardDataHelper;
+    private BoardDataConverter boardDataConverter;
     @Mock
     private BoardStorageService boardStorageService;
     @Mock
@@ -60,7 +58,7 @@ class SimulationSyncToolTest {
         DeviceVerificationDto device = new DeviceVerificationDto();
         device.setVarName("dev_1");
         device.setTemplateName("Light");
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
 
         SimulationResultDto result = SimulationResultDto.builder()
@@ -68,21 +66,21 @@ class SimulationSyncToolTest {
                 .steps(10)
                 .logs(List.of("ok"))
                 .build();
-        when(simulationService.simulate(anyLong(), any(), any(), anyInt(), anyBoolean(), anyInt(), anyBoolean()))
+        when(simulationService.simulate(anyLong(), any()))
                 .thenReturn(result);
 
-        SimulateModelTool tool = new SimulateModelTool(boardDataHelper, boardStorageService, simulationService, failingMapper);
+        SimulateModelTool tool = new SimulateModelTool(boardDataConverter, boardStorageService, simulationService, failingMapper);
         String response = tool.execute("{}");
         JsonNode json = objectMapper.readTree(response);
 
         assertEquals("Simulation completed.", json.path("message").asText());
         assertTrue(json.path("warning").asText().contains("serialization degraded"));
-        verify(simulationService).simulate(anyLong(), any(), any(), anyInt(), anyBoolean(), anyInt(), anyBoolean());
+        verify(simulationService).simulate(anyLong(), any());
     }
 
     @Test
     void simulateModel_invalidJsonArgs_shouldReturnValidationError() throws Exception {
-        SimulateModelTool tool = new SimulateModelTool(boardDataHelper, boardStorageService, simulationService, objectMapper);
+        SimulateModelTool tool = new SimulateModelTool(boardDataConverter, boardStorageService, simulationService, objectMapper);
 
         String response = tool.execute("{");
         JsonNode json = objectMapper.readTree(response);
@@ -90,6 +88,6 @@ class SimulationSyncToolTest {
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
         assertEquals("Invalid JSON arguments.", json.path("error").asText());
-        verify(simulationService, never()).simulate(anyLong(), any(), any(), anyInt(), anyBoolean(), anyInt(), anyBoolean());
+        verify(simulationService, never()).simulate(anyLong(), any());
     }
 }

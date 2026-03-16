@@ -57,6 +57,12 @@ nusmv:
   max-concurrent: ${NUSMV_MAX_CONCURRENT:6}
   acquire-permit-timeout-ms: ${NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS:10000}
 
+fix:
+  max-attempts: ${FIX_MAX_ATTEMPTS:20}
+  max-candidates-per-rule: ${FIX_MAX_CANDIDATES_PER_RULE:5}
+  max-refine-attempts: ${FIX_MAX_REFINE_ATTEMPTS:10}
+  fix-timeout-ms: ${FIX_TIMEOUT_MS:300000}
+
 thread-pool:
   chat:
     core-pool-size: ${THREAD_POOL_CHAT_CORE:10}

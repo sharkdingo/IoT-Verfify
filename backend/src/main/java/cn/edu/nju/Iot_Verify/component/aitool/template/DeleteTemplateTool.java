@@ -1,17 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -21,11 +18,14 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class DeleteTemplateTool implements AiTool {
+public class DeleteTemplateTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final ObjectMapper objectMapper;
+
+    public DeleteTemplateTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+    }
 
     @Override
     public String getName() {
@@ -36,8 +36,8 @@ public class DeleteTemplateTool implements AiTool {
     public ChatTool getDefinition() {
         Map<String, Object> props = new HashMap<>();
         props.put("templateId", Map.of(
-                "type", "string",
-                "description", "The ID of the template to delete (from list_templates result)."
+                "type", "integer",
+                "description", "The numeric ID of the template to delete (from list_templates result)."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -54,27 +54,39 @@ public class DeleteTemplateTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
-            String templateId = trimToNull(args.path("templateId").asText(null));
-            if (templateId == null) {
+            JsonNode templateIdNode = args.path("templateId");
+            if (templateIdNode.isMissingNode() || templateIdNode.isNull()) {
                 return errorJson("Template ID is required.", "VALIDATION_ERROR", 400);
+            }
+            long templateId;
+            if (templateIdNode.isIntegralNumber()) {
+                if (!templateIdNode.canConvertToLong()) {
+                    return errorJson("Template ID is out of range.", "VALIDATION_ERROR", 400);
+                }
+                templateId = templateIdNode.asLong();
+            } else {
+                // Fallback: try parsing string representation
+                String raw = trimToNull(templateIdNode.asText(null));
+                if (raw == null) {
+                    return errorJson("Template ID is required.", "VALIDATION_ERROR", 400);
+                }
+                try {
+                    templateId = Long.parseLong(raw.trim());
+                } catch (NumberFormatException e) {
+                    return errorJson("Template ID must be a number.", "VALIDATION_ERROR", 400);
+                }
             }
 
             boardStorageService.deleteDeviceTemplate(userId, templateId);
-            return writeJson(Map.of("message", "Template deleted successfully."));
+            return successJson(Map.of("message", "Template deleted successfully."), "Template deleted successfully.");
         } catch (ServiceUnavailableException e) {
             log.warn("delete_template busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -85,21 +97,5 @@ public class DeleteTemplateTool implements AiTool {
             log.error("delete_template failed", e);
             return errorJson("Failed to delete template.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
-    }
-
-    private String writeJson(Map<String, Object> body) {
-        return AiToolResponseHelper.success(objectMapper, body, "Template deleted successfully.");
     }
 }

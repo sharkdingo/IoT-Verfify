@@ -1,11 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,7 +14,6 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -29,13 +26,11 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class RecommendRulesTool implements AiTool {
+public class RecommendRulesTool extends AbstractAiTool {
 
     private final DeviceInfoHelper deviceInfoHelper;
     private final BoardStorageService boardStorageService;
     private final ArkAiClient arkAiClient;
-    private final ObjectMapper objectMapper;
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)自动化规则推荐助手。你的任务是根据用户面板上的设备信息，
@@ -91,6 +86,16 @@ public class RecommendRulesTool implements AiTool {
 - 如果设备信息不足，返回空的recommendations数组
 """;
 
+    public RecommendRulesTool(DeviceInfoHelper deviceInfoHelper,
+                              BoardStorageService boardStorageService,
+                              ArkAiClient arkAiClient,
+                              ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.deviceInfoHelper = deviceInfoHelper;
+        this.boardStorageService = boardStorageService;
+        this.arkAiClient = arkAiClient;
+    }
+
     @Override
     public String getName() {
         return "recommend_rules";
@@ -121,25 +126,19 @@ public class RecommendRulesTool implements AiTool {
                         .name(getName())
                         .description("Analyze current board devices and recommend intelligent automation rules using AI. " +
                                 "This tool uses AI to analyze each device's capabilities (APIs, variables, states) and suggests " +
-                                "meaningful rules based on device联动, security, energy saving, or comfort scenarios.")
+                                "meaningful rules based on device linkage, security, energy saving, or comfort scenarios.")
                         .parameters(schema)
                         .build()
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
 
             int maxRecommendations = args.path("maxRecommendations").asInt(5);
@@ -151,12 +150,12 @@ public class RecommendRulesTool implements AiTool {
             log.info("=== RULE RECOMMENDATION DEBUG ===");
             log.info("User ID: {}", userId);
             log.info("Devices found: {}", devices.size());
-            
+
             // 打印每个设备的详细信息
             for (DeviceInfoHelper.DeviceInfo device : devices) {
-                log.info("Device: nodeId={}, label={}, templateName={}", 
+                log.info("Device: nodeId={}, label={}, templateName={}",
                     device.nodeId(), device.label(), device.templateName());
-                
+
                 // 打印变量
                 if (device.variables() != null && !device.variables().isEmpty()) {
                     List<String> varNames = device.variables().stream()
@@ -164,7 +163,7 @@ public class RecommendRulesTool implements AiTool {
                         .collect(Collectors.toList());
                     log.info("  Variables: {}", varNames);
                 }
-                
+
                 // 打印 APIs
                 if (device.apis() != null && !device.apis().isEmpty()) {
                     List<String> apiNames = device.apis().stream()
@@ -187,20 +186,20 @@ public class RecommendRulesTool implements AiTool {
             }
 
             // 获取现有规则，避免推荐重复的
-            List<cn.edu.nju.Iot_Verify.dto.rule.RuleDto> existingRules = 
+            List<cn.edu.nju.Iot_Verify.dto.rule.RuleDto> existingRules =
                     safeList(boardStorageService.getRules(userId));
 
             log.info("Generating AI-based rule recommendations for user {}: {} devices, max {} recommendations, category: {}",
                     userId, devices.size(), maxRecommendations, category);
-            
+
             // 构建现有规则的简要信息
             String existingRulesInfo = buildExistingRulesInfo(existingRules);
 
             // 调用 Ark AI 生成智能推荐
             String aiResponse = generateRecommendationsWithAI(
                     devices,
-                    existingRulesInfo, 
-                    maxRecommendations, 
+                    existingRulesInfo,
+                    maxRecommendations,
                     category
             );
 
@@ -208,9 +207,9 @@ public class RecommendRulesTool implements AiTool {
 
             // 解析 AI 响应并进行验证
             String result = parseAiResponse(aiResponse, devices, maxRecommendations);
-            
+
             log.info("Final Result: {}", result);
-            
+
             return result;
 
         } catch (ServiceUnavailableException e) {
@@ -229,8 +228,8 @@ public class RecommendRulesTool implements AiTool {
      * 调用 Ark AI 生成智能推荐
      */
     private String generateRecommendationsWithAI(
-            List<DeviceInfoHelper.DeviceInfo> devices, 
-            String existingRulesInfo, 
+            List<DeviceInfoHelper.DeviceInfo> devices,
+            String existingRulesInfo,
             int maxRecommendations,
             String category) {
 
@@ -248,27 +247,29 @@ public class RecommendRulesTool implements AiTool {
                 .maxTokens(4000)
                 .build();
 
+        ChatCompletionResult result;
         try {
             log.info("Calling Ark AI for recommendations...");
-            ChatCompletionResult result = arkAiClient.getArkService().createChatCompletion(request);
-            if (result.getChoices() == null || result.getChoices().isEmpty()) {
-                log.warn("AI returned empty choices");
-                return "{\"recommendations\": []}";
-            }
-            
-            ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-            if (responseMsg == null || responseMsg.getContent() == null) {
-                log.warn("AI returned null message content");
-                return "{\"recommendations\": []}";
-            }
-            
-            String content = responseMsg.getContent().toString();
-            log.info("AI response content length: {}", content.length());
-            return content;
+            result = arkAiClient.getArkService().createChatCompletion(request);
         } catch (Exception e) {
             log.error("Failed to call Ark AI for recommendations", e);
-            throw new RuntimeException("AI service unavailable: " + e.getMessage());
+            throw ServiceUnavailableException.aiService();
         }
+
+        if (result.getChoices() == null || result.getChoices().isEmpty()) {
+            log.warn("AI returned empty choices");
+            return "{\"recommendations\": []}";
+        }
+
+        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
+        if (responseMsg == null || responseMsg.getContent() == null) {
+            log.warn("AI returned null message content");
+            return "{\"recommendations\": []}";
+        }
+
+        String content = responseMsg.getContent().toString();
+        log.info("AI response content length: {}", content.length());
+        return content;
     }
 
     /**
@@ -277,26 +278,26 @@ public class RecommendRulesTool implements AiTool {
     private String buildUserPrompt(String deviceInfoJson, String existingRulesInfo, int maxRecommendations, String category) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("请根据以下设备信息生成智能自动化规则推荐。\n\n");
-        
+
         prompt.append("## 设备列表\n");
         prompt.append(deviceInfoJson);
         prompt.append("\n\n");
-        
+
         if (existingRulesInfo != null && !existingRulesInfo.isEmpty()) {
             prompt.append("## 现有规则（避免重复推荐）\n");
             prompt.append(existingRulesInfo);
             prompt.append("\n\n");
         }
-        
+
         prompt.append("## 推荐要求\n");
         prompt.append("- 最大推荐数量: ").append(maxRecommendations).append("\n");
-        
+
         if (!"all".equals(category)) {
             prompt.append("- 分类筛选: ").append(category).append("\n");
         }
-        
+
         prompt.append("\n请直接返回JSON格式的推荐结果，不要包含其他文字。");
-        
+
         return prompt.toString();
     }
 
@@ -396,31 +397,31 @@ public class RecommendRulesTool implements AiTool {
             if (cleanedResponse.endsWith("```")) {
                 cleanedResponse = cleanedResponse.substring(0, cleanedResponse.lastIndexOf("```")).trim();
             }
-            
+
             // 构建设备能力映射，用于验证
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap = new HashMap<>();
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 deviceMap.put(device.nodeId(), device);
             }
-            
+
             // 尝试解析 AI 返回的 JSON
             JsonNode root = objectMapper.readTree(cleanedResponse);
-            
+
             JsonNode recommendationsNode = root.path("recommendations");
             if (recommendationsNode.isMissingNode() || !recommendationsNode.isArray()) {
                 // 如果AI没有返回正确格式，尝试直接使用整个响应
                 recommendationsNode = root;
             }
-            
+
             List<Map<String, Object>> recommendations = new ArrayList<>();
             int count = 0;
-            
+
             for (JsonNode rec : recommendationsNode) {
                 if (count >= maxRecommendations) break;
-                
+
                 try {
                     Map<String, Object> recommendation = objectMapper.convertValue(rec, Map.class);
-                    
+
                     // 验证并过滤推荐
                     if (isValidRecommendation(recommendation, deviceMap)) {
                         recommendations.add(recommendation);
@@ -437,14 +438,14 @@ public class RecommendRulesTool implements AiTool {
             if (recommendations.isEmpty()) {
                 result.put("message", "No valid recommendations available. AI suggestions did not match actual device capabilities.");
             } else {
-                result.put("message", String.format("Found %d validated rule recommendations based on your current devices.", 
+                result.put("message", String.format("Found %d validated rule recommendations based on your current devices.",
                         recommendations.size()));
             }
             result.put("count", recommendations.size());
             result.put("recommendations", recommendations);
 
             return objectMapper.writeValueAsString(result);
-            
+
         } catch (Exception e) {
             log.error("Failed to parse AI response", e);
             // 返回空结果而不是错误
@@ -465,36 +466,36 @@ public class RecommendRulesTool implements AiTool {
      * 验证推荐是否使用设备实际存在的变量和API
      */
     @SuppressWarnings("unchecked")
-    private boolean isValidRecommendation(Map<String, Object> recommendation, 
+    private boolean isValidRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap) {
-        
+
         if (!recommendation.containsKey("conditions") || !recommendation.containsKey("command")) {
             return false;
         }
-        
+
         List<Map<String, Object>> conditions = (List<Map<String, Object>>) recommendation.get("conditions");
         Map<String, Object> command = (Map<String, Object>) recommendation.get("command");
-        
+
         if (conditions == null || conditions.isEmpty() || command == null) {
             return false;
         }
-        
+
         // 验证每个触发条件
         for (Map<String, Object> condition : conditions) {
             String deviceName = (String) condition.get("deviceName");
             String attribute = (String) condition.get("attribute");
-            
+
             if (deviceName == null || attribute == null) {
                 return false;
             }
-            
+
             // 检查设备是否存在
             DeviceInfoHelper.DeviceInfo device = deviceMap.get(deviceName);
             if (device == null) {
                 log.debug("Device {} not found in board", deviceName);
                 return false;
             }
-            
+
             // 检查属性是否存在于设备的变量中
             boolean attrExists = false;
             if (device.variables() != null) {
@@ -505,27 +506,27 @@ public class RecommendRulesTool implements AiTool {
                     }
                 }
             }
-            
+
             if (!attrExists) {
                 log.debug("Attribute {} not found in device {} variables", attribute, deviceName);
                 return false;
             }
         }
-        
+
         // 验证执行动作
         String actionDeviceName = (String) command.get("deviceName");
         String action = (String) command.get("action");
-        
+
         if (actionDeviceName == null || action == null) {
             return false;
         }
-        
+
         DeviceInfoHelper.DeviceInfo actionDevice = deviceMap.get(actionDeviceName);
         if (actionDevice == null) {
             log.debug("Action device {} not found in board", actionDeviceName);
             return false;
         }
-        
+
         // 检查动作是否存在于设备的API中
         boolean actionExists = false;
         if (actionDevice.apis() != null) {
@@ -536,20 +537,12 @@ public class RecommendRulesTool implements AiTool {
                 }
             }
         }
-        
+
         if (!actionExists) {
             log.debug("Action {} not found in device {} APIs", action, actionDeviceName);
             return false;
         }
-        
+
         return true;
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? Collections.emptyList() : list;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

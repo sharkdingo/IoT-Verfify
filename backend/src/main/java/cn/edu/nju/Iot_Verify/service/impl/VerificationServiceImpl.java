@@ -24,11 +24,11 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
+import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -51,7 +51,7 @@ import java.util.concurrent.*;
  */
 @Slf4j
 @Service
-public class VerificationServiceImpl implements VerificationService {
+public class VerificationServiceImpl extends AbstractAsyncTaskService<VerificationTaskPo> implements VerificationService {
 
     private final SmvGenerator smvGenerator;
     private final SmvTraceParser smvTraceParser;
@@ -62,16 +62,8 @@ public class VerificationServiceImpl implements VerificationService {
     private final TraceMapper traceMapper;
     private final SpecificationMapper specificationMapper;
     private final VerificationTaskMapper verificationTaskMapper;
-    private final ObjectMapper objectMapper;
     private final ThreadPoolTaskExecutor syncVerificationExecutor;
     private final TransactionTemplate transactionTemplate;
-
-    private static final int MAX_OUTPUT_LENGTH = 10000;
-    private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
-
-    private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
-    private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
 
     public VerificationServiceImpl(SmvGenerator smvGenerator,
                                    SmvTraceParser smvTraceParser,
@@ -85,6 +77,7 @@ public class VerificationServiceImpl implements VerificationService {
                                    ObjectMapper objectMapper,
                                    @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor,
                                    TransactionTemplate transactionTemplate) {
+        super(objectMapper, "VerificationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
         this.nusmvExecutor = nusmvExecutor;
@@ -94,7 +87,6 @@ public class VerificationServiceImpl implements VerificationService {
         this.traceMapper = traceMapper;
         this.specificationMapper = specificationMapper;
         this.verificationTaskMapper = verificationTaskMapper;
-        this.objectMapper = objectMapper;
         this.syncVerificationExecutor = syncVerificationExecutor;
         this.transactionTemplate = transactionTemplate;
     }
@@ -121,13 +113,14 @@ public class VerificationServiceImpl implements VerificationService {
     // ==================== 同步验证 ====================
 
     @Override
-    public VerificationResultDto verify(Long userId,
-                                        List<DeviceVerificationDto> devices,
-                                        List<RuleDto> rules,
-                                        List<SpecificationDto> specs,
-                                        boolean isAttack,
-                                        int intensity,
-                                        boolean enablePrivacy) {
+    public VerificationResultDto verify(Long userId, VerificationRequestDto request) {
+        List<DeviceVerificationDto> devices = request.getDevices();
+        List<RuleDto> rules = request.getRules();
+        List<SpecificationDto> specs = request.getSpecs();
+        boolean isAttack = request.isAttack();
+        int intensity = request.getIntensity();
+        boolean enablePrivacy = request.isEnablePrivacy();
+
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         if (devices == null || devices.isEmpty()) {
             return buildErrorResult("", List.of("Error: devices list cannot be empty"));
@@ -145,7 +138,7 @@ public class VerificationServiceImpl implements VerificationService {
         Future<VerificationResultDto> future;
         try {
             future = syncVerificationExecutor.submit(() ->
-                    doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy));
+                    doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, request));
         } catch (RejectedExecutionException e) {
             log.warn("Sync verification request rejected: executor is saturated ({})", syncVerificationExecutorSnapshot());
             throw new ServiceUnavailableException("Verification service is busy, please retry later", e);
@@ -176,12 +169,13 @@ public class VerificationServiceImpl implements VerificationService {
                                            List<RuleDto> rules,
                                            List<SpecificationDto> specs,
                                            boolean isAttack, int intensity,
-                                           boolean enablePrivacy) {
+                                           boolean enablePrivacy,
+                                           VerificationRequestDto request) {
         List<String> checkLogs = new ArrayList<>();
         File smvFile = null;
         Map<String, DeviceSmvData> deviceSmvMap = null;
         VerificationResultDto finalResult = null;
-        String requestJson = buildRequestSnapshot(devices, rules, specs, isAttack, intensity, enablePrivacy);
+        String requestJson = buildRequestSnapshot(request);
 
         try {
             checkLogs.add("Generating NuSMV model...");
@@ -213,7 +207,7 @@ public class VerificationServiceImpl implements VerificationService {
             checkLogs.add("NuSMV execution completed.");
 
             // Build per-spec results and reuse deviceSmvMap from generation stage.
-            finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap);
+            finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap, requestJson);
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
@@ -267,19 +261,7 @@ public class VerificationServiceImpl implements VerificationService {
         }
     }
 
-    private String buildRequestSnapshot(List<DeviceVerificationDto> devices,
-                                        List<RuleDto> rules,
-                                        List<SpecificationDto> specs,
-                                        boolean isAttack,
-                                        int intensity,
-                                        boolean enablePrivacy) {
-        VerificationRequestDto request = new VerificationRequestDto();
-        request.setDevices(devices);
-        request.setRules(rules != null ? rules : List.of());
-        request.setSpecs(specs != null ? specs : List.of());
-        request.setAttack(isAttack);
-        request.setIntensity(intensity);
-        request.setEnablePrivacy(enablePrivacy);
+    private String buildRequestSnapshot(VerificationRequestDto request) {
         return JsonUtils.toJson(request);
     }
 
@@ -351,17 +333,19 @@ public class VerificationServiceImpl implements VerificationService {
 
     @Override
     @Async("verificationTaskExecutor")
-    public void verifyAsync(Long userId, Long taskId,
-                            List<DeviceVerificationDto> devices,
-                            List<RuleDto> rules,
-                            List<SpecificationDto> specs,
-                            boolean isAttack, int intensity,
-                            boolean enablePrivacy) {
+    public void verifyAsync(Long userId, Long taskId, VerificationRequestDto request) {
+        List<DeviceVerificationDto> devices = request.getDevices();
+        List<RuleDto> rules = request.getRules();
+        List<SpecificationDto> specs = request.getSpecs();
+        boolean isAttack = request.isAttack();
+        int intensity = request.getIntensity();
+        boolean enablePrivacy = request.isEnablePrivacy();
+
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
-        String requestJson = buildRequestSnapshot(devices, safeRules, specs, isAttack, intensity, enablePrivacy);
+        String requestJson = buildRequestSnapshot(request);
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
-        runningTasks.put(taskId, Thread.currentThread());
+        registerRunningTask(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
 
         File smvFile = null;
@@ -369,7 +353,7 @@ public class VerificationServiceImpl implements VerificationService {
         VerificationResultDto finalResult = null;
         try {
             // Check in-memory cancellation marker (fast path for same-instance cancellation).
-            if (cancelledTasks.contains(taskId)) {
+            if (isTaskCancelled(taskId)) {
                 return;
             }
 
@@ -415,7 +399,7 @@ public class VerificationServiceImpl implements VerificationService {
                     userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
-            if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
+            if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
             if (smvFile == null || !smvFile.exists()) {
@@ -430,7 +414,7 @@ public class VerificationServiceImpl implements VerificationService {
             updateTaskProgress(taskId, 50, "Executing NuSMV");
             NusmvResult result = nusmvExecutor.execute(smvFile);
 
-            if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
+            if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
 
@@ -443,7 +427,7 @@ public class VerificationServiceImpl implements VerificationService {
 
             updateTaskProgress(taskId, 80, "Parsing results");
             finalResult = buildVerificationResult(
-                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>(), deviceSmvMap);
+                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>(), deviceSmvMap, requestJson);
 
             updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(task, finalResult.isSafe(),
@@ -451,7 +435,7 @@ public class VerificationServiceImpl implements VerificationService {
                     finalResult.getCheckLogs(), truncateOutput(result.getOutput()));
 
         } catch (Exception e) {
-            if (cancelledTasks.contains(taskId)) {
+            if (isTaskCancelled(taskId)) {
                 // Exceptions caused by cancellation are handled in finally.
                 log.info("Async verification cancelled for task: {}", taskId);
             } else {
@@ -466,11 +450,11 @@ public class VerificationServiceImpl implements VerificationService {
             }
             cleanupTempFile(smvFile);
             // Unified cancellation handling.
-            if (cancelledTasks.remove(taskId)) {
+            if (removeCancelledMark(taskId)) {
                 if (task != null) handleCancellation(task);
             }
-            runningTasks.remove(taskId);
-            taskProgress.remove(taskId);
+            removeRunningTask(taskId);
+            removeTaskProgress(taskId);
         }
     }
 
@@ -480,7 +464,7 @@ public class VerificationServiceImpl implements VerificationService {
     @Transactional(readOnly = true)
     public VerificationTaskDto getTask(Long userId, Long taskId) {
         VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
+                .orElseThrow(() -> new ResourceNotFoundException("VerificationTask", taskId));
         task.setCheckLogs(readCheckLogs(task));
         return verificationTaskMapper.toDto(task);
     }
@@ -510,64 +494,18 @@ public class VerificationServiceImpl implements VerificationService {
     @Override
     @Transactional
     public boolean cancelTask(Long userId, Long taskId) {
-        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId).orElse(null);
-        if (task == null) return false;
-
-        int updated = taskRepository.cancelTaskIfStillActive(
-                taskId,
-                VerificationTaskPo.TaskStatus.CANCELLED,
-                LocalDateTime.now(),
-                List.of(VerificationTaskPo.TaskStatus.PENDING,
-                        VerificationTaskPo.TaskStatus.RUNNING));
-        if (updated == 0) {
-            return false;
-        }
-
-        cancelledTasks.add(taskId);
-        Thread taskThread = runningTasks.get(taskId);
-        if (taskThread != null && taskThread.isAlive()) {
-            // Task is running; interrupt it and let verifyAsync finally handle final state.
-            taskThread.interrupt();
-        } else {
-            // No local running thread owns this task now; cleanup marker immediately.
-            cancelledTasks.remove(taskId);
-        }
-
-        return true;
+        return super.cancelTask(userId, taskId);
     }
 
     @Override
     public void updateTaskProgress(Long taskId, int progress, String message) {
-        Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
-        int clamped = Math.min(100, Math.max(0, progress));
-        taskProgress.put(requiredTaskId, clamped);
-        // Atomic DB update — only updates if task is still PENDING or RUNNING
-        taskRepository.updateProgressIfActive(requiredTaskId, clamped);
-        log.debug("Task {} progress: {}% - {}", requiredTaskId, progress, message);
+        super.updateTaskProgress(taskId, progress, message);
     }
 
     @Override
     @Transactional(readOnly = true)
     public int getTaskProgress(Long userId, Long taskId) {
-        // Validate task ownership.
-        VerificationTaskPo task = taskRepository.findByIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId));
-        // Prefer in-memory value (active task on this instance)
-        Integer progress = taskProgress.get(taskId);
-        if (progress != null) {
-            return progress;
-        }
-        // Fall back to DB column (task running on another instance or after restart)
-        if (task.getProgress() != null) {
-            return task.getProgress();
-        }
-        // Final fallback: infer from terminal status
-        if (task.getStatus() == VerificationTaskPo.TaskStatus.COMPLETED
-                || task.getStatus() == VerificationTaskPo.TaskStatus.FAILED
-                || task.getStatus() == VerificationTaskPo.TaskStatus.CANCELLED) {
-            return 100;
-        }
-        return 0;
+        return super.getTaskProgress(userId, taskId);
     }
 
     // ==================== Core: build per-spec verification result ====================
@@ -578,7 +516,8 @@ public class VerificationServiceImpl implements VerificationService {
                                                           List<SpecificationDto> specs,
                                                           Long userId, Long taskId,
                                                           List<String> checkLogs,
-                                                          Map<String, DeviceSmvData> deviceSmvMap) {
+                                                          Map<String, DeviceSmvData> deviceSmvMap,
+                                                          String requestJson) {
         List<Boolean> specResults = new ArrayList<>();
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> specCheckResults = result.getSpecResults();
@@ -628,9 +567,10 @@ public class VerificationServiceImpl implements VerificationService {
                         TraceDto trace = TraceDto.builder()
                                 .userId(userId)
                                 .verificationTaskId(taskId)
-                                .violatedSpecId(violatedSpec.getId() != null ? violatedSpec.getId() : UNKNOWN_VIOLATED_SPEC_ID)
+                                .violatedSpecId(violatedSpec.getId() != null ? violatedSpec.getId() : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID)
                                 .violatedSpecJson(specificationMapper.toJson(violatedSpec))
                                 .states(states)
+                                .requestJson(requestJson)
                                 .createdAt(LocalDateTime.now())
                                 .build();
                         traces.add(trace);
@@ -664,9 +604,10 @@ public class VerificationServiceImpl implements VerificationService {
                         TraceDto trace = TraceDto.builder()
                                 .userId(userId)
                                 .verificationTaskId(taskId)
-                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : UNKNOWN_VIOLATED_SPEC_ID)
+                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID)
                                 .violatedSpecJson(violatedSpec != null ? specificationMapper.toJson(violatedSpec) : null)
                                 .states(states)
+                                .requestJson(requestJson)
                                 .createdAt(LocalDateTime.now())
                                 .build();
                         traces.add(trace);
@@ -751,28 +692,6 @@ public class VerificationServiceImpl implements VerificationService {
         }
     }
 
-    private String serializeCheckLogs(List<String> logs) {
-        try {
-            return objectMapper.writeValueAsString(logs == null ? List.of() : logs);
-        } catch (Exception e) {
-            log.warn("Failed to serialize check logs", e);
-            return "[]";
-        }
-    }
-
-    private void handleCancellation(VerificationTaskPo task) {
-        log.info("Handling cancellation for task: {}", task.getId());
-        int updated = taskRepository.cancelTaskIfStillActive(
-                task.getId(),
-                VerificationTaskPo.TaskStatus.CANCELLED,
-                LocalDateTime.now(),
-                List.of(VerificationTaskPo.TaskStatus.PENDING,
-                        VerificationTaskPo.TaskStatus.RUNNING));
-        if (updated == 0) {
-            log.info("Verification task {} already finished (COMPLETED/FAILED), skipping cancel", task.getId());
-        }
-    }
-
     // ==================== Utilities ====================
 
     private void saveTraces(List<TraceDto> traces, Long userId, Long taskId) {
@@ -781,7 +700,10 @@ public class VerificationServiceImpl implements VerificationService {
                 trace.setUserId(userId);
                 if (taskId != null) trace.setVerificationTaskId(taskId);
                 TracePo po = traceMapper.toEntity(trace);
-                if (po != null) traceRepository.save(po);
+                if (po != null) {
+                    traceRepository.save(po);
+                    trace.setId(po.getId());
+                }
             }
         });
     }
@@ -790,33 +712,6 @@ public class VerificationServiceImpl implements VerificationService {
         return VerificationResultDto.builder()
                 .safe(false).traces(List.of()).specResults(List.of())
                 .checkLogs(checkLogs).nusmvOutput(truncateOutput(nusmvOutput)).build();
-    }
-
-    private String truncateOutput(String output) {
-        if (output == null) return null;
-        return output.length() > MAX_OUTPUT_LENGTH
-                ? output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)" : output;
-    }
-
-    private List<String> readCheckLogs(VerificationTaskPo task) {
-        if (task == null || task.getCheckLogsJson() == null || task.getCheckLogsJson().isBlank()) {
-            return new ArrayList<>();
-        }
-        try {
-            return objectMapper.readValue(task.getCheckLogsJson(), new TypeReference<List<String>>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse checkLogsJson for task {}", task.getId(), e);
-            return new ArrayList<>();
-        }
-    }
-
-    private void writeCheckLogs(VerificationTaskPo task, List<String> logs) {
-        if (task == null) return;
-        try {
-            task.setCheckLogsJson(objectMapper.writeValueAsString(logs == null ? List.of() : logs));
-        } catch (Exception e) {
-            log.warn("Failed to serialize check logs for task {}", task.getId(), e);
-        }
     }
 
     private void cleanupTempFile(File file) {
@@ -842,5 +737,27 @@ public class VerificationServiceImpl implements VerificationService {
         } catch (IllegalStateException ignored) {
             // executor may not be initialized yet
         }
+    }
+
+    // ==================== AbstractAsyncTaskService hooks ====================
+
+    @Override
+    protected Optional<VerificationTaskPo> findTaskByIdAndUserId(Long id, Long userId) {
+        return taskRepository.findByIdAndUserId(id, userId);
+    }
+
+    @Override
+    protected int atomicCancelTask(Long taskId, LocalDateTime completedAt) {
+        return taskRepository.cancelTaskIfStillActive(
+                taskId,
+                VerificationTaskPo.TaskStatus.CANCELLED,
+                completedAt,
+                List.of(VerificationTaskPo.TaskStatus.PENDING,
+                        VerificationTaskPo.TaskStatus.RUNNING));
+    }
+
+    @Override
+    protected int atomicUpdateProgress(Long taskId, int progress) {
+        return taskRepository.updateProgressIfActive(taskId, progress);
     }
 }

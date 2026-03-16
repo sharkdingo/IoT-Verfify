@@ -1,17 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -22,11 +19,14 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class SearchNodeTool implements AiTool {
+public class SearchNodeTool extends AbstractAiTool {
 
     private final NodeService nodeService;
-    private final ObjectMapper objectMapper;
+
+    public SearchNodeTool(NodeService nodeService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.nodeService = nodeService;
+    }
 
     @Override
     public String getName() {
@@ -56,18 +56,13 @@ public class SearchNodeTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             String keyword = args.path("keyword").asText("").trim();
             log.info("Executing search_devices, keyword: {}", keyword);
@@ -93,7 +88,6 @@ public class SearchNodeTool implements AiTool {
         try {
             root = objectMapper.readTree(raw);
         } catch (Exception ignore) {
-            // Not valid JSON — wrap as plain message
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("message", raw);
             body.put("count", 0);
@@ -111,9 +105,5 @@ public class SearchNodeTool implements AiTool {
         body.put("count", 0);
         body.put("devices", Collections.emptyList());
         return objectMapper.writeValueAsString(body);
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

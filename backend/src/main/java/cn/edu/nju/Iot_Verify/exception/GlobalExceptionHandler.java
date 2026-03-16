@@ -10,10 +10,13 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.validation.ConstraintViolationException;
 import java.util.Map;
+import java.util.Objects;
 
 @Slf4j
 @RestControllerAdvice
@@ -41,15 +44,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.UNAUTHORIZED)
                 .body(Result.unauthorized(e.getMessage()));
-    }
-
-    // 调试：打印所有未捕获的异常
-    @ExceptionHandler(Throwable.class)
-    public ResponseEntity<Result<Void>> handleThrowable(Throwable e) {
-        log.error("Unhandled Throwable: {} - {}", e.getClass().getName(), e.getMessage(), e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error(500, "Internal server error: " + e.getMessage()));
     }
 
     @ExceptionHandler(ForbiddenException.class)
@@ -113,6 +107,14 @@ public class GlobalExceptionHandler {
                 .body(Result.serviceUnavailable(e.getMessage()));
     }
 
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Result<Void>> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("Argument type mismatch: {} for parameter '{}'", e.getValue(), e.getName());
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Result.badRequest("Invalid parameter '" + e.getName() + "': expected a valid number"));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Result<Void>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("IllegalArgumentException: {}", e.getMessage());
@@ -128,6 +130,32 @@ public class GlobalExceptionHandler {
                 .findFirst()
                 .orElse("Validation failed");
         log.warn("Validation failed: {}", message);
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Result.badRequest(message));
+    }
+
+    @ExceptionHandler(org.springframework.web.method.annotation.HandlerMethodValidationException.class)
+    public ResponseEntity<Result<Void>> handleHandlerMethodValidationException(
+            org.springframework.web.method.annotation.HandlerMethodValidationException e) {
+        String message = e.getAllErrors().stream()
+                .map(err -> err.getDefaultMessage())
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse("Validation failed");
+        log.warn("Handler method validation failed: {}", message);
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Result.badRequest(message));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<Result<Void>> handleConstraintViolationException(ConstraintViolationException e) {
+        String message = e.getConstraintViolations().stream()
+                .map(cv -> cv.getPropertyPath() + ": " + cv.getMessage())
+                .findFirst()
+                .orElse("Validation failed");
+        log.warn("Constraint violation: {}", message);
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest(message));
@@ -191,10 +219,17 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception e) {
-        String errorMsg = e.getClass().getName() + ": " + e.getMessage();
-        log.error("Unexpected error: {}", errorMsg, e);
+        log.error("Unexpected error: {} - {}", e.getClass().getName(), e.getMessage(), e);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error("Server error: " + errorMsg));
+                .body(Result.error("Internal server error"));
+    }
+
+    @ExceptionHandler(Throwable.class)
+    public ResponseEntity<Result<Void>> handleThrowable(Throwable e) {
+        log.error("Unhandled Throwable: {} - {}", e.getClass().getName(), e.getMessage(), e);
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error("Internal server error"));
     }
 }

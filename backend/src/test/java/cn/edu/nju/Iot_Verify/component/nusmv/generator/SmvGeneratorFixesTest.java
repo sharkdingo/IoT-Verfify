@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvDeviceModuleBuilder;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuilder;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWriter;
+import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -974,9 +975,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("unknown_state");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertNull(expr, "Unresolvable multi-mode state condition should fail-closed");
     }
@@ -1004,9 +1005,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertNull(expr, "Blank attribute should fail-closed");
     }
@@ -1036,9 +1037,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("30");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertEquals("sensor_1.temperature=30", expr);
     }
@@ -1068,9 +1069,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" , ; | ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertNull(expr, "Empty IN list should fail-closed");
     }
@@ -1100,9 +1101,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("1");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertNull(expr, "Unknown attribute should fail-closed");
     }
@@ -1134,9 +1135,9 @@ class SmvGeneratorFixesTest {
         condition.setValue(" true ");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertEquals("fan_1.fanAuto_a=TRUE", expr);
     }
@@ -1168,9 +1169,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertNull(expr, "API signal relation value should be boolean");
     }
@@ -1200,9 +1201,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, false, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
         assertEquals("(fan_1.fanAuto_a=TRUE | fan_1.FanMode=auto)", expr);
     }
@@ -1232,9 +1233,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null, null, 0, null);
 
         assertEquals("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto)", expr);
     }
@@ -1263,9 +1264,9 @@ class SmvGeneratorFixesTest {
         condition.setAttribute("powerOn");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null, null, 0, null);
 
         assertEquals("next(plug_1.powerOn_a)=TRUE", expr);
     }
@@ -1358,9 +1359,9 @@ class SmvGeneratorFixesTest {
         condition.setValue("auto;on");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class);
+                "buildSingleCondition", RuleDto.Condition.class, Map.class, boolean.class, String.class, Integer.class, int.class, ParameterizationConfig.class);
         method.setAccessible(true);
-        String expr = (String) method.invoke(mainBuilder, condition, map, true, null);
+        String expr = (String) method.invoke(mainBuilder, condition, map, true, null, null, 0, null);
 
         assertEquals("(next(thermostat_1.Mode)=auto & next(thermostat_1.FanMode)=on)", expr);
     }

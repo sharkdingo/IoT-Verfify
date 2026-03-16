@@ -1,17 +1,22 @@
 package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixRequestDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
+import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -20,12 +25,14 @@ import java.util.List;
  * 验证控制器
  */
 @Slf4j
+@Validated
 @RestController
 @RequestMapping("/api/verify")
 @RequiredArgsConstructor
 public class VerificationController {
 
     private final VerificationService verificationService;
+    private final FixService fixService;
 
     /**
      * 同步验证（立即返回结果）
@@ -35,15 +42,7 @@ public class VerificationController {
             @CurrentUser Long userId,
             @Valid @RequestBody VerificationRequestDto request) {
 
-        VerificationResultDto result = verificationService.verify(
-                userId,
-                request.getDevices(),
-                request.getRules(),
-                request.getSpecs(),
-                request.isAttack(),
-                request.getIntensity(),
-                request.isEnablePrivacy()
-        );
+        VerificationResultDto result = verificationService.verify(userId, request);
 
         return Result.success(result);
     }
@@ -59,16 +58,7 @@ public class VerificationController {
         Long taskId = verificationService.createTask(userId);
 
         try {
-            verificationService.verifyAsync(
-                    userId,
-                    taskId,
-                    request.getDevices(),
-                    request.getRules(),
-                    request.getSpecs(),
-                    request.isAttack(),
-                    request.getIntensity(),
-                    request.isEnablePrivacy()
-            );
+            verificationService.verifyAsync(userId, taskId, request);
         } catch (TaskRejectedException e) {
             log.warn("Verification task {} rejected: thread pool full", taskId);
             verificationService.failTaskById(taskId, "Server busy, please try again later");
@@ -128,5 +118,28 @@ public class VerificationController {
             @PathVariable Long id) {
         int progress = verificationService.getTaskProgress(userId, id);
         return Result.success(progress);
+    }
+
+    /**
+     * 故障定位：识别反例轨迹中被触发的规则
+     */
+    @GetMapping("/traces/{id}/fault-rules")
+    public Result<List<FaultRuleDto>> localizeFault(
+            @CurrentUser Long userId,
+            @PathVariable Long id) {
+        return Result.success(fixService.localizeFault(userId, id));
+    }
+
+    /**
+     * 修复建议：定位故障规则并尝试修复策略
+     */
+    @PostMapping("/traces/{id}/fix")
+    public Result<FixResultDto> fix(
+            @CurrentUser Long userId,
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) FixRequestDto request) {
+        List<String> strategies = (request != null) ? request.getStrategies() : null;
+        var preferredRanges = (request != null) ? request.getPreferredRanges() : null;
+        return Result.success(fixService.fix(userId, id, strategies, preferredRanges));
     }
 }

@@ -25,6 +25,7 @@ public class RuleMapper {
         dto.setId(po.getId());
         dto.setUserId(po.getUserId());
         dto.setRuleString(po.getRuleString());
+        dto.setCreatedAt(po.getCreatedAt());
 
         if (po.getConditionsJson() != null && !po.getConditionsJson().isEmpty()) {
             dto.setConditions(JsonUtils.fromJsonOrDefault(
@@ -56,6 +57,8 @@ public class RuleMapper {
         po.setId(dto.getId());
         po.setUserId(userId);
         po.setRuleString(dto.getRuleString());
+        // createdAt is server-managed: @PrePersist sets it for new entities,
+        // service layer restores it from DB for updates. Never trust client value.
 
         if (dto.getConditions() != null) {
             po.setConditionsJson(JsonUtils.toJson(dto.getConditions()));

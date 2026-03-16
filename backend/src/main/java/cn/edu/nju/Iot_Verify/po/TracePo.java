@@ -13,10 +13,12 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class TracePo {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(nullable = false)
@@ -33,6 +35,9 @@ public class TracePo {
 
     @Column(name = "states_json", columnDefinition = "JSON", nullable = false)
     private String statesJson;
+
+    @Column(name = "request_json", columnDefinition = "JSON")
+    private String requestJson;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

@@ -47,7 +47,7 @@ class TemplateToolsFallbackTest {
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
 
         DeviceTemplateDto saved = new DeviceTemplateDto();
-        saved.setId("tpl_1");
+        saved.setId(1L);
         saved.setName("Lamp");
         when(boardStorageService.addDeviceTemplate(anyLong(), any(DeviceTemplateDto.class))).thenReturn(saved);
 
@@ -76,12 +76,12 @@ class TemplateToolsFallbackTest {
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
 
         DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, failingMapper);
-        String result = tool.execute("{\"templateId\":\"tpl_1\"}");
+        String result = tool.execute("{\"templateId\":\"42\"}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("Template deleted successfully.", json.path("message").asText());
         assertTrue(json.path("warning").asText().contains("serialization degraded"));
-        verify(boardStorageService).deleteDeviceTemplate(1L, "tpl_1");
+        verify(boardStorageService).deleteDeviceTemplate(1L, 42L);
     }
 
     @Test
@@ -95,6 +95,18 @@ class TemplateToolsFallbackTest {
         assertEquals(400, json.path("status").asInt());
         assertEquals("Invalid JSON arguments.", json.path("error").asText());
         verify(boardStorageService, never()).addDeviceTemplate(anyLong(), any(DeviceTemplateDto.class));
+    }
+
+    @Test
+    void deleteTemplate_outOfRangeLong_shouldReturn400() throws Exception {
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper);
+        String result = tool.execute("{\"templateId\":99999999999999999999}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals(400, json.path("status").asInt());
+        assertTrue(json.path("error").asText().contains("out of range"));
+        verify(boardStorageService, never()).deleteDeviceTemplate(anyLong(), anyLong());
     }
 
     @Test

@@ -94,16 +94,41 @@ mvn clean install -DskipTests
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| **Database** | | | |
 | `DB_URL` | Yes | `jdbc:mysql://localhost:3306/iot_verify...` | MySQL connection string |
 | `DB_USERNAME` | Yes | `root` | Database username |
 | `DB_PASSWORD` | Yes | `sharkdingo123` | Database password |
+| `JPA_SHOW_SQL` | No | `false` | Log SQL statements |
+| **Server** | | | |
+| `SERVER_PORT` | No | `8080` | Backend server port |
+| **Auth** | | | |
 | `JWT_SECRET` | Yes | (default) | JWT signing key (256+ bits) |
-| `VOLCENGINE_API_KEY` | For AI | `your_api_key_here` | Volcengine Ark API key |
+| `JWT_EXPIRATION` | No | `86400000` | JWT token expiration in ms (default 24h) |
+| **Redis** | | | |
 | `REDIS_HOST` | No | `localhost` | Redis host |
 | `REDIS_PORT` | No | `6379` | Redis port |
+| `REDIS_PASSWORD` | No | _(empty)_ | Redis password |
+| `REDIS_DATABASE` | No | `0` | Redis database index |
+| **CORS** | | | |
+| `CORS_ORIGINS` | No | `http://localhost:3000,http://localhost:3001` | Allowed origins (comma-separated) |
+| **NuSMV** | | | |
 | `NUSMV_PATH` | Yes | (OS-specific) | Path to NuSMV executable |
 | `NUSMV_TIMEOUT_MS` | No | `120000` | NuSMV execution timeout (ms) |
-| `SERVER_PORT` | No | `8080` | Backend server port |
+| `NUSMV_MAX_CONCURRENT` | No | `6` | Max concurrent NuSMV processes |
+| `NUSMV_PREFIX` | No | _(empty)_ | Command prefix (e.g. `wine` on Linux) |
+| `NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS` | No | `10000` | Concurrency permit acquire timeout (ms) |
+| **Fix** | | | |
+| `FIX_TIMEOUT_MS` | No | `300000` | Fix overall timeout in ms (soft deadline) |
+| `FIX_MAX_ATTEMPTS` | No | `20` | Max NuSMV calls per fix strategy |
+| `FIX_MAX_REFINE_ATTEMPTS` | No | `10` | Max refinement loop iterations (§5.3) |
+| `FIX_MAX_CANDIDATES_PER_RULE` | No | `5` | Max candidate fixes per rule |
+| **AI (Volcengine Ark)** | | | |
+| `VOLCENGINE_API_KEY` | For AI | `your_api_key_here` | Volcengine Ark API key |
+| `VOLCENGINE_MODEL_ID` | No | `ep-20251125202752-bhwbw` | Ark model endpoint ID |
+| `VOLCENGINE_BASE_URL` | No | `https://ark.cn-beijing.volces.com` | Ark API base URL |
+| `ARK_TIMEOUT_MINUTES` | No | `5` | AI request timeout (minutes) |
+| **Thread Pools** | | | |
+| `THREAD_POOL_{NAME}_{PARAM}` | No | (see below) | 5 pools: `CHAT`, `VERIFICATION_TASK`, `SYNC_VERIFICATION`, `SYNC_SIMULATION`, `SIMULATION_TASK`. Each has `CORE`, `MAX`, `QUEUE`, `AWAIT` params. Example: `THREAD_POOL_CHAT_CORE=10` |
 
 ### Configuration File
 
@@ -112,7 +137,7 @@ Minimal `application.yaml`:
 ```yaml
 spring:
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/iot_verify?useSSL=false&serverTimezone=UTC}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/iot_verify?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:sharkdingo123}
   data:
@@ -120,13 +145,60 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+jwt:
+  secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}
+  expiration: ${JWT_EXPIRATION:86400000}
+
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:3001}
+
 nusmv:
-  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/bin/NuSMV.exe}
+  path: ${NUSMV_PATH:D:/NuSMV/NuSMV-2.7.1-win64/NuSMV-2.7.1-win64/bin/NuSMV.exe}
   timeout-ms: ${NUSMV_TIMEOUT_MS:120000}
+  max-concurrent: ${NUSMV_MAX_CONCURRENT:6}
+  command-prefix: ${NUSMV_PREFIX:}
+  acquire-permit-timeout-ms: ${NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS:10000}
+
+fix:
+  fix-timeout-ms: ${FIX_TIMEOUT_MS:300000}
+  max-attempts: ${FIX_MAX_ATTEMPTS:20}
+  max-refine-attempts: ${FIX_MAX_REFINE_ATTEMPTS:10}
+  max-candidates-per-rule: ${FIX_MAX_CANDIDATES_PER_RULE:5}
 
 volcengine:
   ark:
     api-key: ${VOLCENGINE_API_KEY:your_api_key_here}
+    model-id: ${VOLCENGINE_MODEL_ID:ep-20251125202752-bhwbw}
+    base-url: ${VOLCENGINE_BASE_URL:https://ark.cn-beijing.volces.com}
+    timeout-minutes: ${ARK_TIMEOUT_MINUTES:5}
+
+# Thread pools (all optional, shown with defaults)
+thread-pool:
+  chat:
+    core-pool-size: 10
+    max-pool-size: 50
+    queue-capacity: 200
+    await-termination-seconds: 30
+  verification-task:
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
+    await-termination-seconds: 60
+  sync-verification:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 16
+    await-termination-seconds: 30
+  sync-simulation:
+    core-pool-size: 4
+    max-pool-size: 4
+    queue-capacity: 16
+    await-termination-seconds: 30
+  simulation-task:
+    core-pool-size: 4
+    max-pool-size: 8
+    queue-capacity: 40
+    await-termination-seconds: 60
 ```
 
 **Note**: Database tables are auto-created on first run (Hibernate `ddl-auto: update`).
@@ -456,6 +528,11 @@ GET    /api/board/nodes                - List device instances
 POST   /api/board/nodes                - Save device instances
 GET    /api/board/edges                - List device connections
 POST   /api/board/edges                - Save device connections
+
+GET    /api/board/layout               - Get board layout
+POST   /api/board/layout               - Save board layout
+GET    /api/board/active               - Get active board state
+POST   /api/board/active               - Save active board state
 ```
 
 ### 6.3 Rules & Specifications
@@ -464,6 +541,8 @@ POST   /api/board/edges                - Save device connections
 GET    /api/board/rules                - List automation rules
 POST   /api/board/rules                - Save rules
 GET    /api/board/rules/recommend      - AI-powered rule recommendations
+POST   /api/board/rules/check-duplicate - Check for duplicate rules
+POST   /api/board/devices/recommend    - AI-powered device recommendations
 
 GET    /api/board/specs                - List specifications
 POST   /api/board/specs                - Save specifications
@@ -478,25 +557,77 @@ GET    /api/verify/tasks/{id}                   - Get verification task status
 GET    /api/verify/tasks/{id}/progress          - Get verification progress (0-100)
 POST   /api/verify/tasks/{id}/cancel            - Cancel verification task
 
-POST   /api/verify/simulate                     - Synchronous simulation
-POST   /api/verify/simulate/async               - Async simulation (returns taskId)
-GET    /api/verify/simulations/tasks/{id}       - Get simulation task status
-GET    /api/verify/simulations/tasks/{id}/progress - Get simulation progress (0-100)
-POST   /api/verify/simulations/tasks/{id}/cancel   - Cancel simulation task
+POST   /api/simulate                             - Synchronous simulation
+POST   /api/simulate/async                       - Async simulation (returns taskId)
+GET    /api/simulate/tasks/{id}                  - Get simulation task status
+GET    /api/simulate/tasks/{id}/progress         - Get simulation progress (0-100)
+POST   /api/simulate/tasks/{id}/cancel           - Cancel simulation task
 
-POST   /api/verify/simulations                  - Simulate and save
-GET    /api/verify/simulations                  - List saved simulations
-GET    /api/verify/simulations/{id}             - Get simulation details
-DELETE /api/verify/simulations/{id}             - Delete simulation
+POST   /api/simulate/traces                      - Simulate and save
+GET    /api/simulate/traces                      - List saved simulations
+GET    /api/simulate/traces/{id}                 - Get simulation details
+DELETE /api/simulate/traces/{id}                 - Delete simulation
 
 GET    /api/verify/traces                       - List verification traces
 GET    /api/verify/traces/{id}                  - Get trace details
 DELETE /api/verify/traces/{id}                  - Delete trace
+GET    /api/verify/traces/{id}/fault-rules      - Fault localization
+POST   /api/verify/traces/{id}/fix              - Fix recommendations
 ```
 
-**Important**: Verification and simulation use **different task paths**:
-- **Verification tasks**: `/api/verify/tasks/{id}`
-- **Simulation tasks**: `/api/verify/simulations/tasks/{id}`
+**Fix API Details**:
+
+`GET /api/verify/traces/{id}/fault-rules` — Fast fault localization (no NuSMV invocation). Returns which rules were triggered in the counterexample.
+
+Response: `Result<List<FaultRuleDto>>`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ruleIndex` | int | Rule index in the verification request's rule list (stable key) |
+| `ruleId` | Long? | Rule database ID (null for unsaved rules) |
+| `ruleString` | String | Human-readable rule description |
+| `triggerStep` | int | Counterexample step where this rule was triggered |
+| `targetDevice` | String | Target device of the rule command |
+| `targetAction` | String | Target API/action of the rule command |
+| `conflicting` | boolean | Whether this rule conflicts with another triggered rule |
+| `conflictWithRuleIndex` | Integer? | Index of the conflicting rule |
+| `reason` | String | Explanation of why the rule was identified as a fault |
+
+`POST /api/verify/traces/{id}/fix` — Fix recommendations (may invoke NuSMV multiple times, up to `fix.fix-timeout-ms`).
+
+Request body (`FixRequestDto`, **optional** — omit or send `null` for defaults):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategies` | List\<String\>? | `["parameter","condition","disable"]` | Fix strategies to attempt, in order |
+| `preferredRanges` | Map\<String, PreferredRange\>? | null | Per-parameter preferred value ranges. Keys: `r{ruleIdx}_c{condIdx}` (e.g. `r0_c1`). Values: `{lower: int, upper: int}` (inclusive, lower ≤ upper) |
+
+Response: `Result<FixResultDto>`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `traceId` | Long | ID of the analyzed trace |
+| `violatedSpecId` | String | Spec ID that was violated (from trace) |
+| `fixable` | boolean | Whether at least one fix suggestion was found |
+| `faultRules` | List\<FaultRuleDto\> | Fault-localized rules (same schema as above) |
+| `suggestions` | List\<FixSuggestionDto\> | Verified fix proposals |
+| `summary` | String | Human-readable summary (includes timeout/drift warnings if applicable) |
+| `unusedPreferredRangeKeys` | List\<String\>? | `preferredRanges` keys that did not match any parameterizable condition |
+
+`FixSuggestionDto` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `strategy` | String | `"parameter"`, `"condition"`, or `"disable"` |
+| `description` | String | Human-readable fix description |
+| `parameterAdjustments` | List? | §5.1: threshold changes (`ruleIndex`, `conditionIndex`, `attribute`, `relation`, `originalValue`, `newValue`, `lowerBound`, `upperBound`) |
+| `conditionAdjustments` | List? | §5.2: condition changes (`ruleIndex`, `conditionIndex`, `action`=remove/add, `attribute`, `description`, `deviceName`, `relation`, `value`) |
+| `disabledRuleIndices` | List\<Integer\>? | Rule indices to disable (for "disable" strategy) |
+| `verified` | boolean | Whether the fix was re-verified with NuSMV |
+
+**Important**: Verification and simulation use **different base paths**:
+- **Verification**: `/api/verify/tasks/{id}`
+- **Simulation**: `/api/simulate/tasks/{id}`
 
 **Sync vs Async**:
 
@@ -504,16 +635,18 @@ DELETE /api/verify/traces/{id}                  - Delete trace
 |------|----------|----------|--------------|
 | Sync Verify | Small models (<10 devices) | Immediate result | N/A |
 | Async Verify | Large models, long-running | `taskId` | `/api/verify/tasks/{id}` |
-| Async Simulate | Large simulations | `taskId` | `/api/verify/simulations/tasks/{id}` |
+| Sync Simulate | Small models, quick preview | Immediate result | N/A |
+| Async Simulate | Large simulations | `taskId` | `/api/simulate/tasks/{id}` |
+| Simulate+Save | Persist simulation trace | `SimulationTraceDto` | N/A |
 
 ### 6.5 AI Assistant
 
 ```
 GET    /api/chat/sessions              - List chat sessions
 POST   /api/chat/sessions              - Create new session
-GET    /api/chat/sessions/{id}/messages - Get message history
+GET    /api/chat/sessions/{sessionId}/messages - Get message history
 POST   /api/chat/completions           - Send message (SSE stream)
-DELETE /api/chat/sessions/{id}         - Delete session
+DELETE /api/chat/sessions/{sessionId}         - Delete session
 ```
 
 **SSE Streaming**:
@@ -615,6 +748,7 @@ Natural language interface powered by Volcengine Ark AI with tool-based function
 - "Verify my system configuration"
 - "Run a simulation for 10 steps"
 - "Show me the last verification trace"
+- "Fix the violated specification in trace #5" ← **fault localization + fix suggestions**
 
 **Template Management**:
 - "List available device templates"
@@ -704,7 +838,37 @@ curl -X POST http://localhost:8080/api/verify \
   }'
 ```
 
-### Workflow 3: Use AI Assistant
+### Workflow 3: Fix a Violated Specification
+
+```bash
+# 1. Run verification and get a trace with violation
+TRACE_ID=$(curl -X POST http://localhost:8080/api/verify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }' | jq -r '.data.traces[0].id')
+
+# 2. Fault localization (fast, no NuSMV)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/verify/traces/$TRACE_ID/fault-rules
+
+# 3. Fix recommendations (may take up to fix.fix-timeout-ms)
+curl -X POST http://localhost:8080/api/verify/traces/$TRACE_ID/fix \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategies": ["parameter", "condition", "disable"],
+    "preferredRanges": {
+      "r0_c1": {"lower": 20, "upper": 30}
+    }
+  }'
+
+# Response includes:
+# - faultRules: which rules caused the violation
+# - suggestions: verified fix proposals (parameter/condition/disable)
+# - summary: includes timeout/drift warnings if applicable
+```
+
+### Workflow 4: Use AI Assistant
 
 ```bash
 # 1. Create chat session

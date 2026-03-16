@@ -6,6 +6,8 @@ import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
 
+import cn.edu.nju.Iot_Verify.util.SmvConstants;
+
 import java.util.List;
 
 /**
@@ -13,7 +15,6 @@ import java.util.List;
  */
 @Component
 public class TraceMapper {
-    private static final String UNKNOWN_VIOLATED_SPEC_ID = "__UNKNOWN_SPEC__";
 
     /**
      * TracePo -> TraceDto
@@ -28,6 +29,7 @@ public class TraceMapper {
         dto.setVerificationTaskId(tracePo.getVerificationTaskId());
         dto.setViolatedSpecId(tracePo.getViolatedSpecId());
         dto.setViolatedSpecJson(tracePo.getViolatedSpecJson());
+        dto.setRequestJson(tracePo.getRequestJson());
         dto.setCreatedAt(tracePo.getCreatedAt());
 
         if (tracePo.getStatesJson() != null && !tracePo.getStatesJson().isEmpty()) {
@@ -57,8 +59,9 @@ public class TraceMapper {
         po.setVerificationTaskId(traceDto.getVerificationTaskId());
         po.setViolatedSpecId(traceDto.getViolatedSpecId() != null
                 ? traceDto.getViolatedSpecId()
-                : UNKNOWN_VIOLATED_SPEC_ID);
+                : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID);
         po.setViolatedSpecJson(traceDto.getViolatedSpecJson());
+        po.setRequestJson(traceDto.getRequestJson());
         po.setCreatedAt(traceDto.getCreatedAt());
 
         if (traceDto.getStates() != null && !traceDto.getStates().isEmpty()) {

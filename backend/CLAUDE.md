@@ -20,10 +20,11 @@ cn.edu.nju.Iot_Verify/
 ├── service/impl/        # Business logic
 ├── component/
 │   ├── nusmv/           # NuSMV verification
-│   │   ├── generator/   # SMV model generation (SmvGenerator + 4 builders + validator)
+│   │   ├── generator/   # SMV model generation (SmvGenerator + 3 builders + comment writer + validator)
+│   │   ├── fixer/       # Fault localization & fix strategies (localize, parameterize, strategy)
 │   │   ├── executor/    # Process execution
 │   │   └── parser/      # Counterexample parsing
-│   └── aitool/          # AI tool integration (25 tools)
+│   └── aitool/          # AI tool integration (29 tools)
 ├── client/              # ArkAiClient wrapper
 ├── dto/po/repository/   # Data layer
 ├── security/            # JWT + auth
@@ -49,9 +50,16 @@ Key settings in `application.yaml`:
 - `jwt.secret` / `jwt.expiration` — JWT settings
 - `nusmv.path` — NuSMV executable path
 - `nusmv.timeout-ms` — Execution timeout (default 120s)
-- `nusmv.max-concurrent` — Global concurrency cap
+- `nusmv.max-concurrent` — Global concurrency cap (default 6)
+- `nusmv.command-prefix` — Command prefix (e.g. `wine` on Linux, default empty)
+- `nusmv.acquire-permit-timeout-ms` — Concurrency permit acquire timeout (default 10s)
+- `fix.fix-timeout-ms` — Fix overall timeout (default 300s, soft deadline)
+- `fix.max-attempts` — Max NuSMV calls per strategy (default 20)
+- `fix.max-refine-attempts` — Max refinement loop iterations for §5.3 closest-value search (default 10); each iteration ≤ 2 NuSMV calls; try-original step not counted
+- `fix.max-candidates-per-rule` — Max candidate fixes per rule (default 5)
 - `volcengine.ark.*` — AI chat API settings
 - `cors.allowed-origins` — CORS origins (comma-separated)
+- `thread-pool.*` — 5 configurable thread pools: `chat`, `verification-task`, `sync-verification`, `sync-simulation`, `simulation-task`; each with `core-pool-size`, `max-pool-size`, `queue-capacity`, `await-termination-seconds`
 
 **Production Safety**: `ProductionSafetyCheck` refuses startup in prod/production profile if JWT secret, DB password, or Ark API key are insecure/missing.
 
@@ -101,6 +109,22 @@ VerificationRequestDto → SmvGenerator.generate()
   → Save result.json
 ```
 
+**Fix Pipeline (Salus Paper §4-§5)**
+```
+POST /api/verify/traces/{id}/fix → FixServiceImpl.fix()
+  → loadContext(): TracePo.requestJson → VerificationRequestDto
+  → RuleFixer.fix():
+    1. FaultLocalizer.localize() — identify triggered rules from counterexample
+    2. FixContext with deadline (fix.fix-timeout-ms, soft timeout)
+    3. Strategies (parameter → condition → disable):
+       - §5.1 ParameterAdjustStrategy: FROZENVAR thresholds + ¬ρ + NuSMV solve
+       - §5.2 ConditionAdjustStrategy: boolean lambda guards + NuSMV solve
+       - DisableFixStrategy: minimal rule disable set
+    4. Each strategy: forward-verify candidate fix against ALL specs
+  → appendDriftWarningIfNeeded(): compare DeviceTemplatePo.updatedAt vs trace.createdAt
+  → FixResultDto (traceId, violatedSpecId, fixable, faultRules, suggestions, summary, unusedPreferredRangeKeys)
+```
+
 **SMV Generation Key Points**
 - Device templates in `src/main/resources/deviceTemplate/` define modes, states, APIs, transitions, internal variables
 - `SmvDeviceModuleBuilder`: generates MODULE per template (FROZENVAR for sensors, VAR for actuators, trust/privacy propagation)
@@ -118,17 +142,19 @@ VerificationRequestDto → SmvGenerator.generate()
 
 **Auth**: `POST /api/auth/register|login|logout`
 
-**Board**: `GET|POST /api/board/nodes|edges|rules|specs|layout|active|templates`, `DELETE /api/board/templates/{id}`, `POST /api/board/templates/reload`
+**Board**: `GET|POST /api/board/nodes|edges|rules|specs|layout|active|templates`, `DELETE /api/board/templates/{id}`, `POST /api/board/templates/reload`, `GET /api/board/rules/recommend`, `POST /api/board/devices/recommend`, `POST /api/board/rules/check-duplicate`
 
 **Verification**:
 - Sync: `POST /api/verify`
 - Async: `POST /api/verify/async`, `GET /api/verify/tasks/{id}`, `GET /api/verify/tasks/{id}/progress`, `POST /api/verify/tasks/{id}/cancel`
 - Traces: `GET /api/verify/traces`, `GET|DELETE /api/verify/traces/{id}`
+- Fix: `GET /api/verify/traces/{id}/fault-rules`, `POST /api/verify/traces/{id}/fix` (body optional: `FixRequestDto{strategies, preferredRanges}`)
+- AI tool: `fix_violation` (traceId required; optional strategies, preferredRanges) → calls `FixService.fix()`
 
-**Simulation**:
-- Sync: `POST /api/verify/simulate`
-- Async: `POST /api/verify/simulate/async`, `GET /api/verify/simulations/tasks/{id}`, `GET /api/verify/simulations/tasks/{id}/progress`, `POST /api/verify/simulations/tasks/{id}/cancel`
-- Traces: `POST|GET /api/verify/simulations`, `GET|DELETE /api/verify/simulations/{id}`
+**Simulation** (`SimulationController` → `/api/simulate`):
+- Sync: `POST /api/simulate`
+- Async: `POST /api/simulate/async`, `GET /api/simulate/tasks/{id}`, `GET /api/simulate/tasks/{id}/progress`, `POST /api/simulate/tasks/{id}/cancel`
+- Traces: `POST|GET /api/simulate/traces`, `GET|DELETE /api/simulate/traces/{id}`
 
 **Chat**: `GET|POST /api/chat/sessions`, `DELETE /api/chat/sessions/{sessionId}`, `GET /api/chat/sessions/{sessionId}/messages`, `POST /api/chat/completions` (SSE)
 

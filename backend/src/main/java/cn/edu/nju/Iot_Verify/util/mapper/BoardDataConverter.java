@@ -1,4 +1,4 @@
-package cn.edu.nju.Iot_Verify.component.aitool;
+package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -15,7 +15,7 @@ import java.util.Locale;
  */
 @Component
 @RequiredArgsConstructor
-public class BoardDataHelper {
+public class BoardDataConverter {
 
     private final BoardStorageService boardStorageService;
 

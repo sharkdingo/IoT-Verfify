@@ -1,9 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
-import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
-import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import java.util.List;
@@ -16,46 +14,16 @@ import java.util.List;
  * 注意：Trace 会自动保存（当检测到违规时），无需传入 saveTrace 参数
  */
 public interface VerificationService {
-    
+
     /**
      * 同步验证（立即返回结果）
-     *
-     * @param userId 用户ID
-     * @param devices 设备节点列表
-     * @param rules 规则列表
-     * @param specs 规格列表
-     * @param isAttack 是否启用攻击模式
-     * @param intensity 攻击强度 0-50
-     * @param enablePrivacy 是否启用隐私维度建模
-     * @return 验证结果
      */
-    VerificationResultDto verify(Long userId,
-                                  List<DeviceVerificationDto> devices,
-                                  List<RuleDto> rules,
-                                  List<SpecificationDto> specs,
-                                  boolean isAttack,
-                                  int intensity,
-                                  boolean enablePrivacy);
-    
+    VerificationResultDto verify(Long userId, VerificationRequestDto request);
+
     /**
      * 异步验证（通过任务ID回调）
-     *
-     * @param userId 用户ID
-     * @param taskId 任务ID（用于回调）
-     * @param devices 设备节点列表
-     * @param rules 规则列表
-     * @param specs 规格列表
-     * @param isAttack 是否启用攻击模式
-     * @param intensity 攻击强度 0-50
-     * @param enablePrivacy 是否启用隐私维度建模
      */
-    void verifyAsync(Long userId, Long taskId,
-                      List<DeviceVerificationDto> devices,
-                      List<RuleDto> rules,
-                      List<SpecificationDto> specs,
-                      boolean isAttack,
-                      int intensity,
-                      boolean enablePrivacy);
+    void verifyAsync(Long userId, Long taskId, VerificationRequestDto request);
     
     /**
      * 获取任务状态

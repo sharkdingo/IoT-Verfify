@@ -1,4 +1,4 @@
-package cn.edu.nju.Iot_Verify.dto.rule;
+package cn.edu.nju.Iot_Verify.dto.device;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;

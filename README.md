@@ -685,15 +685,15 @@ curl -X POST http://localhost:8080/api/chat/completions \
 
 | 方法 | 路径 | 说明 | 需要认证 |
 |------|------|------|----------|
-| POST | `/api/verify/simulate` | 随机模拟 N 步（不落库） | 是 |
-| POST | `/api/verify/simulate/async` | 异步模拟，返回 taskId | 是 |
-| GET | `/api/verify/simulations/tasks/{id}` | 获取模拟任务状态 | 是 |
-| GET | `/api/verify/simulations/tasks/{id}/progress` | 获取模拟任务进度 (0-100) | 是 |
-| POST | `/api/verify/simulations/tasks/{id}/cancel` | 取消模拟任务 | 是 |
-| POST | `/api/verify/simulations` | 执行模拟并持久化 | 是 |
-| GET | `/api/verify/simulations` | 获取用户所有模拟记录（摘要） | 是 |
-| GET | `/api/verify/simulations/{id}` | 获取单条模拟记录（详情） | 是 |
-| DELETE | `/api/verify/simulations/{id}` | 删除模拟记录 | 是 |
+| POST | `/api/simulate` | 随机模拟 N 步（不落库） | 是 |
+| POST | `/api/simulate/async` | 异步模拟，返回 taskId | 是 |
+| GET | `/api/simulate/tasks/{id}` | 获取模拟任务状态 | 是 |
+| GET | `/api/simulate/tasks/{id}/progress` | 获取模拟任务进度 (0-100) | 是 |
+| POST | `/api/simulate/tasks/{id}/cancel` | 取消模拟任务 | 是 |
+| POST | `/api/simulate/traces` | 执行模拟并持久化 | 是 |
+| GET | `/api/simulate/traces` | 获取用户所有模拟记录（摘要） | 是 |
+| GET | `/api/simulate/traces/{id}` | 获取单条模拟记录（详情） | 是 |
+| DELETE | `/api/simulate/traces/{id}` | 删除模拟记录 | 是 |
 
 #### 验证请求示例
 

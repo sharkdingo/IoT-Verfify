@@ -1,18 +1,15 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -21,11 +18,14 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class ListTemplatesTool implements AiTool {
+public class ListTemplatesTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final ObjectMapper objectMapper;
+
+    public ListTemplatesTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+    }
 
     @Override
     public String getName() {
@@ -58,19 +58,13 @@ public class ListTemplatesTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             String keyword = args.path("keyword").asText("").trim();
             boolean detail = args.path("detail").asBoolean(false);
@@ -123,13 +117,5 @@ public class ListTemplatesTool implements AiTool {
             log.error("list_templates failed", e);
             return errorJson("Failed to list templates.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? List.of() : list;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

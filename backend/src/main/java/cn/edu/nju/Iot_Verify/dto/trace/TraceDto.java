@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.trace;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -52,6 +53,13 @@ public class TraceDto {
     @Valid
     @NotNull(message = "States are required")
     private List<TraceStateDto> states;
+
+    /**
+     * 验证请求快照（设备、规则、规约、参数），用于修复功能恢复上下文。
+     * 不序列化到 API 响应，仅供内部 FixService 使用。
+     */
+    @JsonIgnore
+    private String requestJson;
     
     /**
      * 创建时间

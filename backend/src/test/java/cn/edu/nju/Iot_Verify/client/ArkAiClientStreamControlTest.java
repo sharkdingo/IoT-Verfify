@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.client;
 
+import cn.edu.nju.Iot_Verify.configure.ArkAiConfig;
 import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionChoice;
 import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionChunk;
 import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
@@ -27,8 +28,9 @@ class ArkAiClientStreamControlTest {
         when(arkService.streamChatCompletion(any(ChatCompletionRequest.class)))
                 .thenReturn(Flowable.just(chunk("A"), chunk("B"), chunk("C")));
 
-        ArkAiClient client = new ArkAiClient(new com.fasterxml.jackson.databind.ObjectMapper());
-        ReflectionTestUtils.setField(client, "modelId", "mock-model");
+        ArkAiConfig arkConfig = new ArkAiConfig();
+        arkConfig.setModelId("mock-model");
+        ArkAiClient client = new ArkAiClient(arkConfig, new com.fasterxml.jackson.databind.ObjectMapper());
         ReflectionTestUtils.setField(client, "arkService", arkService);
 
         List<String> outputs = new ArrayList<>();

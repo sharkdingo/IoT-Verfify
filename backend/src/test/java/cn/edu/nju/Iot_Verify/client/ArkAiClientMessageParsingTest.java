@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.client;
 
+import cn.edu.nju.Iot_Verify.configure.ArkAiConfig;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
@@ -18,7 +19,7 @@ class ArkAiClientMessageParsingTest {
 
     @Test
     void convertToSdkMessages_shouldParseStructuredToolResult() {
-        ArkAiClient client = new ArkAiClient(new ObjectMapper());
+        ArkAiClient client = new ArkAiClient(new ArkAiConfig(), new ObjectMapper());
 
         ChatMessagePo po = new ChatMessagePo();
         po.setRole("tool");
@@ -35,7 +36,7 @@ class ArkAiClientMessageParsingTest {
 
     @Test
     void convertToSdkMessages_shouldParseStructuredAssistantToolCalls() throws Exception {
-        ArkAiClient client = new ArkAiClient(new ObjectMapper());
+        ArkAiClient client = new ArkAiClient(new ArkAiConfig(), new ObjectMapper());
 
         String content = objectMapper.writeValueAsString(Map.of(
                 "type", ArkAiClient.TOOL_CALLS_JSON_TYPE,
@@ -65,7 +66,7 @@ class ArkAiClientMessageParsingTest {
 
     @Test
     void convertToSdkMessages_shouldParseStructuredToolResultWithLeadingWhitespace() {
-        ArkAiClient client = new ArkAiClient(new ObjectMapper());
+        ArkAiClient client = new ArkAiClient(new ArkAiConfig(), new ObjectMapper());
 
         ChatMessagePo po = new ChatMessagePo();
         po.setRole("tool");
@@ -82,7 +83,7 @@ class ArkAiClientMessageParsingTest {
 
     @Test
     void convertToSdkMessages_shouldParseAssistantToolCallsWithLeadingWhitespace() throws Exception {
-        ArkAiClient client = new ArkAiClient(new ObjectMapper());
+        ArkAiClient client = new ArkAiClient(new ArkAiConfig(), new ObjectMapper());
 
         String content = "  " + objectMapper.writeValueAsString(Map.of(
                 "type", ArkAiClient.TOOL_CALLS_JSON_TYPE,

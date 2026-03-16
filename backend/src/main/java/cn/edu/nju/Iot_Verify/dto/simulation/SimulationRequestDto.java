@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.simulation;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -19,6 +20,7 @@ import java.util.List;
  * 与 VerificationRequestDto 的区别：无 specs（模拟不检查规约），新增 steps 控制模拟步数。
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class SimulationRequestDto {
 
     @Valid

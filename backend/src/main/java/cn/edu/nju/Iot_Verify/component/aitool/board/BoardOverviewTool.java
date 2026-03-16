@@ -1,20 +1,17 @@
 package cn.edu.nju.Iot_Verify.component.aitool.board;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -27,11 +24,14 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class BoardOverviewTool implements AiTool {
+public class BoardOverviewTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final ObjectMapper objectMapper;
+
+    public BoardOverviewTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+    }
 
     @Override
     public String getName() {
@@ -55,13 +55,8 @@ public class BoardOverviewTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
             List<DeviceEdgeDto> edges = safeList(boardStorageService.getEdges(userId));
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
@@ -149,15 +144,7 @@ public class BoardOverviewTool implements AiTool {
         }
     }
 
-    private <T> List<T> safeList(List<T> values) {
-        return values == null ? List.of() : values;
-    }
-
     private String safe(String value) {
         return value == null ? "" : value;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

@@ -1,17 +1,16 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -19,7 +18,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -32,13 +30,21 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class VerifyModelTool implements AiTool {
+public class VerifyModelTool extends AbstractAiTool {
 
-    private final BoardDataHelper boardDataHelper;
+    private final BoardDataConverter boardDataConverter;
     private final BoardStorageService boardStorageService;
     private final VerificationService verificationService;
-    private final ObjectMapper objectMapper;
+
+    public VerifyModelTool(BoardDataConverter boardDataConverter,
+                           BoardStorageService boardStorageService,
+                           VerificationService verificationService,
+                           ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardDataConverter = boardDataConverter;
+        this.boardStorageService = boardStorageService;
+        this.verificationService = verificationService;
+    }
 
     @Override
     public String getName() {
@@ -80,26 +86,20 @@ public class VerifyModelTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             boolean isAttack = args.path("isAttack").asBoolean(false);
             int intensity = args.path("intensity").asInt(3);
             boolean enablePrivacy = args.path("enablePrivacy").asBoolean(false);
             intensity = Math.max(0, Math.min(50, intensity));
 
-            // Load board data directly from current workspace state.
-            List<DeviceVerificationDto> devices = boardDataHelper.getDevicesForVerification(userId);
+            List<DeviceVerificationDto> devices = boardDataConverter.getDevicesForVerification(userId);
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
 
@@ -115,10 +115,16 @@ public class VerifyModelTool implements AiTool {
             log.info("Executing verify_model: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
                     devices.size(), rules.size(), specs.size(), isAttack, intensity, enablePrivacy);
 
-            VerificationResultDto result = verificationService.verify(
-                    userId, devices, rules, specs, isAttack, intensity, enablePrivacy);
+            VerificationRequestDto request = new VerificationRequestDto();
+            request.setDevices(devices);
+            request.setRules(rules);
+            request.setSpecs(specs);
+            request.setAttack(isAttack);
+            request.setIntensity(intensity);
+            request.setEnablePrivacy(enablePrivacy);
 
-            // Build a compact summary for chat output.
+            VerificationResultDto result = verificationService.verify(userId, request);
+
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("safe", result.isSafe());
             summary.put("specsChecked", specs.size());
@@ -158,21 +164,5 @@ public class VerifyModelTool implements AiTool {
             log.error("verify_model failed", e);
             return errorJson("Verification failed.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? List.of() : list;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return errorJson(message, errorCode, status, Map.of());
-    }
-
-    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
-    }
-
-    private String successJson(Map<String, Object> body, String fallbackMessage) {
-        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

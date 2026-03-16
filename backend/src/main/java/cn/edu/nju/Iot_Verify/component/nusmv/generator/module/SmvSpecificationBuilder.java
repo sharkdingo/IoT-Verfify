@@ -24,6 +24,105 @@ public class SmvSpecificationBuilder {
     private static final String PERSISTENCE_TEMPLATE_ID = "6";
     private static final String CONDITION_SEPARATOR = " & ";
 
+    /**
+     * Build specifications with one spec negated (for ActFeedback §5 fix strategies).
+     * Only the negated spec is emitted; all others are omitted to reduce NuSMV solve complexity.
+     *
+     * @param specs              full spec list
+     * @param negatedSpecIndex   index of the spec to negate (¬ρ)
+     * @param isAttack           attack mode
+     * @param intensity          attack intensity
+     * @param deviceSmvMap       device SMV data
+     * @param enablePrivacy      privacy flag
+     * @return SMV specification section containing only the negated spec
+     */
+    public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
+                               boolean isAttack, int intensity,
+                               Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
+        if (specs == null || specs.isEmpty() || negatedSpecIndex < 0 || negatedSpecIndex >= specs.size()) {
+            log.warn("buildNegated: invalid negatedSpecIndex={} for specs size={}", negatedSpecIndex,
+                    specs == null ? 0 : specs.size());
+            return "";
+        }
+
+        SpecificationDto spec = specs.get(negatedSpecIndex);
+        if (spec == null) return "";
+
+        StringBuilder content = new StringBuilder();
+        content.append("\n-- Negated specification (index ").append(negatedSpecIndex).append(")");
+
+        try {
+            String negatedSpec = generateNegatedSpec(spec, isAttack, intensity, deviceSmvMap);
+            content.append("\n\t").append(negatedSpec);
+        } catch (InvalidConditionException e) {
+            log.warn("Failed to negate spec at index {}: {}", negatedSpecIndex, e.getMessage());
+            content.append("\n\tCTLSPEC TRUE -- negation failed: ").append(
+                    e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown");
+        }
+
+        return content.toString();
+    }
+
+    /**
+     * Generate the negated form of a specification.
+     * Negation mapping (from Salus paper §5):
+     * <ul>
+     *   <li>Template 1 (always):      AG(p)           → CTLSPEC EF(!(p))</li>
+     *   <li>Template 1' (always-imply): AG(a→b)        → CTLSPEC EF((a) & !(b))</li>
+     *   <li>Template 2 (eventually):   AF(p)           → CTLSPEC EG(!(p))</li>
+     *   <li>Template 3 (never):        AG(!(p))        → CTLSPEC EF(p)</li>
+     *   <li>Template 4 (immediate):    AG(a→AX(b))     → CTLSPEC EF((a) & EX(!(b)))</li>
+     *   <li>Template 5 (response):     AG(a→AF(b))     → CTLSPEC EF((a) & EG(!(b)))</li>
+     *   <li>Template 6 (persistence):  G(a→FG(b)) [LTL] → LTLSPEC F((a) & GF(!(b)))</li>
+     *   <li>Template 7 (safety):       AG !(body)      → CTLSPEC EF(body)  (body includes trust/attack expressions)</li>
+     * </ul>
+     */
+    String generateNegatedSpec(SpecificationDto spec, boolean isAttack, int intensity,
+                                       Map<String, DeviceSmvData> deviceSmvMap) {
+        String templateId = spec.getTemplateId();
+        if (PERSISTENCE_TEMPLATE_ID.equals(templateId)) {
+            return generateNegatedLtlSpec(spec, deviceSmvMap);
+        }
+        return generateNegatedCtlSpec(spec, isAttack, intensity, deviceSmvMap);
+    }
+
+    private String generateNegatedCtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
+                                          Map<String, DeviceSmvData> deviceSmvMap) {
+        String templateId = spec.getTemplateId();
+        String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
+        String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
+        String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
+
+        switch (templateId) {
+            case "1": // always: AG(A) → EF(!A); or AG(IF→THEN) → EF(IF & !THEN)
+                if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
+                    // Always-imply form: AG(IF→THEN) → EF(IF & !THEN)
+                    return "CTLSPEC EF((" + ifPart + ") & !(" + thenPart + "))";
+                }
+                return "CTLSPEC EF(!(" + aPart + "))";
+            case "2": // eventually: AF(A) → EG(!A)
+                return "CTLSPEC EG(!(" + aPart + "))";
+            case "3": // never: AG(!A) → EF(A)
+                return "CTLSPEC EF(" + aPart + ")";
+            case "4": // immediate: AG(IF→AX(THEN)) → EF(IF & EX(!THEN))
+                return "CTLSPEC EF((" + ifPart + ") & EX(!(" + thenPart + ")))";
+            case "5": // response: AG(IF→AF(THEN)) → EF(IF & EG(!THEN))
+                return "CTLSPEC EF((" + ifPart + ") & EG(!(" + thenPart + ")))";
+            case "7": // safety: AG !(body) → EF(body), where body includes trust/attack expressions
+                return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, intensity) + ")";
+            default:
+                // Unknown template: treat as AG(A) → EF(!A)
+                return "CTLSPEC EF(!(" + aPart + "))";
+        }
+    }
+
+    private String generateNegatedLtlSpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap) {
+        // Template 6 (persistence): G(IF→FG(THEN)) → F(IF & GF(!THEN))
+        String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
+        String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
+        return "LTLSPEC F((" + ifPart + ") & G F(!(" + thenPart + ")))";
+    }
+
     public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
         StringBuilder content = new StringBuilder();
@@ -423,6 +522,12 @@ public class SmvSpecificationBuilder {
 
     private String buildSafetySpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
                                    boolean isAttack, int intensity) {
+        String body = buildSafetyBody(spec, deviceSmvMap, isAttack, intensity);
+        return "CTLSPEC AG !(" + body + ")";
+    }
+
+    private String buildSafetyBody(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
+                                   boolean isAttack, int intensity) {
         List<String> parts = new ArrayList<>();
         if (spec.getAConditions() != null) {
             for (SpecConditionDto cond : spec.getAConditions()) {
@@ -434,7 +539,6 @@ public class SmvSpecificationBuilder {
                 if (trustExpr != null) {
                     parts.add(trustExpr + "=untrusted");
                 }
-                // is_attack is declared only in attack mode; otherwise this would be undefined in NuSMV.
                 if (isAttack) {
                     String attackExpr = buildAttackFalseForCondition(cond, deviceSmvMap);
                     if (attackExpr != null) {
@@ -446,8 +550,7 @@ public class SmvSpecificationBuilder {
 
         // intensity is constrained globally by main module INVAR; do not inject it into safety spec.
 
-        String body = parts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, parts);
-        return "CTLSPEC AG !(" + body + ")";
+        return parts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, parts);
     }
 
     private String buildTrustForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {

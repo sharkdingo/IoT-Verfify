@@ -1,14 +1,14 @@
 {
   "title": "IoT Device Template Schema",
-  "description": "Comprehensive schema for IoT device templates with NuSMV validation constraints. NOTE: This schema serves as design documentation and offline validation reference. Runtime validation is enforced through DTO annotations and BoardStorageServiceImpl.validateTemplateManifestForNuSmv().",
+  "description": "Comprehensive schema for IoT device templates with NuSMV validation constraints. NOTE: This schema serves as design documentation and offline validation reference. Runtime validation is enforced through DTO annotations and BoardStorageServiceImpl.validateTemplateManifestForNuSmv(). Runtime DTO uses @JsonIgnoreProperties(ignoreUnknown=true), so unknown fields are silently ignored even if this schema forbids them.",
   "type": "object",
   "required": ["Name"],
   "properties": {
     "Name": {
       "type": "string",
       "minLength": 1,
-      "description": "Device template name (will be sanitized for NuSMV)",
-      "pattern": "^[^\\x00-\\x1F]+$"
+      "description": "Device template name (will be sanitized for NuSMV via sanitizeSmvToken: spaces removed, non-alphanumeric replaced with '_')",
+      "pattern": "^[\\x20-\\x7E]+$"
     },
     "Description": {
       "type": "string",
@@ -16,7 +16,7 @@
     },
     "Modes": {
       "type": "array",
-      "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode'])",
+      "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode']). Runtime strips spaces before validation (BoardStorageServiceImpl:560), so 'Thermostat Mode' is accepted and becomes 'ThermostatMode'. Schema pattern validates the post-strip form; raw inputs with spaces should be pre-processed before schema validation.",
       "items": {
         "type": "string",
         "minLength": 1,
@@ -56,8 +56,8 @@
           "Name": {
             "type": "string",
             "minLength": 1,
-            "description": "State name. For multi-mode: semicolon-separated (e.g., 'auto;cool'). Spaces will be sanitized to underscores.",
-            "examples": ["on", "off", "auto;cool", "circulate;heat"]
+            "description": "State name. For multi-mode: semicolon-separated (e.g., 'auto;cool'). Spaces are removed by sanitizeSmvToken (e.g., 'emergency heat' -> 'emergencyheat').",
+            "examples": ["on", "off", "auto;cool", "circulate;heat", "auto;emergency heat"]
           },
           "Dynamics": {
             "type": "array",
@@ -80,6 +80,7 @@
                   "description": "Direct value assignment (mutually exclusive with ChangeRate)"
                 }
               },
+              "additionalProperties": false,
               "oneOf": [
                 {
                   "required": ["ChangeRate"],
@@ -110,7 +111,8 @@
             "enum": ["private", "public", "Private", "Public"],
             "description": "Privacy level (will be normalized to lowercase)"
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "InternalVariables": {
@@ -124,9 +126,23 @@
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
-            "description": "Variable name (must be valid NuSMV identifier)",
+            "description": "Variable name (must be valid NuSMV identifier). Runtime validates against full NUSMV_RESERVED_WORDS set (case-insensitive).",
             "not": {
-              "pattern": "^(MODULE|VAR|IVAR|FROZENVAR|DEFINE|CONSTANTS|ASSIGN|INIT|TRANS|INVAR|SPEC|CTLSPEC|LTLSPEC|case|esac|next|init|self|TRUE|FALSE|boolean|integer|word|process|array|of|mod|union|in|xor|xnor|EX|AX|EF|AF|EG|AG)$"
+              "enum": [
+                "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
+                "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
+                "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",
+                "MIRROR", "INVARSPEC", "COMPUTE",
+                "case", "esac", "next", "init", "self",
+                "TRUE", "FALSE", "boolean", "integer", "word", "signed", "unsigned",
+                "process", "array", "of", "mod", "union", "in", "xor", "xnor",
+                "abs", "max", "min", "count", "toint", "typeof",
+                "swconst", "wordconst", "uwconst", "resize", "extend",
+                "signed_word", "unsigned_word",
+                "EX", "AX", "EF", "AF", "EG", "AG",
+                "E", "F", "O", "G", "H", "X", "Y", "Z", "W", "A", "U", "S", "V", "T",
+                "BU", "EBF", "ABF", "EBG", "ABG"
+              ]
             }
           },
           "Description": {
@@ -134,8 +150,7 @@
           },
           "IsInside": {
             "type": "boolean",
-            "description": "true = device-internal variable, false = environment variable (shared across devices)",
-            "default": true
+            "description": "true = device-internal variable, false = environment variable (shared across devices). NOTE: Runtime treats null as false (environment variable), not true. Always set explicitly."
           },
           "PublicVisible": {
             "type": "boolean",
@@ -151,7 +166,7 @@
           },
           "Values": {
             "type": "array",
-            "description": "Enumerated values (mutually exclusive with LowerBound/UpperBound). Spaces in values will be sanitized.",
+            "description": "Enumerated values (mutually exclusive with LowerBound/UpperBound). Spaces in values will be removed by sanitizeSmvToken (e.g., 'fan only' -> 'fanonly').",
             "items": {
               "type": "string",
               "minLength": 1
@@ -172,6 +187,7 @@
             "description": "Natural change rate: single value '1' or range '[-1, 1]'"
           }
         },
+        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["Values"],
@@ -202,15 +218,33 @@
     },
     "ImpactedVariables": {
       "type": "array",
-      "description": "List of environment variables this device can affect",
+      "description": "List of environment variables this device can affect. Runtime validates as NuSMV identifiers (no spaces, no reserved words) via validateSmvIdentifier().",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+        "not": {
+          "enum": [
+            "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
+            "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
+            "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",
+            "MIRROR", "INVARSPEC", "COMPUTE",
+            "case", "esac", "next", "init", "self",
+            "TRUE", "FALSE", "boolean", "integer", "word", "signed", "unsigned",
+            "process", "array", "of", "mod", "union", "in", "xor", "xnor",
+            "abs", "max", "min", "count", "toint", "typeof",
+            "swconst", "wordconst", "uwconst", "resize", "extend",
+            "signed_word", "unsigned_word",
+            "EX", "AX", "EF", "AF", "EG", "AG",
+            "E", "F", "O", "G", "H", "X", "Y", "Z", "W", "A", "U", "S", "V", "T",
+            "BU", "EBF", "ABF", "EBG", "ABG"
+          ]
+        }
       }
     },
     "Transitions": {
       "type": "array",
-      "description": "Automatic state transitions triggered by conditions",
+      "description": "Automatic state transitions triggered by conditions (non-signal by default). Found in 9 templates: Camera, Mobile Phone, Email, Facebook, Home Mode, Online Bank, Sina Weibo, Twitter, Clock.",
       "items": {
         "type": "object",
         "required": ["Name"],
@@ -218,20 +252,19 @@
           "Name": {
             "type": "string",
             "minLength": 1,
-            "description": "Transition name (will be sanitized for signal variables)"
+            "description": "Transition name. If Signal=true, a boolean variable is generated (sanitized via formatApiSignalName: non-alphanumeric -> '_')"
           },
           "StartState": {
             "type": "string",
-            "description": "Starting state. Empty string '' means 'from any state'. '_' is wildcard. For multi-mode: semicolon-separated."
+            "description": "Starting state. Empty string '' means 'from any state'. '_' is wildcard. For multi-mode: semicolon-separated partial patterns allowed (e.g., ';sendingAlertMessage')."
           },
           "EndState": {
-            "type": "string",
-            "description": "Target state (optional for internal variable transitions). For multi-mode: semicolon-separated. Partial changes like ';cool' allowed."
+            "type": ["string", "null"],
+            "description": "Target state after transition. Optional: if omitted, null, or empty, no state change occurs but assignments still execute (e.g., Clock.reset only resets variables). For multi-mode: semicolon-separated. Partial changes like ';idle' allowed."
           },
           "Trigger": {
             "type": ["object", "null"],
-            "description": "Condition that triggers this transition",
-            "required": ["Attribute", "Relation", "Value"],
+            "description": "Condition that triggers this transition. Required for non-signal transitions; validated by SmvModelValidator.validateTrigger().",
             "properties": {
               "Attribute": {
                 "type": "string",
@@ -240,37 +273,54 @@
               },
               "Relation": {
                 "type": "string",
-                "enum": ["=", "!=", ">", "<", ">=", "<="],
-                "description": "Comparison operator"
+                "enum": ["=", "!=", ">", "<", ">=", "<=", "EQ", "NEQ", "GT", "GTE", "LT", "LTE", "=="],
+                "description": "Comparison operator. EQ/NEQ/GT/GTE/LT/LTE/== are normalized to =/!=/>/>=/</<= by SmvRelationUtils.normalizeTriggerRelation()."
               },
               "Value": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Value to compare against (spaces will be removed)"
+                "description": "Value to compare against (spaces will be removed by generator)"
               }
-            }
+            },
+            "required": ["Attribute", "Relation", "Value"],
+            "additionalProperties": false
           },
           "Assignments": {
             "type": "array",
-            "description": "Variable assignments when transition occurs",
+            "description": "Variable assignments when transition occurs. Validated by SmvModelValidator.validateAssignments().",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": ["Attribute", "Value"],
+              "properties": {
+                "Attribute": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Target variable name"
+                },
+                "Value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Value to assign"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "Signal": {
             "type": "boolean",
-            "description": "If true, creates a boolean signal variable for this transition",
+            "description": "If true, creates a boolean signal variable for this transition. Typically false for transitions (default).",
             "default": false
           },
           "Description": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "APIs": {
       "type": "array",
-      "description": "External APIs that can be called to control the device",
+      "description": "External APIs that can be called to control the device via rule commands",
       "items": {
         "type": "object",
         "required": ["Name", "EndState"],
@@ -279,42 +329,58 @@
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-zA-Z_][a-zA-Z0-9_ ]*$",
-            "description": "API name (will be sanitized for signal variables, appended with '_a')"
+            "description": "API name (spaces allowed). Signal variable name is generated via formatApiSignalName: non-alphanumeric chars (including spaces) replaced with '_', then appended with '_a'. E.g., 'take photo' -> signal variable 'take_photo_a'."
           },
           "StartState": {
             "type": "string",
-            "description": "Required starting state. Empty string '' means 'from any state' (common pattern). '_' is wildcard. For multi-mode: semicolon-separated."
+            "description": "Starting state constraint. Empty string '' (default) means 'from any state' (22 of 29 API-bearing templates). Non-empty StartState found in 7 templates: Camera ('on','off'), Mobile Phone ('on'), Email ('idle'), Facebook ('idle'), Online Bank ('idle'), Sina Weibo ('idle'), Twitter ('idle'). For multi-mode: semicolon-separated partial patterns allowed.",
+            "default": ""
           },
           "EndState": {
             "type": "string",
             "minLength": 1,
-            "description": "Target state after API call. For multi-mode: semicolon-separated. Partial changes like ';cool' or 'auto;' allowed."
+            "description": "Target state after API call. All 45 existing templates have non-empty EndState. NOTE: Runtime DTO has no @NotNull constraint, so null can reach FaultLocalizer (handled permissively). For multi-mode: semicolon-separated. Partial changes like ';cool' or 'auto;' allowed."
           },
           "Trigger": {
             "type": "null",
-            "description": "Always null for APIs (triggers are for Transitions)"
+            "description": "Always null for APIs (triggers are for Transitions only)"
           },
           "Assignments": {
             "type": "array",
-            "description": "Variable assignments when API is called",
+            "description": "Variable assignments when API is called. NOTE: Unlike Transitions, API assignments are NOT validated by SmvModelValidator.validateAssignments() at generation time.",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": ["Attribute", "Value"],
+              "properties": {
+                "Attribute": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Target variable name"
+                },
+                "Value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Value to assign"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "Signal": {
             "type": "boolean",
-            "description": "If true, creates a boolean signal variable '<name>_a' for this API",
+            "description": "If true, creates a boolean signal variable '<name>_a' for this API. All 45 existing templates use Signal=true for APIs. Signal=true is required for the API to be usable as a rule condition (relation=null, value=null pattern). Signal=false APIs can only be used as rule command actions, not conditions. NOTE: DTO default is null (falsy), not true; omitting this field means no signal variable is generated. Always set explicitly.",
             "default": false
           },
           "Description": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "Contents": {
       "type": "array",
-      "description": "Content/data items managed by the device",
+      "description": "Content/data items managed by the device (e.g., photos, data). Used for privacy checking in specifications.",
       "items": {
         "type": "object",
         "required": ["Name"],
@@ -333,10 +399,11 @@
             "description": "Whether content can be modified",
             "default": false
           }
-        }
+        },
+        "additionalProperties": false
       }
     }
   },
   "additionalProperties": false,
-  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state. 2) Spaces in Mode/State names are removed (not replaced with underscores); other invalid characters replaced with underscores. 3) NuSMV reserved words will be escaped with '_' prefix. 4) Trust/Privacy values normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var)."
+  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words will be escaped with '_' prefix. 4) Trust/Privacy values normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var). 9) This schema is stricter than runtime: DTO uses @JsonIgnoreProperties(ignoreUnknown=true) and lacks @NotNull on API.EndState. The schema documents intended constraints, not enforced ones. 10) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 11) Transition.EndState is optional: when absent, no state change occurs but assignments (e.g., variable resets) still execute (see Clock.json). 12) API Assignments are NOT validated by SmvModelValidator (only Transition assignments are). 13) Known schema-vs-runtime gaps that cannot be expressed in JSON Schema: (a) Reserved word checks are case-sensitive in schema but case-insensitive at runtime (e.g., 'module' and 'MODULE' are both rejected at runtime but schema only blocks the exact-case entries in the enum). (b) Modes pattern validates the post-strip (normalized) form only; if validating raw user input directly against this schema, mode names with spaces will be rejected even though runtime accepts them. (c) APIs.Trigger is constrained to null in schema as a design rule; runtime SmvModelValidator will process non-null API triggers without error but they have no generator semantics."
 }

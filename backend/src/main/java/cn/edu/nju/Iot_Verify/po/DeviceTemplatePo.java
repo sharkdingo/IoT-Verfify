@@ -3,6 +3,8 @@ package cn.edu.nju.Iot_Verify.po;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Table(name = "device_templates", indexes = {
         @Index(name = "idx_device_templates_user_id", columnList = "user_id")
@@ -13,10 +15,12 @@ import lombok.*;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class DeviceTemplatePo {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(name = "user_id", nullable = false)
@@ -28,4 +32,19 @@ public class DeviceTemplatePo {
     @Lob
     @Column(name = "manifest_json", columnDefinition = "TEXT")
     private String manifestJson;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (updatedAt == null) {
+            updatedAt = LocalDateTime.now();
+        }
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
 }

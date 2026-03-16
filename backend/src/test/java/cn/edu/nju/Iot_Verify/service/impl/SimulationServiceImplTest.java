@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
@@ -139,7 +140,7 @@ class SimulationServiceImplTest {
 
     @SuppressWarnings("unchecked")
     private Set<Long> cancelledTaskIds() throws Exception {
-        Field f = SimulationServiceImpl.class.getDeclaredField("cancelledTasks");
+        Field f = AbstractAsyncTaskService.class.getDeclaredField("cancelledTasks");
         f.setAccessible(true);
         return (Set<Long>) f.get(service);
     }
@@ -260,7 +261,7 @@ class SimulationServiceImplTest {
                 .requestedSteps(10).createdAt(LocalDateTime.now()).build();
         when(simulationTaskRepository.findById(9L)).thenReturn(Optional.of(task));
 
-        service.simulateAsync(1L, 9L, singleDevice(), List.of(), 10, false, 3, false);
+        service.simulateAsync(1L, 9L, simRequest(singleDevice(), List.of(), 10, false, 3, false));
 
         assertEquals(200, readResultCode(fakeFile));
     }
@@ -269,7 +270,7 @@ class SimulationServiceImplTest {
     void simulateAsync_cancelledBeforeRun_skipsGeneration() throws Exception {
         cancelledTaskIds().add(10L);
 
-        service.simulateAsync(1L, 10L, singleDevice(), List.of(), 10, false, 3, false);
+        service.simulateAsync(1L, 10L, simRequest(singleDevice(), List.of(), 10, false, 3, false));
 
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -279,7 +280,7 @@ class SimulationServiceImplTest {
         // startTaskIfStillPending returns 0 by default (Mockito int stub),
         // simulating a DB-level race where the task was cancelled or started by another process
         // after the in-memory check passed.
-        service.simulateAsync(1L, 11L, singleDevice(), List.of(), 10, false, 3, false);
+        service.simulateAsync(1L, 11L, simRequest(singleDevice(), List.of(), 10, false, 3, false));
 
         // Verify the atomic start was attempted.
         verify(simulationTaskRepository).startTaskIfStillPending(
@@ -294,7 +295,7 @@ class SimulationServiceImplTest {
 
     @Test
     void simulate_nullDevices_returnsError() {
-        SimulationResultDto result = service.simulate(1L, null, List.of(), 10, false, 3, false);
+        SimulationResultDto result = service.simulate(1L, simRequest(null, List.of(), 10, false, 3, false));
 
         assertTrue(result.getStates().isEmpty());
         assertEquals(0, result.getSteps());
@@ -303,7 +304,7 @@ class SimulationServiceImplTest {
 
     @Test
     void simulate_emptyDevices_returnsError() {
-        SimulationResultDto result = service.simulate(1L, List.of(), List.of(), 10, false, 3, false);
+        SimulationResultDto result = service.simulate(1L, simRequest(List.of(), List.of(), 10, false, 3, false));
 
         assertTrue(result.getStates().isEmpty());
         assertEquals(0, result.getSteps());
@@ -314,7 +315,7 @@ class SimulationServiceImplTest {
         syncSimulationExecutor.shutdown();
 
         ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
-                () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
+                () -> service.simulate(1L, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
         assertTrue(ex.getMessage().contains("busy"));
     }
 
@@ -329,7 +330,7 @@ class SimulationServiceImplTest {
             }
         });
 
-        SimulationResultDto result = service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false);
+        SimulationResultDto result = service.simulate(1L, simRequest(singleDevice(), List.of(), 10, false, 3, false));
 
         assertTrue(result.getStates().isEmpty());
         assertEquals(0, result.getSteps());
@@ -349,7 +350,7 @@ class SimulationServiceImplTest {
                 .thenThrow(SmvGenerationException.ambiguousDeviceReference("Light", List.of("light_1", "light_2")));
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> service.simulate(1L, singleDevice(), List.of(), 10, false, 3, false));
+                () -> service.simulate(1L, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
         assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
     }
 
@@ -573,5 +574,17 @@ class SimulationServiceImplTest {
             }
         }
         return Objects.requireNonNull(lastSaved, "simulation trace should be saved");
+    }
+
+    private SimulationRequestDto simRequest(List<DeviceVerificationDto> devices, List<RuleDto> rules,
+                                            int steps, boolean isAttack, int intensity, boolean enablePrivacy) {
+        SimulationRequestDto r = new SimulationRequestDto();
+        r.setDevices(devices);
+        r.setRules(rules);
+        r.setSteps(steps);
+        r.setAttack(isAttack);
+        r.setIntensity(intensity);
+        r.setEnablePrivacy(enablePrivacy);
+        return r;
     }
 }

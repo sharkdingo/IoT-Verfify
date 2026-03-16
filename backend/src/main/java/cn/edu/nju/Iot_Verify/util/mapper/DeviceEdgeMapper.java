@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
-import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.po.DeviceEdgePo;
 import org.springframework.stereotype.Component;
 

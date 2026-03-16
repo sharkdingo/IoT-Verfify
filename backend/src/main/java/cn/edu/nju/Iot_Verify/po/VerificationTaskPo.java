@@ -23,7 +23,7 @@ import java.util.List;
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class VerificationTaskPo {
+public class VerificationTaskPo implements TaskView {
 
     public enum TaskStatus {
         PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
@@ -69,6 +69,13 @@ public class VerificationTaskPo {
 
     /** 0-100 progress percentage, persisted for multi-instance visibility */
     private Integer progress;
+
+    @Override
+    public boolean isTerminalStatus() {
+        return status == TaskStatus.COMPLETED
+                || status == TaskStatus.FAILED
+                || status == TaskStatus.CANCELLED;
+    }
 
     @PrePersist
     protected void onCreate() {

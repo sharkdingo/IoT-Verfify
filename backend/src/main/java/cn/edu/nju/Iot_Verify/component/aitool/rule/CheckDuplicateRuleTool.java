@@ -1,12 +1,10 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.client.ArkAiClient;
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,7 +15,6 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -29,12 +26,10 @@ import java.util.*;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class CheckDuplicateRuleTool implements AiTool {
+public class CheckDuplicateRuleTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
     private final ArkAiClient arkAiClient;
-    private final ObjectMapper objectMapper;
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)规则重复性检查助手。你的任务是检查用户新添加的规则是否与现有规则重复。
@@ -68,6 +63,14 @@ public class CheckDuplicateRuleTool implements AiTool {
 - 如果没有现有规则，返回isDuplicate为false
 """;
 
+    public CheckDuplicateRuleTool(BoardStorageService boardStorageService,
+                                  ArkAiClient arkAiClient,
+                                  ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+        this.arkAiClient = arkAiClient;
+    }
+
     @Override
     public String getName() {
         return "check_duplicate_rule";
@@ -97,19 +100,13 @@ public class CheckDuplicateRuleTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
 
             JsonNode newRuleNode = args.path("newRule");
@@ -122,23 +119,23 @@ public class CheckDuplicateRuleTool implements AiTool {
 
             // 解析新规则
             RuleDto newRule = objectMapper.convertValue(newRuleNode, RuleDto.class);
-            
+
             if (!isValidRule(newRule)) {
                 return errorJson("Invalid rule format", "VALIDATION_ERROR", 400);
             }
 
-            log.info("New rule: trigger={}->{}, action={}",
+            log.info("New rule: trigger={}, action={}",
                     getTriggerDescription(newRule),
                     getActionDescription(newRule));
 
             // 获取现有规则
             List<RuleDto> existingRules = safeList(boardStorageService.getRules(userId));
-            
+
             log.info("Existing rules count: {}", existingRules.size());
-            
+
             // 打印现有规则
             for (RuleDto rule : existingRules) {
-                log.info("Existing rule: id={}, trigger={}->{}, action={}",
+                log.info("Existing rule: id={}, trigger={}, action={}",
                         rule.getId(),
                         getTriggerDescription(rule),
                         getActionDescription(rule));
@@ -156,7 +153,7 @@ public class CheckDuplicateRuleTool implements AiTool {
 
             // 构建新规则信息
             String newRuleInfo = buildRuleInfoJson(newRule, "new");
-            
+
             // 构建现有规则列表
             String existingRulesInfo = buildRulesListJson(existingRules);
 
@@ -167,9 +164,9 @@ public class CheckDuplicateRuleTool implements AiTool {
 
             // 解析 AI 响应
             String result = parseAiResponse(aiResponse, existingRules);
-            
+
             log.info("Final Result: {}", result);
-            
+
             return result;
 
         } catch (ServiceUnavailableException e) {
@@ -217,7 +214,7 @@ public class CheckDuplicateRuleTool implements AiTool {
         try {
             Map<String, Object> ruleMap = new LinkedHashMap<>();
             ruleMap.put("ruleId", prefix + "_" + System.currentTimeMillis());
-            
+
             // 条件
             if (rule.getConditions() != null && !rule.getConditions().isEmpty()) {
                 List<Map<String, Object>> conditions = new ArrayList<>();
@@ -231,7 +228,7 @@ public class CheckDuplicateRuleTool implements AiTool {
                 }
                 ruleMap.put("conditions", conditions);
             }
-            
+
             // 命令
             if (rule.getCommand() != null) {
                 Map<String, Object> commandMap = new LinkedHashMap<>();
@@ -241,7 +238,7 @@ public class CheckDuplicateRuleTool implements AiTool {
                 commandMap.put("content", rule.getCommand().getContent());
                 ruleMap.put("command", commandMap);
             }
-            
+
             return objectMapper.writeValueAsString(ruleMap);
         } catch (Exception e) {
             log.error("Failed to build rule info JSON", e);
@@ -252,11 +249,11 @@ public class CheckDuplicateRuleTool implements AiTool {
     private String buildRulesListJson(List<RuleDto> rules) {
         try {
             List<Map<String, Object>> rulesList = new ArrayList<>();
-            
+
             for (RuleDto rule : rules) {
                 Map<String, Object> ruleMap = new LinkedHashMap<>();
                 ruleMap.put("ruleId", rule.getId() != null ? rule.getId() : "unknown");
-                
+
                 if (rule.getConditions() != null && !rule.getConditions().isEmpty()) {
                     List<Map<String, Object>> conditions = new ArrayList<>();
                     for (var cond : rule.getConditions()) {
@@ -269,7 +266,7 @@ public class CheckDuplicateRuleTool implements AiTool {
                     }
                     ruleMap.put("conditions", conditions);
                 }
-                
+
                 if (rule.getCommand() != null) {
                     Map<String, Object> commandMap = new LinkedHashMap<>();
                     commandMap.put("deviceName", rule.getCommand().getDeviceName());
@@ -278,10 +275,10 @@ public class CheckDuplicateRuleTool implements AiTool {
                     commandMap.put("content", rule.getCommand().getContent());
                     ruleMap.put("command", commandMap);
                 }
-                
+
                 rulesList.add(ruleMap);
             }
-            
+
             return objectMapper.writeValueAsString(rulesList);
         } catch (Exception e) {
             log.error("Failed to build rules list JSON", e);
@@ -303,43 +300,45 @@ public class CheckDuplicateRuleTool implements AiTool {
                 .maxTokens(2000)
                 .build();
 
+        ChatCompletionResult result;
         try {
             log.info("Calling Ark AI for duplicate rule check...");
-            ChatCompletionResult result = arkAiClient.getArkService().createChatCompletion(request);
-            if (result.getChoices() == null || result.getChoices().isEmpty()) {
-                log.warn("AI returned empty choices");
-                return "{\"isDuplicate\": false, \"similarity\": 0.0}";
-            }
-            
-            ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-            if (responseMsg == null || responseMsg.getContent() == null) {
-                log.warn("AI returned null message content");
-                return "{\"isDuplicate\": false, \"similarity\": 0.0}";
-            }
-            
-            String content = responseMsg.getContent().toString();
-            log.info("AI response content length: {}", content.length());
-            return content;
+            result = arkAiClient.getArkService().createChatCompletion(request);
         } catch (Exception e) {
             log.error("Failed to call Ark AI for duplicate check", e);
-            throw new RuntimeException("AI service unavailable: " + e.getMessage());
+            throw ServiceUnavailableException.aiService();
         }
+
+        if (result.getChoices() == null || result.getChoices().isEmpty()) {
+            log.warn("AI returned empty choices");
+            return "{\"isDuplicate\": false, \"similarity\": 0.0}";
+        }
+
+        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
+        if (responseMsg == null || responseMsg.getContent() == null) {
+            log.warn("AI returned null message content");
+            return "{\"isDuplicate\": false, \"similarity\": 0.0}";
+        }
+
+        String content = responseMsg.getContent().toString();
+        log.info("AI response content length: {}", content.length());
+        return content;
     }
 
     private String buildUserPrompt(String newRuleInfo, String existingRulesInfo) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("请检查新添加的规则是否与现有规则重复。\n\n");
-        
+
         prompt.append("## 新添加的规则\n");
         prompt.append(newRuleInfo);
         prompt.append("\n\n");
-        
+
         prompt.append("## 现有规则列表\n");
         prompt.append(existingRulesInfo);
         prompt.append("\n\n");
-        
+
         prompt.append("请直接返回JSON格式的检查结果，不要包含其他文字。");
-        
+
         return prompt.toString();
     }
 
@@ -356,10 +355,10 @@ public class CheckDuplicateRuleTool implements AiTool {
             if (cleanedResponse.endsWith("```")) {
                 cleanedResponse = cleanedResponse.substring(0, cleanedResponse.lastIndexOf("```")).trim();
             }
-            
+
             // 解析 JSON
             JsonNode root = objectMapper.readTree(cleanedResponse);
-            
+
             boolean isDuplicate = root.path("isDuplicate").asBoolean(false);
             String duplicateWith = root.path("duplicateWith").asText(null);
             double similarity = root.path("similarity").asDouble(0.0);
@@ -382,7 +381,7 @@ public class CheckDuplicateRuleTool implements AiTool {
             result.put("duplicateWith", duplicateWith);
             result.put("similarity", similarity);
             result.put("reason", reason);
-            
+
             if (isDuplicate) {
                 result.put("message", "This rule is duplicate with existing rule: " + duplicateWith);
             } else {
@@ -390,7 +389,7 @@ public class CheckDuplicateRuleTool implements AiTool {
             }
 
             return objectMapper.writeValueAsString(result);
-            
+
         } catch (Exception e) {
             log.error("Failed to parse AI response", e);
             try {
@@ -405,10 +404,6 @@ public class CheckDuplicateRuleTool implements AiTool {
         }
     }
 
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? Collections.emptyList() : list;
-    }
-
     private Long parseLongSafely(String value) {
         try {
             return value == null ? null : Long.valueOf(value.trim());
@@ -416,10 +411,4 @@ public class CheckDuplicateRuleTool implements AiTool {
             return null;
         }
     }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
-    }
 }
-
-

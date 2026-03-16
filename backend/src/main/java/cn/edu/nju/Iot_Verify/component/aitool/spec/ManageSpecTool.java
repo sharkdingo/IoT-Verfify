@@ -1,20 +1,17 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -28,8 +25,7 @@ import java.util.UUID;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class ManageSpecTool implements AiTool {
+public class ManageSpecTool extends AbstractAiTool {
 
     private static final Set<String> TARGET_TYPES = Set.of("state", "variable", "api", "trust", "privacy");
     private static final Set<String> RELATIONS = Set.of("=", "!=", ">", "<", ">=", "<=", "in", "not in");
@@ -37,7 +33,11 @@ public class ManageSpecTool implements AiTool {
     private static final Set<String> TEMPLATE_IDS = Set.of("1", "2", "3", "4", "5", "6", "7");
 
     private final BoardStorageService boardStorageService;
-    private final ObjectMapper objectMapper;
+
+    public ManageSpecTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+    }
 
     @Override
     public String getName() {
@@ -106,19 +106,13 @@ public class ManageSpecTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             String action = args.path("action").asText("").trim().toLowerCase(Locale.ROOT);
 
@@ -428,25 +422,5 @@ public class ManageSpecTool implements AiTool {
             }
         }
         return true;
-    }
-
-    private String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? List.of() : list;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
-    }
-
-    private String successJson(Map<String, Object> body, String fallbackMessage) {
-        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

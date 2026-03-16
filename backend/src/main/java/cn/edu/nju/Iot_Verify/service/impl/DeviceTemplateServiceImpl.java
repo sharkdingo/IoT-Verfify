@@ -24,6 +24,10 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class DeviceTemplateServiceImpl implements DeviceTemplateService {
 
+    /** Template names must be printable ASCII so that Locale.ROOT and MySQL LOWER() agree. */
+    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
+            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
+
     private final DeviceTemplateRepository templateRepo;
 
     @Override
@@ -83,6 +87,12 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                     }
                     if (name.isBlank()) {
                         name = "Unknown";
+                    }
+
+                    // Enforce ASCII-only names for Locale.ROOT / LOWER() consistency
+                    if (!SAFE_TEMPLATE_NAME.matcher(name).matches()) {
+                        log.warn("Skipping template '{}' with non-ASCII name from {}", name, resource.getFilename());
+                        continue;
                     }
 
                     templates.add(DeviceTemplatePo.builder()

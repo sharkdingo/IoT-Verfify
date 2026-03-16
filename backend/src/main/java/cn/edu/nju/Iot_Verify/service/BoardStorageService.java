@@ -4,7 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
-import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 
@@ -39,7 +39,7 @@ public interface BoardStorageService {
 
     List<DeviceTemplateDto> getDeviceTemplates(Long userId);
     DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);
-    void deleteDeviceTemplate(Long userId, String templateId);
+    void deleteDeviceTemplate(Long userId, Long templateId);
 
     /**
      * 重新加载设备模板（从资源文件重新初始化默认模板）

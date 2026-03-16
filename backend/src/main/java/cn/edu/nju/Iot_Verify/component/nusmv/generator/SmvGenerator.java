@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvDeviceModuleBuilder;
@@ -95,6 +96,37 @@ public class SmvGenerator {
         return deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
     }
 
+    /**
+     * Generate a parameterized SMV model for ActFeedback §5 fix strategies.
+     * Uses negated spec and FROZENVAR parameterization for threshold/condition solving.
+     */
+    public GenerateResult generateParameterized(Long userId, List<DeviceVerificationDto> devices,
+                                                 List<RuleDto> rules, List<SpecificationDto> specs,
+                                                 boolean isAttack, int intensity, boolean enablePrivacy,
+                                                 ParameterizationConfig config) throws IOException {
+        intensity = Math.max(0, Math.min(50, intensity));
+        if (devices == null || devices.isEmpty()) {
+            throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
+        }
+        List<SpecificationDto> safeSpecs = (specs != null) ? specs : List.of();
+        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
+
+        Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+        String smvContent = buildParameterizedSmvContent(deviceSmvMap, userId, devices, safeRules, safeSpecs,
+                isAttack, intensity, enablePrivacy, config);
+
+        Path tempDir = Files.createTempDirectory("nusmv_fix_");
+        File smvFile = tempDir.resolve("model.smv").toFile();
+
+        try (PrintWriter writer = new PrintWriter(new java.io.OutputStreamWriter(
+                new java.io.FileOutputStream(smvFile), StandardCharsets.UTF_8))) {
+            writer.print(smvContent);
+        }
+
+        log.info("Generated parameterized NuSMV model: {}", smvFile.getAbsolutePath());
+        return new GenerateResult(smvFile, deviceSmvMap);
+    }
+
     // ==================== 内部方法 ====================
 
     private String buildSmvContent(Map<String, DeviceSmvData> deviceSmvMap,
@@ -105,6 +137,32 @@ public class SmvGenerator {
                                    boolean isAttack,
                                    int intensity,
                                    boolean enablePrivacy) {
+        return buildSmvContentInternal(deviceSmvMap, userId, devices, rules, specs,
+                isAttack, intensity, enablePrivacy, null);
+    }
+
+    private String buildParameterizedSmvContent(Map<String, DeviceSmvData> deviceSmvMap,
+                                                Long userId,
+                                                List<DeviceVerificationDto> devices,
+                                                List<RuleDto> rules,
+                                                List<SpecificationDto> specs,
+                                                boolean isAttack,
+                                                int intensity,
+                                                boolean enablePrivacy,
+                                                ParameterizationConfig config) {
+        return buildSmvContentInternal(deviceSmvMap, userId, devices, rules, specs,
+                isAttack, intensity, enablePrivacy, config);
+    }
+
+    private String buildSmvContentInternal(Map<String, DeviceSmvData> deviceSmvMap,
+                                           Long userId,
+                                           List<DeviceVerificationDto> devices,
+                                           List<RuleDto> rules,
+                                           List<SpecificationDto> specs,
+                                           boolean isAttack,
+                                           int intensity,
+                                           boolean enablePrivacy,
+                                           ParameterizationConfig config) {
 
         log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
             devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, intensity, enablePrivacy);
@@ -129,8 +187,17 @@ public class SmvGenerator {
             }
         }
 
-        content.append(mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy));
-        content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy));
+        content.append(config != null
+                ? mainModuleBuilder.buildParameterized(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, config)
+                : mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy));
+
+        if (config != null) {
+            // Only emit the negated spec (¬ρ)
+            content.append(specBuilder.buildNegated(specs, config.getNegatedSpecIndex(),
+                    isAttack, intensity, deviceSmvMap, enablePrivacy));
+        } else {
+            content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy));
+        }
 
         return content.toString();
     }

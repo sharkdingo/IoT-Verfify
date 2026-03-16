@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.client;
 
+import cn.edu.nju.Iot_Verify.configure.ArkAiConfig;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,7 +15,6 @@ import com.volcengine.ark.runtime.service.ArkService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -28,32 +28,22 @@ import java.util.stream.Collectors;
 @Service
 public class ArkAiClient {
 
-    @Value("${volcengine.ark.api-key}")
-    private String apiKey;
-
-    @Value("${volcengine.ark.model-id}")
-    private String modelId;
-
-    @Value("${volcengine.ark.base-url}")
-    private String baseUrl;
-
-    @Value("${volcengine.ark.timeout-minutes}")
-    private int timeoutMinutes;
+    private final ArkAiConfig config;
+    private final ObjectMapper objectMapper;
 
     private ArkService arkService;
 
-    private final ObjectMapper objectMapper;
-
     // Getters for external access
     public String getModelId() {
-        return modelId;
+        return config.getModelId();
     }
 
     public ArkService getArkService() {
         return arkService;
     }
 
-    public ArkAiClient(ObjectMapper objectMapper) {
+    public ArkAiClient(ArkAiConfig config, ObjectMapper objectMapper) {
+        this.config = config;
         this.objectMapper = objectMapper;
     }
 
@@ -67,13 +57,13 @@ public class ArkAiClient {
 
     @PostConstruct
     public void init() {
-        String normalizedBaseUrl = normalizeArkBaseUrl(baseUrl);
+        String normalizedBaseUrl = normalizeArkBaseUrl(config.getBaseUrl());
         this.arkService = ArkService.builder()
-                .apiKey(apiKey)
+                .apiKey(config.getApiKey())
                 .baseUrl(normalizedBaseUrl)
-                .timeout(Duration.ofMinutes(timeoutMinutes))
+                .timeout(Duration.ofMinutes(config.getTimeoutMinutes()))
                 .build();
-        log.info("ArkAiClient initialized with Model ID: {}, Base URL: {}", modelId, normalizedBaseUrl);
+        log.info("ArkAiClient initialized with Model ID: {}, Base URL: {}", config.getModelId(), normalizedBaseUrl);
     }
 
     @PreDestroy
@@ -90,7 +80,7 @@ public class ArkAiClient {
 
     public ChatCompletionResult checkIntent(List<ChatMessage> messages, List<ChatTool> tools) {
         ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(modelId)
+                .model(config.getModelId())
                 .messages(messages)
                 .tools(tools)
                 .build();
@@ -103,7 +93,7 @@ public class ArkAiClient {
 
     public void streamChat(List<ChatMessage> messages, Consumer<String> onNext, BooleanSupplier shouldStop) {
         ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(modelId)
+                .model(config.getModelId())
                 .messages(messages)
                 .build();
 

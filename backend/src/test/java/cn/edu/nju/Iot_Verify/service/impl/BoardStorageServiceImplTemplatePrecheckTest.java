@@ -15,8 +15,11 @@ import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardActiveMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +28,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.lang.NonNull;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
 import java.util.List;
@@ -73,11 +77,21 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     private DeviceNodeMapper deviceNodeMapper;
     @Mock
     private DeviceEdgeMapper deviceEdgeMapper;
+    @Mock
+    private BoardLayoutMapper boardLayoutMapper;
+    @Mock
+    private BoardActiveMapper boardActiveMapper;
+    @Mock
+    private DeviceTemplateMapper deviceTemplateMapper;
+    @Mock
+    private TransactionTemplate transactionTemplate;
 
     private BoardStorageServiceImpl service;
 
     @BeforeEach
     void setUp() {
+        // Use a real DeviceTemplateMapper so toDto() works in addDeviceTemplate tests
+        deviceTemplateMapper = new DeviceTemplateMapper();
         service = new BoardStorageServiceImpl(
                 nodeRepo,
                 edgeRepo,
@@ -87,11 +101,15 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 activeRepo,
                 deviceTemplateRepo,
                 deviceTemplateService,
+                transactionTemplate,
                 smvGenerator,
                 specificationMapper,
                 ruleMapper,
                 deviceNodeMapper,
-                deviceEdgeMapper
+                deviceEdgeMapper,
+                boardLayoutMapper,
+                boardActiveMapper,
+                deviceTemplateMapper
         );
     }
 
@@ -214,7 +232,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
 
-        assertEquals("101", result.getId());
+        assertEquals(101L, result.getId());
         assertEquals("Demo", result.getName());
         assertFalse(precheckFile.exists());
     }
@@ -237,7 +255,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
 
         DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
 
-        assertEquals("200", result.getId());
+        assertEquals(200L, result.getId());
         assertEquals("WeatherSensor", result.getName());
         assertFalse(precheckFile.exists());
     }
@@ -414,7 +432,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         // Should succeed now
         DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
         assertNotNull(result);
-        assertEquals("300", result.getId());
+        assertEquals(300L, result.getId());
         assertFalse(precheckFile.exists());
     }
 
@@ -449,7 +467,7 @@ class BoardStorageServiceImplTemplatePrecheckTest {
         // Should succeed now
         DeviceTemplateDto result = service.addDeviceTemplate(1L, dto);
         assertNotNull(result);
-        assertEquals("301", result.getId());
+        assertEquals(301L, result.getId());
         assertFalse(precheckFile.exists());
     }
 

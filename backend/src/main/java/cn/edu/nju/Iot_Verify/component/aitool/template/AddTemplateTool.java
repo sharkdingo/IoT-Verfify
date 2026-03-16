@@ -1,11 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,7 +12,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -24,12 +21,15 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class AddTemplateTool implements AiTool {
+public class AddTemplateTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final ObjectMapper objectMapper;
     private ObjectMapper tolerantMapper;
+
+    public AddTemplateTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardStorageService = boardStorageService;
+    }
 
     @PostConstruct
     void initTolerantMapper() {
@@ -80,19 +80,13 @@ public class AddTemplateTool implements AiTool {
         );
     }
 
-    @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             String name = trimToNull(args.path("name").asText(null));
             if (name == null) {
@@ -130,11 +124,11 @@ public class AddTemplateTool implements AiTool {
             dto.setManifest(manifest);
 
             DeviceTemplateDto saved = boardStorageService.addDeviceTemplate(userId, dto);
-            return writeJson(Map.of(
+            return successJson(Map.of(
                     "message", "Template added successfully.",
                     "templateId", saved.getId(),
                     "name", saved.getName()
-            ));
+            ), "Template added successfully.");
         } catch (ServiceUnavailableException e) {
             log.warn("add_template busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -146,21 +140,5 @@ public class AddTemplateTool implements AiTool {
             return errorJson("Failed to add template. Please check manifest format and retry.",
                     "INTERNAL_ERROR", 500);
         }
-    }
-
-    private String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
-    }
-
-    private String writeJson(Map<String, Object> body) {
-        return AiToolResponseHelper.success(objectMapper, body, "Template added successfully.");
     }
 }

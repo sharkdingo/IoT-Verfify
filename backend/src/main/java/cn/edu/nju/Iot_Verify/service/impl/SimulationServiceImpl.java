@@ -23,7 +23,6 @@ import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +40,7 @@ import java.util.concurrent.*;
 
 @Slf4j
 @Service
-public class SimulationServiceImpl implements SimulationService {
+public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTaskPo> implements SimulationService {
 
     private final SmvGenerator smvGenerator;
     private final SmvTraceParser smvTraceParser;
@@ -51,14 +50,7 @@ public class SimulationServiceImpl implements SimulationService {
     private final SimulationTaskRepository simulationTaskRepository;
     private final SimulationTraceMapper simulationTraceMapper;
     private final SimulationTaskMapper simulationTaskMapper;
-    private final ObjectMapper objectMapper;
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
-
-    private static final int MAX_OUTPUT_LENGTH = 10000;
-
-    private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
-    private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
 
     public SimulationServiceImpl(SmvGenerator smvGenerator,
                                  SmvTraceParser smvTraceParser,
@@ -70,6 +62,7 @@ public class SimulationServiceImpl implements SimulationService {
                                  SimulationTaskMapper simulationTaskMapper,
                                  ObjectMapper objectMapper,
                                  @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor) {
+        super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
         this.nusmvExecutor = nusmvExecutor;
@@ -78,7 +71,6 @@ public class SimulationServiceImpl implements SimulationService {
         this.simulationTaskRepository = simulationTaskRepository;
         this.simulationTraceMapper = simulationTraceMapper;
         this.simulationTaskMapper = simulationTaskMapper;
-        this.objectMapper = objectMapper;
         this.syncSimulationExecutor = syncSimulationExecutor;
     }
 
@@ -101,13 +93,14 @@ public class SimulationServiceImpl implements SimulationService {
     }
 
     @Override
-    public SimulationResultDto simulate(Long userId,
-                                        List<DeviceVerificationDto> devices,
-                                        List<RuleDto> rules,
-                                        int steps,
-                                        boolean isAttack,
-                                        int intensity,
-                                        boolean enablePrivacy) {
+    public SimulationResultDto simulate(Long userId, SimulationRequestDto request) {
+        List<DeviceVerificationDto> devices = request.getDevices();
+        List<RuleDto> rules = request.getRules();
+        int steps = request.getSteps();
+        boolean isAttack = request.isAttack();
+        int intensity = request.getIntensity();
+        boolean enablePrivacy = request.isEnablePrivacy();
+
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         if (devices == null || devices.isEmpty()) {
             return SimulationResultDto.builder()
@@ -175,22 +168,23 @@ public class SimulationServiceImpl implements SimulationService {
 
     @Override
     @Async("simulationTaskExecutor")
-    public void simulateAsync(Long userId, Long taskId,
-                              List<DeviceVerificationDto> devices,
-                              List<RuleDto> rules,
-                              int steps,
-                              boolean isAttack,
-                              int intensity,
-                              boolean enablePrivacy) {
+    public void simulateAsync(Long userId, Long taskId, SimulationRequestDto request) {
+        List<DeviceVerificationDto> devices = request.getDevices();
+        List<RuleDto> rules = request.getRules();
+        int steps = request.getSteps();
+        boolean isAttack = request.isAttack();
+        int intensity = request.getIntensity();
+        boolean enablePrivacy = request.isEnablePrivacy();
+
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
 
-        runningTasks.put(taskId, Thread.currentThread());
+        registerRunningTask(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
 
         SimulationTaskPo task = null;
         try {
             // Check in-memory cancellation marker (fast path for same-instance cancellation).
-            if (cancelledTasks.contains(taskId)) {
+            if (isTaskCancelled(taskId)) {
                 return;
             }
 
@@ -224,7 +218,7 @@ public class SimulationServiceImpl implements SimulationService {
             updateTaskProgress(taskId, 20, "Executing simulation");
             SimulationResultDto result = doSimulate(userId, devices, safeRules, steps, isAttack, intensity, enablePrivacy);
 
-            if (cancelledTasks.contains(taskId) || Thread.currentThread().isInterrupted()) {
+            if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
 
@@ -243,18 +237,18 @@ public class SimulationServiceImpl implements SimulationService {
             completeTask(task, savedTrace.getId(), result.getSteps(), result.getLogs());
 
         } catch (Exception e) {
-            if (cancelledTasks.contains(taskId)) {
+            if (isTaskCancelled(taskId)) {
                 log.info("Async simulation cancelled for task: {}", taskId);
             } else {
                 log.error("Async simulation failed for task: {}", taskId, e);
                 failTask(task, "Simulation failed: " + e.getMessage(), List.of("Simulation failed: " + e.getMessage()));
             }
         } finally {
-            if (cancelledTasks.remove(taskId)) {
+            if (removeCancelledMark(taskId)) {
                 if (task != null) handleCancellation(task);
             }
-            runningTasks.remove(taskId);
-            taskProgress.remove(taskId);
+            removeRunningTask(taskId);
+            removeTaskProgress(taskId);
         }
     }
 
@@ -270,60 +264,19 @@ public class SimulationServiceImpl implements SimulationService {
     @Override
     @Transactional(readOnly = true)
     public int getTaskProgress(Long userId, Long taskId) {
-        SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
-
-        // Prefer in-memory value (active task on this instance)
-        Integer progress = taskProgress.get(taskId);
-        if (progress != null) {
-            return progress;
-        }
-        // Fall back to DB column (task running on another instance or after restart)
-        if (task.getProgress() != null) {
-            return task.getProgress();
-        }
-        // Final fallback: infer from terminal status
-        if (task.getStatus() == SimulationTaskPo.TaskStatus.COMPLETED
-                || task.getStatus() == SimulationTaskPo.TaskStatus.FAILED
-                || task.getStatus() == SimulationTaskPo.TaskStatus.CANCELLED) {
-            return 100;
-        }
-        return 0;
+        return super.getTaskProgress(userId, taskId);
     }
 
     @Override
     @Transactional
     public boolean cancelTask(Long userId, Long taskId) {
-        SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId).orElse(null);
-        if (task == null) return false;
-
-        int updated = simulationTaskRepository.cancelTaskIfStillActive(
-                taskId,
-                SimulationTaskPo.TaskStatus.CANCELLED,
-                LocalDateTime.now(),
-                List.of(SimulationTaskPo.TaskStatus.PENDING,
-                        SimulationTaskPo.TaskStatus.RUNNING));
-        if (updated == 0) {
-            return false;
-        }
-
-        cancelledTasks.add(taskId);
-        Thread taskThread = runningTasks.get(taskId);
-        if (taskThread != null && taskThread.isAlive()) {
-            taskThread.interrupt();
-        } else {
-            // No local running thread owns this task now; cleanup marker immediately.
-            cancelledTasks.remove(taskId);
-        }
-        return true;
+        return super.cancelTask(userId, taskId);
     }
 
     @Override
     @Transactional
     public SimulationTraceDto simulateAndSave(Long userId, SimulationRequestDto request) {
-        SimulationResultDto result = simulate(userId,
-                request.getDevices(), request.getRules(), request.getSteps(),
-                request.isAttack(), request.getIntensity(), request.isEnablePrivacy());
+        SimulationResultDto result = simulate(userId, request);
 
         if (result.getStates() == null || result.getStates().isEmpty()) {
             throw new InternalServerException("Simulation produced no states, nothing to save");
@@ -503,37 +456,6 @@ public class SimulationServiceImpl implements SimulationService {
         }
     }
 
-    private String serializeCheckLogs(List<String> logs) {
-        try {
-            return objectMapper.writeValueAsString(logs == null ? List.of() : logs);
-        } catch (Exception e) {
-            log.warn("Failed to serialize check logs", e);
-            return "[]";
-        }
-    }
-
-    private void handleCancellation(SimulationTaskPo task) {
-        log.info("Handling cancellation for simulation task: {}", task.getId());
-        int updated = simulationTaskRepository.cancelTaskIfStillActive(
-                task.getId(),
-                SimulationTaskPo.TaskStatus.CANCELLED,
-                LocalDateTime.now(),
-                List.of(SimulationTaskPo.TaskStatus.PENDING,
-                        SimulationTaskPo.TaskStatus.RUNNING));
-        if (updated == 0) {
-            log.info("Simulation task {} already finished (COMPLETED/FAILED), skipping cancel", task.getId());
-        }
-    }
-
-    private void updateTaskProgress(Long taskId, int progress, String message) {
-        Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
-        int clamped = Math.min(100, Math.max(0, progress));
-        taskProgress.put(requiredTaskId, clamped);
-        // Atomic DB update — only updates if task is still PENDING or RUNNING
-        simulationTaskRepository.updateProgressIfActive(requiredTaskId, clamped);
-        log.debug("Simulation task {} progress: {}% - {}", requiredTaskId, progress, message);
-    }
-
     private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result, String requestJson) {
         SimulationTracePo po = SimulationTracePo.builder()
                 .userId(userId)
@@ -572,27 +494,6 @@ public class SimulationServiceImpl implements SimulationService {
             return "Simulation failed";
         }
         return logs.get(logs.size() - 1);
-    }
-
-    private List<String> readCheckLogs(SimulationTaskPo task) {
-        if (task == null || task.getCheckLogsJson() == null || task.getCheckLogsJson().isBlank()) {
-            return new ArrayList<>();
-        }
-        try {
-            return objectMapper.readValue(task.getCheckLogsJson(), new TypeReference<List<String>>() {});
-        } catch (Exception e) {
-            log.warn("Failed to parse checkLogsJson for simulation task {}", task.getId(), e);
-            return new ArrayList<>();
-        }
-    }
-
-    private void writeCheckLogs(SimulationTaskPo task, List<String> logs) {
-        if (task == null) return;
-        try {
-            task.setCheckLogsJson(objectMapper.writeValueAsString(logs == null ? List.of() : logs));
-        } catch (Exception e) {
-            log.warn("Failed to serialize check logs for simulation task {}", task.getId(), e);
-        }
     }
 
     private void saveResultJson(File smvFile, SimulationResultDto simulationResult) {
@@ -666,12 +567,6 @@ public class SimulationServiceImpl implements SimulationService {
         // Temp directories (nusmv_*) are retained for post-mortem debugging.
     }
 
-    private String truncateOutput(String output) {
-        if (output == null) return null;
-        return output.length() > MAX_OUTPUT_LENGTH
-                ? output.substring(0, MAX_OUTPUT_LENGTH) + "\n... (output truncated)" : output;
-    }
-
     private String syncSimulationExecutorSnapshot() {
         try {
             ThreadPoolExecutor nativeExecutor = syncSimulationExecutor.getThreadPoolExecutor();
@@ -690,5 +585,27 @@ public class SimulationServiceImpl implements SimulationService {
         } catch (IllegalStateException ignored) {
             // executor may not be initialized yet
         }
+    }
+
+    // ── AbstractAsyncTaskService hooks ─────────────────────────────────
+
+    @Override
+    protected Optional<SimulationTaskPo> findTaskByIdAndUserId(Long id, Long userId) {
+        return simulationTaskRepository.findByIdAndUserId(id, userId);
+    }
+
+    @Override
+    protected int atomicCancelTask(Long taskId, LocalDateTime completedAt) {
+        return simulationTaskRepository.cancelTaskIfStillActive(
+                taskId,
+                SimulationTaskPo.TaskStatus.CANCELLED,
+                completedAt,
+                List.of(SimulationTaskPo.TaskStatus.PENDING,
+                        SimulationTaskPo.TaskStatus.RUNNING));
+    }
+
+    @Override
+    protected int atomicUpdateProgress(Long taskId, int progress) {
+        return simulationTaskRepository.updateProgressIfActive(taskId, progress);
     }
 }

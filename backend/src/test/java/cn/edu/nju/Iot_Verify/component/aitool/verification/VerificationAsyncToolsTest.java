@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
@@ -22,8 +22,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -35,7 +33,7 @@ import static org.mockito.Mockito.when;
 class VerificationAsyncToolsTest {
 
     @Mock
-    private BoardDataHelper boardDataHelper;
+    private BoardDataConverter boardDataConverter;
     @Mock
     private BoardStorageService boardStorageService;
     @Mock
@@ -49,7 +47,7 @@ class VerificationAsyncToolsTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        verifyModelAsyncTool = new VerifyModelAsyncTool(boardDataHelper, boardStorageService, verificationService, objectMapper);
+        verifyModelAsyncTool = new VerifyModelAsyncTool(boardDataConverter, boardStorageService, verificationService, objectMapper);
         verifyTaskStatusTool = new VerifyTaskStatusTool(verificationService, objectMapper);
         cancelVerifyTaskTool = new CancelVerifyTaskTool(verificationService, objectMapper);
         UserContextHolder.setUserId(1L);
@@ -62,7 +60,7 @@ class VerificationAsyncToolsTest {
 
     @Test
     void verifyModelAsync_withoutDevices_shouldFailFast() throws Exception {
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of());
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of());
 
         String result = verifyModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
@@ -82,7 +80,7 @@ class VerificationAsyncToolsTest {
         SpecificationDto spec = new SpecificationDto();
         spec.setId("s1");
 
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
         when(verificationService.createTask(1L)).thenReturn(100L);
@@ -92,7 +90,7 @@ class VerificationAsyncToolsTest {
 
         assertTrue(result.contains("taskId"));
         assertEquals("PENDING", json.path("taskStatus").asText());
-        verify(verificationService).verifyAsync(anyLong(), anyLong(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean());
+        verify(verificationService).verifyAsync(anyLong(), anyLong(), any());
     }
 
     @Test
@@ -104,12 +102,12 @@ class VerificationAsyncToolsTest {
         SpecificationDto spec = new SpecificationDto();
         spec.setId("s1");
 
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
         when(verificationService.createTask(1L)).thenReturn(101L);
         doThrow(new TaskRejectedException("busy")).when(verificationService)
-                .verifyAsync(anyLong(), anyLong(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean());
+                .verifyAsync(anyLong(), anyLong(), any());
 
         String result = verifyModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);

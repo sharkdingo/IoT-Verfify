@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.po;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import java.time.LocalDateTime;
 
 /**
@@ -13,9 +14,11 @@ import java.time.LocalDateTime;
 @Table(name = "chat_message", indexes = {
         @Index(name = "idx_chat_message_session_id", columnList = "session_id")
 })
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class ChatMessagePo {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     @Column(nullable = false)

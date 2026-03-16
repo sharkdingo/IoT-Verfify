@@ -8,6 +8,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -31,6 +32,8 @@ public class RuleDto {
     private Command command;
 
     private String ruleString;
+
+    private LocalDateTime createdAt;
 
     /**
      * 条件

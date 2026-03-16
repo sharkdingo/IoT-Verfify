@@ -8,7 +8,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
-import cn.edu.nju.Iot_Verify.dto.rule.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
@@ -26,12 +26,15 @@ import cn.edu.nju.Iot_Verify.util.mapper.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardActiveMapper;
+import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,11 +54,15 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
     private final DeviceTemplateService deviceTemplateService;
+    private final TransactionTemplate transactionTemplate;
     private final SmvGenerator smvGenerator;
     private final SpecificationMapper specificationMapper;
     private final RuleMapper ruleMapper;
     private final DeviceNodeMapper deviceNodeMapper;
     private final DeviceEdgeMapper deviceEdgeMapper;
+    private final BoardLayoutMapper boardLayoutMapper;
+    private final BoardActiveMapper boardActiveMapper;
+    private final DeviceTemplateMapper deviceTemplateMapper;
 
     /**
      * User-level write locks for saveRules/saveSpecs to prevent cross-session
@@ -122,40 +129,46 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional(readOnly = true)
     public List<SpecificationDto> getSpecs(Long userId) {
+        return getSpecsInternal(userId);
+    }
+
+    /** Non-transactional read; safe to call inside transactionTemplate lambdas. */
+    private List<SpecificationDto> getSpecsInternal(Long userId) {
         return specRepo.findByUserId(userId).stream()
                 .map(specificationMapper::toDto)
                 .toList();
     }
 
     @Override
-    @Transactional
     public List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs) {
         synchronized (getUserWriteLock(userId)) {
-            return saveSpecsInternal(userId, specs);
+            return transactionTemplate.execute(status -> saveSpecsInternal(userId, specs));
         }
     }
 
     @Override
-    @Transactional
     public List<SpecificationDto> addSpec(Long userId, SpecificationDto spec) {
         synchronized (getUserWriteLock(userId)) {
-            List<SpecificationDto> existing = new ArrayList<>(getSpecs(userId));
-            existing.add(spec);
-            return saveSpecsInternal(userId, existing);
+            return transactionTemplate.execute(status -> {
+                List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
+                existing.add(spec);
+                return saveSpecsInternal(userId, existing);
+            });
         }
     }
 
     @Override
-    @Transactional
     public List<SpecificationDto> removeSpec(Long userId, String specId) {
         synchronized (getUserWriteLock(userId)) {
-            List<SpecificationDto> existing = new ArrayList<>(getSpecs(userId));
-            boolean removed = existing.removeIf(s -> specId.equals(s.getId()));
-            if (!removed) {
-                return null;
-            }
-            saveSpecsInternal(userId, existing);
-            return existing;
+            return transactionTemplate.execute(status -> {
+                List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
+                boolean removed = existing.removeIf(s -> specId.equals(s.getId()));
+                if (!removed) {
+                    return null;
+                }
+                saveSpecsInternal(userId, existing);
+                return existing;
+            });
         }
     }
 
@@ -172,81 +185,90 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     @Transactional(readOnly = true)
     public List<RuleDto> getRules(Long userId) {
+        return getRulesInternal(userId);
+    }
+
+    /** Non-transactional read; safe to call inside transactionTemplate lambdas. */
+    private List<RuleDto> getRulesInternal(Long userId) {
         return ruleRepo.findByUserId(userId).stream()
                 .map(ruleMapper::toDto)
                 .toList();
     }
 
     @Override
-    @Transactional
     public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
         synchronized (getUserWriteLock(userId)) {
-            // 增量更新：获取现有规则
-            Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
-                    .collect(Collectors.toMap(RulePo::getId, r -> r));
+            return transactionTemplate.execute(status -> {
+                // 增量更新：获取现有规则
+                Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
+                        .collect(Collectors.toMap(RulePo::getId, r -> r));
 
-            // 新规则 ID 集合
-            Set<Long> newRuleIds = new HashSet<>();
+                // 新规则 ID 集合
+                Set<Long> newRuleIds = new HashSet<>();
 
-            // 处理每个规则
-            for (RuleDto r : rules) {
-                Long ruleId = r.getId();
-                if (ruleId != null) {
-                    newRuleIds.add(ruleId);
+                // 处理每个规则
+                for (RuleDto r : rules) {
+                    Long ruleId = r.getId();
+                    if (ruleId != null) {
+                        newRuleIds.add(ruleId);
+                    }
+
+                    RulePo po = ruleMapper.toEntity(r, userId);
+                    if (ruleId == null) {
+                        // 新规则，直接插入 (@PrePersist sets createdAt)
+                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                    } else if (existingRules.containsKey(ruleId)) {
+                        // 已有规则且属于当前用户，更新 (preserve original createdAt)
+                        po.setId(ruleId);
+                        po.setCreatedAt(existingRules.get(ruleId).getCreatedAt());
+                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                    } else {
+                        // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
+                        log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
+                        po.setId(null);
+                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                    }
                 }
 
-                RulePo po = ruleMapper.toEntity(r, userId);
-                if (ruleId == null) {
-                    // 新规则，直接插入
-                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-                } else if (existingRules.containsKey(ruleId)) {
-                    // 已有规则且属于当前用户，更新
-                    po.setId(ruleId);
-                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-                } else {
-                    // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
-                    log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
-                    po.setId(null);
-                    ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                // 删除不再存在的规则
+                for (Long existingId : existingRules.keySet()) {
+                    if (!newRuleIds.contains(existingId)) {
+                        ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
+                    }
                 }
-            }
 
-            // 删除不再存在的规则
-            for (Long existingId : existingRules.keySet()) {
-                if (!newRuleIds.contains(existingId)) {
-                    ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
-                }
-            }
-
-            return getRules(userId);
+                return getRulesInternal(userId);
+            });
         }
     }
 
     @Override
-    @Transactional
     public List<RuleDto> addRule(Long userId, RuleDto rule) {
         synchronized (getUserWriteLock(userId)) {
-            rule.setId(null); // new rule, let DB assign ID
-            RulePo po = ruleMapper.toEntity(rule, userId);
-            ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-            return getRules(userId);
+            return transactionTemplate.execute(status -> {
+                rule.setId(null); // new rule, let DB assign ID
+                RulePo po = ruleMapper.toEntity(rule, userId);
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+                return getRulesInternal(userId);
+            });
         }
     }
 
     @Override
-    @Transactional
     public List<RuleDto> removeRule(Long userId, long ruleId) {
         synchronized (getUserWriteLock(userId)) {
-            List<RulePo> existing = ruleRepo.findByUserId(userId);
-            boolean found = existing.stream().anyMatch(r -> r.getId() != null && r.getId() == ruleId);
-            if (!found) {
-                return null;
-            }
-            ruleRepo.deleteById(ruleId);
-            return existing.stream()
-                    .filter(r -> r.getId() == null || r.getId() != ruleId)
-                    .map(ruleMapper::toDto)
-                    .toList();
+            return transactionTemplate.execute(status -> {
+                List<RulePo> existing = ruleRepo.findByUserId(userId);
+                boolean found = existing.stream().anyMatch(r -> r.getId() != null && r.getId() == ruleId);
+                if (!found) {
+                    return null;
+                }
+                ruleRepo.deleteById(ruleId);
+                return existing.stream()
+                        .filter(r -> r.getId() == null || r.getId() != ruleId)
+                        .map(ruleMapper::toDto)
+                        .toList();
+            });
         }
     }
 
@@ -267,113 +289,16 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return layoutRepo.save(Objects.requireNonNull(created, "layout to save must not be null"));
         });
 
-        return mapLayoutPoToDto(po);
-    }
-
-    private BoardLayoutDto mapLayoutPoToDto(BoardLayoutPo po) {
-        BoardLayoutDto dto = new BoardLayoutDto();
-
-        BoardLayoutDto.PanelPosition inputPos = new BoardLayoutDto.PanelPosition();
-        inputPos.setX(po.getInputX());
-        inputPos.setY(po.getInputY());
-        dto.setInput(inputPos);
-
-        BoardLayoutDto.PanelPosition statusPos = new BoardLayoutDto.PanelPosition();
-        statusPos.setX(po.getStatusX());
-        statusPos.setY(po.getStatusY());
-        dto.setStatus(statusPos);
-
-        BoardLayoutDto.DockStateWrapper dockWrapper = new BoardLayoutDto.DockStateWrapper();
-
-        BoardLayoutDto.DockState inputDock = new BoardLayoutDto.DockState();
-        inputDock.setIsDocked(po.getInputIsDocked() != null ? po.getInputIsDocked() : false);
-        inputDock.setSide(po.getInputDockSide());
-
-        BoardLayoutDto.PanelPosition inputLastPos = new BoardLayoutDto.PanelPosition();
-        inputLastPos.setX(po.getInputLastPosX() != null ? po.getInputLastPosX() : 24.0);
-        inputLastPos.setY(po.getInputLastPosY() != null ? po.getInputLastPosY() : 24.0);
-        inputDock.setLastPos(inputLastPos);
-
-        dockWrapper.setInput(inputDock);
-
-        BoardLayoutDto.DockState statusDock = new BoardLayoutDto.DockState();
-        statusDock.setIsDocked(po.getStatusIsDocked() != null ? po.getStatusIsDocked() : false);
-        statusDock.setSide(po.getStatusDockSide());
-
-        BoardLayoutDto.PanelPosition statusLastPos = new BoardLayoutDto.PanelPosition();
-        statusLastPos.setX(po.getStatusLastPosX() != null ? po.getStatusLastPosX() : 1040.0);
-        statusLastPos.setY(po.getStatusLastPosY() != null ? po.getStatusLastPosY() : 80.0);
-        statusDock.setLastPos(statusLastPos);
-
-        dockWrapper.setStatus(statusDock);
-
-        dto.setDockState(dockWrapper);
-
-        BoardLayoutDto.CanvasPan pan = new BoardLayoutDto.CanvasPan();
-        pan.setX(po.getCanvasPanX());
-        pan.setY(po.getCanvasPanY());
-        dto.setCanvasPan(pan);
-
-        dto.setCanvasZoom(po.getCanvasZoom());
-
-        return dto;
+        return boardLayoutMapper.toDto(po);
     }
 
     @Transactional
     @Override
     public BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout) {
-        boolean inDocked = false;
-        String inSide = null;
-        double inLastX = 24.0;
-        double inLastY = 24.0;
-
-        if (layout.getDockState() != null && layout.getDockState().getInput() != null) {
-            BoardLayoutDto.DockState ds = layout.getDockState().getInput();
-            inDocked = Boolean.TRUE.equals(ds.getIsDocked());
-            inSide = ds.getSide();
-            if (ds.getLastPos() != null) {
-                inLastX = ds.getLastPos().getX() != null ? ds.getLastPos().getX() : 24.0;
-                inLastY = ds.getLastPos().getY() != null ? ds.getLastPos().getY() : 24.0;
-            }
-        }
-
-        boolean stDocked = false;
-        String stSide = null;
-        double stLastX = 1040.0;
-        double stLastY = 80.0;
-
-        if (layout.getDockState() != null && layout.getDockState().getStatus() != null) {
-            BoardLayoutDto.DockState ds = layout.getDockState().getStatus();
-            stDocked = Boolean.TRUE.equals(ds.getIsDocked());
-            stSide = ds.getSide();
-            if (ds.getLastPos() != null) {
-                stLastX = ds.getLastPos().getX() != null ? ds.getLastPos().getX() : 1040.0;
-                stLastY = ds.getLastPos().getY() != null ? ds.getLastPos().getY() : 80.0;
-            }
-        }
-
         BoardLayoutPo existing = layoutRepo.findByUserId(userId).orElse(null);
         Long id = existing != null ? existing.getId() : null;
 
-        BoardLayoutPo po = BoardLayoutPo.builder()
-                .id(id)
-                .userId(userId)
-                .inputX(layout.getInput() != null ? layout.getInput().getX() : 24.0)
-                .inputY(layout.getInput() != null ? layout.getInput().getY() : 24.0)
-                .statusX(layout.getStatus() != null ? layout.getStatus().getX() : 1040.0)
-                .statusY(layout.getStatus() != null ? layout.getStatus().getY() : 80.0)
-                .canvasPanX(layout.getCanvasPan() != null ? layout.getCanvasPan().getX() : 0.0)
-                .canvasPanY(layout.getCanvasPan() != null ? layout.getCanvasPan().getY() : 0.0)
-                .canvasZoom(layout.getCanvasZoom() != null ? layout.getCanvasZoom() : 1.0)
-                .inputIsDocked(inDocked)
-                .inputDockSide(inSide)
-                .inputLastPosX(inLastX)
-                .inputLastPosY(inLastY)
-                .statusIsDocked(stDocked)
-                .statusDockSide(stSide)
-                .statusLastPosX(stLastX)
-                .statusLastPosY(stLastY)
-                .build();
+        BoardLayoutPo po = boardLayoutMapper.toEntity(layout, id, userId);
         layoutRepo.save(Objects.requireNonNull(po, "layout to save must not be null"));
 
         return getLayout(userId);
@@ -383,17 +308,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Transactional(readOnly = true)
     public BoardActiveDto getActive(Long userId) {
         BoardActivePo po = activeRepo.findByUserId(userId).orElse(null);
-        BoardActiveDto dto = new BoardActiveDto();
-
-        if (po == null) {
-            dto.setInput(List.of("devices", "rules", "specs"));
-            dto.setStatus(List.of("devices", "edges", "specs"));
-            return dto;
-        }
-
-        dto.setInput(JsonUtils.fromJsonToStringList(po.getInputTabsJson()));
-        dto.setStatus(JsonUtils.fromJsonToStringList(po.getStatusTabsJson()));
-        return dto;
+        return boardActiveMapper.toDto(po);
     }
 
     @Transactional
@@ -402,12 +317,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         BoardActivePo existing = activeRepo.findByUserId(userId).orElse(null);
         Long id = existing != null ? existing.getId() : null;
 
-        BoardActivePo po = BoardActivePo.builder()
-                .id(id)
-                .userId(userId)
-                .inputTabsJson(JsonUtils.toJsonOrEmpty(active.getInput()))
-                .statusTabsJson(JsonUtils.toJsonOrEmpty(active.getStatus()))
-                .build();
+        BoardActivePo po = boardActiveMapper.toEntity(active, id, userId);
         activeRepo.save(Objects.requireNonNull(po, "active tabs to save must not be null"));
 
         return getActive(userId);
@@ -417,22 +327,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Transactional(readOnly = true)
     public List<DeviceTemplateDto> getDeviceTemplates(Long userId) {
         List<DeviceTemplatePo> poList = deviceTemplateRepo.findByUserId(userId);
-
-        return poList.stream().map(po -> {
-            DeviceTemplateDto dto = new DeviceTemplateDto();
-            dto.setId(po.getId().toString());
-            dto.setName(po.getName());
-
-            DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
-                    po.getManifestJson(),
-                    new TypeReference<DeviceManifest>() {},
-                    new DeviceManifest()
-            );
-            // Keep DTO-level name as the single source used by business logic.
-            manifest.setName(dto.getName());
-            dto.setManifest(manifest);
-            return dto;
-        }).toList();
+        return poList.stream().map(deviceTemplateMapper::toDto).toList();
     }
 
     @Override
@@ -449,6 +344,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
 
         final String canonicalName = rawName;
+        if (!SAFE_TEMPLATE_NAME.matcher(canonicalName).matches()) {
+            throw new BadRequestException(
+                    "Template name '" + canonicalName
+                    + "' contains non-ASCII characters. Only printable ASCII characters are allowed.");
+        }
         safeDto.setName(canonicalName);
         safeDto.getManifest().setName(canonicalName);
         validateTemplateManifestForNuSmv(canonicalName, safeDto.getManifest());
@@ -474,25 +374,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
         runTemplateNuSmvPrecheck(userId, canonicalName, safeDto.getManifest());
 
-        DeviceTemplateDto result = new DeviceTemplateDto();
-        result.setId(saved.getId().toString());
-        result.setName(canonicalName);
-        result.setManifest(safeDto.getManifest());
-        return result;
+        return deviceTemplateMapper.toDto(saved);
     }
 
     @Override
     @Transactional
-    public void deleteDeviceTemplate(Long userId, String templateId) {
-        Long id;
-        try {
-            id = Long.parseLong(templateId.trim());
-        } catch (NumberFormatException e) {
-            throw new BadRequestException("Invalid template ID format: " + templateId);
-        }
-
-        DeviceTemplatePo po = deviceTemplateRepo.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Template", id));
+    public void deleteDeviceTemplate(Long userId, Long templateId) {
+        DeviceTemplatePo po = deviceTemplateRepo.findById(templateId)
+                .orElseThrow(() -> new ResourceNotFoundException("Template", templateId));
 
         if (!po.getUserId().equals(userId)) {
             throw new ForbiddenException("Access denied to this template");
@@ -517,6 +406,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
     private static final java.util.regex.Pattern SAFE_SMV_TOKEN =
             java.util.regex.Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
+
+    /** Template names must be printable ASCII (spaces allowed) so that
+     *  Locale.ROOT toLowerCase and MySQL LOWER() produce identical results. */
+    private static final java.util.regex.Pattern SAFE_TEMPLATE_NAME =
+            java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
 
     private void validateTemplateManifestForNuSmv(String templateName, DeviceManifest manifest) {
         // ── Validate InternalVariable / ImpactedVariable names FIRST ──

@@ -18,7 +18,7 @@ import java.util.List;
 @Data
 public class DeviceTemplateDto {
 
-    private String id;
+    private Long id;
 
     @NotBlank(message = "Template name is required")
     @Size(max = 100, message = "Template name must be at most 100 characters")

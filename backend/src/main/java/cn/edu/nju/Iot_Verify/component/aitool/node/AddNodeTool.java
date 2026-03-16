@@ -1,17 +1,15 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -22,11 +20,14 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class AddNodeTool implements AiTool {
+public class AddNodeTool extends AbstractAiTool {
 
     private final NodeService nodeService;
-    private final ObjectMapper objectMapper;
+
+    public AddNodeTool(NodeService nodeService, ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.nodeService = nodeService;
+    }
 
     @Override
     public String getName() {
@@ -67,18 +68,13 @@ public class AddNodeTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             String templateName = args.path("templateName").asText("").trim();
             if (templateName.isEmpty()) {
@@ -133,14 +129,6 @@ public class AddNodeTool implements AiTool {
         }
     }
 
-    private String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
-    }
-
     private String normalizeResult(String raw) {
         if (raw == null || raw.isBlank()) {
             return AiToolResponseHelper.success(objectMapper, "Device operation completed.");
@@ -157,9 +145,5 @@ public class AddNodeTool implements AiTool {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", raw);
         return AiToolResponseHelper.success(objectMapper, body, raw);
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
     }
 }

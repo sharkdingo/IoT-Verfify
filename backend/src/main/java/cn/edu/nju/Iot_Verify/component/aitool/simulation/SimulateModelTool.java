@@ -1,15 +1,14 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
-import cn.edu.nju.Iot_Verify.component.aitool.AiTool;
-import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
-import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -17,7 +16,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
 import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -29,13 +27,21 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class SimulateModelTool implements AiTool {
+public class SimulateModelTool extends AbstractAiTool {
 
-    private final BoardDataHelper boardDataHelper;
+    private final BoardDataConverter boardDataConverter;
     private final BoardStorageService boardStorageService;
     private final SimulationService simulationService;
-    private final ObjectMapper objectMapper;
+
+    public SimulateModelTool(BoardDataConverter boardDataConverter,
+                             BoardStorageService boardStorageService,
+                             SimulationService simulationService,
+                             ObjectMapper objectMapper) {
+        super(objectMapper);
+        this.boardDataConverter = boardDataConverter;
+        this.boardStorageService = boardStorageService;
+        this.simulationService = simulationService;
+    }
 
     @Override
     public String getName() {
@@ -81,18 +87,13 @@ public class SimulateModelTool implements AiTool {
     }
 
     @Override
-    public String execute(String argsJson) {
+    protected String doExecute(Long userId, String argsJson) {
         try {
-            Long userId = UserContextHolder.getUserId();
-            if (userId == null) {
-                return errorJson("User not logged in", "UNAUTHORIZED", 401);
-            }
-
             JsonNode args;
             try {
-                args = objectMapper.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
-            } catch (Exception parseEx) {
-                return errorJson("Invalid JSON arguments.", "VALIDATION_ERROR", 400);
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
             }
             int steps = args.path("steps").asInt(10);
             boolean isAttack = args.path("isAttack").asBoolean(false);
@@ -104,7 +105,7 @@ public class SimulateModelTool implements AiTool {
             intensity = Math.max(0, Math.min(50, intensity));
 
             // Load board data directly from current workspace state.
-            List<DeviceVerificationDto> devices = boardDataHelper.getDevicesForVerification(userId);
+            List<DeviceVerificationDto> devices = boardDataConverter.getDevicesForVerification(userId);
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
 
             if (devices.isEmpty()) {
@@ -115,8 +116,15 @@ public class SimulateModelTool implements AiTool {
             log.info("Executing simulate_model: {} devices, {} rules, {} steps, attack={}, intensity={}, privacy={}",
                     devices.size(), rules.size(), steps, isAttack, intensity, enablePrivacy);
 
-            SimulationResultDto result = simulationService.simulate(
-                    userId, devices, rules, steps, isAttack, intensity, enablePrivacy);
+            SimulationRequestDto request = new SimulationRequestDto();
+            request.setDevices(devices);
+            request.setRules(rules);
+            request.setSteps(steps);
+            request.setAttack(isAttack);
+            request.setIntensity(intensity);
+            request.setEnablePrivacy(enablePrivacy);
+
+            SimulationResultDto result = simulationService.simulate(userId, request);
 
             // Build a compact summary for chat output.
             Map<String, Object> summary = new LinkedHashMap<>();
@@ -156,21 +164,5 @@ public class SimulateModelTool implements AiTool {
             log.error("simulate_model failed", e);
             return errorJson("Simulation failed.", "INTERNAL_ERROR", 500);
         }
-    }
-
-    private <T> List<T> safeList(List<T> list) {
-        return list == null ? List.of() : list;
-    }
-
-    private String errorJson(String message, String errorCode, int status) {
-        return errorJson(message, errorCode, status, Map.of());
-    }
-
-    private String errorJson(String message, String errorCode, int status, Map<String, Object> extras) {
-        return AiToolResponseHelper.error(objectMapper, message, errorCode, status, extras);
-    }
-
-    private String successJson(Map<String, Object> body, String fallbackMessage) {
-        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
     }
 }

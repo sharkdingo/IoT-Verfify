@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
-import cn.edu.nju.Iot_Verify.component.aitool.BoardDataHelper;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
@@ -21,8 +21,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -34,7 +32,7 @@ import static org.mockito.Mockito.when;
 class VerificationSyncToolTest {
 
     @Mock
-    private BoardDataHelper boardDataHelper;
+    private BoardDataConverter boardDataConverter;
     @Mock
     private BoardStorageService boardStorageService;
     @Mock
@@ -61,7 +59,7 @@ class VerificationSyncToolTest {
         DeviceVerificationDto device = new DeviceVerificationDto();
         device.setVarName("dev_1");
         device.setTemplateName("Light");
-        when(boardDataHelper.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
 
         SpecificationDto spec = new SpecificationDto();
@@ -74,21 +72,21 @@ class VerificationSyncToolTest {
                 .traces(List.of())
                 .checkLogs(List.of("ok"))
                 .build();
-        when(verificationService.verify(anyLong(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean()))
+        when(verificationService.verify(anyLong(), any()))
                 .thenReturn(result);
 
-        VerifyModelTool tool = new VerifyModelTool(boardDataHelper, boardStorageService, verificationService, failingMapper);
+        VerifyModelTool tool = new VerifyModelTool(boardDataConverter, boardStorageService, verificationService, failingMapper);
         String response = tool.execute("{}");
         JsonNode json = objectMapper.readTree(response);
 
         assertEquals("Verification completed.", json.path("message").asText());
         assertTrue(json.path("warning").asText().contains("serialization degraded"));
-        verify(verificationService).verify(anyLong(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean());
+        verify(verificationService).verify(anyLong(), any());
     }
 
     @Test
     void verifyModel_invalidJsonArgs_shouldReturnValidationError() throws Exception {
-        VerifyModelTool tool = new VerifyModelTool(boardDataHelper, boardStorageService, verificationService, objectMapper);
+        VerifyModelTool tool = new VerifyModelTool(boardDataConverter, boardStorageService, verificationService, objectMapper);
 
         String response = tool.execute("{");
         JsonNode json = objectMapper.readTree(response);
@@ -96,6 +94,6 @@ class VerificationSyncToolTest {
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
         assertEquals("Invalid JSON arguments.", json.path("error").asText());
-        verify(verificationService, never()).verify(anyLong(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean());
+        verify(verificationService, never()).verify(anyLong(), any());
     }
 }
