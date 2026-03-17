@@ -3,7 +3,11 @@
  * 1. Imports & Setup
  * ================================================================================= */
 import {ref, reactive, computed, onMounted, onBeforeUnmount} from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useChatStore } from '@/stores/chat'
+import { useAuth } from '@/stores/auth'
+import LogoutConfirmDialog from '@/components/LogoutConfirmDialog.vue'
 import { ElMessage } from 'element-plus'
 // Icons
 
@@ -47,6 +51,25 @@ import FixResultDialog from '../components/FixResultDialog.vue'
 import '../styles/board.css'
 
 const { t } = useI18n()
+const router = useRouter()
+const { toggleChat } = useChatStore()
+const { logout } = useAuth()
+
+const showLogoutDialog = ref(false)
+
+const handleLogout = () => {
+  showLogoutDialog.value = true
+}
+
+const handleLogoutConfirm = () => {
+  logout()
+  showLogoutDialog.value = false
+  router.push('/login')
+}
+
+const handleLogoutCancel = () => {
+  showLogoutDialog.value = false
+}
 
 /* =================================================================================
  * 2. Constants & Configuration
@@ -2441,6 +2464,32 @@ const closeResultDialog = () => {
 <template>
   <!-- [Fix] @wheel.ctrl.prevent 阻止浏览器原生缩放 -->
   <div class="iot-board" @wheel.ctrl.prevent="onBoardWheel">
+    <!-- Navigation Bar - 与首页风格一致 -->
+    <nav class="board-nav-bar">
+      <div class="nav-content">
+        <div class="logo-left" @click="router.push('/board')">
+          IoT-Verify<sup class="logo-sup">®</sup>
+        </div>
+
+        <div class="nav-actions">
+          <button class="nav-action-btn ai-assistant-btn" @click="toggleChat">
+            <span class="material-symbols-outlined">smart_toy</span>
+            <span>IoT Assistant</span>
+          </button>
+          <button class="nav-logout-btn" @click="handleLogout">
+            <span class="material-symbols-outlined">logout</span>
+          </button>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Logout Confirmation Dialog -->
+    <LogoutConfirmDialog
+      v-model:visible="showLogoutDialog"
+      @confirm="handleLogoutConfirm"
+      @cancel="handleLogoutCancel"
+    />
+
     <!-- Left Sidebar - Control Center -->
     <ControlCenter
       :device-templates="deviceTemplates"
@@ -2470,9 +2519,9 @@ const closeResultDialog = () => {
 
     <!-- Canvas Area -->
     <div class="canvas-container">
-      <!-- Background elements -->
+      <!-- Background elements - 与首页一致的深蓝色调 -->
       <div class="absolute inset-0 grid-bg opacity-100 pointer-events-none z-0"></div>
-      <div class="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-blue-50/20 pointer-events-none z-0"></div>
+      <div class="absolute inset-0 bg-gradient-to-b from-blue-900/20 via-transparent to-blue-950/30 pointer-events-none z-0"></div>
 
 
       <!-- Canvas Board -->
@@ -2502,7 +2551,7 @@ const closeResultDialog = () => {
         <!-- Pulse animation when active -->
         <div 
           v-if="simulationAnimationState.visible"
-          class="absolute inset-0 rounded-full bg-indigo-400 animate-ping opacity-75"
+          class="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-75"
         ></div>
         <button
           @click="togglePanel('simulation')"
@@ -2510,8 +2559,8 @@ const closeResultDialog = () => {
           :class="[
             'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
             (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel) 
-              ? 'bg-indigo-300 cursor-not-allowed disabled:hover:scale-100' 
-              : 'bg-indigo-500 hover:bg-indigo-600'
+              ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100' 
+              : 'bg-blue-500 hover:bg-blue-600'
           ]"
           title="Simulation"
         >
@@ -2521,7 +2570,7 @@ const closeResultDialog = () => {
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
             {{ simulationAnimationState.visible ? 'Simulation Running' : 'Simulation' }}
-            <span v-if="simulationAnimationState.visible" class="ml-1 text-indigo-300">(Active)</span>
+            <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">(Active)</span>
           </span>
         </button>
       </div>

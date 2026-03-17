@@ -32,6 +32,7 @@ declare module 'vue' {
     FixResultDialog: typeof import('./src/components/FixResultDialog.vue')['default']
     Header: typeof import('./src/components/Header.vue')['default']
     LogoutConfirm: typeof import('./src/components/LogoutConfirm.vue')['default']
+    LogoutConfirmDialog: typeof import('./src/components/LogoutConfirmDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']

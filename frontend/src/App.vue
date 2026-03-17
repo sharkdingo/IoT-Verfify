@@ -9,7 +9,7 @@ const route = useRoute();
 const routerViewRef = ref<any>(null);
 
 const isAuthPage = computed(() => {
-  return route.path === '/login' || route.path === '/register';
+  return route.path === '/' || route.path === '/login' || route.path === '/register';
 });
 
 const invokeViewMethod = async (methodName: string) => {

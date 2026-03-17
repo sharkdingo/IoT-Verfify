@@ -12,7 +12,7 @@ const checkAuthSync = (): boolean => {
 const clearInvalidTokens = () => {
   // 如果当前页面不是公开页面但没有token，清除所有认证相关数据
   const currentPath = window.location.hash.replace('#', '') || '/';
-  const isPublicPath = ['/login', '/register', '/404'].includes(currentPath) ||
+  const isPublicPath = ['/', '/login', '/register', '/404'].includes(currentPath) ||
                        currentPath.startsWith('/login') ||
                        currentPath.startsWith('/register');
 
@@ -25,6 +25,12 @@ const clearInvalidTokens = () => {
 
 const routes: RouteRecordRaw[] = [
   {
+    path: '/',
+    name: 'landing',
+    component: () => import('../views/Landing.vue'),
+    meta: { title: 'Velorah', public: true }
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('../views/Login.vue'),
@@ -35,10 +41,6 @@ const routes: RouteRecordRaw[] = [
     name: 'register',
     component: () => import('../views/Register.vue'),
     meta: { title: 'Register', public: true }
-  },
-  {
-    path: '/',
-    redirect: '/board'
   },
   {
     path: '/board',
@@ -80,8 +82,8 @@ router.beforeEach((to, _from, next) => {
 
   // 如果是公开页面，直接放行
   if (isPublic) {
-    // 如果已登录且访问登录/注册页，跳转到board
-    if (isLoggedIn && ['/login', '/register'].includes(to.path)) {
+    // 如果已登录且访问登录/注册/landing页，跳转到board
+    if (isLoggedIn && ['/', '/login', '/register'].includes(to.path)) {
       next('/board');
     } else {
       next();
@@ -94,7 +96,7 @@ router.beforeEach((to, _from, next) => {
     if (isLoggedIn) {
       next('/board');
     } else {
-      next('/login');
+      next('/'); // 跳转到 Landing 页面
     }
     return;
   }

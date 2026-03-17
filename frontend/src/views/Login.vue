@@ -82,6 +82,19 @@ const goToRegister = () => {
   <div class="auth-wrapper">
     <!-- Left Side - Branding -->
     <div class="brand-panel">
+      <!-- Video Background -->
+      <video
+        class="brand-video-bg"
+        autoplay
+        loop
+        muted
+        playsinline
+      >
+        <source src="https://cdn.pixabay.com/video/2019/10/10/27725-365890983_large.mp4" type="video/mp4">
+      </video>
+      
+      <div class="video-overlay"></div>
+      
       <div class="bg-effects">
         <div class="grid-pattern"></div>
         <div class="gradient-overlay"></div>
@@ -90,14 +103,8 @@ const goToRegister = () => {
       </div>
 
       <div class="brand-content">
-        <div class="brand-header">
-          <div class="brand-logo">
-            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-              <path clip-rule="evenodd" d="M24 18.4228L42 11.475V34.3663C42 34.7796 41.7457 35.1504 41.3601 35.2992L24 42V18.4228Z" fill="currentColor" fill-rule="evenodd"></path>
-              <path clip-rule="evenodd" d="M24 8.18819L33.4123 11.574L24 15.2071L14.5877 11.574L24 8.18819ZM9 15.8487L21 20.4805V37.6263L9 32.9945V15.8487ZM27 37.6263V20.4805L39 15.8487V32.9945L27 37.6263ZM25.354 2.29885C24.4788 1.98402 23.5212 1.98402 22.646 2.29885L4.98454 8.65208C3.7939 9.08038 3 10.2097 3 11.475V34.3663C3 36.0196 4.01719 37.5026 5.55962 38.098L22.9197 44.7987C23.6149 45.0671 24.3851 45.0671 25.0803 44.7987L42.4404 38.098C43.9828 37.5026 45 36.0196 45 34.3663V11.475C45 10.2097 44.2061 9.08038 43.0155 8.65208L25.354 2.29885Z" fill="currentColor" fill-rule="evenodd"></path>
-            </svg>
-          </div>
-          <span class="brand-name">IoT Verify</span>
+        <div class="logo">
+          IoT-Verify<sup class="logo-sup">®</sup>
         </div>
 
         <div class="hero-text">
@@ -234,6 +241,32 @@ const goToRegister = () => {
   }
 }
 
+/* Video Background */
+.brand-video-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+.video-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    135deg,
+    rgba(10, 20, 35, 0.85) 0%,
+    rgba(20, 30, 50, 0.7) 50%,
+    rgba(10, 20, 35, 0.85) 100%
+  );
+  z-index: 1;
+}
+
 .bg-effects {
   position: absolute;
   inset: 0;
@@ -273,14 +306,21 @@ const goToRegister = () => {
   flex-direction: column;
   height: 100%;
   justify-content: space-between;
+  color: #ffffff;
 }
 
-.brand-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  color: var(--text-primary);
-  margin-bottom: 3rem;
+/* Logo Styles for Login Page */
+.logo {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  letter-spacing: -0.025em;
+  color: #ffffff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.logo-sup {
+  font-size: 0.75rem;
+  vertical-align: super;
 }
 
 .brand-logo svg {
@@ -306,22 +346,24 @@ const goToRegister = () => {
 }
 
 .hero-text h2 {
-  font-size: 3rem; /* Keeping close to Register's 3rem but slightly adjusted if needed via variable */
+  font-size: 3rem;
   line-height: 1.1;
   font-weight: 700;
-  color: var(--text-primary);
+  color: #ffffff;
   margin-bottom: 1rem;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
 .hero-text h2 span {
-  color: var(--color-primary);
+  color: #64b5f6;
 }
 
 .hero-text p {
   font-size: 1.125rem;
-  color: var(--text-secondary);
+  color: #e0e0e0;
   max-width: 36rem;
   line-height: 1.6;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 .hero-image-placeholder {
@@ -353,16 +395,16 @@ const goToRegister = () => {
 }
 
 .stat-card {
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(12px);
   padding: 1.25rem;
   border-radius: 16px;
-  border: 1px solid #bfdbfe;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 .stat-icon {
-  color: var(--color-primary);
+  color: #64b5f6;
   margin-bottom: 0.5rem;
 }
 
@@ -375,19 +417,19 @@ const goToRegister = () => {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  color: #e0e0e0;
   margin-bottom: 0.25rem;
 }
 
 .stat-value {
   font-size: 2rem;
   font-weight: 700;
-  color: var(--text-primary);
+  color: #ffffff;
 }
 
 .stat-value span {
   font-size: 1.25rem;
-  color: var(--color-primary);
+  color: #64b5f6;
 }
 
 /* --- Right Panel (Form) --- */
