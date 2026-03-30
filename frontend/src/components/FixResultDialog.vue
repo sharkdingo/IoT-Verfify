@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import boardApi from '@/api/board'
 import type { FixResult, FixSuggestion, FaultRule } from '@/types/fix'
@@ -31,12 +31,6 @@ const strategyDescriptions: Record<string, string> = {
   parameter: 'Modify condition values to prevent rule triggering',
   condition: 'Add or remove conditions to refine rule scope',
   disable: 'Completely disable problematic rules'
-}
-
-const strategyColors: Record<string, string> = {
-  parameter: 'from-blue-500 to-blue-600',
-  condition: 'from-emerald-500 to-emerald-600',
-  disable: 'from-orange-500 to-orange-600'
 }
 
 // Fetch fault localization
@@ -96,7 +90,6 @@ const switchStrategy = async (strategy: string) => {
 const applyFix = async (suggestion: FixSuggestion) => {
   applyingFix.value = true
   try {
-    // TODO: Implement actual fix application logic
     console.log('Applying fix:', suggestion)
     ElMessage.success('Fix applied successfully')
     emit('applied')
@@ -115,322 +108,363 @@ const currentSuggestion = computed(() => {
   return fixResult.value.suggestions.find(s => s.strategy === selectedStrategy.value)
 })
 
-// Format parameter adjustment
-const formatParameterAdjustment = (adj: any) => {
-  return `${adj.attribute} ${adj.relation} ${adj.originalValue} → ${adj.newValue}`
-}
-
-// Format condition adjustment
-const formatConditionAdjustment = (adj: any) => {
-  if (adj.action === 'remove') {
-    return `Remove condition: ${adj.attribute}`
-  } else if (adj.action === 'add') {
-    return `Add condition: ${adj.deviceName}.${adj.attribute} ${adj.relation} ${adj.value}`
-  }
-  return adj.description
-}
+// Get verified strategies count
+const verifiedCount = computed(() => {
+  if (!fixResult.value) return 0
+  return fixResult.value.suggestions.filter(s => s.verified).length
+})
 
 // Get step label
 const getStepLabel = (step: number) => {
   return step === 0 ? 'Initial State' : `Step ${step}`
 }
+
+// Watch visible prop
+watch(() => props.visible, (val) => {
+  if (val) {
+    handleOpen()
+  }
+})
+
+// Close dialog
+const closeDialog = () => {
+  emit('update:visible', false)
+}
 </script>
 
 <template>
-  <el-dialog
-    :model-value="visible"
-    @update:model-value="$emit('update:visible', $event)"
-    title="Fault Localization & Fix"
-    width="900px"
-    :before-close="() => $emit('update:visible', false)"
-    @open="handleOpen"
-    class="fix-dialog"
-  >
-    <!-- Loading State -->
-    <div v-if="loading" class="flex flex-col items-center justify-center py-16">
-      <div class="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent mb-4"></div>
-      <span class="text-slate-500">Analyzing trace and generating suggestions...</span>
-    </div>
-
-    <div v-else-if="fixResult" class="space-y-6">
-      <!-- Violation Summary -->
-      <div class="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-xl p-5">
-        <div class="flex items-start gap-3">
-          <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
-            <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-            </svg>
-          </div>
-          <div class="flex-1">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="text-lg font-semibold text-red-800">Violated Specification</span>
-              <code class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-sm font-mono">{{ fixResult.violatedSpecId }}</code>
+  <!-- Fix Result Dialog - Following Verification Result Style -->
+  <div v-if="visible" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" @click="closeDialog">
+    <div class="bg-white rounded-2xl w-[800px] max-w-[95vw] shadow-2xl max-h-[85vh] flex flex-col border border-slate-200" @click.stop>
+      
+      <!-- Header -->
+      <div class="relative overflow-hidden rounded-t-2xl border-b" :class="verifiedCount > 0 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'">
+        <div class="relative flex items-center justify-between p-5">
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm" :class="verifiedCount > 0 ? 'bg-amber-100' : 'bg-red-100'">
+              <span class="material-symbols-outlined text-2xl" :class="verifiedCount > 0 ? 'text-amber-600' : 'text-red-600'">
+                {{ verifiedCount > 0 ? 'build' : 'error' }}
+              </span>
             </div>
-            <p class="text-sm text-red-700">{{ fixResult.summary }}</p>
+            <div>
+              <h3 class="text-xl font-bold text-slate-800">Fix Suggestions</h3>
+              <p class="text-sm text-slate-600">{{ verifiedCount > 0 ? `${verifiedCount} solution(s) verified` : 'No verified solutions yet' }}</p>
+            </div>
           </div>
+          <button @click="closeDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
+            <span class="material-symbols-outlined text-xl">close</span>
+          </button>
         </div>
       </div>
 
-      <!-- Fault Localization Section -->
-      <div class="border border-slate-200 rounded-xl overflow-hidden">
-        <div class="bg-slate-50 px-5 py-3 border-b border-slate-200 flex items-center gap-2">
-          <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-          </svg>
-          <h3 class="font-semibold text-slate-800">Fault Localization</h3>
-          <span v-if="faultRules.length > 0" class="ml-auto px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">
-            {{ faultRules.length }} rule(s) identified
-          </span>
-        </div>
+      <!-- Content -->
+      <div class="p-6 flex-1 overflow-y-auto">
         
-        <div class="p-5">
-          <div v-if="faultRules.length === 0" class="text-center py-8">
-            <svg class="w-16 h-16 mx-auto text-slate-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-            <p class="text-slate-500 mb-1">No fault rules found in counterexample trace</p>
-            <p class="text-sm text-slate-400">The violation may be caused by device transitions or environment conditions</p>
+        <!-- Loading State -->
+        <div v-if="loading" class="flex flex-col items-center justify-center py-16">
+          <div class="relative mb-4">
+            <div class="animate-spin rounded-full h-12 w-12 border-4 border-slate-200 border-t-blue-500"></div>
           </div>
+          <span class="text-slate-600 font-medium">Analyzing trace and generating suggestions...</span>
+        </div>
+
+        <div v-else-if="fixResult" class="space-y-4">
           
-          <div v-else class="space-y-3">
-            <div
-              v-for="(rule, idx) in faultRules"
-              :key="idx"
-              class="bg-white border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-              :class="{ 'border-orange-300 bg-orange-50': rule.conflicting }"
-            >
-              <div class="flex items-start justify-between gap-4">
-                <div class="flex items-center gap-2">
-                  <span class="w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-medium">
-                    {{ rule.ruleIndex + 1 }}
-                  </span>
-                  <code class="text-sm bg-slate-100 px-2 py-1 rounded font-mono text-slate-700">{{ rule.ruleString }}</code>
-                </div>
-                <el-tag v-if="rule.conflicting" type="warning" size="small">
-                  Conflicts with Rule {{ rule.conflictWithRuleIndex! + 1 }}
-                </el-tag>
+          <!-- Violation Info Card -->
+          <div class="p-5 rounded-xl bg-gradient-to-r from-red-50 to-orange-50 border border-red-200">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center bg-red-100">
+                <span class="material-symbols-outlined text-red-600">warning</span>
               </div>
-              
-              <div class="mt-3 grid grid-cols-3 gap-4 text-sm">
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-400">Trigger Step:</span>
-                  <span class="font-medium text-slate-700">{{ getStepLabel(rule.triggerStep) }}</span>
+              <div class="flex-1">
+                <span class="text-lg font-bold text-red-800">Violation Detected</span>
+                <div class="flex items-center gap-2 mt-1">
+                  <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded font-mono">{{ fixResult.violatedSpecId }}</span>
+                  <span class="text-sm text-red-600">{{ faultRules.length }} fault rule(s) identified</span>
                 </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-400">Target Device:</span>
-                  <span class="font-medium text-slate-700">{{ rule.targetDevice }}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-400">Action:</span>
-                  <span class="font-medium text-slate-700">{{ rule.targetAction }}</span>
-                </div>
-              </div>
-              
-              <div v-if="rule.reason" class="mt-2 text-sm text-slate-500 flex items-start gap-2">
-                <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                </svg>
-                {{ rule.reason }}
               </div>
             </div>
+            <p class="text-sm text-red-700 mt-3 ml-13">{{ fixResult.summary }}</p>
           </div>
-        </div>
-      </div>
 
-      <!-- Fix Suggestions Section -->
-      <div class="border border-slate-200 rounded-xl overflow-hidden">
-        <div class="bg-slate-50 px-5 py-3 border-b border-slate-200 flex items-center gap-2">
-          <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-          </svg>
-          <h3 class="font-semibold text-slate-800">Fix Suggestions</h3>
-        </div>
-        
-        <div class="p-5">
           <!-- Strategy Tabs -->
-          <div class="flex gap-2 mb-6">
-            <button
-              v-for="(label, key) in strategyLabels"
-              :key="key"
-              @click="switchStrategy(key)"
-              class="flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all"
-              :class="selectedStrategy === key 
-                ? `bg-gradient-to-r ${strategyColors[key]} text-white shadow-md` 
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
-            >
-              {{ label }}
-            </button>
-          </div>
-
-          <!-- Strategy Description -->
-          <div class="mb-4 text-sm text-slate-500">
-            {{ strategyDescriptions[selectedStrategy] }}
-          </div>
-
-          <!-- Current Strategy Suggestion -->
-          <div v-if="currentSuggestion" class="space-y-4">
-            <div class="border border-slate-200 rounded-lg overflow-hidden">
-              <!-- Suggestion Header -->
-              <div class="bg-slate-50 px-4 py-3 flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                  <span 
-                    class="px-2 py-1 rounded text-xs font-medium"
-                    :class="currentSuggestion.verified ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
-                  >
-                    {{ currentSuggestion.verified ? '✓ Verified' : '✗ Not Verified' }}
-                  </span>
-                </div>
-                <span class="text-sm text-slate-500">
-                  {{ currentSuggestion.description }}
-                </span>
+          <div class="border border-slate-200 rounded-xl overflow-hidden">
+            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
+              <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-slate-600">tune</span>
+                <span class="font-bold text-slate-800">Fix Strategies</span>
               </div>
-              
-              <!-- Suggestion Content -->
-              <div class="p-4 space-y-4">
-                <!-- Parameter Adjustments -->
-                <div v-if="currentSuggestion.parameterAdjustments?.length" class="space-y-2">
-                  <div class="text-sm font-medium text-slate-700 flex items-center gap-2">
-                    <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
-                    </svg>
-                    Parameter Adjustments
+            </div>
+            
+            <div class="p-4">
+              <!-- Strategy Buttons -->
+              <div class="flex gap-2 mb-4">
+                <button
+                  v-for="(label, key) in strategyLabels"
+                  :key="key"
+                  @click="switchStrategy(key)"
+                  class="flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2"
+                  :class="selectedStrategy === key 
+                    ? 'bg-blue-500 text-white shadow-md' 
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+                >
+                  <span class="material-symbols-outlined text-lg">
+                    {{ key === 'parameter' ? 'tune' : key === 'condition' ? 'checklist' : 'block' }}
+                  </span>
+                  {{ label }}
+                </button>
+              </div>
+
+              <!-- Strategy Description -->
+              <div class="text-sm text-slate-500 mb-4 pl-1">
+                {{ strategyDescriptions[selectedStrategy] }}
+              </div>
+
+              <!-- Current Suggestion -->
+              <div v-if="currentSuggestion">
+                
+                <!-- Status Card -->
+                <div class="p-4 rounded-xl mb-4" :class="currentSuggestion.verified 
+                  ? 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200' 
+                  : 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200'">
+                  <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl flex items-center justify-center" :class="currentSuggestion.verified ? 'bg-green-100' : 'bg-red-100'">
+                      <span class="material-symbols-outlined" :class="currentSuggestion.verified ? 'text-green-600' : 'text-red-600'">
+                        {{ currentSuggestion.verified ? 'verified' : 'cancel' }}
+                      </span>
+                    </div>
+                    <div class="flex-1">
+                      <span class="font-bold" :class="currentSuggestion.verified ? 'text-green-800' : 'text-red-800'">
+                        {{ currentSuggestion.verified ? 'Verified Solution' : 'Not Verified' }}
+                      </span>
+                      <p class="text-sm" :class="currentSuggestion.verified ? 'text-green-600' : 'text-red-600'">
+                        {{ currentSuggestion.description }}
+                      </p>
+                    </div>
                   </div>
-                  <div
-                    v-for="(adj, idx) in currentSuggestion.parameterAdjustments"
-                    :key="idx"
-                    class="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3"
-                  >
-                    <div class="flex items-center justify-between">
-                      <div class="font-mono text-sm">
-                        <span class="text-blue-700">Rule {{ adj.ruleIndex + 1 }}</span>
-                        <span class="text-slate-500 mx-2">:</span>
-                        <span class="text-slate-700">{{ formatParameterAdjustment(adj) }}</span>
+                </div>
+
+                <!-- Parameter Adjustments -->
+                <div v-if="currentSuggestion.parameterAdjustments?.length" class="mb-4">
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
+                    <span class="material-symbols-outlined text-blue-500">tune</span>
+                    Parameter Adjustments ({{ currentSuggestion.parameterAdjustments.length }})
+                  </div>
+                  <div class="space-y-2">
+                    <div
+                      v-for="(adj, idx) in currentSuggestion.parameterAdjustments"
+                      :key="idx"
+                      class="bg-blue-50 border border-blue-200 rounded-lg p-3"
+                    >
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <span class="px-2 py-0.5 bg-blue-500 text-white text-xs rounded font-bold">Rule {{ adj.ruleIndex + 1 }}</span>
+                          <code class="text-sm font-mono text-slate-700">{{ adj.attribute }} {{ adj.relation }}</code>
+                        </div>
+                        <span class="text-xs text-slate-500">Range: [{{ adj.lowerBound }}, {{ adj.upperBound }}]</span>
                       </div>
-                      <span class="text-xs text-slate-500">
-                        Range: [{{ adj.lowerBound }}, {{ adj.upperBound }}]
+                      <div class="flex items-center gap-2 mt-2">
+                        <span class="px-2 py-1 bg-red-100 text-red-700 rounded font-mono text-sm line-through">{{ adj.originalValue }}</span>
+                        <span class="material-symbols-outlined text-slate-400">arrow_forward</span>
+                        <span class="px-2 py-1 bg-green-100 text-green-700 rounded font-mono text-sm">{{ adj.newValue }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Condition Adjustments -->
+                <div v-if="currentSuggestion.conditionAdjustments?.length" class="mb-4">
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
+                    <span class="material-symbols-outlined text-emerald-500">checklist</span>
+                    Condition Adjustments ({{ currentSuggestion.conditionAdjustments.length }})
+                  </div>
+                  <div class="space-y-2">
+                    <div
+                      v-for="(adj, idx) in currentSuggestion.conditionAdjustments"
+                      :key="idx"
+                      class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-3"
+                    >
+                      <div 
+                        class="w-8 h-8 rounded-lg flex items-center justify-center"
+                        :class="adj.action === 'remove' ? 'bg-red-100' : adj.action === 'add' ? 'bg-emerald-100' : 'bg-slate-100'"
+                      >
+                        <span class="material-symbols-outlined text-sm" :class="adj.action === 'remove' ? 'text-red-600' : adj.action === 'add' ? 'text-emerald-600' : 'text-slate-600'">
+                          {{ adj.action === 'remove' ? 'remove' : adj.action === 'add' ? 'add' : 'check' }}
+                        </span>
+                      </div>
+                      <div class="flex-1">
+                        <span class="text-sm font-medium text-slate-700">{{ adj.description }}</span>
+                      </div>
+                      <span 
+                        class="px-2 py-0.5 rounded text-xs font-medium"
+                        :class="adj.action === 'remove' ? 'bg-red-100 text-red-700' : adj.action === 'add' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'"
+                      >
+                        {{ adj.action }}
                       </span>
                     </div>
                   </div>
                 </div>
-                
-                <!-- Condition Adjustments -->
-                <div v-if="currentSuggestion.conditionAdjustments?.length" class="space-y-2">
-                  <div class="text-sm font-medium text-slate-700 flex items-center gap-2">
-                    <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    Condition Adjustments
-                  </div>
-                  <div
-                    v-for="(adj, idx) in currentSuggestion.conditionAdjustments"
-                    :key="idx"
-                    class="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm"
-                  >
-                    {{ formatConditionAdjustment(adj) }}
-                  </div>
-                </div>
-                
+
                 <!-- Disabled Rules -->
-                <div v-if="currentSuggestion.disabledRuleIndices?.length" class="space-y-2">
-                  <div class="text-sm font-medium text-slate-700 flex items-center gap-2">
-                    <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path>
-                    </svg>
-                    Rules to Disable
+                <div v-if="currentSuggestion.disabledRuleIndices?.length" class="mb-4">
+                  <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
+                    <span class="material-symbols-outlined text-orange-500">block</span>
+                    Rules to Disable ({{ currentSuggestion.disabledRuleIndices.length }})
                   </div>
-                  <div class="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3">
+                  <div class="bg-orange-50 border border-orange-200 rounded-lg p-3">
                     <div class="flex flex-wrap gap-2">
                       <span 
                         v-for="idx in currentSuggestion.disabledRuleIndices" 
                         :key="idx"
-                        class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-sm font-medium"
+                        class="px-3 py-1 bg-orange-500 text-white rounded-lg text-sm font-medium"
                       >
                         Rule {{ idx + 1 }}
                       </span>
                     </div>
                   </div>
                 </div>
+
+                <!-- Apply Button -->
+                <div v-if="currentSuggestion.verified" class="pt-4 border-t border-slate-200">
+                  <button 
+                    class="w-full py-3 rounded-lg font-bold text-base transition-all flex items-center justify-center gap-2"
+                    :class="applyingFix 
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                      : 'bg-green-500 hover:bg-green-600 text-white shadow-md hover:shadow-lg'"
+                    :disabled="applyingFix"
+                    @click="applyFix(currentSuggestion)"
+                  >
+                    <span v-if="!applyingFix" class="material-symbols-outlined">check_circle</span>
+                    <div v-else class="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    {{ applyingFix ? 'Applying...' : 'Apply This Fix' }}
+                  </button>
+                </div>
+                <div v-else class="pt-4 border-t border-slate-200 text-center">
+                  <div class="flex items-center justify-center gap-2 text-red-600">
+                    <span class="material-symbols-outlined">info</span>
+                    <span class="font-medium">This solution did not pass verification</span>
+                  </div>
+                  <p class="text-xs text-red-500 mt-1">Try another strategy or wait for the system to find a verified solution</p>
+                </div>
+              </div>
+
+              <div v-else class="text-center py-8 text-slate-400">
+                <span class="material-symbols-outlined text-4xl mb-2 block">help</span>
+                <p>No fix suggestions available for this strategy</p>
               </div>
             </div>
+          </div>
 
-            <!-- Apply Fix Button -->
-            <div v-if="currentSuggestion.verified" class="flex justify-end">
-              <el-button 
-                type="primary" 
-                size="large"
-                :loading="applyingFix"
-                @click="applyFix(currentSuggestion)"
-                class="px-8"
-              >
-                <svg v-if="!applyingFix" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                </svg>
-                Apply This Fix
-              </el-button>
+          <!-- Fault Rules Section -->
+          <div class="border border-slate-200 rounded-xl overflow-hidden">
+            <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
+              <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-slate-600">search</span>
+                <span class="font-bold text-slate-800">Fault Localization</span>
+                <span class="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">{{ faultRules.length }} rule(s)</span>
+              </div>
             </div>
-            <div v-else class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-center text-red-600 text-sm">
-              This fix solution did not pass verification and cannot be applied
+            
+            <div class="p-4">
+              <div v-if="faultRules.length === 0" class="text-center py-8 text-slate-400">
+                <span class="material-symbols-outlined text-4xl mb-2 block">check_circle</span>
+                <p>No fault rules found in counterexample trace</p>
+                <p class="text-xs mt-1">The violation may be caused by device transitions</p>
+              </div>
+              
+              <div v-else class="space-y-2">
+                <div 
+                  v-for="(rule, idx) in faultRules"
+                  :key="idx"
+                  class="border border-slate-200 rounded-lg p-3 hover:bg-slate-50 transition-colors"
+                  :class="{ 'border-orange-300 bg-orange-50/50': rule.conflicting }"
+                >
+                  <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                      <span class="w-6 h-6 bg-blue-500 text-white rounded flex items-center justify-center text-xs font-bold">{{ rule.ruleIndex + 1 }}</span>
+                      <code class="text-xs bg-slate-100 px-2 py-1 rounded font-mono">{{ rule.ruleString }}</code>
+                    </div>
+                    <span v-if="rule.conflicting" class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded flex items-center gap-1">
+                      <span class="material-symbols-outlined text-xs">warning</span>
+                      Conflicts
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-2 text-xs text-slate-600">
+                    <div>Step: <span class="font-medium">{{ getStepLabel(rule.triggerStep) }}</span></div>
+                    <div>Device: <span class="font-medium">{{ rule.targetDevice }}</span></div>
+                    <div>Action: <span class="font-medium">{{ rule.targetAction }}</span></div>
+                  </div>
+                  <div v-if="rule.reason" class="mt-2 text-xs text-slate-500 flex items-start gap-1">
+                    <span class="material-symbols-outlined text-xs mt-0.5">info</span>
+                    {{ rule.reason }}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div v-else class="text-center py-8 text-slate-400">
-            No fix suggestions available for this strategy
-          </div>
-
-          <!-- Other Available Strategies -->
-          <div v-if="fixResult.suggestions.length > 1" class="mt-6 pt-4 border-t border-slate-200">
-            <div class="text-sm text-slate-500 mb-3">Other available strategies:</div>
+          <!-- Other Strategies -->
+          <div v-if="fixResult.suggestions.length > 1" class="border border-slate-200 rounded-xl p-4">
+            <div class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+              <span class="material-symbols-outlined text-slate-600">layers</span>
+              Other Available Strategies
+            </div>
             <div class="flex flex-wrap gap-2">
               <button
                 v-for="s in fixResult.suggestions"
                 :key="s.strategy"
                 v-show="s.strategy !== selectedStrategy"
                 @click="switchStrategy(s.strategy)"
-                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                 :class="s.verified 
-                  ? 'bg-green-100 text-green-700 hover:bg-green-200' 
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+                  ? 'bg-green-100 text-green-700 hover:bg-green-200 border border-green-300' 
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300'"
               >
+                <span class="material-symbols-outlined text-sm">
+                  {{ s.strategy === 'parameter' ? 'tune' : s.strategy === 'condition' ? 'checklist' : 'block' }}
+                </span>
                 {{ strategyLabels[s.strategy] }}
-                <span class="ml-1">{{ s.verified ? '✓' : '(unverified)' }}</span>
+                <span v-if="s.verified" class="material-symbols-outlined text-green-600 text-xs">verified</span>
               </button>
             </div>
           </div>
+
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
+        <div class="flex justify-end">
+          <button 
+            @click="closeDialog"
+            class="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            <span class="material-symbols-outlined text-sm">close</span>
+            Close
+          </button>
         </div>
       </div>
     </div>
-
-    <template #footer>
-      <el-button @click="$emit('update:visible', false)">Close</el-button>
-    </template>
-  </el-dialog>
+  </div>
 </template>
 
 <style scoped>
-:deep(.el-dialog__header) {
-  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-  padding: 16px 20px;
-  margin: 0;
+/* Custom scrollbar */
+:deep(.p-6::-webkit-scrollbar) {
+  width: 8px;
 }
 
-:deep(.el-dialog__title) {
-  color: white;
-  font-weight: 600;
+:deep(.p-6::-webkit-scrollbar-track) {
+  background: #f1f5f9;
+  border-radius: 4px;
 }
 
-:deep(.el-dialog__headerbtn .el-dialog__close) {
-  color: white;
+:deep(.p-6::-webkit-scrollbar-thumb) {
+  background: #cbd5e1;
+  border-radius: 4px;
 }
 
-:deep(.el-dialog__body) {
-  padding: 20px;
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-:deep(.el-dialog__footer) {
-  border-top: 1px solid #e2e8f0;
-  padding: 12px 20px;
+:deep(.p-6::-webkit-scrollbar-thumb:hover) {
+  background: #94a3b8;
 }
 </style>
