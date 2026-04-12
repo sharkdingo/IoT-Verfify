@@ -2519,11 +2519,6 @@ const closeResultDialog = () => {
 
     <!-- Canvas Area -->
     <div class="canvas-container">
-      <!-- Background elements - 与首页一致的深蓝色调 -->
-      <div class="absolute inset-0 grid-bg opacity-100 pointer-events-none z-0"></div>
-      <div class="absolute inset-0 bg-gradient-to-b from-blue-900/20 via-transparent to-blue-950/30 pointer-events-none z-0"></div>
-
-
       <!-- Canvas Board -->
       <CanvasBoard
           :nodes="nodes"

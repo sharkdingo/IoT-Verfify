@@ -120,13 +120,8 @@
     height: 100vh;
     box-sizing: border-box;
     overflow: hidden;
-    /* 与首页一致的深蓝色背景 */
-    background: linear-gradient(
-        135deg,
-        hsl(201, 100%, 8%) 0%,
-        hsl(201, 100%, 5%) 50%,
-        hsl(201, 100%, 10%) 100%
-    );
+    /* 白色背景 */
+    background: #ffffff;
     color: var(--iot-color-text);
     font-size: var(--iot-font-base);
 }
@@ -136,8 +131,8 @@
     position: absolute;
     inset: 0;
     overflow: hidden; /* 避免浏览器自带滚动条 */
-    /* 与首页一致的深蓝色画布背景 */
-    background-color: hsl(201, 100%, 5%);
+    /* 白色画布背景 */
+    background-color: #ffffff;
     /* 为固定导航栏留出空间 */
     padding-top: 60px;
 }
@@ -150,10 +145,10 @@
     min-width: 400vw;
     min-height: 400vh;
 
-    /* 网格背景：跟随 translate / scale 一起变化 - 与首页一致的蓝色网格 */
+    /* 网格背景：跟随 translate / scale 一起变化 - 白色背景配深黑色网格 */
     background-image:
-            linear-gradient(90deg, rgba(100, 181, 246, 0.15) 1px, transparent 0),
-            linear-gradient(180deg, rgba(100, 181, 246, 0.15) 1px, transparent 0);
+            linear-gradient(90deg, rgba(0, 0, 0, 0.4) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(0, 0, 0, 0.4) 1px, transparent 1px);
     background-size: var(--iot-grid-size) var(--iot-grid-size);
 }
 
@@ -777,8 +772,8 @@
 /* Grid background pattern */
 .grid-bg {
     background-size: 40px 40px;
-    background-image: linear-gradient(to right, rgba(148, 163, 184, 0.15) 1px, transparent 1px),
-                      linear-gradient(to bottom, rgba(148, 163, 184, 0.15) 1px, transparent 1px);
+    background-image: linear-gradient(to right, rgba(0, 0, 0, 0.15) 1px, transparent 1px),
+                      linear-gradient(to bottom, rgba(0, 0, 0, 0.15) 1px, transparent 1px);
 }
 
 /* Particle line animation */
