@@ -67,9 +67,9 @@ export interface FixRequest {
   preferredRanges?: Record<string, PreferredRange>
 }
 
-// 参数化调整的首选范围
+// Preferred value range for parameter-adjustment fixes.
+// Must match backend PreferredRange DTO: both fields required, inclusive lower ≤ upper.
 export interface PreferredRange {
-  lowerBound?: number
-  upperBound?: number
-  excludeValues?: number[]
+  lower: number
+  upper: number
 }

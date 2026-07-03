@@ -20,6 +20,7 @@ export interface VerificationResult {
 export interface Trace {
   id: number;
   userId: number;
+  verificationTaskId?: number;   // backend TraceDto.verificationTaskId (Long, null for sync verifications)
   violatedSpecId: string;
   violatedSpecJson: string;
   states: TraceState[];
@@ -29,7 +30,9 @@ export interface Trace {
 export interface TraceState {
   stateIndex: number;
   devices: TraceDevice[];
-  envVariables?: TraceVariable[];  // 环境变量（如 a_temperature, a_airQuality）
+  rules?: number[];                     // indices of rules triggered in this state (backend List<Integer>)
+  trustPrivacies?: TraceTrustPrivacy[]; // state-level trust/privacy entries (backend List<TraceTrustPrivacyDto>)
+  envVariables?: TraceVariable[];       // environment variables (e.g. a_temperature, a_airQuality)
 }
 
 export interface TraceDevice {

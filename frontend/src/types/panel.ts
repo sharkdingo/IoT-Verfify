@@ -1,31 +1,12 @@
 // src/types/panel.ts
+//
+// The old collapsible-panel / dock system was removed; its DockSide / DockState /
+// PanelPosition types lived here but are no longer referenced (canvas.ts owns the
+// layout DTO types used by /board/layout). Only PanelActive remains in use.
 
-/* ================== 基础类型定义 ================== */
-
-// PanelKey type removed as all panels are removed
-
-export type DockSide = 'left' | 'right' | 'top' | 'bottom' | null
-
-export interface PanelPosition {
-    x: number
-    y: number
-}
-
-/* ================== 停靠状态 ================== */
-
-export interface DockState {
-    isDocked: boolean
-    side: DockSide
-    lastPos: PanelPosition // 记录停靠前的坐标，用于恢复
-}
-
-/* ================== DTO (数据传输对象) ================== */
-
-// 整个看板布局的数据结构（对应后端存储的 JSON）
-// BoardLayoutDto removed as panel system is removed
-
-/* ================== 折叠面板状态 ================== */
-
+// Matches backend BoardActiveDto: both `input` and `status` are required (@NotNull)
+// lists of active tab ids.
 export interface PanelActive {
+    input: string[]
     status: string[]
 }

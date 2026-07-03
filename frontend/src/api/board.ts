@@ -39,8 +39,8 @@ interface BackendRuleDto {
     conditions: Array<{
         deviceName: string
         attribute: string
-        relation: string
-        value: string
+        relation?: string
+        value?: string
     }>
     command: {
         deviceName: string
@@ -114,7 +114,12 @@ export default {
     getRules: async (): Promise<RuleForm[]> => {
         const data = await unpack<BackendRuleDto[]>(await api.get('/board/rules'));
         return data.map((rule: BackendRuleDto) => ({
-            id: rule.id ? `rule_${rule.id}` : '',
+            // Keep the raw DB id (as a numeric string) so it round-trips on save:
+            // saveRules treats a non-`rule_` id as an existing rule and sends the number
+            // back, letting the backend do an incremental upsert (preserving createdAt
+            // and stable rule identity). Client-created rules use a `rule_<timestamp>`
+            // id and are sent with id=null. See docs/api/board.md (write strategy).
+            id: rule.id != null ? String(rule.id) : '',
             name: rule.ruleString || '',
             sources: (rule.conditions && rule.conditions.length > 0) 
                 ? rule.conditions.map((c) => ({
@@ -130,17 +135,20 @@ export default {
             toApi: rule.command?.action || ''
         }));
     },
-    saveRules: async (rules: RuleForm[]): Promise<RuleForm[]> => {
+    // Returns void: the backend responds with saved RuleDto[] (backend shape, not the
+    // frontend RuleForm), and no caller consumes it. Re-fetch via getRules() if you need
+    // the persisted rules mapped to RuleForm (e.g. to pick up server-assigned ids).
+    saveRules: async (rules: RuleForm[]): Promise<void> => {
         // 转换为后端 DTO，确保所有必填字段都有值
         const ruleDtos: BackendRuleDto[] = rules.map(rule => {
-            // 对于新创建的规则（id 以 rule_ 开头），不发送 id，让后端自动生成
+            // Client-created rules use a `rule_<timestamp>` id → send null so the backend
+            // inserts them. Existing rules carry their raw numeric DB id (from getRules)
+            // → send it back so the backend updates in place (incremental upsert).
             let id: number | null = null;
             if (rule.id && rule.id.startsWith('rule_')) {
-                // 新创建的规则，不传 id，或者传 null
-                // 如果要支持更新已有规则，需要从数据库加载现有规则并比对
                 id = null;
             } else if (rule.id) {
-                // 已有规则，尝试解析为数字
+                // Existing rule — parse its numeric DB id.
                 const num = Number(rule.id);
                 if (!isNaN(num)) {
                     id = num;
@@ -175,7 +183,42 @@ export default {
             return dto;
         });
 
-        return unpack<RuleForm[]>(await api.post('/board/rules', ruleDtos));
+        await api.post('/board/rules', ruleDtos);
+    },
+
+    /**
+     * 检查规则是否重复（AI判断）
+     * 非阻塞检查，返回 AI 对规则重复性的判断结果
+     */
+    checkDuplicateRule: async (rule: RuleForm): Promise<{
+        isDuplicate: boolean;
+        reason?: string;
+        similarRules?: any[];
+    }> => {
+        // 复用 RuleForm -> RuleDto 映射逻辑（单条规则）
+        const dto: BackendRuleDto = {
+            id: rule.id && !rule.id.startsWith('rule_') ? Number(rule.id) : null,
+            conditions: rule.sources.map((s) => ({
+                deviceName: s.fromId,
+                attribute: s.fromApi,
+                relation: s.relation || '=',
+                value: s.value || 'true'
+            })),
+            command: {
+                deviceName: rule.toId,
+                action: rule.toApi,
+                contentDevice: null,
+                content: null
+            },
+            ruleString: String(rule.name || '')
+        };
+
+        const response = await api.post<any>('/board/rules/check-duplicate', dto);
+        return unpack<{
+            isDuplicate: boolean;
+            reason?: string;
+            similarRules?: any[];
+        }>(response);
     },
 
     // ==== 布局（包含 Panel 位置、停靠状态、Canvas 缩放位移） ====

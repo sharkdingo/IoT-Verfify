@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { reactive, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { reactive, computed, watch, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
+import boardApi from '../api/board'
 
 // Props
 interface Props {
@@ -237,6 +238,50 @@ const handleSave = () => {
 
   emit('save-rule', { ...ruleData })
   handleClose()
+}
+
+const checkingDuplicate = ref(false)
+
+const handleCheckDuplicate = async () => {
+  // Validate before checking
+  if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
+    ElMessage.warning('Please complete all required fields before checking for duplicates')
+    return
+  }
+
+  checkingDuplicate.value = true
+  try {
+    const result = await boardApi.checkDuplicateRule(ruleData)
+
+    if (result.isDuplicate) {
+      const message = result.reason
+        ? `This rule may be duplicate: ${result.reason}`
+        : 'This rule appears to be a duplicate of an existing rule.'
+
+      await ElMessageBox.confirm(
+        message,
+        'Duplicate Rule Detected',
+        {
+          confirmButtonText: 'Save Anyway',
+          cancelButtonText: 'Cancel',
+          type: 'warning'
+        }
+      )
+      // User chose "Save Anyway" - proceed with save
+      handleSave()
+    } else {
+      ElMessage.success('No duplicates found. This rule appears unique.')
+    }
+  } catch (error: any) {
+    if (error === 'cancel') {
+      // User cancelled after seeing duplicate warning - do nothing
+      return
+    }
+    console.error('Duplicate check failed:', error)
+    ElMessage.error('Failed to check for duplicates. You can still save the rule.')
+  } finally {
+    checkingDuplicate.value = false
+  }
 }
 
 const handleClose = () => {
@@ -664,10 +709,19 @@ const formatApiLabel = (api: string) => {
           Cancel
         </button>
         <button
-          @click="handleSave"
-          class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2"
+          @click="handleCheckDuplicate"
+          :disabled="checkingDuplicate"
+          class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-         
+          <span v-if="checkingDuplicate" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
+          <span>{{ checkingDuplicate ? 'Checking...' : 'Check Duplicate' }}</span>
+        </button>
+        <button
+          @click="handleSave"
+          :disabled="checkingDuplicate"
+          class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+        >
+
           Create Rule
         </button>
       </div>

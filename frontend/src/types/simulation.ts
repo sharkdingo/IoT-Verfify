@@ -23,6 +23,8 @@ export interface SimulationResult {
 export interface SimulationState {
   stateIndex: number
   devices: SimulationDevice[]
+  rules?: number[]                              // rule indices triggered in this state (backend TraceStateDto.rules)
+  trustPrivacies?: SimulationTrustPrivacy[]     // state-level trust/privacy (backend TraceStateDto.trustPrivacies)
   envVariables?: SimulationVariable[]
 }
 

@@ -1,165 +1,109 @@
-# CLAUDE.md - IoT-Verify Backend
+# CLAUDE.md — IoT-Verify Backend
 
-## Project Overview
+Guidance for Claude Code when working in `backend/`. Keep this file short and
+rule-focused; detailed reference lives in `../docs/` (start at
+[../docs/README.md](../docs/README.md)). When code and docs disagree, **code wins** —
+fix the doc in the same change (see [../CONTRIBUTING.md](../CONTRIBUTING.md)).
 
-IoT smart home simulation and formal verification platform using NuSMV model checking. User-defined device instances, rules, and specifications via REST API.
+## What this is
 
-## Tech Stack
+Spring Boot backend for a smart-home IoT formal-verification platform: users define
+devices, rules, and specifications; the backend generates an SMV model, runs NuSMV,
+parses counterexamples, and suggests automatic fixes. There is also an AI assistant
+(Volcengine Ark, SSE streaming) with tool/function-calling.
 
-- Java 17 + Spring Boot 3.x
-- MySQL + Redis (token blacklist, fail-open)
-- JWT authentication (BCrypt)
-- NuSMV 2.6+ (incompatible with nuXmv)
-- Volcengine Ark AI (SSE streaming chat)
+Stack: Java 17, Spring Boot 3.5.7, Spring Data JPA + MySQL, Redis (JWT blacklist,
+fail-open), Spring Security + JWT, NuSMV 2.6–2.7 (**not** nuXmv), Volcengine Ark SDK.
 
-## Package Structure
-
-```
-cn.edu.nju.Iot_Verify/
-├── controller/          # REST API (Result<T> wrapper)
-├── service/impl/        # Business logic
-├── component/
-│   ├── nusmv/           # NuSMV verification
-│   │   ├── generator/   # SMV model generation (SmvGenerator + 3 builders + comment writer + validator)
-│   │   ├── fixer/       # Fault localization & fix strategies (localize, parameterize, strategy)
-│   │   ├── executor/    # Process execution
-│   │   └── parser/      # Counterexample parsing
-│   └── aitool/          # AI tool integration (29 tools)
-├── client/              # ArkAiClient wrapper
-├── dto/po/repository/   # Data layer
-├── security/            # JWT + auth
-├── configure/           # Config + thread pools + ProductionSafetyCheck
-├── exception/           # Exception hierarchy
-└── util/                # Mappers, JsonUtils, JwtUtil
-```
-
-## Build & Run
+## Commands
 
 ```bash
-cd backend
-mvn compile          # Compile
-mvn spring-boot:run  # Run (requires MySQL; Redis optional)
-mvn test             # Run tests
+mvn compile            # compile
+mvn spring-boot:run    # run (needs MySQL; Redis optional; :8080, auto-creates tables)
+mvn test               # unit tests
+mvn clean package -DskipTests   # build jar → target/Iot-Verify-0.0.1-SNAPSHOT.jar
 ```
 
-## Configuration
+Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `VOLCENGINE_API_KEY`,
+`NUSMV_PATH`. Full list and defaults: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md).
 
-Key settings in `application.yaml`:
-- `spring.datasource.*` — MySQL connection
-- `spring.data.redis.*` — Redis (fail-open when unavailable)
-- `jwt.secret` / `jwt.expiration` — JWT settings
-- `nusmv.path` — NuSMV executable path
-- `nusmv.timeout-ms` — Execution timeout (default 120s)
-- `nusmv.max-concurrent` — Global concurrency cap (default 6)
-- `nusmv.command-prefix` — Command prefix (e.g. `wine` on Linux, default empty)
-- `nusmv.acquire-permit-timeout-ms` — Concurrency permit acquire timeout (default 10s)
-- `fix.fix-timeout-ms` — Fix overall timeout (default 300s, soft deadline)
-- `fix.max-attempts` — Max NuSMV calls per strategy (default 20)
-- `fix.max-refine-attempts` — Max refinement loop iterations for §5.3 closest-value search (default 10); each iteration ≤ 2 NuSMV calls; try-original step not counted
-- `fix.max-candidates-per-rule` — Max candidate fixes per rule (default 5)
-- `volcengine.ark.*` — AI chat API settings
-- `cors.allowed-origins` — CORS origins (comma-separated)
-- `thread-pool.*` — 5 configurable thread pools: `chat`, `verification-task`, `sync-verification`, `sync-simulation`, `simulation-task`; each with `core-pool-size`, `max-pool-size`, `queue-capacity`, `await-termination-seconds`
+## Codebase map
 
-**Production Safety**: `ProductionSafetyCheck` refuses startup in prod/production profile if JWT secret, DB password, or Ark API key are insecure/missing.
-
-## Key Conventions
-
-**API & Controllers**
-- Controllers return `Result<T>` wrapper. Use `Result.success()` for void responses.
-- `@CurrentUser` parameter always named `userId`.
-- Never expose PO objects — always map to DTOs.
-- SSE endpoints return `SseEmitter` directly (not wrapped in `Result<T>`).
-
-**Exception Handling**
-- `ValidationException` → HTTP 422
-- `SmvGenerationException` includes `errorCategory` in response data
-- `ServiceUnavailableException` → HTTP 503 (executor saturation)
-- `GlobalExceptionHandler` masks internal error messages for security
-
-**NuSMV Generation**
-- Identifier sanitization: `DeviceSmvDataFactory.sanitizeSmvToken()` escapes reserved words, removes spaces, handles digit prefixes
-- Device resolution: prefer `varName`, allow `templateName` only when unique
-- Template validation: `addDeviceTemplate()` runs probe generation before saving
-- Debug artifacts: `model.smv`, `request.json`, `output.txt`, `result.json` retained in temp dir
-
-**Security & Concurrency**
-- Thread pool context propagation: deep-copy `Authentication`, `UserContextHolder`, `MDC`
-- Async task safety: atomic conditional UPDATE queries prevent TOCTOU races
-- Redis fail-open: logout revocation degrades gracefully when Redis unavailable
-- `@Transactional(readOnly = true)` on all read-only service methods
-
-**Database**
-- `device_node` uses composite PK `(id, user_id)` for user isolation
-- Entity indexes: `device_edge(user_id)`, `verification_task(user_id)`, `simulation_task(user_id)`
-- Unique constraint: `device_templates(user_id, name)`
-
-## NuSMV Verification Flow
+Base package `cn.edu.nju.Iot_Verify` (entry point `IotVerifyApplication`):
 
 ```
-VerificationRequestDto → SmvGenerator.generate()
-  → DeviceSmvDataFactory.buildDeviceSmvMap() (merge user devices + templates)
-  → SmvModelValidator.validate() (P1-P5 checks)
-  → SmvDeviceModuleBuilder + SmvMainModuleBuilder + SmvSpecificationBuilder
-  → Write .smv + request.json to temp dir
-→ NusmvExecutor.execute() → NusmvResult (per-spec pass/fail + counterexample)
-  → Save output.txt
-→ SmvTraceParser.parseCounterexampleStates() → TraceStateDto list
-→ VerificationResultDto (safe, traces, specResults, checkLogs, nusmvOutput)
-  → Save result.json
+controller/        REST controllers — return Result<T> (SSE endpoints return SseEmitter)
+service/impl/      business logic
+component/
+  nusmv/
+    generator/     SMV model generation: SmvGenerator + Device/Main/Specification builders + SmvModelValidator
+    executor/      NusmvExecutor — subprocess exec, semaphore concurrency, timeout
+    parser/        SmvTraceParser — counterexample parsing
+    fixer/         FaultLocalizer + parameter/condition/disable fix strategies
+  aitool/          30 AI tools (board/node/rule/spec/template/simulation/verification)
+client/            ArkAiClient wrapper
+dto/ po/ repository/   DTOs, JPA entities, data access
+security/          JWT + Spring Security
+configure/         config, thread pools, ProductionSafetyCheck
+exception/         exception hierarchy + GlobalExceptionHandler
+util/              mappers, JsonUtils, JwtUtil
+resources/
+  application.yaml     config (env-var overridable)
+  deviceTemplate/      default device-template JSON (seeded into DB per user)
 ```
 
-**Fix Pipeline (Salus Paper §4-§5)**
-```
-POST /api/verify/traces/{id}/fix → FixServiceImpl.fix()
-  → loadContext(): TracePo.requestJson → VerificationRequestDto
-  → RuleFixer.fix():
-    1. FaultLocalizer.localize() — identify triggered rules from counterexample
-    2. FixContext with deadline (fix.fix-timeout-ms, soft timeout)
-    3. Strategies (parameter → condition → disable):
-       - §5.1 ParameterAdjustStrategy: FROZENVAR thresholds + ¬ρ + NuSMV solve
-       - §5.2 ConditionAdjustStrategy: boolean lambda guards + NuSMV solve
-       - DisableFixStrategy: minimal rule disable set
-    4. Each strategy: forward-verify candidate fix against ALL specs
-  → appendDriftWarningIfNeeded(): compare DeviceTemplatePo.updatedAt vs trace.createdAt
-  → FixResultDto (traceId, violatedSpecId, fixable, faultRules, suggestions, summary, unusedPreferredRangeKeys)
-```
+Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/overview.md).
 
-**SMV Generation Key Points**
-- Device templates in `src/main/resources/deviceTemplate/` define modes, states, APIs, transitions, internal variables
-- `SmvDeviceModuleBuilder`: generates MODULE per template (FROZENVAR for sensors, VAR for actuators, trust/privacy propagation)
-- `SmvMainModuleBuilder`: generates main MODULE (device instances, env vars, state transitions, trust/privacy propagation)
-- `SmvSpecificationBuilder`: 7 spec templates (always, eventually, never, immediate, response, persistence, safety)
-- Attack mode: `FROZENVAR is_attack` + `intensity: 0..50` + proportional sensor range expansion
-- Trust propagation: AND logic (all sources must be trusted)
-- Privacy: optional via `enablePrivacy` flag
+## Conventions (hard rules)
 
-**Trace Parsing**
-- Supports multiple NuSMV output formats: `State 1.1:`, `-> State: 1.1 <-`, `State: 1.1`, and variants
-- Extracts `<deviceVarName>.<attribute> = <value>` per state
+- Controllers return `Result<T>`; use `Result.success()` for void. SSE endpoints return
+  `SseEmitter` directly (not wrapped). The `@CurrentUser` param is always `Long userId`.
+- **Never expose PO entities** — always map to DTOs.
+- Read methods are `@Transactional(readOnly = true)`.
+- Exceptions map via `GlobalExceptionHandler` (masks internal messages). Throw the
+  typed exception, don't hand-build error responses. See
+  [../docs/api/overview.md](../docs/api/overview.md) for the full status mapping.
+- Keep docs in sync in the same change: touching a controller/DTO/config/spec-template/
+  AI-tool means updating the owning doc under `docs/` (see CONTRIBUTING.md).
 
-## API Endpoints
+## Gotchas (the "why", not the "what")
 
-**Auth**: `POST /api/auth/register|login|logout`
+- **`saveRules` is incremental, not full-replace** (unlike nodes/edges/specs). It
+  upserts by `id` and preserves `createdAt`, because fault localization keys off stable
+  rule identity — a delete-and-recreate would churn ids and break fixes. Send existing
+  `id`s back. See [../docs/api/board.md](../docs/api/board.md).
+- **NuSMV identifiers**: mode/state names are sanitized at generation time
+  (`sanitizeSmvToken`), but InternalVariable/ImpactedVariable names are validated (and
+  rejected) at persist time — they are cross-referenced by `.equals()`, so sanitizing
+  them would break matching. Don't "fix" this by sanitizing them later. See
+  [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
+- **Async task state** uses atomic conditional UPDATEs (`WHERE status <> CANCELLED`) to
+  avoid TOCTOU races — don't replace with read-then-write.
+- **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
+  make request flow hard-depend on it.
+- **Temp files are kept on purpose**: `cleanupTempFile()` is a no-op so `nusmv_*` dirs
+  (`model.smv`, `request.json`, `output.txt`, `result.json`) survive for debugging.
+- **`ProductionSafetyCheck`** refuses to start under a `prod`/`production` profile if
+  `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY` hold unsafe defaults.
+- Attack-mode transitions take priority over template transitions in `next()` — an
+  attacked device can jump to any mode regardless of rules.
 
-**Board**: `GET|POST /api/board/nodes|edges|rules|specs|layout|active|templates`, `DELETE /api/board/templates/{id}`, `POST /api/board/templates/reload`, `GET /api/board/rules/recommend`, `POST /api/board/devices/recommend`, `POST /api/board/rules/check-duplicate`
+## Reference (don't duplicate here — link)
 
-**Verification**:
-- Sync: `POST /api/verify`
-- Async: `POST /api/verify/async`, `GET /api/verify/tasks/{id}`, `GET /api/verify/tasks/{id}/progress`, `POST /api/verify/tasks/{id}/cancel`
-- Traces: `GET /api/verify/traces`, `GET|DELETE /api/verify/traces/{id}`
-- Fix: `GET /api/verify/traces/{id}/fault-rules`, `POST /api/verify/traces/{id}/fix` (body optional: `FixRequestDto{strategies, preferredRanges}`)
-- AI tool: `fix_violation` (traceId required; optional strategies, preferredRanges) → calls `FixService.fix()`
+- Endpoint index: [../docs/api/rest-endpoints.md](../docs/api/rest-endpoints.md)
+- API contracts: [auth](../docs/api/auth.md) · [board](../docs/api/board.md) ·
+  [verification/simulation/fix](../docs/api/verification.md) ·
+  [chat SSE](../docs/api/chat-sse.md) · [AI tools](../docs/api/ai-tools.md)
+- Verification pipeline & trace format: [../docs/architecture/verification-flow.md](../docs/architecture/verification-flow.md)
+- Spec templates & P1–P5 validation: [../docs/architecture/spec-templates.md](../docs/architecture/spec-templates.md)
+- Auto-fix (Salus §4–§5): [../docs/architecture/auto-fix.md](../docs/architecture/auto-fix.md)
+- Change history: [../CHANGELOG.md](../CHANGELOG.md)
 
-**Simulation** (`SimulationController` → `/api/simulate`):
-- Sync: `POST /api/simulate`
-- Async: `POST /api/simulate/async`, `GET /api/simulate/tasks/{id}`, `GET /api/simulate/tasks/{id}/progress`, `POST /api/simulate/tasks/{id}/cancel`
-- Traces: `POST|GET /api/simulate/traces`, `GET|DELETE /api/simulate/traces/{id}`
+## Data model
 
-**Chat**: `GET|POST /api/chat/sessions`, `DELETE /api/chat/sessions/{sessionId}`, `GET /api/chat/sessions/{sessionId}/messages`, `POST /api/chat/completions` (SSE)
-
-## Database
-
-14 tables: `user`, `device_node`, `device_edge`, `rules`, `specification`, `board_layout`, `board_active`, `device_templates`, `verification_task`, `simulation_task`, `trace`, `simulation_trace`, `chat_session`, `chat_message`
-
-Auto-created by Hibernate (`ddl-auto: update`).
+14 tables, auto-created by Hibernate (`ddl-auto: update`): `user`, `device_node`,
+`device_edge`, `rules`, `specification`, `board_layout`, `board_active`,
+`device_templates`, `verification_task`, `simulation_task`, `trace`,
+`simulation_trace`, `chat_session`, `chat_message`. Notable: `device_node` has a
+composite PK `(id, user_id)` for user isolation; `device_templates` has a unique
+constraint on `(user_id, name)`.

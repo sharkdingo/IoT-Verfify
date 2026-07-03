@@ -1,17 +1,21 @@
 // src/types/chat.ts
 
-// 定义类型
+// Matches backend ChatSessionResponseDto.
 export interface ChatSession {
     id: string
-    userId: string
+    userId: number
     title: string
+    createdAt?: string
     updatedAt: string
 }
 
+// Matches backend ChatMessageResponseDto.
 export interface ChatMessage {
     id?: number
+    sessionId?: string
     role: 'user' | 'assistant' | 'tool'
     content: string
+    createdAt?: string
 }
 
 export interface StreamCommand {

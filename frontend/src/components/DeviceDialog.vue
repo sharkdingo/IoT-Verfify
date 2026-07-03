@@ -71,11 +71,11 @@ const generateFormulaFromConditions = (spec: Specification): string => {
       const ifStr = conditionsToString(spec.ifConditions || [])
       const thenStr = conditionsToString(spec.thenConditions || [])
       if (ifStr && thenStr) {
-        return `□((${ifStr}) → (${thenStr}))`
+        return `□((${ifStr}) → ○(${thenStr}))`
       } else if (ifStr) {
-        return `□((${ifStr}) → B)`
+        return `□((${ifStr}) → ○B)`
       }
-      return '□(A → B)'
+      return '□(A → ○B)'
     case 'response':
       const respIf = conditionsToString(spec.ifConditions || [])
       const respThen = conditionsToString(spec.thenConditions || [])
@@ -95,14 +95,8 @@ const generateFormulaFromConditions = (spec: Specification): string => {
       }
       return '□(A → □B)'
     case 'safety':
-      const safeIf = conditionsToString(spec.ifConditions || [])
-      const safeThen = conditionsToString(spec.thenConditions || [])
-      if (safeIf && safeThen) {
-        return `□((${safeIf}) → ¬(${safeThen}))`
-      } else if (safeIf) {
-        return `□((${safeIf}) → ¬A)`
-      }
-      return '□(untrusted → ¬A)'
+      const safeA = conditionsToString(spec.aConditions || [])
+      return safeA ? `□¬((${safeA}) ∧ untrusted)` : '□(untrusted → ¬A)'
     default:
       return spec.templateLabel || 'Unknown'
   }
@@ -190,10 +184,19 @@ const apis = computed(() => {
     description: api.Description || '',
     startState: api.StartState,
     endState: api.EndState,
-    trigger: api.Trigger || 'user',
+    trigger: formatTrigger(api.Trigger),
     signal: api.Signal || false
   }))
 })
+
+// Trigger is an object { Attribute, Relation, Value }; render it as readable text.
+const formatTrigger = (t: any): string => {
+  if (!t) return 'user'
+  if (typeof t === 'string') return t   // tolerate legacy string-form data
+  const rel = t.Relation || '='
+  const val = t.Value !== undefined && t.Value !== '' ? ` ${rel} ${t.Value}` : ''
+  return t.Attribute ? `${t.Attribute}${val}` : 'user'
+}
 
 // 获取设备图标
 const getDeviceIcon = (deviceName: string) => {

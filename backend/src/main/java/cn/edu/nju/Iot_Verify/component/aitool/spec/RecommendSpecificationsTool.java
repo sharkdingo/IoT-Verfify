@@ -123,7 +123,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 1. **always (AG)**: 总是满足 - "如果条件A满足，则状态B必须始终保持"
 2. **eventually (EF)**: 最终满足 - "条件A满足后，最终状态B会达成"
 3. **never (AG !)**: 永不发生 - "状态A永远不应该发生"
-4. **immediate (A)**: 立即响应 - "当条件A满足时，立即执行动作B"
+4. **immediate (A)**: 下一状态响应 - "当条件A满足时，下一状态必须满足B（AX，紧接其后）"
 5. **response (A->)**: 响应 - "当条件A满足后，动作B最终会执行"
 6. **persistence (GF)**: 持续满足 - "状态A最终会持续保持"
 7. **safety (AG)**: 安全 - "危险状态永远不会发生"

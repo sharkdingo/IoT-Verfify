@@ -2132,57 +2132,17 @@ const handleVerify = async () => {
 
     // Handle async or sync verification
     if (verificationForm.isAsync) {
-      // Async verification
+      // Async verification. IMPORTANT: await the polling promise so the outer `finally`
+      // (which sets isVerifying=false) only runs after polling truly ends — otherwise
+      // the progress UI vanishes immediately and the button re-enables mid-run,
+      // letting the user launch duplicate tasks.
       asyncVerificationTask.value = { taskId: null, progress: 0, status: 'Initializing...' }
-      
-      // Start async verification
+
       const taskId = await boardApi.verifyAsync(req)
       asyncVerificationTask.value.taskId = taskId
       asyncVerificationTask.value.status = 'Running verification...'
-      
-      // Poll for progress and result
-      const pollInterval = setInterval(async () => {
-        try {
-          const progress = await boardApi.getTaskProgress(taskId)
-          asyncVerificationTask.value.progress = progress
-          
-          const task = await boardApi.getTask(taskId)
-          asyncVerificationTask.value.status = `Status: ${task.status}`
-          
-          if (task.status === 'COMPLETED') {
-            clearInterval(pollInterval)
-            isVerifying.value = false
-            
-            if (task.isSafe) {
-              verificationResult.value = { safe: true, traces: [], specResults: [], checkLogs: task.checkLogs || [], nusmvOutput: task.nusmvOutput || '' }
-              ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
-            } else {
-              // Get traces for failed verification
-              const traces = await boardApi.getVerificationTraces()
-              verificationResult.value = { 
-                safe: false, 
-                traces: traces.slice(0, task.violatedSpecCount || 1), 
-                specResults: [], 
-                checkLogs: task.checkLogs || [], 
-                nusmvOutput: task.nusmvOutput || '' 
-              }
-              ElMessage.warning({ message: `Verification failed: Found ${task.violatedSpecCount || 0} violations`, type: 'warning' })
-            }
-            showVerificationPanel.value = false
-          } else if (task.status === 'FAILED' || task.status === 'CANCELLED') {
-            clearInterval(pollInterval)
-            isVerifying.value = false
-            verificationError.value = task.errorMessage || 'Verification failed'
-            ElMessage.error({ message: verificationError.value, type: 'error' })
-          }
-        } catch (e: any) {
-          clearInterval(pollInterval)
-          isVerifying.value = false
-          verificationError.value = e.message || 'Failed to get verification progress'
-          ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
-        }
-      }, 1000)
-      
+
+      await pollAsyncVerification(taskId)
       return
     }
 
@@ -2394,6 +2354,69 @@ const handleSimulate = async (simConfig: {
   }
 }
 
+// A status/progress fetch error is "permanent" (fail fast, don't retry to timeout) when
+// it is an auth/not-found/client error — retrying will never succeed. Network blips and
+// 5xx are treated as transient.
+const isPermanentPollError = (error: any): boolean => {
+  const status = error?.response?.status
+  return typeof status === 'number' && status >= 400 && status < 500
+}
+
+// 轮询异步验证任务：await 到终态/超时/永久错误为止，供 handleVerify await。
+// 用 while + await sleep（而非 setInterval + async 回调）：串行执行，天然无重入——
+// 若某次状态查询超过 1s 也不会并发发起下一轮、不会重复 toast 或旧响应覆盖新进度。
+const pollAsyncVerification = async (taskId: number): Promise<void> => {
+  const pollIntervalMs = 1000
+  const maxPolls = 600  // 600 * 1000ms = 10 min ceiling
+  let pollCount = 0
+
+  while (pollCount < maxPolls) {
+    let task: any
+    try {
+      const progress = await boardApi.getTaskProgress(taskId)
+      asyncVerificationTask.value.progress = progress
+      task = await boardApi.getTask(taskId)
+      asyncVerificationTask.value.status = `Status: ${task.status}`
+    } catch (e: any) {
+      // Permanent errors (401/403/404/…) fail fast; transient errors retry.
+      if (isPermanentPollError(e)) {
+        throw new Error(e?.message || 'Failed to get verification status')
+      }
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+      pollCount++
+      continue
+    }
+
+    // Terminal-state handling outside the try so its logic isn't swallowed by the catch.
+    if (task.status === 'COMPLETED') {
+      if (task.isSafe) {
+        verificationResult.value = { safe: true, traces: [], specResults: [], checkLogs: task.checkLogs || [], nusmvOutput: task.nusmvOutput || '' }
+        ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
+      } else {
+        const traces = await boardApi.getVerificationTraces()
+        verificationResult.value = {
+          safe: false,
+          traces: traces.slice(0, task.violatedSpecCount || 1),
+          specResults: [],
+          checkLogs: task.checkLogs || [],
+          nusmvOutput: task.nusmvOutput || ''
+        }
+        ElMessage.warning({ message: `Verification failed: Found ${task.violatedSpecCount || 0} violations`, type: 'warning' })
+      }
+      showVerificationPanel.value = false
+      return
+    } else if (task.status === 'FAILED' || task.status === 'CANCELLED') {
+      throw new Error(task.errorMessage || 'Verification failed')
+    }
+
+    // 仍在 PENDING/RUNNING，等待后继续
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+    pollCount++
+  }
+
+  throw new Error('Verification timeout - please check task status manually')
+}
+
 // 轮询异步模拟任务
 const pollAsyncSimulation = async (taskId: number): Promise<any> => {
   const maxPollCount = 120  // 最多轮询 2 分钟 (120 * 1000ms)
@@ -2401,51 +2424,49 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
   let pollCount = 0
 
   while (pollCount < maxPollCount) {
+    let task: any
     try {
-      // 获取任务进度
+      // 获取任务进度 + 状态（瞬时网络错误容忍：进入 catch 后继续轮询）
       const progress = await simulationApi.getTaskProgress(taskId)
       asyncSimulationTask.value.progress = progress
 
-      // 获取任务状态
-      const task = await simulationApi.getTask(taskId)
+      task = await simulationApi.getTask(taskId)
       asyncSimulationTask.value.status = task.status
-
-      // 根据任务状态处理
-      if (task.status === 'COMPLETED') {
-        // 任务完成，获取模拟结果
-        if (task.simulationTraceId) {
-          const trace = await simulationApi.getSimulation(task.simulationTraceId)
-          return {
-            states: trace.states,
-            steps: trace.steps,
-            requestedSteps: trace.requestedSteps,
-            logs: trace.logs || [],
-            nusmvOutput: trace.nusmvOutput
-          }
-        }
-        return { states: [], steps: 0, requestedSteps: 0, logs: ['Task completed but no trace found'] }
-      } else if (task.status === 'FAILED') {
-        // 任务失败
-        const errorMsg = task.errorMessage || 'Async simulation failed'
-        throw new Error(errorMsg)
-      } else if (task.status === 'CANCELLED') {
-        // 任务被取消
-        throw new Error('Simulation task was cancelled')
-      }
-
-      // 等待一段时间后继续轮询
-      await new Promise(resolve => setTimeout(resolve, pollInterval))
-      pollCount++
-
     } catch (error: any) {
-      if (error.message === 'Simulation task was cancelled') {
-        throw error
+      // Permanent errors (401/403/404/task-not-found) fail fast; only transient
+      // errors (network blips, 5xx) retry until the poll ceiling.
+      if (isPermanentPollError(error)) {
+        throw new Error(error?.message || 'Failed to get simulation status')
       }
-      console.error('Poll error:', error)
-      // 继续轮询，即使出现错误
+      console.error('Poll error (transient, will retry):', error)
       await new Promise(resolve => setTimeout(resolve, pollInterval))
       pollCount++
+      continue
     }
+
+    // 终态处理放在 try 之外：FAILED/CANCELLED 必须立即抛出并中止轮询，
+    // 不能被上面的瞬时错误 catch 吞掉（否则会一直轮询到超时才报通用错误）。
+    if (task.status === 'COMPLETED') {
+      if (task.simulationTraceId) {
+        const trace = await simulationApi.getSimulation(task.simulationTraceId)
+        return {
+          states: trace.states,
+          steps: trace.steps,
+          requestedSteps: trace.requestedSteps,
+          logs: trace.logs || [],
+          nusmvOutput: trace.nusmvOutput
+        }
+      }
+      return { states: [], steps: 0, requestedSteps: 0, logs: ['Task completed but no trace found'] }
+    } else if (task.status === 'FAILED') {
+      throw new Error(task.errorMessage || 'Async simulation failed')
+    } else if (task.status === 'CANCELLED') {
+      throw new Error('Simulation task was cancelled')
+    }
+
+    // 仍在 PENDING/RUNNING，等待后继续
+    await new Promise(resolve => setTimeout(resolve, pollInterval))
+    pollCount++
   }
 
   // 超出最大轮询次数

@@ -56,7 +56,8 @@ export const sendStreamChat = async (
     try {
         const { getToken } = useAuth();
         const token = getToken();
-        const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+        // Relative by default → dev Vite proxy / prod same-origin proxy; override with VITE_API_BASE_URL.
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
         
         const headers: Record<string, string> = {
             'Content-Type': 'application/json'

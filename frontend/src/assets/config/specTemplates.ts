@@ -1,21 +1,9 @@
 // src/assets/config/specTemplates.ts
-import type { SpecTemplate, SpecSide } from '@/types/spec.ts'
+// Types live in @/types/spec (single source); this module only provides runtime config.
+import type { SpecTemplate, SpecTemplateType, SpecTemplateDetail } from '@/types/spec.ts'
 
-export type SpecTemplateType = 
-  | 'always'      // A holds forever - 只有a条件
-  | 'eventually'  // A will happen later - 只有a条件
-  | 'never'       // A never happens - 只有a条件
-  | 'immediate'   // A → B (at same time) - if + then
-  | 'response'    // A → ◇B (eventually) - if + then
-  | 'persistence' // A → □B (forever after) - if + then
-  | 'safety'      // untrusted → ¬A - if + then
-
-export interface SpecTemplateDetail extends SpecTemplate {
-  type: SpecTemplateType
-  description: string
-  requiredSides: SpecSide[]  // 需要配置的条件位置
-  ltlFormula: string         // 对应的LTL公式
-}
+// Re-export so existing importers of these types from this module keep working.
+export type { SpecTemplateType, SpecTemplateDetail }
 
 /**
  * 七种规约模板配置
@@ -53,10 +41,10 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
   {
     id: '4',
     type: 'immediate',
-    label: 'IF A happens, B should happen at the same time',
-    description: '当条件A发生时，条件B必须同时发生',
+    label: 'IF A happens, B should happen in the next state (immediately after)',
+    description: '当条件A发生时，条件B必须在下一状态满足（紧接其后）',
     requiredSides: ['if', 'then'],
-    ltlFormula: '□(A → B)'
+    ltlFormula: '□(A → ○B)'
   },
   {
     id: '5',
@@ -103,9 +91,11 @@ export const relationOperators = [
   { value: 'not_in', label: 'not in' }
 ]
 
-// 可用的目标类型
+// 可用的目标类型（与后端 SpecConditionDto.targetType 一致）
 export const targetTypes = [
   { value: 'state', label: 'State' },
   { value: 'variable', label: 'Variable' },
-  { value: 'api', label: 'API' }
+  { value: 'api', label: 'API' },
+  { value: 'trust', label: 'Trust' },
+  { value: 'privacy', label: 'Privacy' }
 ]

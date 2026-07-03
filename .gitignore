@@ -1,5 +1,12 @@
-# General ignores
+# .gitignore — IoT-Verify full-stack repo (Vue/Vite frontend + Spring Boot/Java backend
+# + NuSMV verification). Grouped by concern. Keep committed: package-lock.json,
+# .env.example, application.yaml (uses ${ENV:default}, no secrets).
+
+# ======================= General / OS =======================
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 *.log
 *.tmp
 *.bak
@@ -7,46 +14,73 @@
 *~
 .~lock.*
 
-# IDE
+# ======================= IDE / Editors ======================
 .idea/
-.vscode/
 *.iml
-queries/
+# VS Code: ignore personal settings but keep shared, checked-in config if added later.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+# Claude Code: ignore machine-local permissions; a shared .claude/settings.json
+# (if the team adds one) stays tracked.
+.claude/settings.local.json
 
-# Node.js dependencies
+# AI / code-review tooling scratch output (runtime logs, scraped papers, review
+# artifacts) — transient, machine-specific, never committed.
+.codex-review/
+
+# ======================= Secrets / env ======================
+# Never commit real env files; the *.example templates ARE committed.
+.env
+.env.local
+.env.*.local
+*.local
+!.env.example
+!*.env.example
+# Common credential/key leaks
+*.pem
+*.key
+*.p12
+*.keystore
+secrets.*
+credentials.*
+
+# ======================= Frontend (Node / Vite) =============
 node_modules/
+jspm_packages/
+.pnpm-store/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-.vite/
-
-# Frontend build outputs
+# Build output
 dist/
+dist-ssr/
 out/
+build/
+# Caches
 .cache/
 .temp/
-.env.local
-.env.*.local
+.vite/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+# Test / coverage
+coverage/
+.nyc_output/
+# Vitest / Playwright
+playwright-report/
+test-results/
 
-# Backend Java project
+# ======================= Backend (Java / Maven) =============
 target/
 *.class
 *.jar
 *.war
 *.ear
-*.zip
-*.tar.gz
-*.rar
 hs_err_pid*
-backend/tmp-*.txt
-backend/tmp-*.json
-backend/sse-output.txt
-
-# Dependency directories
-jspm_packages/
-
-# Maven
+replay_pid*
+# Maven housekeeping
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
@@ -55,26 +89,53 @@ release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
 .mvn/timing.properties
-.mvn/wrapper/maven-wrapper.jar
+# Surefire / test reports
+backend/target/surefire-reports/
+# Ad-hoc backend scratch files
+backend/tmp-*.txt
+backend/tmp-*.json
+backend/sse-output.txt
+# Local scratch SQL (e.g. queries/Query.sql = "SHOW TABLES;"); not a shipped example.
+backend/queries/
 
-# Environment files
-.env
-!.env.example
+# ======================= NuSMV verification =================
+# Generated verification artifacts and temp working dirs. The backend writes
+# model.smv / request.json / output.txt / result.json into nusmv_* temp dirs
+# (retained on disk for debugging via a no-op cleanup) — never commit them.
+nusmv_*/
+**/nusmv_*/
+*.smv.out
+verification-output/
+model.smv
+request.json
+output.txt
+result.json
 
-# Vite
-*.local
+# ======================= Optional backends (Python / Go) ====
+# Present for contributors who add tooling/scripts in these languages.
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Go
+/bin/
+*.exe
+*.exe~
+*.test
+*.out
 
-# TypeScript
-*.tsbuildinfo
-
-# Docker
-docker-compose.override.yml
-
-# System files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Redis dump
+# ======================= Archives / DB dumps ================
+*.zip
+*.tar.gz
+*.rar
 dump.rdb
 *.rdb
+
+# ======================= Docker =============================
+docker-compose.override.yml

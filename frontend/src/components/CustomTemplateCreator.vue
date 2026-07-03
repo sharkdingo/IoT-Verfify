@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import boardApi from '@/api/board'
@@ -33,8 +33,10 @@ const customTemplateForm = reactive({
     signal: boolean,
     startState: string,
     endState: string,
-    trigger: string | { Attribute: string, Relation: string, Value: string },
-    assignments: Array<{variableName: string, changeRate: string}>
+    triggerAttribute: string,
+    triggerRelation: string,
+    triggerValue: string,
+    assignments: Array<{attribute: string, value: string}>
   }>,
   variables: [] as Array<{
     name: string,
@@ -71,8 +73,8 @@ const editingVariableData = reactive({
   description: '',
   isInside: true,
   publicVisible: true,
-  trust: 'high',
-  privacy: 'low',
+  trust: 'trusted',
+  privacy: 'public',
   lowerBound: 0,
   upperBound: 100,
   values: []
@@ -81,8 +83,8 @@ const editingVariableData = reactive({
 const editingWorkingStateData = reactive({
   name: '',
   description: '',
-  trust: 'high',
-  privacy: 'low',
+  trust: 'trusted',
+  privacy: 'public',
   invariant: 'true'
 })
 
@@ -92,9 +94,26 @@ const editingApiData = reactive({
   signal: false,
   startState: '',
   endState: '',
-  trigger: 'user',
-  assignments: [] as Array<{variableName: string, changeRate: string}>
+  // Trigger matches backend DeviceManifest.API.Trigger { Attribute, Relation, Value },
+  // all non-blank; Attribute must be a legal mode or internal-variable name (P1).
+  triggerAttribute: '',
+  triggerRelation: '=',
+  triggerValue: '',
+  // Assignments match backend { Attribute, Value } (not variableName/changeRate).
+  assignments: [] as Array<{attribute: string, value: string}>
 })
+
+// Legal Trigger.Attribute values = mode names + internal-variable names (backend P1,
+// SmvModelValidator.buildLegalAttributeSet). The dropdown offers exactly these so a
+// created template can't fail the NuSMV pre-check on an illegal trigger attribute.
+const triggerAttributeOptions = computed<string[]>(() => {
+  const modes = customTemplateForm.modes.filter(m => m.trim() !== '')
+  const vars = customTemplateForm.variables.map(v => v.name).filter(n => n.trim() !== '')
+  return [...modes, ...vars]
+})
+
+// Relation operators supported by the backend trigger parser (SmvRelationUtils).
+const triggerRelations = ['=', '!=', '>', '>=', '<', '<=']
 
 // JSON file upload handling
 const fileInput = ref<HTMLInputElement>()
@@ -164,17 +183,26 @@ const createCustomTemplate = async () => {
       Modes: customTemplateForm.modes.filter(m => m.trim() !== ''),
       InternalVariables: customTemplateForm.variables
         .filter(v => v.name.trim() !== '')
-        .map(v => ({
-          Name: v.name,
-          Description: v.description,
-          IsInside: v.isInside,
-          PublicVisible: v.publicVisible,
-          Trust: v.trust,
-          Privacy: v.privacy,
-          LowerBound: v.lowerBound,
-          UpperBound: v.upperBound,
-          Values: v.values.filter(val => val.trim() !== '')
-        })),
+        .map(v => {
+          const base: any = {
+            Name: v.name,
+            Description: v.description,
+            IsInside: v.isInside,
+            PublicVisible: v.publicVisible,
+            Trust: v.trust,
+            Privacy: v.privacy
+          }
+          // Backend requires Values XOR (LowerBound+UpperBound), never both — mirror the
+          // JSON-import path. Prefer enum Values when present; otherwise emit the range.
+          const values = (v.values || []).filter(val => val.trim() !== '')
+          if (values.length > 0) {
+            base.Values = values
+          } else if (v.lowerBound !== undefined && v.upperBound !== undefined) {
+            base.LowerBound = v.lowerBound
+            base.UpperBound = v.upperBound
+          }
+          return base
+        }),
       ImpactedVariables: customTemplateForm.impactedVariables.filter(v => v.trim() !== ''),
       InitState: customTemplateForm.initState,
       WorkingStates: customTemplateForm.workingStates
@@ -196,13 +224,24 @@ const createCustomTemplate = async () => {
           Signal: api.signal,
           StartState: api.startState,
           EndState: api.endState,
-          Trigger: typeof api.trigger === 'string' 
-            ? { Attribute: api.trigger, Relation: 'EQ', Value: '' } 
-            : api.trigger,
-          Assignments: api.assignments.filter(a => a.variableName.trim() !== '').map(a => ({
-            VariableName: a.variableName,
-            ChangeRate: a.changeRate
-          }))
+          // Trigger { Attribute, Relation, Value }; omit entirely when Attribute is
+          // blank (backend treats a null Trigger as "no trigger" and skips P1).
+          Trigger: api.triggerAttribute && api.triggerAttribute.trim() !== ''
+            ? {
+                Attribute: api.triggerAttribute,
+                Relation: api.triggerRelation || '=',
+                Value: api.triggerValue
+              }
+            : null,
+          Assignments: api.assignments
+            // Keep only fully-filled assignments; the backend rejects a blank Attribute
+            // or Value. (confirmSaveApi already blocks half-filled rows, so this just
+            // drops entirely-empty leftover rows.)
+            .filter(a => a.attribute.trim() !== '' && String(a.value).trim() !== '')
+            .map(a => ({
+              Attribute: a.attribute,
+              Value: a.value
+            }))
         }))
     }
 
@@ -249,56 +288,6 @@ const createCustomTemplate = async () => {
   }
 }
 
-const handleApiError = async (response: Response, operation: string) => {
-  let errorMessage = 'Operation failed'
-
-  try {
-    const errorText = await response.text()
-    console.error(`${operation} error response:`, errorText)
-
-    // Try to parse as JSON error
-    try {
-      const errorData = JSON.parse(errorText)
-      if (errorData.message) {
-        // Shorten common error messages
-        errorMessage = shortenErrorMessage(errorData.message)
-      } else if (errorData.error) {
-        errorMessage = shortenErrorMessage(errorData.error)
-      }
-    } catch {
-      // Not JSON, use raw text but shorten it
-      if (errorText) {
-        errorMessage = errorText.length > 50 ? errorText.substring(0, 50) + '...' : errorText
-      }
-    }
-  } catch (textError) {
-    console.error('Failed to read error response:', textError)
-    errorMessage = 'Server error'
-  }
-
-  return errorMessage
-}
-
-const shortenErrorMessage = (message: string): string => {
-  if (message.includes('Device template already exists')) {
-    return 'Template name already exists'
-  }
-  if (message.includes('Template not found')) {
-    return 'Template not found'
-  }
-  if (message.includes('Invalid template ID')) {
-    return 'Invalid template ID'
-  }
-  if (message.includes('Failed to delete template')) {
-    return 'Delete failed'
-  }
-  if (message.includes('Failed to create template')) {
-    return 'Create failed'
-  }
-
-  return message.length > 40 ? message.substring(0, 40) + '...' : message
-}
-
 const createTemplateFromJson = async (jsonData: any) => {
   try {
     console.log('Creating template from JSON:', jsonData)
@@ -308,25 +297,38 @@ const createTemplateFromJson = async (jsonData: any) => {
       Name: jsonData.Name,
       Description: jsonData.Description,
       Modes: jsonData.Modes || [],
-      InternalVariables: (jsonData.InternalVariables || jsonData.variables || []).map((v: any) => ({
-        Name: v.Name || v.name || '',
-        Description: v.Description || v.description || '',
-        IsInside: v.IsInside !== undefined ? v.IsInside : (v.isInside !== undefined ? v.isInside : true),
-        PublicVisible: v.PublicVisible !== undefined ? v.PublicVisible : (v.publicVisible !== undefined ? v.publicVisible : true),
-        Trust: v.Trust || v.trust || 'high',
-        Privacy: v.Privacy || v.privacy || 'low',
-        LowerBound: v.LowerBound !== undefined ? v.LowerBound : (v.lowerBound !== undefined ? v.lowerBound : 0),
-        UpperBound: v.UpperBound !== undefined ? v.UpperBound : (v.upperBound !== undefined ? v.upperBound : 100),
-        Values: v.Values || v.values || [],
-        NaturalChangeRate: v.NaturalChangeRate || v.naturalChangeRate
-      })),
+      InternalVariables: (jsonData.InternalVariables || jsonData.variables || []).map((v: any) => {
+        const values = v.Values || v.values || []
+        const lower = v.LowerBound !== undefined ? v.LowerBound : v.lowerBound
+        const upper = v.UpperBound !== undefined ? v.UpperBound : v.upperBound
+        const base: any = {
+          Name: v.Name || v.name || '',
+          Description: v.Description || v.description || '',
+          IsInside: v.IsInside !== undefined ? v.IsInside : (v.isInside !== undefined ? v.isInside : true),
+          PublicVisible: v.PublicVisible !== undefined ? v.PublicVisible : (v.publicVisible !== undefined ? v.publicVisible : true),
+          Trust: v.Trust || v.trust || 'trusted',
+          Privacy: v.Privacy || v.privacy || 'public',
+          NaturalChangeRate: v.NaturalChangeRate || v.naturalChangeRate
+        }
+        // Backend requires exactly one of {Values} XOR {LowerBound+UpperBound} (or
+        // neither) — never both. Preserve enum vars as-is; only emit bounds when the
+        // source actually had them. Do NOT inject a default 0..100 range, which would
+        // turn a legal enum variable into an illegal both-valued-and-bounded one.
+        if (Array.isArray(values) && values.length > 0) {
+          base.Values = values
+        } else if (lower !== undefined && upper !== undefined) {
+          base.LowerBound = lower
+          base.UpperBound = upper
+        }
+        return base
+      }),
       ImpactedVariables: jsonData.ImpactedVariables || jsonData.impactedVariables || [],
       InitState: jsonData.InitState || jsonData.initState || '',
       WorkingStates: (jsonData.WorkingStates || jsonData.workingStates || []).map((s: any) => ({
         Name: s.Name || s.name || '',
         Description: s.Description || s.description || '',
-        Trust: s.Trust || s.trust || 'high',
-        Privacy: s.Privacy || s.privacy || 'low',
+        Trust: s.Trust || s.trust || 'trusted',
+        Privacy: s.Privacy || s.privacy || 'public',
         Invariant: s.Invariant || s.invariant || 'true',
         Dynamics: s.Dynamics || s.dynamics || []
       })),
@@ -337,7 +339,11 @@ const createTemplateFromJson = async (jsonData: any) => {
         Signal: api.Signal !== undefined ? api.Signal : (api.signal !== undefined ? api.signal : false),
         StartState: api.StartState || api.startState || jsonData.InitState || jsonData.initState || '',
         EndState: api.EndState || api.endState || jsonData.InitState || jsonData.initState || '',
-        Trigger: api.Trigger || api.trigger || 'user',
+        // Preserve an object Trigger { Attribute, Relation, Value } as-is; drop a legacy
+        // pseudo-string trigger (e.g. "user") since it is not a valid backend Trigger.
+        Trigger: (api.Trigger && typeof api.Trigger === 'object') ? api.Trigger
+               : (api.trigger && typeof api.trigger === 'object') ? api.trigger
+               : null,
         Assignments: api.Assignments || api.assignments || []
       }))
     }
@@ -395,8 +401,8 @@ const addWorkingStateToTemplate = () => {
   Object.assign(editingWorkingStateData, {
     name: '',
     description: '',
-    trust: 'high',
-    privacy: 'low',
+    trust: 'trusted',
+    privacy: 'public',
     invariant: 'true'
   })
   showWorkingStateDialog.value = true
@@ -445,8 +451,8 @@ const addVariableToTemplate = () => {
     description: '',
     isInside: true,
     publicVisible: true,
-    trust: 'high',
-    privacy: 'low',
+    trust: 'trusted',
+    privacy: 'public',
     lowerBound: 0,
     upperBound: 100,
     values: []
@@ -515,7 +521,9 @@ const addApiToTemplate = () => {
     signal: false,
     startState: customTemplateForm.initState || '',
     endState: customTemplateForm.initState || '',
-    trigger: 'user',
+    triggerAttribute: '',
+    triggerRelation: '=',
+    triggerValue: '',
     assignments: []
   })
   showApiDialog.value = true
@@ -530,11 +538,23 @@ const editApi = (index: number) => {
 
 const confirmSaveApi = () => {
   if (!editingApiData.name.trim()) {
-    ElMessage({
-      message: 'Enter API name',
-      type: 'warning',
-      center: true
-    })
+    ElMessage({ message: 'Enter API name', type: 'warning', center: true })
+    return
+  }
+  // Trigger is optional, but if an Attribute is chosen the backend requires Relation
+  // and Value too (P1 validateTriggerCompleteness) — enforce completeness here.
+  if (editingApiData.triggerAttribute && editingApiData.triggerAttribute.trim() !== '') {
+    if (!editingApiData.triggerRelation || !String(editingApiData.triggerValue).trim()) {
+      ElMessage({ message: 'Trigger needs a relation and a value (or clear the trigger attribute)', type: 'warning', center: true })
+      return
+    }
+  }
+  // Every assignment must have both Attribute and Value (backend rejects half-filled).
+  const badAssignment = editingApiData.assignments.some(
+    a => (a.attribute && a.attribute.trim() !== '') !== (a.value != null && String(a.value).trim() !== '')
+  )
+  if (badAssignment) {
+    ElMessage({ message: 'Each assignment needs both a variable and a value', type: 'warning', center: true })
     return
   }
   saveApi({ ...editingApiData })
@@ -841,9 +861,8 @@ const saveApi = (apiData: any) => {
               v-model="editingVariableData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
+              <option value="trusted">Trusted</option>
+              <option value="untrusted">Untrusted</option>
             </select>
           </div>
           <div>
@@ -854,7 +873,6 @@ const saveApi = (apiData: any) => {
             >
               <option value="public">Public</option>
               <option value="private">Private</option>
-              <option value="low">Low</option>
             </select>
           </div>
         </div>
@@ -956,9 +974,8 @@ const saveApi = (apiData: any) => {
               v-model="editingWorkingStateData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
+              <option value="trusted">Trusted</option>
+              <option value="untrusted">Untrusted</option>
             </select>
           </div>
           <div>
@@ -969,7 +986,6 @@ const saveApi = (apiData: any) => {
             >
               <option value="public">Public</option>
               <option value="private">Private</option>
-              <option value="low">Low</option>
             </select>
           </div>
         </div>
@@ -1060,28 +1076,42 @@ const saveApi = (apiData: any) => {
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Trigger</label>
+        <!-- Trigger { Attribute, Relation, Value } — leave Attribute empty for no trigger -->
+        <div>
+          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Trigger <span class="text-slate-400 font-normal">(optional)</span></label>
+          <div class="grid grid-cols-3 gap-2">
             <select
-              v-model="editingApiData.trigger"
-              class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
+              v-model="editingApiData.triggerAttribute"
+              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="user">User</option>
-              <option value="auto">Auto</option>
-              <option value="event">Event</option>
+              <option value="">(none)</option>
+              <option v-for="attr in triggerAttributeOptions" :key="attr" :value="attr">{{ attr }}</option>
             </select>
+            <select
+              v-model="editingApiData.triggerRelation"
+              :disabled="!editingApiData.triggerAttribute"
+              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm disabled:opacity-50"
+            >
+              <option v-for="op in triggerRelations" :key="op" :value="op">{{ op }}</option>
+            </select>
+            <input
+              v-model="editingApiData.triggerValue"
+              :disabled="!editingApiData.triggerAttribute"
+              placeholder="Value"
+              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm disabled:opacity-50"
+            />
           </div>
-          <div class="flex items-center h-full pt-4">
-            <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                v-model="editingApiData.signal"
-                class="w-3.5 h-3.5 text-orange-500 bg-slate-100 border-slate-300 rounded focus:ring-orange-500 dark:focus:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
-              />
-               Signal
-            </label>
-          </div>
+          <p class="text-[10px] text-slate-400 mt-1">Attribute must be a mode or internal-variable name; all three are required when a trigger is set.</p>
+        </div>
+        <div class="flex items-center">
+          <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              v-model="editingApiData.signal"
+              class="w-3.5 h-3.5 text-orange-500 bg-slate-100 border-slate-300 rounded focus:ring-orange-500 dark:focus:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
+            />
+             Signal
+          </label>
         </div>
 
         <!-- Assignments -->
@@ -1089,7 +1119,7 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center justify-between mb-1.5">
             <label class="text-xs font-medium text-slate-700 dark:text-slate-300">Assignments</label>
             <button
-              @click="editingApiData.assignments.push({variableName: '', changeRate: ''})"
+              @click="editingApiData.assignments.push({attribute: '', value: ''})"
               class="text-[10px] text-orange-500 hover:text-orange-600 dark:text-orange-400 dark:hover:text-orange-300"
             >
               + Add
@@ -1098,7 +1128,7 @@ const saveApi = (apiData: any) => {
           <div class="space-y-1.5 max-h-24 overflow-y-auto">
             <div v-for="(assignment, index) in editingApiData.assignments" :key="index" class="flex items-center gap-2">
               <select
-                v-model="assignment.variableName"
+                v-model="assignment.attribute"
                 class="flex-1 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
               >
                 <option value="">Select</option>
@@ -1107,9 +1137,9 @@ const saveApi = (apiData: any) => {
                 </option>
               </select>
               <input
-                v-model="assignment.changeRate"
+                v-model="assignment.value"
                 class="w-16 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
-                placeholder="Rate"
+                placeholder="Value"
               />
               <button
                 @click="editingApiData.assignments.splice(index, 1)"

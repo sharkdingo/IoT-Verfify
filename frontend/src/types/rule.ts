@@ -12,20 +12,6 @@ export interface SourceEntry {
     value?: string
 }
 
-// 全局变量列表（从设备模板的 ImpactedVariables 提取）
-export const GLOBAL_VARIABLES = [
-    { name: 'temperature', label: '温度 (Temperature)', unit: '°C' },
-    { name: 'humidity', label: '湿度 (Humidity)', unit: '%' },
-    { name: 'airQuality', label: '空气质量 (Air Quality)', unit: '' },
-    { name: 'carbonDioxide', label: '二氧化碳 (CO₂)', unit: 'ppm' },
-    { name: 'illuminance', label: '光照强度 (Illuminance)', unit: 'lux' },
-    { name: 'contact', label: '门/窗状态 (Contact)', unit: '' },
-    { name: 'waterTemperature', label: '水温 (Water Temperature)', unit: '°C' },
-    { name: 'waterQuality', label: '水质 (Water Quality)', unit: '' }
-] as const
-
-export type GlobalVariableName = typeof GLOBAL_VARIABLES[number]['name']
-
 export interface RuleForm {
     id?: string  // 可选，添加新规则时由前端生成
     name?: string // 规则名称

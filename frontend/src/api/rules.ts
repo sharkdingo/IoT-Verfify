@@ -71,43 +71,14 @@ export const cancelRecommendRules = (): void => {
 /**
  * 规则类型定义
  */
-export interface Rule {
-  id?: number
-  userId?: number
-  conditions: {
-    deviceName: string
-    attribute: string
-    relation?: string
-    value?: string
-  }[]
-  command: {
-    deviceName: string
-    action: string
-    contentDevice?: string
-    content?: string
-  }
-}
-
-/**
- * 获取规则列表
- */
-export const getRules = async (): Promise<Rule[]> => {
-  const response = await api.get<any>('/board/rules')
-  return unpack<Rule[]>(response)
-}
-
-/**
- * 保存规则列表
- */
-export const saveRules = async (rules: Rule[]): Promise<Rule[]> => {
-  const response = await api.post<any>('/board/rules', rules)
-  return unpack<Rule[]>(response)
-}
+// NOTE: rule persistence (GET/POST /board/rules with RuleDto <-> RuleForm mapping and
+// incremental-upsert semantics) lives in `api/board.ts` (getRules/saveRules). This
+// module owns only rule *recommendation*. A duplicate getRules/saveRules + Rule type
+// used to live here but was dead code and has been removed to avoid a second, diverging
+// rule API surface.
 
 // Default export for convenience
 export default {
   recommendRules,
-  cancelRecommendRules,
-  getRules,
-  saveRules
+  cancelRecommendRules
 }

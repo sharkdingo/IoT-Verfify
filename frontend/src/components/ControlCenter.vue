@@ -362,6 +362,22 @@ const getAvailableKeys = (deviceId: string, targetType: string): Array<{label: s
     })
   }
 
+  // trust / privacy conditions key off a device property — either a working-state name
+  // or an internal-variable name (backend resolvePropertyKey matches trust_/privacy_
+  // against both). Offer the union so the Property dropdown is populated.
+  if (targetType === 'trust' || targetType === 'privacy') {
+    if (template.manifest.WorkingStates) {
+      template.manifest.WorkingStates.forEach((s: any) => {
+        keys.push({ label: `${s.Name} (state)`, value: s.Name })
+      })
+    }
+    if (template.manifest.InternalVariables) {
+      template.manifest.InternalVariables.forEach((v: any) => {
+        keys.push({ label: `${v.Name} (variable)`, value: v.Name })
+      })
+    }
+  }
+
   return keys
 }
 
@@ -398,6 +414,11 @@ const filteredRelationOperators = computed(() => {
   if (editingConditionData.targetType === 'state') {
     return relationOperators.filter(op => ['in', 'not_in'].includes(op.value))
   }
+  // trust/privacy are enum-valued — only equality / set membership make sense.
+  // Ordering comparisons (> >= < <=) would generate meaningless NuSMV conditions.
+  if (editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy') {
+    return relationOperators.filter(op => ['=', '!=', 'in', 'not_in'].includes(op.value))
+  }
   return relationOperators
 })
 
@@ -412,6 +433,14 @@ const availableStates = computed(() => {
   const manifest = node ? getCachedManifestForNode(node.id) : null
   if (!manifest || !manifest.WorkingStates) return []
   return manifest.WorkingStates.map((s: any) => s.Name)
+})
+
+// Allowed values for trust/privacy conditions — must match the backend enum domains
+// (SmvDeviceModuleBuilder: trust ∈ {untrusted, trusted}, privacy ∈ {private, public}).
+const trustPrivacyValues = computed<string[]>(() => {
+  if (editingConditionData.targetType === 'trust') return ['trusted', 'untrusted']
+  if (editingConditionData.targetType === 'privacy') return ['public', 'private']
+  return []
 })
 
 // Get relation label (accepts string for flexibility)
@@ -458,15 +487,15 @@ const updateFormula = () => {
       formula = neverA ? `□¬(${neverA})` : '□¬A'
       break
     case 'immediate':
-      // □(A → B) - Immediate response
+      // □(A → ○B) - next-state response (AX in CTL)
       const ifStr = conditionsToString(specForm.ifConditions)
       const thenStr = conditionsToString(specForm.thenConditions)
       if (ifStr && thenStr) {
-        formula = `□((${ifStr}) → (${thenStr}))`
+        formula = `□((${ifStr}) → ○(${thenStr}))`
       } else if (ifStr) {
-        formula = `□((${ifStr}) → B)`
+        formula = `□((${ifStr}) → ○B)`
       } else {
-        formula = '□(A → B)'
+        formula = '□(A → ○B)'
       }
       break
     case 'response':
@@ -494,13 +523,10 @@ const updateFormula = () => {
       }
       break
     case 'safety':
-      // □(untrusted → ¬A) - Safety
-      const safeIf = conditionsToString(specForm.ifConditions)
-      const safeThen = conditionsToString(specForm.thenConditions)
-      if (safeIf && safeThen) {
-        formula = `□((${safeIf}) → ¬(${safeThen}))`
-      } else if (safeIf) {
-        formula = `□((${safeIf}) → ¬A)`
+      // □¬(A ∧ untrusted) - A must not hold in an untrusted state (a-conditions only)
+      const safeA = conditionsToString(specForm.aConditions)
+      if (safeA) {
+        formula = `□¬((${safeA}) ∧ untrusted)`
       } else {
         formula = '□(untrusted → ¬A)'
       }
@@ -570,9 +596,9 @@ const naturalLanguageRule = computed(() => {
 
     case 'immediate':
       if (ifConditions && thenConditions) {
-        return `When ${ifConditions} happens, then ${thenConditions} must happen at the same time`
+        return `When ${ifConditions} happens, then ${thenConditions} must hold in the next state (immediately after)`
       } else if (ifConditions) {
-        return `When ${ifConditions} happens, some action must occur simultaneously`
+        return `When ${ifConditions} happens, some action must occur in the next state`
       }
       return 'Configure conditions to define the immediate response rule'
 
@@ -593,12 +619,10 @@ const naturalLanguageRule = computed(() => {
       return 'Configure conditions to define the persistence rule'
 
     case 'safety':
-      if (ifConditions && thenConditions) {
-        return `When ${ifConditions} is detected (untrusted), ${thenConditions} must not happen`
-      } else if (ifConditions) {
-        return `When ${ifConditions} is detected, unsafe conditions must be prevented`
+      if (aConditions) {
+        return `${aConditions} must not happen due to an untrusted (attacked) state`
       }
-      return 'Configure conditions to define the safety rule'
+      return 'Configure the A condition to define the safety rule'
 
     default:
       return 'Configure conditions to generate rule description'
@@ -854,58 +878,6 @@ const confirmDeleteTemplate = async () => {
 }
 
 // Enhanced error handling utility with concise messages
-const handleApiError = async (response: Response, operation: string) => {
-  let errorMessage = 'Operation failed'
-
-  try {
-    const errorText = await response.text()
-    console.error(`${operation} error response:`, errorText)
-
-    // Try to parse as JSON error
-    try {
-      const errorData = JSON.parse(errorText)
-      if (errorData.message) {
-        // Shorten common error messages
-        errorMessage = shortenErrorMessage(errorData.message)
-      } else if (errorData.error) {
-        errorMessage = shortenErrorMessage(errorData.error)
-      }
-    } catch {
-      // Not JSON, use raw text but shorten it
-      if (errorText) {
-        errorMessage = errorText.length > 50 ? errorText.substring(0, 50) + '...' : errorText
-      }
-    }
-  } catch (textError) {
-    console.error('Failed to read error response:', textError)
-    errorMessage = 'Server error'
-  }
-
-  return errorMessage
-}
-
-const shortenErrorMessage = (message: string): string => {
-  // Shorten common error patterns
-  if (message.includes('Device template already exists')) {
-    return 'Template name already exists'
-  }
-  if (message.includes('Template not found')) {
-    return 'Template not found'
-  }
-  if (message.includes('Invalid template ID')) {
-    return 'Invalid template ID'
-  }
-  if (message.includes('Failed to delete template')) {
-    return 'Delete failed'
-  }
-  if (message.includes('Failed to create template')) {
-    return 'Create failed'
-  }
-
-  // For other messages, keep them short
-  return message.length > 40 ? message.substring(0, 40) + '...' : message
-}
-
 const exportTemplate = (template: any) => {
   try {
     const dataStr = JSON.stringify(template.manifest, null, 2)
@@ -1682,6 +1654,16 @@ const exportTemplate = (template: any) => {
                 <option value="" hidden>State</option>
                 <option v-for="state in availableStates" :key="state" :value="state">
                   {{ state }}
+                </option>
+              </select>
+              <select
+                v-else-if="editingConditionData.targetType === 'trust' || editingConditionData.targetType === 'privacy'"
+                v-model="editingConditionData.value"
+                class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
+              >
+                <option value="" hidden>Value</option>
+                <option v-for="val in trustPrivacyValues" :key="val" :value="val">
+                  {{ val }}
                 </option>
               </select>
               <input

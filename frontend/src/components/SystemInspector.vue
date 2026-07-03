@@ -143,9 +143,13 @@ const generateFormulaFromConditions = (spec: any): string => {
   switch (spec.templateId) {
     case 'always':
     case '1':
-    case 'safety':
       const aStr = conditionsToString(spec.aConditions)
       return aStr ? `□(${aStr})` : '□A'
+    case 'safety':
+    case '7': {
+      const safeA = conditionsToString(spec.aConditions)
+      return safeA ? `□¬((${safeA}) ∧ untrusted)` : '□(untrusted → ¬A)'
+    }
     case 'eventually':
     case '2':
     case 'liveness':
@@ -160,7 +164,7 @@ const generateFormulaFromConditions = (spec: any): string => {
     case '4':
       const ifStr = conditionsToString(spec.ifConditions)
       const thenStr = conditionsToString(spec.thenConditions)
-      return ifStr && thenStr ? `□((${ifStr}) → (${thenStr}))` : '□(A → B)'
+      return ifStr && thenStr ? `□((${ifStr}) → ○(${thenStr}))` : '□(A → ○B)'
     case 'response':
     case '5':
       const respIf = conditionsToString(spec.ifConditions)

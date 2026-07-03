@@ -22,7 +22,9 @@ export interface InternalVariable {
 
 export interface Dynamic {
     VariableName: string
-    ChangeRate: string
+    // Backend Dynamic requires exactly one of Value XOR ChangeRate (both optional here).
+    ChangeRate?: string
+    Value?: string
 }
 
 export interface WorkingState {
@@ -34,14 +36,34 @@ export interface WorkingState {
     Privacy?: string        // "public" | "private"
 }
 
+// Matches backend DeviceTemplateDto.DeviceManifest.API.Trigger (object form).
+export interface DeviceTrigger {
+    Attribute: string
+    Relation: string
+    Value: string
+}
+
+// Matches backend DeviceTemplateDto.DeviceManifest.Assignment { Attribute, Value }.
+export interface DeviceAssignment {
+    Attribute: string
+    Value: string
+}
+
 export interface DeviceAPI {
     Name: string
     StartState: string
     EndState: string
-    Trigger?: string | null
-    Assignments?: any[]
+    Trigger?: DeviceTrigger | null
+    Assignments?: DeviceAssignment[]
     Signal?: boolean
     Description?: string
+}
+
+// Matches backend DeviceTemplateDto.DeviceManifest.Content { Name, Privacy, IsChangeable }.
+export interface DeviceContent {
+    Name: string
+    Privacy?: string        // "public" | "private"
+    IsChangeable?: boolean
 }
 
 export interface DeviceManifest {
@@ -54,6 +76,7 @@ export interface DeviceManifest {
     WorkingStates: WorkingState[]
     Transitions?: any[]
     APIs: DeviceAPI[]
+    Contents?: DeviceContent[]
 }
 
 export interface DeviceTemplate {

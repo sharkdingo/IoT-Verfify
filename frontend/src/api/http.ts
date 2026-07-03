@@ -4,7 +4,9 @@ import { useAuth } from '../stores/auth';
 import { router } from '../router';
 
 const api = axios.create({
-  baseURL: 'http://localhost:8080/api',
+  // Default to a relative "/api" so dev goes through the Vite proxy and prod through
+  // the same-origin reverse proxy (Nginx). Set VITE_API_BASE_URL for cross-origin.
+  baseURL: (import.meta.env.VITE_API_BASE_URL || '') + '/api',
   timeout: 100000,
   headers: {
     'Content-Type': 'application/json'
