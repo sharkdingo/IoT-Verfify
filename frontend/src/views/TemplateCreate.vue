@@ -7,7 +7,7 @@
         class="group flex items-center gap-2 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-colors bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm hover:shadow border border-slate-200 dark:border-slate-700"
       >
         <span class="material-symbols-outlined bg-white dark:bg-slate-700 rounded-full p-0.5 shadow-sm group-hover:shadow transition-shadow text-sm">arrow_back</span>
-        <span class="text-sm font-medium">Back to Board</span>
+        <span class="text-sm font-medium">{{ t('app.backToBoard') }}</span>
       </button>
     </div>
 
@@ -20,8 +20,8 @@
             <span class="material-symbols-outlined text-2xl text-white">construction</span>
           </div>
           <div>
-            <h1 class="text-2xl font-bold text-black">Create New Template</h1>
-            <p class="text-orange-100 text-sm mt-1">Design a powerful template for your IoT devices</p>
+            <h1 class="text-2xl font-bold text-white">{{ t('app.createNewTemplate') }}</h1>
+            <p class="text-orange-100 text-sm mt-1">{{ t('app.createNewTemplateSubtitle') }}</p>
           </div>
         </div>
       </div>
@@ -36,15 +36,16 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import CustomTemplateCreator from '@/components/CustomTemplateCreator.vue'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const goBack = () => {
-  router.push('/')
+  router.push('/board')
 }
 
 const onRefresh = () => {
-  console.log('Template created/refreshed')
 }
 </script>

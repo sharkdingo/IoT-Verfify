@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { computed, ref, reactive } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { authApi } from '@/api/auth';
 import { useAuth } from '@/stores/auth';
 import { useI18n } from 'vue-i18n';
+import PublicHeader from '@/components/common/PublicHeader.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -19,7 +20,7 @@ const form = reactive({
   password: ''
 });
 
-const rules = {
+const rules = computed(() => ({
   phone: [
     { required: true, message: t('auth.phoneRequired'), trigger: 'blur' },
     { pattern: /^1[3-9]\d{9}$/, message: t('auth.phoneInvalid'), trigger: 'blur' }
@@ -27,7 +28,7 @@ const rules = {
   password: [
     { required: true, message: t('auth.passwordRequired'), trigger: 'blur' }
   ]
-};
+}));
 
 const handleLogin = async () => {
   if (!formRef.value) return;
@@ -76,10 +77,20 @@ const handleLogin = async () => {
 const goToRegister = () => {
   router.push('/register');
 };
+
+const handleForgotPassword = () => {
+  ElMessage.info(t('auth.passwordRecoveryUnavailable'));
+};
 </script>
 
 <template>
   <div class="auth-wrapper">
+    <PublicHeader
+      variant="auth"
+      :secondary-label="t('auth.registerNow')"
+      secondary-to="/register"
+    />
+
     <!-- Left Side - Branding -->
     <div class="brand-panel">
       <!-- Video Background -->
@@ -103,28 +114,24 @@ const goToRegister = () => {
       </div>
 
       <div class="brand-content">
-        <div class="logo">
-          IoT-Verify<sup class="logo-sup">®</sup>
-        </div>
-
         <div class="hero-text">
-          <h2>Orchestrate Your <br/><span>Environment</span></h2>
-          <p>Advanced canvas-based logic for the modern smart home. Connect, automate, and visualize your entire device network in real-time.</p>
+          <h2>{{ t('auth.loginHeroTitle') }} <br/><span>{{ t('auth.loginHeroHighlight') }}</span></h2>
+          <p>{{ t('auth.loginHeroSubtitle') }}</p>
         </div>
 
         <div class="hero-image-placeholder">
-          <img src="/IoT-Verify.png" alt="IoT-Verify Logo" class="hero-logo">
+          <img src="/IoT-Verify.png" :alt="t('app.logoAlt')" class="hero-logo">
         </div>
 
         <div class="stats-row">
           <div class="stat-card">
             <div class="stat-icon"><span class="material-symbols-outlined">speed</span></div>
-            <div class="stat-label">Uptime</div>
+            <div class="stat-label">{{ t('auth.loginStatsUptime') }}</div>
             <div class="stat-value">99.9<span>%</span></div>
           </div>
           <div class="stat-card">
             <div class="stat-icon"><span class="material-symbols-outlined">devices</span></div>
-            <div class="stat-label">Devices</div>
+            <div class="stat-label">{{ t('auth.loginStatsDevices') }}</div>
             <div class="stat-value">1.2k<span>+</span></div>
           </div>
         </div>
@@ -133,20 +140,10 @@ const goToRegister = () => {
 
     <!-- Right Side - Login Form -->
     <div class="form-panel">
-      <div class="mobile-header">
-        <div class="brand-logo">
-          <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-            <path clip-rule="evenodd" d="M24 18.4228L42 11.475V34.3663C42 34.7796 41.7457 35.1504 41.3601 35.2992L24 42V18.4228Z" fill="currentColor" fill-rule="evenodd"></path>
-            <path clip-rule="evenodd" d="M24 8.18819L33.4123 11.574L24 15.2071L14.5877 11.574L24 8.18819ZM9 15.8487L21 20.4805V37.6263L9 32.9945V15.8487ZM27 37.6263V20.4805L39 15.8487V32.9945L27 37.6263ZM25.354 2.29885C24.4788 1.98402 23.5212 1.98402 22.646 2.29885L4.98454 8.65208C3.7939 9.08038 3 10.2097 3 11.475V34.3663C3 36.0196 4.01719 37.5026 5.55962 38.098L22.9197 44.7987C23.6149 45.0671 24.3851 45.0671 25.0803 44.7987L42.4404 38.098C43.9828 37.5026 45 36.0196 45 34.3663V11.475C45 10.2097 44.2061 9.08038 43.0155 8.65208L25.354 2.29885Z" fill="currentColor" fill-rule="evenodd"></path>
-          </svg>
-        </div>
-        <span class="brand-name">IoT Verify</span>
-      </div>
-
       <div class="form-container">
         <div class="form-header">
-          <h3>Welcome Back</h3>
-          <p>Please enter your account details below.</p>
+          <h3>{{ t('auth.welcomeBack') }}</h3>
+          <p>{{ t('auth.welcomeBackSubtitle') }}</p>
         </div>
 
         <el-form
@@ -155,25 +152,27 @@ const goToRegister = () => {
           :rules="rules"
           class="auth-form"
         >
-          <div class="form-group">
-            <label>Phone Number</label>
+          <el-form-item prop="phone" class="form-group auth-form-item">
+            <label>{{ t('auth.phoneNumber') }}</label>
             <div class="input-wrapper">
               <div class="input-icon">
                 <span class="material-symbols-outlined">phone</span>
               </div>
               <el-input
                 v-model="form.phone"
-                placeholder="Please enter your phone number"
+                :placeholder="t('auth.phoneRequired')"
                 class="custom-input"
                 @keyup.enter="handleLogin"
               />
             </div>
-          </div>
+          </el-form-item>
 
-          <div class="form-group">
+          <el-form-item prop="password" class="form-group auth-form-item">
             <div class="label-row">
-              <label>Password</label>
-              <a href="#" class="forgot-link">Forgot password?</a>
+              <label>{{ t('auth.password') }}</label>
+              <button type="button" class="forgot-link" @click="handleForgotPassword">
+                {{ t('auth.forgotPassword') }}
+              </button>
             </div>
             <div class="input-wrapper">
               <div class="input-icon">
@@ -182,30 +181,31 @@ const goToRegister = () => {
               <el-input
                 v-model="form.password"
                 type="password"
-                placeholder="Enter password"
+                :placeholder="t('auth.passwordPlaceholder')"
                 class="custom-input"
                 show-password
                 @keyup.enter="handleLogin"
               />
             </div>
-          </div>
+          </el-form-item>
 
           <div class="form-group">
             <button
               type="button"
               class="submit-btn"
-              :loading="loading"
+              :disabled="loading"
+              :aria-busy="loading"
               @click="handleLogin"
             >
-              Sign In to Console
+              {{ t('auth.signInToConsole') }}
             </button>
           </div>
         </el-form>
 
         <!-- Login Link -->
         <div class="register-link">
-          <span>Don't have an account?</span>
-          <button @click="goToRegister">Sign up</button>
+          <span>{{ t('auth.noAccount') }}</span>
+          <button @click="goToRegister">{{ t('auth.signUp') }}</button>
         </div>
       </div>
     </div>
@@ -215,9 +215,10 @@ const goToRegister = () => {
 <style>
 /* Component-specific overrides for Login page */
 .auth-wrapper {
+  position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   background-color: var(--bg-page);
   overflow: hidden;
 }
@@ -307,42 +308,8 @@ const goToRegister = () => {
   height: 100%;
   justify-content: space-between;
   color: #ffffff;
-}
-
-/* Logo Styles for Login Page */
-.logo {
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  letter-spacing: -0.025em;
-  color: #ffffff;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-}
-
-.logo-sup {
-  font-size: 0.75rem;
-  vertical-align: super;
-}
-
-.brand-logo svg {
-  width: 36px;
-  height: 36px;
-  color: var(--color-primary);
-}
-
-.brand-logo {
-  background: white;
-  padding: 4px;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.brand-name {
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
+  box-sizing: border-box;
+  padding-top: 4.5rem;
 }
 
 .hero-text h2 {
@@ -440,42 +407,14 @@ const goToRegister = () => {
   background-color: var(--bg-form-panel);
   position: relative;
   z-index: 10;
+  box-sizing: border-box;
+  padding-top: 4.5rem;
 }
 
 @media (min-width: 1024px) {
   .form-panel {
     width: var(--form-panel-width);
   }
-}
-
-.mobile-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding-top: 3rem;
-  padding-bottom: 2rem;
-}
-
-@media (min-width: 1024px) {
-  .mobile-header {
-    display: none;
-  }
-}
-
-.mobile-header .brand-logo {
-  width: 32px;
-  height: 32px;
-}
-
-.mobile-header .brand-logo svg {
-  width: 20px;
-  height: 20px;
-}
-
-.mobile-header .brand-name {
-  font-size: 1.25rem;
-  color: var(--text-primary);
 }
 
 .form-container {
@@ -527,10 +466,14 @@ const goToRegister = () => {
 }
 
 .forgot-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
   font-size: 0.75rem;
   font-weight: 700;
   color: var(--color-primary);
   text-decoration: none;
+  cursor: pointer;
 }
 
 .forgot-link:hover {
@@ -549,7 +492,7 @@ const goToRegister = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--icon-muted);
   z-index: 10;
   pointer-events: none;
   transition: color 0.2s;
@@ -562,25 +505,21 @@ const goToRegister = () => {
 .custom-input {
   width: 100%;
   height: 3rem;
-  background-color: var(--bg-input);
-  border: 1px solid var(--border-color);
+  background-color: transparent;
+  border: none;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.875rem;
-  padding-left: 3rem !important; /* pl-12 */
-  padding-right: 1rem;
+  padding: 0 !important;
   transition: all 0.2s;
 }
 
 .custom-input:hover {
-  background-color: var(--bg-input-hover);
-  border-color: var(--border-color-hover);
+  background-color: transparent;
 }
 
 .custom-input:focus {
-  background-color: var(--bg-input-hover);
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1) !important;
+  box-shadow: none !important;
   outline: none;
 }
 
@@ -622,6 +561,19 @@ const goToRegister = () => {
   background-color: var(--color-primary-hover);
   transform: translateY(-1px);
   box-shadow: 0 20px 25px -5px rgba(37, 99, 235, 0.2);
+}
+
+.submit-btn:disabled {
+  opacity: 0.68;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
+}
+
+.submit-btn:disabled:hover {
+  background-color: var(--color-primary);
+  transform: none;
+  box-shadow: none;
 }
 
 .submit-btn:active {

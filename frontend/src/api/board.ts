@@ -11,6 +11,16 @@ import type { PanelActive } from '../types/panel'
 import type { RuleForm } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
 import type { VerificationRequest, VerificationResult, VerificationTask, Trace } from '@/types/verify'
+import type {
+    FaultRule,
+    FixApplyRequest,
+    FixApplyResult,
+    FixRequest,
+    FixResult,
+    FixSuggestion,
+    FixStrategyName,
+    PreferredRange
+} from '@/types/fix'
 import { assertRuleHasTrigger } from '../utils/rule'
 
 // 辅助函数：解包Result（后端返回 { code, message, data }）
@@ -334,10 +344,12 @@ export default {
     // ==== 规约推荐 ====
     recommendSpecifications: async (
         maxRecommendations: number = 5,
-        category: string = 'all'
+        category: string = 'all',
+        signal?: AbortSignal
     ): Promise<{ message: string; count: number; recommendations: any[] }> => {
         return unpack<{ message: string; count: number; recommendations: any[] }>(await api.get('/board/specs/recommend', {
-            params: { maxRecommendations, category }
+            params: { maxRecommendations, category },
+            signal
         }));
     },
 
@@ -345,34 +357,27 @@ export default {
     /**
      * 获取 Trace 的故障规则定位
      */
-    getFaultRules: async (traceId: number): Promise<any[]> => {
-        return unpack<any[]>(await api.get(`/verify/traces/${traceId}/fault-rules`));
+    getFaultRules: async (traceId: number): Promise<FaultRule[]> => {
+        return unpack<FaultRule[]>(await api.get(`/verify/traces/${traceId}/fault-rules`));
     },
 
     /**
      * 获取 Trace 的修复建议
      */
-    fixTrace: async (traceId: number, request?: {
-        strategies?: string[],
-        preferredRanges?: Record<string, any>
-    }): Promise<any> => {
-        return unpack<any>(await api.post(`/verify/traces/${traceId}/fix`, request || {}));
+    fixTrace: async (traceId: number, request?: FixRequest): Promise<FixResult> => {
+        return unpack<FixResult>(await api.post(`/verify/traces/${traceId}/fix`, request || {}));
     },
 
     /**
      * 应用某条修复建议（把用户所见的、已验证的建议原样回传后端落库）。
      * 后端返回落库后的完整规则列表；当前 UI 成功后会重新拉取规则以刷新画布。
      */
-    applyFix: async (traceId: number, strategy: string, suggestion: any,
-                     preferredRanges?: Record<string, any>): Promise<{
-        applied: boolean,
-        strategy: string,
-        message: string,
-        rules: any[]
-    }> => {
+    applyFix: async (traceId: number, strategy: FixStrategyName, suggestion: FixSuggestion,
+                     preferredRanges?: Record<string, PreferredRange>): Promise<FixApplyResult> => {
         // preferredRanges 必须与生成该建议时 /fix 用的一致，否则后端重算无法复现 → 被拒。
-        return unpack<{ applied: boolean, strategy: string, message: string, rules: any[] }>(
-            await api.post(`/verify/traces/${traceId}/fix/apply`, { strategy, suggestion, preferredRanges })
+        const payload: FixApplyRequest = { strategy, suggestion, preferredRanges };
+        return unpack<FixApplyResult>(
+            await api.post(`/verify/traces/${traceId}/fix/apply`, payload)
         );
     }
 }

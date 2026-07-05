@@ -26,7 +26,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | `README.md` | ✅ ready | Project pitch, feature highlights, 5-minute quick start, links into `docs/` | — |
 | `CHANGELOG.md` | ✅ ready | Change history (`Unreleased` + dated entries until a release process exists) | — |
 | `CONTRIBUTING.md` | ✅ ready | Branch/commit conventions, **doc-sync discipline**, language policy | — |
-| `LICENSE` | ⚠️ pending | License text | **Blocked on decision**: no LICENSE file exists. The root README previously said "南京大学挑战杯参赛作品" and `backend/README.md` said "MIT License"; the conflicting MIT claim has been removed pending a confirmed authorization stance. Add a LICENSE file only once that stance is decided. |
+| `LICENSE` | ⚠️ pending | License text | **Blocked on decision**: no LICENSE file exists. The root README previously described the project as a Nanjing University Challenge Cup entry and `backend/README.md` said "MIT License"; the conflicting MIT claim has been removed pending a confirmed authorization stance. Add a LICENSE file only once that stance is decided. |
 
 ### Getting started
 

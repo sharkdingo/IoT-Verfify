@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   visible: boolean
@@ -38,18 +41,18 @@ const handleCancel = () => {
 
           <!-- Content -->
           <div class="logout-content">
-            <h2 class="logout-title">Log Out</h2>
-            <p class="logout-message">Are you sure you want to log out? You'll need to sign in again to access your account.</p>
+            <h2 class="logout-title">{{ t('app.logoutTitle') }}</h2>
+            <p class="logout-message">{{ t('app.logoutMessage') }}</p>
           </div>
 
           <!-- Actions -->
           <div class="logout-actions">
             <button class="logout-btn logout-btn-cancel" @click="handleCancel" :disabled="loading">
-              Cancel
+              {{ t('app.cancel') }}
             </button>
             <button class="logout-btn logout-btn-confirm" @click="handleConfirm" :disabled="loading">
               <span v-if="loading" class="loading-spinner"></span>
-              <span v-else>Log Out</span>
+              <span v-else>{{ t('app.logout') }}</span>
             </button>
           </div>
         </div>

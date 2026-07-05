@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import Header from "./components/Header.vue";
-import ChatView from "./components/ChatView.vue";
-import { ref, computed } from "vue";
+import { ref, computed, defineAsyncComponent } from "vue";
 import { useRoute } from "vue-router";
 import type { StreamCommand } from "@/types/chat";
+import { useChatStore } from "@/stores/chat";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
+const Header = defineAsyncComponent(() => import("./components/Header.vue"));
+const ChatView = defineAsyncComponent(() => import("./components/ChatView.vue"));
+const chatStore = useChatStore();
 
-const isAuthPage = computed(() => {
-  return route.path === '/' || route.path === '/login' || route.path === '/register';
-});
+const showAppHeader = computed(() => !route.meta.public && !route.meta.usesOwnHeader);
+const shouldMountChat = computed(() => !route.meta.public && chatStore.state.visible);
 
 const invokeViewMethod = async (methodName: string) => {
   const view = routerViewRef.value;
@@ -22,8 +23,6 @@ const invokeViewMethod = async (methodName: string) => {
 };
 
 const handleSystemCommand = async (cmd: StreamCommand) => {
-  console.log("App received command:", cmd);
-
   if (cmd.type === 'REFRESH_DATA') {
     const target = cmd.payload?.target as string | undefined;
     if (!target) {
@@ -57,7 +56,7 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
 
 <template>
   <div class="app-layout">
-    <header v-if="!isAuthPage" class="app-header">
+    <header v-if="showAppHeader" class="app-header">
       <Header />
     </header>
 
@@ -68,7 +67,7 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
         </keep-alive>
       </router-view>
 
-      <ChatView @command="handleSystemCommand" />
+      <ChatView v-if="shouldMountChat" @command="handleSystemCommand" />
     </main>
   </div>
 </template>

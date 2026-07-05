@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import boardApi from '@/api/board'
-import type { FixResult, FixSuggestion, FaultRule } from '@/types/fix'
+import type {
+  FaultRule,
+  FixResult,
+  FixStrategyName,
+  FixSuggestion,
+  ParameterAdjustment,
+  PreferredRange
+} from '@/types/fix'
 
 const props = defineProps<{
   visible: boolean
@@ -15,24 +23,154 @@ const emit = defineEmits<{
   'applied': []
 }>()
 
+const { t } = useI18n()
+
 const loading = ref(false)
 const fixResult = ref<FixResult | null>(null)
 const faultRules = ref<FaultRule[]>([])
-const selectedStrategy = ref<string>('parameter')
+const selectedStrategy = ref<FixStrategyName>('parameter')
 const applyingFix = ref(false)
 // 记录本次 /fix 用的 preferredRanges，apply 时原样回传，保证后端重算复现同一建议。
-const lastPreferredRanges = ref<Record<string, any> | undefined>(undefined)
+const lastPreferredRanges = ref<Record<string, PreferredRange> | undefined>(undefined)
 
-const strategyLabels: Record<string, string> = {
-  parameter: 'Parameter Adjustment',
-  condition: 'Condition Adjustment',
-  disable: 'Disable Rules'
+type PreferredRangeRow = {
+  id: string
+  ruleNumber: number | null
+  conditionNumber: number | null
+  lower: number | null
+  upper: number | null
 }
 
-const strategyDescriptions: Record<string, string> = {
-  parameter: 'Modify condition values to prevent rule triggering',
-  condition: 'Add or remove conditions to refine rule scope',
-  disable: 'Completely disable problematic rules'
+const strategyOrder: FixStrategyName[] = ['parameter', 'condition', 'disable']
+
+const strategyIcons: Record<FixStrategyName, string> = {
+  parameter: 'tune',
+  condition: 'checklist',
+  disable: 'block'
+}
+
+const strategyLabels = computed<Record<FixStrategyName, string>>(() => ({
+  parameter: t('app.fixStrategyParameter'),
+  condition: t('app.fixStrategyCondition'),
+  disable: t('app.fixStrategyDisable')
+}))
+
+const strategyDescriptions = computed<Record<FixStrategyName, string>>(() => ({
+  parameter: t('app.fixStrategyParameterDesc'),
+  condition: t('app.fixStrategyConditionDesc'),
+  disable: t('app.fixStrategyDisableDesc')
+}))
+
+const strategyOptions = computed(() => strategyOrder.map(value => ({
+  value,
+  label: strategyLabels.value[value],
+  icon: strategyIcons[value]
+})))
+
+const preferredRangeRows = ref<PreferredRangeRow[]>([])
+
+const newRangeRowId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+const parameterSuggestion = computed(() => {
+  return fixResult.value?.suggestions.find(s => s.strategy === 'parameter') ?? null
+})
+
+const parameterAdjustments = computed(() => {
+  return parameterSuggestion.value?.parameterAdjustments ?? []
+})
+
+const activePreferredRangeCount = computed(() => {
+  return Object.keys(lastPreferredRanges.value ?? {}).length
+})
+
+const isBlank = (value: unknown) => value === null || value === undefined || value === ''
+
+const buildPreferredRanges = (showWarnings = false): Record<string, PreferredRange> | undefined | null => {
+  const ranges: Record<string, PreferredRange> = {}
+  const seen = new Set<string>()
+
+  for (const row of preferredRangeRows.value) {
+    const values = [row.ruleNumber, row.conditionNumber, row.lower, row.upper]
+    if (values.every(isBlank)) {
+      continue
+    }
+    if (values.some(isBlank)) {
+      if (showWarnings) ElMessage.warning(t('app.preferredRangeCompleteFields'))
+      return null
+    }
+
+    const ruleNumber = Number(row.ruleNumber)
+    const conditionNumber = Number(row.conditionNumber)
+    const lower = Number(row.lower)
+    const upper = Number(row.upper)
+
+    if (!Number.isInteger(ruleNumber) || !Number.isInteger(conditionNumber)
+        || ruleNumber < 1 || conditionNumber < 1) {
+      if (showWarnings) ElMessage.warning(t('app.preferredRangePositiveIntegers'))
+      return null
+    }
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower > upper) {
+      if (showWarnings) ElMessage.warning(t('app.preferredRangeLowerBeforeUpper'))
+      return null
+    }
+
+    const key = `r${ruleNumber - 1}_c${conditionNumber - 1}`
+    if (seen.has(key)) {
+      if (showWarnings) ElMessage.warning(t('app.duplicatePreferredRange', { key }))
+      return null
+    }
+    seen.add(key)
+    ranges[key] = { lower, upper }
+  }
+
+  return Object.keys(ranges).length > 0 ? ranges : undefined
+}
+
+const addPreferenceRow = (adjustment?: ParameterAdjustment) => {
+  const nextAdjustment = adjustment ?? parameterAdjustments.value.find(adj => {
+    return !preferredRangeRows.value.some(row =>
+      row.ruleNumber === adj.ruleIndex + 1 && row.conditionNumber === adj.conditionIndex + 1)
+  })
+  preferredRangeRows.value.push({
+    id: newRangeRowId(),
+    ruleNumber: nextAdjustment ? nextAdjustment.ruleIndex + 1 : null,
+    conditionNumber: nextAdjustment ? nextAdjustment.conditionIndex + 1 : null,
+    lower: nextAdjustment?.lowerBound ?? null,
+    upper: nextAdjustment?.upperBound ?? null
+  })
+}
+
+const useAdjustmentAsPreference = (adjustment: ParameterAdjustment) => {
+  const ruleNumber = adjustment.ruleIndex + 1
+  const conditionNumber = adjustment.conditionIndex + 1
+  const existing = preferredRangeRows.value.find(row =>
+    row.ruleNumber === ruleNumber && row.conditionNumber === conditionNumber)
+
+  if (existing) {
+    existing.lower = adjustment.lowerBound
+    existing.upper = adjustment.upperBound
+  } else {
+    addPreferenceRow(adjustment)
+  }
+}
+
+const seedPreferenceRowsFromSuggestion = () => {
+  const adjustments = parameterAdjustments.value
+  if (adjustments.length === 0) {
+    addPreferenceRow()
+    return
+  }
+  preferredRangeRows.value = adjustments.map(adj => ({
+    id: newRangeRowId(),
+    ruleNumber: adj.ruleIndex + 1,
+    conditionNumber: adj.conditionIndex + 1,
+    lower: adj.lowerBound,
+    upper: adj.upperBound
+  }))
+}
+
+const removePreferenceRow = (rowId: string) => {
+  preferredRangeRows.value = preferredRangeRows.value.filter(row => row.id !== rowId)
 }
 
 // Fetch fault localization
@@ -44,7 +182,7 @@ const fetchFaultRules = async () => {
     faultRules.value = await boardApi.getFaultRules(props.traceId)
   } catch (error) {
     console.error('Failed to fetch fault rules:', error)
-    ElMessage.error('Failed to load fault localization')
+    ElMessage.error(t('app.failedToLoadFaultLocalization'))
   } finally {
     loading.value = false
   }
@@ -56,17 +194,29 @@ const fetchFixSuggestions = async () => {
   
   loading.value = true
   try {
-    // 此 UI 目前不带 preferredRanges；若将来支持，记录下来供 apply 复用。
-    lastPreferredRanges.value = undefined
+    const preferredRanges = buildPreferredRanges()
+    if (preferredRanges === null) return
+    lastPreferredRanges.value = preferredRanges
     fixResult.value = await boardApi.fixTrace(props.traceId, {
-      strategies: [selectedStrategy.value]
+      strategies: strategyOrder,
+      preferredRanges
     })
   } catch (error) {
     console.error('Failed to fetch fix suggestions:', error)
-    ElMessage.error('Failed to load fix suggestions')
+    ElMessage.error(t('app.failedToLoadFixSuggestions'))
   } finally {
     loading.value = false
   }
+}
+
+const refreshWithPreferences = async () => {
+  if (buildPreferredRanges(true) === null) return
+  await fetchFixSuggestions()
+}
+
+const clearPreferenceRows = async () => {
+  preferredRangeRows.value = []
+  await fetchFixSuggestions()
 }
 
 // Load all data
@@ -81,32 +231,34 @@ const loadData = async () => {
 const handleOpen = () => {
   fixResult.value = null
   faultRules.value = []
+  preferredRangeRows.value = []
+  lastPreferredRanges.value = undefined
+  selectedStrategy.value = 'parameter'
   loadData()
 }
 
 // Switch strategy
-const switchStrategy = async (strategy: string) => {
+const switchStrategy = (strategy: FixStrategyName) => {
   selectedStrategy.value = strategy
-  await fetchFixSuggestions()
 }
 
 // Apply fix：把当前展示的（已验证的）建议原样回传后端落库，成功后通知父组件刷新规则。
 const applyFix = async (suggestion: FixSuggestion) => {
   if (!props.traceId) return
   if (!suggestion.verified) {
-    ElMessage.warning('This suggestion was not verified and cannot be applied.')
+    ElMessage.warning(t('app.unverifiedFixCannotApply'))
     return
   }
   applyingFix.value = true
   try {
     const result = await boardApi.applyFix(props.traceId, suggestion.strategy, suggestion, lastPreferredRanges.value)
-    ElMessage.success(result.message || 'Fix applied successfully')
+    ElMessage.success(result.message || t('app.fixAppliedSuccessfully'))
     emit('applied')
     emit('update:visible', false)
   } catch (error: any) {
     console.error('Failed to apply fix:', error)
     // 后端会在 board 规则漂移、索引越界等情况下返回带原因的 400，优先展示它。
-    const msg = error?.response?.data?.message || error?.message || 'Failed to apply fix'
+    const msg = error?.response?.data?.message || error?.message || t('app.failedToApplyFix')
     ElMessage.error(msg)
   } finally {
     applyingFix.value = false
@@ -127,7 +279,14 @@ const verifiedCount = computed(() => {
 
 // Get step label
 const getStepLabel = (step: number) => {
-  return step === 0 ? 'Initial State' : `Step ${step}`
+  return step === 0 ? t('app.traceVisualization.initialState') : `${t('app.step')} ${step}`
+}
+
+const getConditionActionLabel = (action?: string) => {
+  if (action === 'remove') return t('app.remove')
+  if (action === 'add') return t('app.add')
+  if (action === 'keep') return t('app.keep')
+  return action || ''
 }
 
 // Watch visible prop
@@ -158,8 +317,8 @@ const closeDialog = () => {
               </span>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-slate-800">Fix Suggestions</h3>
-              <p class="text-sm text-slate-600">{{ verifiedCount > 0 ? `${verifiedCount} solution(s) verified` : 'No verified solutions yet' }}</p>
+              <h3 class="text-xl font-bold text-slate-800">{{ t('app.fixSuggestions') }}</h3>
+              <p class="text-sm text-slate-600">{{ verifiedCount > 0 ? t('app.verifiedSolutionsCount', { count: verifiedCount }) : t('app.noVerifiedSolutionsYet') }}</p>
             </div>
           </div>
           <button @click="closeDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
@@ -176,7 +335,7 @@ const closeDialog = () => {
           <div class="relative mb-4">
             <div class="animate-spin rounded-full h-12 w-12 border-4 border-slate-200 border-t-blue-500"></div>
           </div>
-          <span class="text-slate-600 font-medium">Analyzing trace and generating suggestions...</span>
+          <span class="text-slate-600 font-medium">{{ t('app.analyzingFixSuggestions') }}</span>
         </div>
 
         <div v-else-if="fixResult" class="space-y-4">
@@ -188,10 +347,10 @@ const closeDialog = () => {
                 <span class="material-symbols-outlined text-red-600">warning</span>
               </div>
               <div class="flex-1">
-                <span class="text-lg font-bold text-red-800">Violation Detected</span>
+                <span class="text-lg font-bold text-red-800">{{ t('app.violationDetected') }}</span>
                 <div class="flex items-center gap-2 mt-1">
                   <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded font-mono">{{ fixResult.violatedSpecId }}</span>
-                  <span class="text-sm text-red-600">{{ faultRules.length }} fault rule(s) identified</span>
+                  <span class="text-sm text-red-600">{{ t('app.faultRulesIdentified', { count: faultRules.length }) }}</span>
                 </div>
               </div>
             </div>
@@ -203,7 +362,7 @@ const closeDialog = () => {
             <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
               <div class="flex items-center gap-2">
                 <span class="material-symbols-outlined text-slate-600">tune</span>
-                <span class="font-bold text-slate-800">Fix Strategies</span>
+                <span class="font-bold text-slate-800">{{ t('app.fixStrategies') }}</span>
               </div>
             </div>
             
@@ -211,24 +370,135 @@ const closeDialog = () => {
               <!-- Strategy Buttons -->
               <div class="flex gap-2 mb-4">
                 <button
-                  v-for="(label, key) in strategyLabels"
-                  :key="key"
-                  @click="switchStrategy(key)"
+                  v-for="option in strategyOptions"
+                  :key="option.value"
+                  @click="switchStrategy(option.value)"
                   class="flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2"
-                  :class="selectedStrategy === key 
+                  :class="selectedStrategy === option.value
                     ? 'bg-blue-500 text-white shadow-md' 
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
                 >
                   <span class="material-symbols-outlined text-lg">
-                    {{ key === 'parameter' ? 'tune' : key === 'condition' ? 'checklist' : 'block' }}
+                    {{ option.icon }}
                   </span>
-                  {{ label }}
+                  {{ option.label }}
+                  <span
+                    v-if="fixResult.suggestions.some(s => s.strategy === option.value && s.verified)"
+                    class="material-symbols-outlined text-sm"
+                  >verified</span>
                 </button>
               </div>
 
               <!-- Strategy Description -->
               <div class="text-sm text-slate-500 mb-4 pl-1">
                 {{ strategyDescriptions[selectedStrategy] }}
+              </div>
+
+              <!-- Preferred Ranges -->
+              <div class="border border-slate-200 rounded-lg overflow-hidden mb-4">
+                <div class="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2">
+                  <span class="material-symbols-outlined text-slate-600 text-lg">speed</span>
+                  <span class="font-bold text-sm text-slate-800">{{ t('app.parameterPreferences') }}</span>
+                  <span
+                    v-if="activePreferredRangeCount"
+                    class="ml-auto px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full"
+                  >{{ activePreferredRangeCount }} {{ t('app.active') }}</span>
+                </div>
+                <div class="p-3 space-y-3">
+                  <div v-if="preferredRangeRows.length" class="space-y-2">
+                    <div
+                      v-for="row in preferredRangeRows"
+                      :key="row.id"
+                      class="grid grid-cols-2 sm:grid-cols-[80px_96px_1fr_1fr_36px] gap-2 items-end"
+                    >
+                      <label class="text-xs font-medium text-slate-600">
+                        {{ t('app.ruleName') }}
+                        <input
+                          v-model.number="row.ruleNumber"
+                          type="number"
+                          min="1"
+                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                        />
+                      </label>
+                      <label class="text-xs font-medium text-slate-600">
+                        {{ t('app.condition') }}
+                        <input
+                          v-model.number="row.conditionNumber"
+                          type="number"
+                          min="1"
+                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                        />
+                      </label>
+                      <label class="text-xs font-medium text-slate-600">
+                        {{ t('app.lowerBound') }}
+                        <input
+                          v-model.number="row.lower"
+                          type="number"
+                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                        />
+                      </label>
+                      <label class="text-xs font-medium text-slate-600">
+                        {{ t('app.upperBound') }}
+                        <input
+                          v-model.number="row.upper"
+                          type="number"
+                          class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-blue-400 focus:outline-none"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        :title="t('app.removePreference')"
+                        @click="removePreferenceRow(row.id)"
+                        class="w-9 h-9 rounded-md bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 flex items-center justify-center transition-colors"
+                      >
+                        <span class="material-symbols-outlined text-lg">delete</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="fixResult.unusedPreferredRangeKeys?.length"
+                    class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+                  >
+                    {{ t('app.unusedPreferences') }}: {{ fixResult.unusedPreferredRangeKeys.join(', ') }}
+                  </div>
+
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      @click="seedPreferenceRowsFromSuggestion"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors"
+                    >
+                      <span class="material-symbols-outlined text-base">playlist_add</span>
+                      {{ t('app.useCurrent') }}
+                    </button>
+                    <button
+                      type="button"
+                      @click="addPreferenceRow()"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors"
+                    >
+                      <span class="material-symbols-outlined text-base">add</span>
+                      {{ t('app.add') }}
+                    </button>
+                    <button
+                      type="button"
+                      @click="refreshWithPreferences"
+                      class="px-3 py-2 rounded-md bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <span class="material-symbols-outlined text-base">refresh</span>
+                      {{ t('app.runWithPreferences') }}
+                    </button>
+                    <button
+                      v-if="preferredRangeRows.length || activePreferredRangeCount"
+                      type="button"
+                      @click="clearPreferenceRows"
+                      class="px-3 py-2 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium flex items-center gap-1 transition-colors"
+                    >
+                      <span class="material-symbols-outlined text-base">restart_alt</span>
+                      {{ t('app.reset') }}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Current Suggestion -->
@@ -246,7 +516,7 @@ const closeDialog = () => {
                     </div>
                     <div class="flex-1">
                       <span class="font-bold" :class="currentSuggestion.verified ? 'text-green-800' : 'text-red-800'">
-                        {{ currentSuggestion.verified ? 'Verified Solution' : 'Not Verified' }}
+                        {{ currentSuggestion.verified ? t('app.verifiedSolution') : t('app.notVerified') }}
                       </span>
                       <p class="text-sm" :class="currentSuggestion.verified ? 'text-green-600' : 'text-red-600'">
                         {{ currentSuggestion.description }}
@@ -259,7 +529,7 @@ const closeDialog = () => {
                 <div v-if="currentSuggestion.parameterAdjustments?.length" class="mb-4">
                   <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
                     <span class="material-symbols-outlined text-blue-500">tune</span>
-                    Parameter Adjustments ({{ currentSuggestion.parameterAdjustments.length }})
+                    {{ t('app.parameterAdjustments') }} ({{ currentSuggestion.parameterAdjustments.length }})
                   </div>
                   <div class="space-y-2">
                     <div
@@ -269,10 +539,20 @@ const closeDialog = () => {
                     >
                       <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2">
-                          <span class="px-2 py-0.5 bg-blue-500 text-white text-xs rounded font-bold">Rule {{ adj.ruleIndex + 1 }}</span>
+                          <span class="px-2 py-0.5 bg-blue-500 text-white text-xs rounded font-bold">{{ t('app.ruleNumber', { number: adj.ruleIndex + 1 }) }}</span>
+                          <span class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded font-medium">{{ t('app.conditionNumber', { number: adj.conditionIndex + 1 }) }}</span>
                           <code class="text-sm font-mono text-slate-700">{{ adj.attribute }} {{ adj.relation }}</code>
                         </div>
-                        <span class="text-xs text-slate-500">Range: [{{ adj.lowerBound }}, {{ adj.upperBound }}]</span>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-slate-500">{{ t('app.rangeLabel') }}: [{{ adj.lowerBound }}, {{ adj.upperBound }}]</span>
+                          <button
+                            type="button"
+                            @click="useAdjustmentAsPreference(adj)"
+                            class="px-2 py-1 rounded bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 text-xs font-medium transition-colors"
+                          >
+                            {{ t('app.prefer') }}
+                          </button>
+                        </div>
                       </div>
                       <div class="flex items-center gap-2 mt-2">
                         <span class="px-2 py-1 bg-red-100 text-red-700 rounded font-mono text-sm line-through">{{ adj.originalValue }}</span>
@@ -287,7 +567,7 @@ const closeDialog = () => {
                 <div v-if="currentSuggestion.conditionAdjustments?.length" class="mb-4">
                   <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
                     <span class="material-symbols-outlined text-emerald-500">checklist</span>
-                    Condition Adjustments ({{ currentSuggestion.conditionAdjustments.length }})
+                    {{ t('app.conditionAdjustments') }} ({{ currentSuggestion.conditionAdjustments.length }})
                   </div>
                   <div class="space-y-2">
                     <div
@@ -310,7 +590,7 @@ const closeDialog = () => {
                         class="px-2 py-0.5 rounded text-xs font-medium"
                         :class="adj.action === 'remove' ? 'bg-red-100 text-red-700' : adj.action === 'add' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'"
                       >
-                        {{ adj.action }}
+                        {{ getConditionActionLabel(adj.action) }}
                       </span>
                     </div>
                   </div>
@@ -320,7 +600,7 @@ const closeDialog = () => {
                 <div v-if="currentSuggestion.disabledRuleIndices?.length" class="mb-4">
                   <div class="flex items-center gap-2 mb-2 text-sm font-bold text-slate-700">
                     <span class="material-symbols-outlined text-orange-500">block</span>
-                    Rules to Disable ({{ currentSuggestion.disabledRuleIndices.length }})
+                    {{ t('app.rulesToDisable') }} ({{ currentSuggestion.disabledRuleIndices.length }})
                   </div>
                   <div class="bg-orange-50 border border-orange-200 rounded-lg p-3">
                     <div class="flex flex-wrap gap-2">
@@ -329,7 +609,7 @@ const closeDialog = () => {
                         :key="idx"
                         class="px-3 py-1 bg-orange-500 text-white rounded-lg text-sm font-medium"
                       >
-                        Rule {{ idx + 1 }}
+                        {{ t('app.ruleNumber', { number: idx + 1 }) }}
                       </span>
                     </div>
                   </div>
@@ -347,21 +627,21 @@ const closeDialog = () => {
                   >
                     <span v-if="!applyingFix" class="material-symbols-outlined">check_circle</span>
                     <div v-else class="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                    {{ applyingFix ? 'Applying...' : 'Apply This Fix' }}
+                    {{ applyingFix ? t('app.applying') : t('app.applyThisFix') }}
                   </button>
                 </div>
                 <div v-else class="pt-4 border-t border-slate-200 text-center">
                   <div class="flex items-center justify-center gap-2 text-red-600">
                     <span class="material-symbols-outlined">info</span>
-                    <span class="font-medium">This solution did not pass verification</span>
+                    <span class="font-medium">{{ t('app.solutionNotVerified') }}</span>
                   </div>
-                  <p class="text-xs text-red-500 mt-1">Try another strategy or wait for the system to find a verified solution</p>
+                  <p class="text-xs text-red-500 mt-1">{{ t('app.tryAnotherStrategy') }}</p>
                 </div>
               </div>
 
               <div v-else class="text-center py-8 text-slate-400">
                 <span class="material-symbols-outlined text-4xl mb-2 block">help</span>
-                <p>No fix suggestions available for this strategy</p>
+                <p>{{ t('app.noFixSuggestionsForStrategy') }}</p>
               </div>
             </div>
           </div>
@@ -371,16 +651,16 @@ const closeDialog = () => {
             <div class="bg-slate-50 px-4 py-3 border-b border-slate-200">
               <div class="flex items-center gap-2">
                 <span class="material-symbols-outlined text-slate-600">search</span>
-                <span class="font-bold text-slate-800">Fault Localization</span>
-                <span class="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">{{ faultRules.length }} rule(s)</span>
+                <span class="font-bold text-slate-800">{{ t('app.faultLocalization') }}</span>
+                <span class="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">{{ t('app.rulesCount', { count: faultRules.length }) }}</span>
               </div>
             </div>
             
             <div class="p-4">
               <div v-if="faultRules.length === 0" class="text-center py-8 text-slate-400">
                 <span class="material-symbols-outlined text-4xl mb-2 block">check_circle</span>
-                <p>No fault rules found in counterexample trace</p>
-                <p class="text-xs mt-1">The violation may be caused by device transitions</p>
+                <p>{{ t('app.noFaultRulesFound') }}</p>
+                <p class="text-xs mt-1">{{ t('app.violationMayBeDeviceTransitions') }}</p>
               </div>
               
               <div v-else class="space-y-2">
@@ -397,13 +677,13 @@ const closeDialog = () => {
                     </div>
                     <span v-if="rule.conflicting" class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded flex items-center gap-1">
                       <span class="material-symbols-outlined text-xs">warning</span>
-                      Conflicts
+                      {{ t('app.conflicts') }}
                     </span>
                   </div>
                   <div class="grid grid-cols-3 gap-2 text-xs text-slate-600">
-                    <div>Step: <span class="font-medium">{{ getStepLabel(rule.triggerStep) }}</span></div>
-                    <div>Device: <span class="font-medium">{{ rule.targetDevice }}</span></div>
-                    <div>Action: <span class="font-medium">{{ rule.targetAction }}</span></div>
+                    <div>{{ t('app.step') }}: <span class="font-medium">{{ getStepLabel(rule.triggerStep) }}</span></div>
+                    <div>{{ t('app.device') }}: <span class="font-medium">{{ rule.targetDevice }}</span></div>
+                    <div>{{ t('app.action') }}: <span class="font-medium">{{ rule.targetAction }}</span></div>
                   </div>
                   <div v-if="rule.reason" class="mt-2 text-xs text-slate-500 flex items-start gap-1">
                     <span class="material-symbols-outlined text-xs mt-0.5">info</span>
@@ -418,7 +698,7 @@ const closeDialog = () => {
           <div v-if="fixResult.suggestions.length > 1" class="border border-slate-200 rounded-xl p-4">
             <div class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
               <span class="material-symbols-outlined text-slate-600">layers</span>
-              Other Available Strategies
+              {{ t('app.otherAvailableStrategies') }}
             </div>
             <div class="flex flex-wrap gap-2">
               <button
@@ -432,7 +712,7 @@ const closeDialog = () => {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300'"
               >
                 <span class="material-symbols-outlined text-sm">
-                  {{ s.strategy === 'parameter' ? 'tune' : s.strategy === 'condition' ? 'checklist' : 'block' }}
+                  {{ strategyIcons[s.strategy] }}
                 </span>
                 {{ strategyLabels[s.strategy] }}
                 <span v-if="s.verified" class="material-symbols-outlined text-green-600 text-xs">verified</span>
@@ -451,7 +731,7 @@ const closeDialog = () => {
             class="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2"
           >
             <span class="material-symbols-outlined text-sm">close</span>
-            Close
+            {{ t('app.close') }}
           </button>
         </div>
       </div>

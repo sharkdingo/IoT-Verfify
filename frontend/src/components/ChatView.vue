@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch, computed } from 'vue';
+import { defineAsyncComponent, nextTick, onUnmounted, ref, watch, computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import {
   ArrowsAltOutlined, AudioOutlined,
   CloseOutlined, DeleteOutlined,
@@ -9,61 +10,56 @@ import {
   CopyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
   CodeOutlined, ExperimentOutlined
 } from '@ant-design/icons-vue';
+import 'ant-design-vue/dist/reset.css';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
-
-import { VueMarkdownRenderer } from "vue-mdr";
-import CodeBlock from '@/components/CodeBlock.vue';
-import "katex/dist/katex.min.css";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import java from "@shikijs/langs/java";
 
 import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
 import { ChatStreamError, createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
 import { useChatStore } from '@/stores/chat';
 
 const emit = defineEmits(['command']);
+const { t, locale } = useI18n();
+const ChatMarkdown = defineAsyncComponent(() => import('@/components/ChatMarkdown.vue'));
 
 // 使用全局状态
 const chatStore = useChatStore();
 const visible = computed(() => chatStore.state.visible);
 const isExpanded = computed(() => chatStore.state.isExpanded);
 
-const loadingRegex = /^正在执行指令[.\s\n]*/;
-const presetTasks = [
+const loadingRegex = /^(正在执行指令|Executing command)[.\s\n]*/;
+const presetTasks = computed(() => [
   {
     icon: ThunderboltOutlined,
-    title: '快速创建设备',
-    desc: '一键添加空调、净化器等组件',
-    text: '请帮我创建一个名为"LivingRoom_AC"的空调设备，初始状态为关闭，放置在坐标(100, 100)处。'
+    title: t('app.chat.presetTasks.quickDevice.title'),
+    desc: t('app.chat.presetTasks.quickDevice.desc'),
+    text: t('app.chat.presetTasks.quickDevice.text')
   },
   {
     icon: SafetyCertificateOutlined,
-    title: '系统验证',
-    desc: '检查系统安全性',
-    text: '请对当前的智能家居系统模型进行形式化验证，检查是否存在"空调开启时窗户未关闭"的安全隐患。'
+    title: t('app.chat.presetTasks.verification.title'),
+    desc: t('app.chat.presetTasks.verification.desc'),
+    text: t('app.chat.presetTasks.verification.text')
   },
   {
     icon: ExperimentOutlined,
-    title: '场景测试',
-    desc: '模拟设备交互与规则触发',
-    text: '如果我现在将"PM2.5监测仪"的读数调整为 150，系统中的空气净化器会自动开启吗？'
+    title: t('app.chat.presetTasks.scenario.title'),
+    desc: t('app.chat.presetTasks.scenario.desc'),
+    text: t('app.chat.presetTasks.scenario.text')
   },
   {
     icon: CodeOutlined,
-    title: '脚本生成',
-    desc: '编写设备数据模拟脚本',
-    text: '请写一段 Python 脚本，用于模拟智能家居中的温度传感器数据上报逻辑，要求使用 MQTT 协议。'
+    title: t('app.chat.presetTasks.script.title'),
+    desc: t('app.chat.presetTasks.script.desc'),
+    text: t('app.chat.presetTasks.script.text')
   }
-];
+]);
 
 // State - 使用全局状态，不重复定义
 // visible 和 isExpanded 来自 chatStore (上面已定义)
 const isSidebarOpen = ref(true);
-// 移除深色模式功能，固定使用亮色主题
 const isRecording = ref(false);
 const sessions = ref<ChatSession[]>([]);
 const currentSessionId = ref<string>('');
@@ -77,8 +73,6 @@ const abortController = ref<AbortController | null>(null);
 watch(isExpanded, (newVal) => {
   isSidebarOpen.value = newVal;
 });
-
-const currentTheme = computed((): 'light' | 'dark' => 'light');
 
 // ================= 文本处理辅助函数 =================
 
@@ -126,9 +120,9 @@ const copyFullMessage = async (content: string) => {
   try {
     const cleanContent = content.replace('CallEnd|>', '');
     await navigator.clipboard.writeText(cleanContent);
-    ElMessage.success({ message: '已复制', zIndex: 30000 });
+    ElMessage.success({ message: t('app.chat.copied'), zIndex: 30000 });
   } catch (err) {
-    ElMessage.error('复制失败');
+    ElMessage.error(t('app.chat.copyFailed'));
   }
 };
 
@@ -145,27 +139,27 @@ const formatStreamError = (error: unknown) => {
 const startListening = () => {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    ElMessage.warning('当前浏览器不支持语音识别');
+    ElMessage.warning(t('app.chat.speechUnsupported'));
     return;
   }
   if (isRecording.value) return;
 
   try {
     const recognition = new SpeechRecognition();
-    recognition.lang = 'zh-CN';
+    recognition.lang = locale.value === 'zh-CN' ? 'zh-CN' : 'en-US';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => { isRecording.value = true; ElMessage.info('请开始说话...'); };
+    recognition.onstart = () => { isRecording.value = true; ElMessage.info(t('app.chat.startSpeaking')); };
     recognition.onend = () => { isRecording.value = false; };
-    recognition.onerror = () => { isRecording.value = false; ElMessage.error('语音识别出错'); };
+    recognition.onerror = () => { isRecording.value = false; ElMessage.error(t('app.chat.speechError')); };
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       if (transcript) inputValue.value += transcript;
     };
     recognition.start();
   } catch (e) {
-    ElMessage.error('启动失败');
+    ElMessage.error(t('app.chat.speechStartFailed'));
     isRecording.value = false;
   }
 };
@@ -211,9 +205,9 @@ const onNewChatClick = async () => {
 const handleDelete = async (sessionId: string) => {
   try {
     await ElMessageBox.confirm(
-        '删除后无法恢复，确定要删除该会话吗？',
-        '删除确认',
-        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', lockScroll: false, appendTo: 'body' }
+        t('app.chat.deleteSessionMessage'),
+        t('app.chat.deleteSessionTitle'),
+        { confirmButtonText: t('app.delete'), cancelButtonText: t('app.cancel'), type: 'warning', lockScroll: false, appendTo: 'body' }
     );
     await deleteSession(sessionId);
     sessions.value = sessions.value.filter(s => s.id !== sessionId);
@@ -221,19 +215,15 @@ const handleDelete = async (sessionId: string) => {
       currentSessionId.value = '';
       messages.value = [];
     }
-    ElMessage.success('会话已删除');
-  } catch (error) { if (error !== 'cancel') ElMessage.error('删除失败'); }
+    ElMessage.success(t('app.chat.sessionDeleted'));
+  } catch (error) { if (error !== 'cancel') ElMessage.error(t('app.chat.deleteFailed')); }
 };
 
 const handleSelectSession = async (sessionId: string) => {
   if (currentSessionId.value === sessionId) return;
 
   // 切换会话时，中断上一次的请求
-  if (abortController.value) {
-    abortController.value.abort();
-    abortController.value = null;
-    isLoading.value = false;
-  }
+  abortActiveRequest(false);
 
   currentSessionId.value = sessionId;
   messages.value = [];
@@ -250,16 +240,35 @@ const handleSelectSession = async (sessionId: string) => {
       content: m.content ? m.content.replace('CallEnd|>', '') : ''
     }));
     scrollToBottom(true);
-  } catch (e) { ElMessage.error('网络错误'); } finally { isLoading.value = false; }
+  } catch (e) { ElMessage.error(t('app.chat.networkError')); } finally { isLoading.value = false; }
 };
 
-const handleStop = () => {
+const markActiveAssistantAsCancelled = () => {
+  const lastMessage = messages.value[messages.value.length - 1];
+  if (lastMessage?.role === 'assistant' && !lastMessage.content?.trim()) {
+    lastMessage.content = t('app.chat.cancelled');
+    scrollToBottom(false);
+  }
+};
+
+const abortActiveRequest = (showCancelledMessage = false) => {
   if (abortController.value) {
     abortController.value.abort();
     abortController.value = null;
     isLoading.value = false;
+    if (showCancelledMessage) {
+      markActiveAssistantAsCancelled();
+    }
   }
 };
+
+const handleStop = () => {
+  abortActiveRequest(true);
+};
+
+onUnmounted(() => {
+  abortActiveRequest(false);
+});
 
 const handleSend = async () => {
   const content = inputValue.value.trim();
@@ -282,7 +291,7 @@ const handleSend = async () => {
     // 自动创建新会话
     if (!targetSessionId) {
       const newId = await handleCreateSession();
-      if (!newId) throw new Error('Create session failed');
+      if (!newId) throw new Error(t('app.chat.createSessionFailed'));
       targetSessionId = newId;
       currentSessionId.value = targetSessionId;
     }
@@ -297,8 +306,8 @@ const handleSend = async () => {
       if (!msg) return;
 
       const prefix = error instanceof ChatStreamError && error.serverFrame
-          ? 'Server error'
-          : 'Request failed';
+          ? t('app.chat.serverError')
+          : t('app.chat.requestFailed');
       const errorText = `${prefix}: ${formatStreamError(error)}`;
       if (hasReceivedContent && msg.content) {
         msg.content += `\n\n> ${errorText}`;
@@ -324,7 +333,6 @@ const handleSend = async () => {
             scrollToBottom(false);
           },
           onCommand: (cmd: StreamCommand) => {
-            console.log("收到指令:", cmd);
             emit('command', cmd); // 转发指令emit
           },
           onError: (err: any) => {
@@ -344,7 +352,9 @@ const handleSend = async () => {
     console.error('[Chat] 发送消息失败:', error);
     // 只有在没有收到内容时才显示错误提示
     if (!streamErrorHandled && !hasReceivedContent) {
-      ElMessage.error('发送消息失败: ' + (error instanceof Error ? error.message : String(error)));
+      ElMessage.error(t('app.chat.sendFailedWithReason', {
+        reason: error instanceof Error ? error.message : String(error)
+      }));
     }
     isLoading.value = false;
     abortController.value = null;
@@ -378,7 +388,7 @@ const scrollToBottom = (force = false) => {
         <div :class="['sidebar', { collapsed: !isSidebarOpen }]">
           <div class="sidebar-header">
             <button class="new-chat-btn" @click="onNewChatClick">
-              <PlusOutlined/> <span class="btn-label">新对话</span>
+              <PlusOutlined/> <span class="btn-label">{{ t('app.chat.newChat') }}</span>
             </button>
           </div>
 
@@ -390,7 +400,7 @@ const scrollToBottom = (force = false) => {
                 @click="handleSelectSession(session.id)"
             >
               <MessageOutlined class="item-icon"/>
-              <span class="item-title">{{ session.title || '新对话' }}</span>
+              <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
               <div class="delete-btn-wrapper" @click.stop="handleDelete(session.id)">
                 <DeleteOutlined class="delete-icon"/>
               </div>
@@ -411,7 +421,7 @@ const scrollToBottom = (force = false) => {
                   @click="isSidebarOpen = !isSidebarOpen"
               />
               <div class="header-title">
-                <span class="logo-emoji">💬</span> 在线支持
+                <span class="logo-emoji">💬</span> {{ t('app.chat.onlineSupport') }}
               </div>
             </div>
             <div class="header-controls">
@@ -428,11 +438,11 @@ const scrollToBottom = (force = false) => {
             <div v-if="messages.length === 0" class="welcome-screen">
               <div class="brand-logo">
                 <div class="logo-inner">
-                  <img src="/AI.png" alt="IoT Assistant" class="custom-logo-img" />
+                  <img src="/AI.png" :alt="t('app.aiAssistant')" class="custom-logo-img" />
                 </div>
               </div>
-              <h3 class="welcome-title">IoT-Verify 在线支持</h3>
-              <p class="welcome-subtitle">智能家居系统仿真与验证平台</p>
+              <h3 class="welcome-title">{{ t('app.chat.welcomeTitle') }}</h3>
+              <p class="welcome-subtitle">{{ t('app.chat.welcomeSubtitle') }}</p>
 
               <div class="task-grid">
                 <div
@@ -466,24 +476,17 @@ const scrollToBottom = (force = false) => {
                   </div>
 
                   <article v-else class="msg-body vue-markdown-wrapper">
-                    <VueMarkdownRenderer
-                        :source="getProcessedContent(msg.content) || ''"
-                        :theme="currentTheme"
-                        :code-block-renderer="CodeBlock"
-                        :extra-langs="[java]"
-                        :remark-plugins="[remarkMath]"
-                        :rehype-plugins="[rehypeKatex as any]"
-                    />
+                    <ChatMarkdown :source="getProcessedContent(msg.content) || ''" />
                   </article>
 
                   <div v-if="msg.role === 'assistant' && msg.content && !isLoading" class="msg-actions">
-                    <div class="action-btn-small" @click="copyFullMessage(msg.content)" title="复制全部">
+                    <div class="action-btn-small" @click="copyFullMessage(msg.content)" :title="t('app.chat.copyAll')">
                       <CopyOutlined />
                     </div>
                   </div>
 
                   <div v-if="isLoading && msg.role === 'assistant' && !msg.content" class="thinking-state">
-                    <span class="thinking-text">正在回复</span>
+                    <span class="thinking-text">{{ t('app.chat.thinking') }}</span>
                     <div class="typing-indicator"><span></span><span></span><span></span></div>
                   </div>
                 </div>
@@ -496,7 +499,7 @@ const scrollToBottom = (force = false) => {
             <div class="input-card">
               <a-textarea
                   v-model:value="inputValue"
-                  placeholder="请输入您的问题..."
+                  :placeholder="t('app.chat.inputPlaceholder')"
                   :auto-size="{ minRows: 1, maxRows: 5 }"
                   @keydown.ctrl.enter="handleSend"
                   class="modern-textarea"
@@ -581,58 +584,18 @@ const scrollToBottom = (force = false) => {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-/* 移除深色模式样式，固定使用亮色主题 */
-
-/* ================= 2. 悬浮球 & Tooltip ================= */
-.float-ball {
-  position: fixed;
-  bottom: 30px;
-  right: 30px;
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background: url('/AI.png') center/cover no-repeat;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  z-index: 999;
-}
-.float-ball:hover { transform: translateY(-5px) scale(1.1); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
-.float-ball:active { transform: scale(0.95); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
-
-.float-tooltip {
-  position: absolute;
-  right: 65px; /* 球体左侧 */
-  top: 50%;
-  transform: translateY(-50%) translateX(15px) scale(0.8);
-  background-color: rgba(0, 0, 0, 0.85);
-  color: #fff;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-.float-tooltip::after {
-  content: ''; position: absolute; top: 50%; left: 100%; margin-top: -5px;
-  border-width: 5px; border-style: solid; border-color: transparent transparent transparent rgba(0, 0, 0, 0.85);
-}
-.float-ball:hover .float-tooltip {
-  opacity: 1; visibility: visible;
-  transform: translateY(-50%) translateX(0) scale(1);
-  transition-delay: 0.1s;
+:global(:root[data-theme='dark']) .global-chat-wrapper {
+  --bg-app: #111827;
+  --bg-sidebar: #0f172a;
+  --bg-input: #020617;
+  --text-main: #f8fafc;
+  --text-sub: #94a3b8;
+  --border: #334155;
+  --shadow-card: 0 16px 48px rgba(2, 6, 23, 0.38);
+  --bubble-user-bg: #1e293b;
 }
 
-.ripple { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 1px solid rgba(255,255,255,0.5); animation: ripple 2s infinite; opacity: 0; }
-@keyframes ripple { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0; } }
-
-/* ================= 3. 聊天主面板 (Panel) ================= */
+/* ================= 2. 聊天主面板 (Panel) ================= */
 .chat-panel {
   position: fixed;
   bottom: 90px;

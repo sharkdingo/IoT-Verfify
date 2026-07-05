@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.fixer.localize;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
@@ -664,7 +665,7 @@ public class FaultLocalizer {
     private DeviceSmvData findDevice(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
         if (deviceName == null || deviceSmvMap == null) return null;
         try {
-            return DeviceSmvDataFactory.findDeviceSmvDataStrict(deviceName, deviceSmvMap);
+            return DeviceReferenceResolver.resolve(deviceName, null, deviceSmvMap);
         } catch (Exception e) {
             log.debug("Device lookup failed for '{}': {}", deviceName, e.getMessage());
             return null;

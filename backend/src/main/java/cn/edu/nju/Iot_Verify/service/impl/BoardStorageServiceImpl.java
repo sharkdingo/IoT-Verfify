@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -64,6 +65,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final BoardLayoutMapper boardLayoutMapper;
     private final BoardActiveMapper boardActiveMapper;
     private final DeviceTemplateMapper deviceTemplateMapper;
+    private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
 
     /**
      * User-level write locks for saveRules/saveSpecs to prevent cross-session
@@ -392,6 +394,9 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (rawName == null || rawName.isBlank()) {
             throw new BadRequestException("Template name is required");
         }
+        if (rawName.length() > 100) {
+            throw new BadRequestException("Template name must be at most 100 characters");
+        }
 
         final String canonicalName = rawName;
         if (!SAFE_TEMPLATE_NAME.matcher(canonicalName).matches()) {
@@ -401,6 +406,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         }
         safeDto.setName(canonicalName);
         safeDto.getManifest().setName(canonicalName);
+        deviceTemplateSchemaValidator.validateManifest(canonicalName, safeDto.getManifest());
         validateTemplateManifestForNuSmv(canonicalName, safeDto.getManifest());
 
         boolean duplicated = deviceTemplateRepo.existsByUserIdAndNameIgnoreCase(userId, canonicalName);

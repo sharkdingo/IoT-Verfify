@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 </script>
 
 
@@ -7,12 +9,12 @@
   <el-main class="main-frame">
     <el-result
         icon="error"
-        title="错误"
-        sub-title="您访问的页面不存在"
+        :title="t('app.notFound.title')"
+        :sub-title="t('app.notFound.subtitle')"
     >
       <template #extra>
         <router-link to="/home">
-          <el-button type="primary">回到主页</el-button>
+          <el-button type="primary">{{ t('app.notFound.home') }}</el-button>
         </router-link>
       </template>
     </el-result>

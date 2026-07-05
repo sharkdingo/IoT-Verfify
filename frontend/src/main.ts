@@ -6,9 +6,8 @@ import './styles/tailwind.css'
 import './assets/auth-styles.css'
 import App from './App.vue'
 import {router} from './router';
-import ElementPlus from 'element-plus';
 import { i18n } from './assets/i18n.ts'
-import Antd from 'ant-design-vue';
-import 'ant-design-vue/dist/reset.css';
+import { initializeTheme } from '@/composables/useTheme';
 
-createApp(App).use(ElementPlus).use(router).use(Antd).use(i18n).mount('#app');
+initializeTheme();
+createApp(App).use(router).use(i18n).mount('#app');

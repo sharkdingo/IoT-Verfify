@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
@@ -24,6 +25,8 @@ import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -48,6 +51,7 @@ public class BoardStorageController {
     private final CheckDuplicateRuleTool checkDuplicateRuleTool;
     private final RecommendSpecificationsTool recommendSpecificationsTool;
     private final ObjectMapper objectMapper;
+    private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
 
     @GetMapping("/nodes")
     public Result<List<DeviceNodeDto>> getNodes(@CurrentUser Long userId) {
@@ -124,7 +128,18 @@ public class BoardStorageController {
     }
 
     @PostMapping("/templates")
-    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @NotNull @Valid @RequestBody DeviceTemplateDto dto) {
+    public Result<DeviceTemplateDto> addTemplate(@CurrentUser Long userId, @NotNull @RequestBody JsonNode body) {
+        if (!body.isObject()) {
+            throw new BadRequestException("Template request body must be a JSON object.");
+        }
+        String name = body.path("name").asText(null);
+        deviceTemplateSchemaValidator.validateRawManifest(name, body.get("manifest"));
+        DeviceTemplateDto dto;
+        try {
+            dto = objectMapper.treeToValue(body, DeviceTemplateDto.class);
+        } catch (JsonProcessingException e) {
+            throw new BadRequestException("Template request body is invalid: " + e.getOriginalMessage(), e);
+        }
         return Result.success(boardService.addDeviceTemplate(userId, dto));
     }
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { computed, ref, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { authApi } from '@/api/auth';
 import { useI18n } from 'vue-i18n';
+import PublicHeader from '@/components/common/PublicHeader.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -18,7 +19,7 @@ const form = reactive({
   confirmPassword: ''
 });
 
-const rules = {
+const rules = computed(() => ({
   phone: [
     { required: true, message: t('auth.phoneRequired'), trigger: 'blur' },
     { pattern: /^1[3-9]\d{9}$/, message: t('auth.phoneInvalid'), trigger: 'blur' }
@@ -44,7 +45,7 @@ const rules = {
       trigger: 'blur'
     }
   ]
-};
+}));
 
 const handleRegister = async () => {
   if (!formRef.value) return;
@@ -91,6 +92,12 @@ const goToLogin = () => {
 
 <template>
   <div class="auth-wrapper">
+    <PublicHeader
+      variant="auth"
+      :secondary-label="t('auth.loginNow')"
+      secondary-to="/login"
+    />
+
     <!-- Left Panel (Branding) -->
     <div class="brand-panel">
       <!-- Video Background -->
@@ -113,32 +120,27 @@ const goToLogin = () => {
       </div>
 
       <div class="brand-content">
-        <!-- Logo -->
-        <div class="logo">
-          IoT-Verify<sup class="logo-sup">®</sup>
-        </div>
-
         <!-- Hero Text -->
         <div class="hero-text">
-          <h2>Master Your <br/><span>Smart Ecosystem</span></h2>
-          <p>Join the world's most advanced IoT management platform. Connect, automate, and scale your network with ease.</p>
+          <h2>{{ t('auth.registerHeroTitle') }} <br/><span>{{ t('auth.registerHeroHighlight') }}</span></h2>
+          <p>{{ t('auth.registerHeroSubtitle') }}</p>
         </div>
 
         <!-- Hero Image Placeholder -->
         <div class="hero-image-placeholder">
-             <img src="/IoT-Verify.png" alt="IoT-Verify Logo" class="hero-logo">
+             <img src="/IoT-Verify.png" :alt="t('app.logoAlt')" class="hero-logo">
         </div>
 
         <!-- Stats -->
         <div class="stats-row">
           <div class="stat-card">
             <div class="stat-icon"><span class="material-symbols-outlined">hub</span></div>
-            <div class="stat-label">GLOBAL NETWORK</div>
+            <div class="stat-label">{{ t('auth.registerStatsNetwork') }}</div>
             <div class="stat-value">124 Nodes</div>
           </div>
           <div class="stat-card">
             <div class="stat-icon"><span class="material-symbols-outlined">shield</span></div>
-            <div class="stat-label">SECURE PROTOCOL</div>
+            <div class="stat-label">{{ t('auth.registerStatsSecurity') }}</div>
             <div class="stat-value">AES-256</div>
           </div>
         </div>
@@ -147,20 +149,10 @@ const goToLogin = () => {
 
     <!-- Right Panel (Form) -->
     <div class="form-panel">
-      <!-- Mobile Header -->
-      <div class="mobile-header">
-        <div class="brand-logo">
-          <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-            <path clip-rule="evenodd" d="M24 18.4228L42 11.475V34.3663C42 34.7796 41.7457 35.1504 41.3601 35.2992L24 42V18.4228Z" fill="currentColor" fill-rule="evenodd"></path>
-          </svg>
-        </div>
-        <span class="brand-name">IoT Nexus</span>
-      </div>
-
       <div class="form-container">
         <div class="form-header">
-          <h3>Get Started</h3>
-          <p>Create your management account in minutes.</p>
+          <h3>{{ t('auth.getStarted') }}</h3>
+          <p>{{ t('auth.getStartedSubtitle') }}</p>
         </div>
 
         <el-form
@@ -170,38 +162,38 @@ const goToLogin = () => {
           class="auth-form"
         >
           <!-- Phone -->
-          <div class="form-group">
-            <label>Phone Number</label>
+          <el-form-item prop="phone" class="form-group auth-form-item">
+            <label>{{ t('auth.phoneNumber') }}</label>
             <div class="input-wrapper">
               <div class="input-icon">
                 <span class="material-symbols-outlined">phone</span>
               </div>
               <el-input
                 v-model="form.phone"
-                placeholder="Please enter your phone number"
+                :placeholder="t('auth.phoneRequired')"
                 class="custom-input"
               />
             </div>
-          </div>
+          </el-form-item>
 
           <!-- Username -->
-          <div class="form-group">
-            <label>Full Name</label>
+          <el-form-item prop="username" class="form-group auth-form-item">
+            <label>{{ t('auth.fullName') }}</label>
             <div class="input-wrapper">
               <div class="input-icon">
                 <span class="material-symbols-outlined">person</span>
               </div>
               <el-input
                 v-model="form.username"
-                placeholder="John Doe"
+                :placeholder="t('auth.usernamePlaceholder')"
                 class="custom-input"
               />
             </div>
-          </div>
+          </el-form-item>
 
           <!-- Password -->
-          <div class="form-group">
-            <label>Password</label>
+          <el-form-item prop="password" class="form-group auth-form-item">
+            <label>{{ t('auth.password') }}</label>
             <div class="input-wrapper">
               <div class="input-icon">
                 <span class="material-symbols-outlined">lock</span>
@@ -209,16 +201,16 @@ const goToLogin = () => {
               <el-input
                 v-model="form.password"
                 type="password"
-                placeholder="Enter password"
+                :placeholder="t('auth.passwordPlaceholder')"
                 class="custom-input"
                 show-password
               />
             </div>
-          </div>
+          </el-form-item>
 
           <!-- Confirm Password -->
-          <div class="form-group">
-            <label>Confirm Password</label>
+          <el-form-item prop="confirmPassword" class="form-group auth-form-item">
+            <label>{{ t('auth.confirmPassword') }}</label>
             <div class="input-wrapper">
               <div class="input-icon">
                 <span class="material-symbols-outlined">verified_user</span>
@@ -226,29 +218,30 @@ const goToLogin = () => {
               <el-input
                 v-model="form.confirmPassword"
                 type="password"
-                placeholder="Confirm password"
+                :placeholder="t('auth.confirmPasswordPlaceholder')"
                 class="custom-input"
                 show-password
                 @keyup.enter="handleRegister"
               />
             </div>
-          </div>
+          </el-form-item>
 
           <button
             type="button"
             class="submit-btn"
-            :loading="loading"
+            :disabled="loading"
+            :aria-busy="loading"
             @click="handleRegister"
           >
-            Register Now
+            {{ t('auth.registerNow') }}
           </button>
         </el-form>
 
 
         <!-- Login Link -->
         <div class="footer-link">
-          <span>Already have an account?</span>
-          <button @click="goToLogin">Login here</button>
+          <span>{{ t('auth.haveAccount') }}</span>
+          <button @click="goToLogin">{{ t('auth.loginNow') }}</button>
         </div>
       </div>
       
@@ -261,9 +254,10 @@ const goToLogin = () => {
 
 /* Component-specific overrides for Register page */
 .auth-wrapper {
+  position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   background-color: var(--bg-page);
   overflow: hidden;
 }
@@ -353,45 +347,8 @@ const goToLogin = () => {
   height: 100%;
   justify-content: space-between;
   color: #ffffff;
-}
-
-/* Logo Styles for Register Page */
-.logo {
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  letter-spacing: -0.025em;
-  color: #ffffff;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-}
-
-.logo-sup {
-  font-size: 0.75rem;
-  vertical-align: super;
-}
-
-.brand-logo {
-  background: white;
-  padding: 4px;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-}
-
-.brand-logo svg {
-  width: 20px;
-  height: 20px;
-  color: var(--color-primary);
-}
-
-.brand-name {
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: #ffffff;
+  box-sizing: border-box;
+  padding-top: 4.5rem;
 }
 
 .hero-text h2 {
@@ -487,26 +444,13 @@ const goToLogin = () => {
   background-color: var(--bg-form-panel);
   position: relative;
   z-index: 10;
+  box-sizing: border-box;
+  padding-top: 4.5rem;
 }
 
 @media (min-width: 1024px) {
   .form-panel {
     width: var(--form-panel-width);
-  }
-}
-
-.mobile-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding-top: 3rem;
-  padding-bottom: 2rem;
-}
-
-@media (min-width: 1024px) {
-  .mobile-header {
-    display: none;
   }
 }
 
@@ -563,7 +507,7 @@ const goToLogin = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--icon-muted);
   z-index: 10;
   pointer-events: none;
 }
@@ -571,25 +515,21 @@ const goToLogin = () => {
 .custom-input {
   width: 100%;
   height: 3rem; /* py-2.5 approx 40px + padding */
-  background-color: var(--bg-input);
-  border: 1px solid var(--border-color);
+  background-color: transparent;
+  border: none;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.875rem;
-  padding-left: 2.5rem !important;
-  padding-right: 1rem;
+  padding: 0 !important;
   transition: all 0.2s;
 }
 
 .custom-input:hover {
-  background-color: var(--bg-input-hover);
-  border-color: var(--border-color-hover);
+  background-color: transparent;
 }
 
 .custom-input:focus {
-  background-color: var(--bg-input-hover);
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px var(--color-primary-light) !important;
+  box-shadow: none !important;
   outline: none;
 }
 
@@ -611,6 +551,16 @@ const goToLogin = () => {
 
 .submit-btn:hover {
   background-color: var(--color-primary-hover);
+}
+
+.submit-btn:disabled {
+  opacity: 0.68;
+  cursor: progress;
+  box-shadow: none;
+}
+
+.submit-btn:disabled:hover {
+  background-color: var(--color-primary);
 }
 
 

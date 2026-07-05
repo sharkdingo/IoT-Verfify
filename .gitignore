@@ -28,6 +28,7 @@ Desktop.ini
 # AI / code-review tooling scratch output (runtime logs, scraped papers, review
 # artifacts) — transient, machine-specific, never committed.
 .codex-review/
+tmp-run/
 
 # ======================= Secrets / env ======================
 # Never commit real env files; the *.example templates ARE committed.

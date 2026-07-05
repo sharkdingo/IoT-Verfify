@@ -15,7 +15,10 @@ npm run dev        # http://localhost:3000, proxies /api → http://localhost:80
 ```
 
 Other scripts: `npm run build` (type-check via `vue-tsc` + production build),
-`npm run preview`, `npm run test:unit` (Vitest).
+`npm run preview`, `npm run test:unit` (Vitest), `npm run test:e2e` (Playwright).
+The e2e suite starts the Vite frontend automatically when `E2E_BASE_URL` is unset,
+but it exercises real auth/board APIs, so keep the backend running at
+`E2E_API_BASE_URL` (default `http://127.0.0.1:8080`).
 
 ## Source layout
 

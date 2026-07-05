@@ -23,9 +23,10 @@ DisableFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFinger
 1. **Fault localization** (`FaultLocalizer.localize`): identify which rules were
    triggered in the counterexample trace (a fast pass, no NuSMV invocation). This also
    backs `GET /api/verify/traces/{id}/fault-rules`.
-2. **Strategy attempts**: run the requested strategies in order. The default order,
-   following the Salus paper §5, is `parameter → condition → disable`. A caller may
-   override the list and order via `FixRequestDto.strategies`.
+2. **Strategy attempts**: run the requested strategies in order. The default order is
+   `parameter → condition → disable`: the first two implement Salus §5.1/§5.2, while
+   `disable` is an IoT-Verify fallback. A caller may override the list and order via
+   `FixRequestDto.strategies`.
 3. Each strategy produces at most one **verified** `FixSuggestionDto` (see forward
    verification below). Results accumulate into `FixResultDto`.
 
@@ -52,6 +53,11 @@ closest to the original.
   (refinement iterations), and `FIX_MAX_CANDIDATES_PER_RULE`.
 - Emits `ParameterAdjustment` entries: `{ ruleIndex, conditionIndex, attribute,
   relation, originalValue, newValue, lowerBound, upperBound }`.
+- Witness extraction is covered by a real NuSMV 2.7.1 smoke test on minimal false
+  EF/EG CTL models. CI must install NuSMV 2.7.1 for this check; local runs without
+  NuSMV skip the smoke test. This confirms the core `FROZENVAR` output behavior for
+  that version and environment, but it is not an exhaustive proof for every generated
+  template shape.
 
 ## Strategy 2 — condition adjustment (`ConditionAdjustStrategy`)
 

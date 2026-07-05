@@ -7,8 +7,9 @@ auto-fix.
 Request/response field contract → [../api/verification.md](../api/verification.md).
 SMV generation internals → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-04. Source: `controller/VerificationController.java`,
-`service/impl/VerificationServiceImpl.java`, `component/nusmv/`.
+Verified against code on 2026-07-05. Source: `controller/VerificationController.java`,
+`controller/SimulationController.java`, `service/impl/VerificationServiceImpl.java`,
+`service/impl/SimulationServiceImpl.java`, `component/nusmv/`.
 
 ---
 
@@ -62,11 +63,19 @@ and the client can then request fault localization and fixes — see
 | Sync verify | `POST /api/verify` | `VerificationResultDto` | Small models, immediate result |
 | Async verify | `POST /api/verify/async` | `taskId` (Long) | Large models; poll status/progress, cancellable |
 | Simulation | `POST /api/simulate` | `SimulationResultDto` | Observe N random steps; no spec checking, not persisted |
+| Saved simulation | `POST /api/simulate/traces` | `SimulationTraceDto` | Synchronous simulation plus persisted history entry |
+| Async simulation | `POST /api/simulate/async` | `taskId` (Long) | Runs on the simulation task pool; completed tasks persist a trace and expose `simulationTraceId` |
 
 Async tasks run on a dedicated thread pool; status transitions
 (`complete`/`fail`/`cancel`) are atomic conditional updates to avoid TOCTOU races (see
 `CHANGELOG.md`, 2026-03-03). Progress is exposed 0–100 via
-`GET /api/verify/tasks/{id}/progress`.
+`GET /api/verify/tasks/{id}/progress` and
+`GET /api/simulate/tasks/{id}/progress`.
+
+Simulation history is intentionally separate from verification traces. A plain
+`POST /api/simulate` response is transient, while `POST /api/simulate/traces` and
+completed async simulation tasks store `SimulationTrace` rows that the frontend can
+list, replay, and delete through the history panel.
 
 Full endpoint list: [../api/rest-endpoints.md](../api/rest-endpoints.md). Field-level
 shapes: [../api/verification.md](../api/verification.md).

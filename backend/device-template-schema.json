@@ -1,6 +1,7 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "IoT Device Template Schema",
-  "description": "Comprehensive schema for IoT device templates with NuSMV validation constraints. NOTE: This schema serves as design documentation and offline validation reference. Runtime validation is enforced through DTO annotations and BoardStorageServiceImpl.validateTemplateManifestForNuSmv(). Runtime DTO uses @JsonIgnoreProperties(ignoreUnknown=true), so unknown fields are silently ignored even if this schema forbids them.",
+  "description": "Canonical schema for IoT device template manifests. backend/device-template-schema.json is the authoritative structural contract for custom template import, AI add_template, and default template resources; runtime then applies DTO validation, BoardStorageServiceImpl.validateTemplateManifestForNuSmv(), and a NuSMV probe pre-check for semantic constraints.",
   "type": "object",
   "required": ["Name"],
   "properties": {
@@ -16,7 +17,7 @@
     },
     "Modes": {
       "type": "array",
-      "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode']). Runtime strips spaces before validation (BoardStorageServiceImpl:560), so 'Thermostat Mode' is accepted and becomes 'ThermostatMode'. Schema pattern validates the post-strip form; raw inputs with spaces should be pre-processed before schema validation.",
+      "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode']). Because this schema validates raw manifests at the API/AI/default-template boundary, each mode must already be a valid NuSMV identifier before submission; use 'ThermostatMode' rather than 'Thermostat Mode'. Runtime NuSMV validation repeats normalization checks as a defensive semantic pass.",
       "items": {
         "type": "string",
         "minLength": 1,
@@ -339,7 +340,7 @@
           "EndState": {
             "type": "string",
             "minLength": 1,
-            "description": "Target state after API call. All 45 existing templates have non-empty EndState. NOTE: Runtime DTO has no @NotNull constraint, so null can reach FaultLocalizer (handled permissively). For multi-mode: semicolon-separated. Partial changes like ';cool' or 'auto;' allowed."
+            "description": "Target state after API call. All 45 existing templates have non-empty EndState. For multi-mode: semicolon-separated. Partial changes like ';cool' or 'auto;' allowed."
           },
           "Trigger": {
             "type": "null",
@@ -347,7 +348,7 @@
           },
           "Assignments": {
             "type": "array",
-            "description": "Variable assignments when API is called. NOTE: Unlike Transitions, API assignments are NOT validated by SmvModelValidator.validateAssignments() at generation time.",
+            "description": "Variable assignments when API is called. The canonical schema validates the assignment shape; NuSMV generation applies additional semantic checks where supported.",
             "items": {
               "type": "object",
               "required": ["Attribute", "Value"],
@@ -405,5 +406,5 @@
     }
   },
   "additionalProperties": false,
-  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words will be escaped with '_' prefix. 4) Trust/Privacy values normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var). 9) This schema is stricter than runtime: DTO uses @JsonIgnoreProperties(ignoreUnknown=true) and lacks @NotNull on API.EndState. The schema documents intended constraints, not enforced ones. 10) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 11) Transition.EndState is optional: when absent, no state change occurs but assignments (e.g., variable resets) still execute (see Clock.json). 12) API Assignments are NOT validated by SmvModelValidator (only Transition assignments are). 13) Known schema-vs-runtime gaps that cannot be expressed in JSON Schema: (a) Reserved word checks are case-sensitive in schema but case-insensitive at runtime (e.g., 'module' and 'MODULE' are both rejected at runtime but schema only blocks the exact-case entries in the enum). (b) Modes pattern validates the post-strip (normalized) form only; if validating raw user input directly against this schema, mode names with spaces will be rejected even though runtime accepts them. (c) APIs.Trigger is constrained to null in schema as a design rule; runtime SmvModelValidator will process non-null API triggers without error but they have no generator semantics."
+  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words are rejected case-insensitively by runtime validation. 4) Trust/Privacy values are normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var). 9) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 10) Transition.EndState is optional: when absent, no state change occurs but assignments (e.g., variable resets) still execute (see Clock.json). 11) Schema limits that are intentionally paired with runtime checks: (a) Reserved word checks are described in schema and enforced case-insensitively at runtime. (b) Modes must be legal identifiers in raw manifests; runtime repeats mode normalization/collision checks as a defensive semantic pass. (c) APIs.Trigger is constrained to null because API triggers have no generator semantics."
 }

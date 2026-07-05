@@ -2,6 +2,16 @@ import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router';
 
 const TOKEN_KEY = 'iot_verify_token';
 
+const normalizeDirectPathForHashHistory = () => {
+  if (window.location.hash || window.location.pathname === '/' || window.location.pathname.endsWith('/index.html')) {
+    return;
+  }
+
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  const search = window.location.search || '';
+  window.history.replaceState(null, '', `/#${path}${search}`);
+};
+
 // 同步检查是否已登录（避免响应式状态时序问题）
 const checkAuthSync = (): boolean => {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -23,12 +33,14 @@ const clearInvalidTokens = () => {
   }
 };
 
+normalizeDirectPathForHashHistory();
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'landing',
     component: () => import('../views/Landing.vue'),
-    meta: { title: 'Velorah', public: true }
+    meta: { title: 'IoT-Verify', public: true }
   },
   {
     path: '/login',
@@ -46,7 +58,7 @@ const routes: RouteRecordRaw[] = [
     path: '/board',
     name: 'board',
     component: () => import('../views/Board.vue'),
-    meta: { title: 'IoT-Verify' }
+    meta: { title: 'IoT-Verify', usesOwnHeader: true }
   },
   {
     path: '/create-template',

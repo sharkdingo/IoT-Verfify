@@ -1,25 +1,28 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { useAuth } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
 import { authApi } from '@/api/auth';
 import LogoutConfirm from './LogoutConfirm.vue';
 import { RobotOutlined } from '@ant-design/icons-vue';
+import LanguageToggle from '@/components/common/LanguageToggle.vue';
+import ThemeToggle from '@/components/common/ThemeToggle.vue';
+import { useTheme } from '@/composables/useTheme';
 
 const router = useRouter();
+const { t } = useI18n();
 const { state, logout, getUser } = useAuth();
 const { toggleChat } = useChatStore();
+const { theme } = useTheme();
 const showLogoutConfirm = ref(false);
-
-// 移除主题切换功能，固定使用亮色主题
-onMounted(() => {
-  document.documentElement.setAttribute('data-theme', 'light');
-});
+type ControlTone = 'light' | 'dark';
 
 // 用户相关
 const currentUser = computed(() => getUser());
 const isLoggedIn = computed(() => state.isLoggedIn);
+const headerControlTone = computed<ControlTone>(() => theme.value === 'dark' ? 'dark' : 'light');
 
 const handleLogout = async () => {
   showLogoutConfirm.value = true;
@@ -53,7 +56,7 @@ const goToRegister = () => {
         <div class="brand-container" @click="router.push('/board')">
           <img
             src="/IoT-Verify.png"
-            alt="IoT-Verify Logo"
+            :alt="t('app.logoAlt')"
             class="brand-logo"
           />
           <h1 class="brand-text">IoT-Verify</h1>
@@ -61,6 +64,9 @@ const goToRegister = () => {
       </el-col>
 
       <el-col :span="20" class="header-right">
+        <ThemeToggle :tone="headerControlTone" compact />
+        <LanguageToggle :tone="headerControlTone" compact />
+
         <!-- 登录状态显示 -->
         <template v-if="isLoggedIn">
           <!-- AI 助手按钮 -->
@@ -71,7 +77,7 @@ const goToRegister = () => {
             @click="toggleChat"
           >
             <RobotOutlined />
-            <span> 智能助手</span>
+            <span>{{ t('app.aiAssistant') }}</span>
           </el-button>
 
           <div class="user-info">
@@ -83,7 +89,7 @@ const goToRegister = () => {
             </div>
             <div class="user-details">
               <span class="username">{{ currentUser?.username }}</span>
-              <span class="user-role">User</span>
+              <span class="user-role">{{ t('app.userRole') }}</span>
             </div>
           </div>
           
@@ -94,7 +100,7 @@ const goToRegister = () => {
             @click="handleLogout"
           >
             <span class="material-symbols-outlined text-lg">logout</span>
-            <span>Logout</span>
+            <span>{{ t('app.logout') }}</span>
           </el-button>
         </template>
         
@@ -107,7 +113,7 @@ const goToRegister = () => {
             @click="goToLogin"
           >
             <span class="material-symbols-outlined text-lg">login</span>
-            <span>Login</span>
+            <span>{{ t('auth.login') }}</span>
           </el-button>
 
           <el-button
@@ -118,7 +124,7 @@ const goToRegister = () => {
             @click="goToRegister"
           >
             <span class="material-symbols-outlined text-lg">person_add</span>
-            <span>Register</span>
+            <span>{{ t('auth.register') }}</span>
           </el-button>
         </template>
 
@@ -335,25 +341,4 @@ export default {
   transition: all 0.2s ease;
 }
 
-.lang-btn {
-  font-weight: 600;
-  letter-spacing: 1px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--iot-lang-btn-border);
-  background: var(--iot-lang-btn-bg);
-  color: var(--iot-lang-btn-text);
-  box-shadow: var(--iot-lang-btn-shadow);
-  transition: all 0.18s ease-out;
-}
-
-.lang-btn:hover {
-  background: var(--iot-lang-btn-hover-bg);
-  box-shadow: 0 0.4rem 1.1rem rgba(15, 23, 42, 0.3);
-  transform: translateY(-1px);
-}
-
-.lang-btn:active {
-  transform: translateY(0);
-}
 </style>

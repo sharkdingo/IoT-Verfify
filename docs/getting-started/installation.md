@@ -83,7 +83,7 @@ npm install
 npm run dev
 ```
 
-The dev server listens on `http://localhost:3000` and proxies `/api` to `http://localhost:8080` (configured in `frontend/vite.config.ts`). npm scripts: `dev` (Vite dev server), `build` (`vue-tsc` type-check + production build), `preview` (serve the build), `test:unit` (Vitest).
+The dev server listens on `http://localhost:3000` and proxies `/api` to `http://localhost:8080` (configured in `frontend/vite.config.ts`). npm scripts: `dev` (Vite dev server), `build` (`vue-tsc` type-check + production build), `preview` (serve the build), `test:unit` (Vitest), and `test:e2e` (Playwright). The Playwright suite starts Vite automatically when `E2E_BASE_URL` is unset, but it uses real backend APIs; keep the backend running at `E2E_API_BASE_URL` (default `http://127.0.0.1:8080`).
 
 For the frontend source layout see [../architecture/overview.md](../architecture/overview.md#frontend-layout); for how the frontend calls the backend see [../guides/frontend-integration.md](../guides/frontend-integration.md).
 

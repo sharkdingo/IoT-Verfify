@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Trace } from '../types/verify'
 
 const props = defineProps<{
@@ -11,6 +12,8 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
   'highlight-trace': [trace: Trace | null]
 }>()
+
+const { t } = useI18n()
 
 // 格式化规约为易读格式
 const formatSpec = (specJson: string): string => {
@@ -208,8 +211,8 @@ onBeforeUnmount(() => {
             <span class="material-symbols-outlined text-white">warning</span>
           </div>
           <div>
-            <h3 class="text-lg font-bold text-white">Counterexample Trace</h3>
-            <p class="text-sm text-white/80">反例路径可视化</p>
+            <h3 class="text-lg font-bold text-white">{{ t('app.traceVisualization.title') }}</h3>
+            <p class="text-sm text-white/80">{{ t('app.traceVisualization.subtitle') }}</p>
           </div>
         </div>
         <button @click="close" class="p-2 hover:bg-white/20 rounded-lg transition-colors">
@@ -221,7 +224,9 @@ onBeforeUnmount(() => {
       <div class="flex-1 overflow-hidden flex min-h-[500px]">
         <!-- 左侧：Trace 列表 -->
         <div class="w-64 border-r border-slate-200 p-4 overflow-y-auto bg-slate-50">
-          <h4 class="text-xs font-bold text-slate-500 uppercase mb-3">Violations ({{ traces.length }})</h4>
+          <h4 class="text-xs font-bold text-slate-500 uppercase mb-3">
+            {{ t('app.traceVisualization.violations') }} ({{ traces.length }})
+          </h4>
           <div class="space-y-2">
             <button
               v-for="(trace, index) in traces"
@@ -242,7 +247,7 @@ onBeforeUnmount(() => {
                 <span class="text-sm font-bold text-slate-700 truncate">{{ trace.violatedSpecId }}</span>
               </div>
               <div class="text-xs text-slate-500 pl-8">
-                {{ trace.states?.length || 0 }} states
+                {{ t('app.statesCount', { count: trace.states?.length || 0 }) }}
               </div>
             </button>
           </div>
@@ -254,7 +259,7 @@ onBeforeUnmount(() => {
           <div class="p-4 border-b border-slate-200 bg-white">
             <div class="flex items-center justify-between mb-3">
               <div class="flex items-center gap-2">
-                <span class="text-sm font-bold text-slate-700">State Sequence</span>
+                <span class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.stateSequence') }}</span>
                 <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
                   {{ selectedStateIndex + 1 }} / {{ totalStates }}
                 </span>
@@ -268,7 +273,7 @@ onBeforeUnmount(() => {
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
                 >
                   <span class="material-symbols-outlined text-sm">{{ isPlaying ? 'stop' : 'play_arrow' }}</span>
-                  {{ isPlaying ? 'Stop' : 'Play' }}
+                  {{ isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play') }}
                 </button>
               </div>
             </div>
@@ -321,26 +326,34 @@ onBeforeUnmount(() => {
               <!-- 当前状态标题 -->
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="text-lg font-bold text-slate-800">State {{ selectedStateIndex + 1 }}</span>
+                  <span class="text-lg font-bold text-slate-800">
+                    {{ t('app.traceVisualization.state', { index: selectedStateIndex + 1 }) }}
+                  </span>
                   <span 
                     v-if="selectedStateIndex === totalStates - 1"
                     class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full animate-pulse"
                   >
-                    Violation Point!
+                    {{ t('app.traceVisualization.violationPoint') }}
                   </span>
                   <!-- 显示攻击强度 -->
                   <span v-if="intensity !== null" class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full flex items-center gap-1">
                     <span class="material-symbols-outlined text-xs">warning</span>
-                    Intensity: {{ intensity }}
+                    {{ t('app.traceVisualization.intensity') }}: {{ intensity }}
                   </span>
                   <!-- 显示被攻击设备 -->
                   <span v-if="hasAttackedDevices" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1 animate-pulse">
                     <span class="material-symbols-outlined text-xs">security</span>
-                    Attacked!
+                    {{ t('app.traceVisualization.attackedBang') }}
                   </span>
                 </div>
                 <span class="text-sm text-slate-500">
-                  {{ selectedStateIndex === 0 ? 'Initial State' : selectedStateIndex === totalStates - 1 ? 'Violation State' : 'Intermediate State' }}
+                  {{
+                    selectedStateIndex === 0
+                      ? t('app.traceVisualization.initialState')
+                      : selectedStateIndex === totalStates - 1
+                        ? t('app.traceVisualization.violationState')
+                        : t('app.traceVisualization.intermediateState')
+                  }}
                 </span>
               </div>
 
@@ -348,7 +361,7 @@ onBeforeUnmount(() => {
               <div v-if="currentState.envVariables && currentState.envVariables.length > 0" class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <div class="text-xs font-semibold text-amber-600 mb-2 uppercase flex items-center gap-1">
                   <span class="material-symbols-outlined text-sm">terrain</span>
-                  Environment Variables
+                  {{ t('app.traceVisualization.environmentVariables') }}
                 </div>
                 <div class="flex flex-wrap gap-2">
                   <span
@@ -366,7 +379,7 @@ onBeforeUnmount(() => {
               <div v-if="hasAttackedDevices" class="mt-3 p-3 bg-red-50 border border-red-300 rounded-lg">
                 <div class="text-xs font-semibold text-red-600 mb-2 uppercase flex items-center gap-1">
                   <span class="material-symbols-outlined text-sm">security</span>
-                  Attacked Devices
+                  {{ t('app.traceVisualization.attackedDevices') }}
                 </div>
                 <div class="flex flex-wrap gap-2">
                   <span
@@ -383,7 +396,9 @@ onBeforeUnmount(() => {
 
               <!-- 违反的规约详情 -->
               <div v-if="selectedStateIndex === totalStates - 1 && formattedSpec" class="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <div class="text-xs font-semibold text-red-600 mb-1 uppercase">Violated Specification</div>
+                <div class="text-xs font-semibold text-red-600 mb-1 uppercase">
+                  {{ t('app.traceVisualization.violatedSpecification') }}
+                </div>
                 <div class="text-sm text-slate-800 font-mono bg-white p-3 rounded border border-red-200">
                   {{ formattedSpec }}
                 </div>
@@ -405,7 +420,7 @@ onBeforeUnmount(() => {
                   <!-- 被攻击设备标识 -->
                   <div v-if="isDeviceAttacked(device)" class="flex items-center gap-1 mb-2 text-red-600 text-xs font-bold uppercase">
                     <span class="material-symbols-outlined text-sm">warning</span>
-                    Attacked
+                    {{ t('app.traceVisualization.attacked') }}
                   </div>
                   <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center gap-2">
@@ -427,7 +442,9 @@ onBeforeUnmount(() => {
 
                   <!-- 变量 -->
                   <div v-if="device.variables && device.variables.length > 0" class="mt-3 pt-3 border-t border-slate-200">
-                    <div class="text-xs font-semibold text-slate-500 mb-2 uppercase">Variables</div>
+                    <div class="text-xs font-semibold text-slate-500 mb-2 uppercase">
+                      {{ t('app.traceVisualization.variables') }}
+                    </div>
                     <div class="flex flex-wrap gap-2">
                       <span
                         v-for="variable in device.variables"
@@ -442,7 +459,9 @@ onBeforeUnmount(() => {
 
                   <!-- 信任状态 -->
                   <div v-if="device.trustPrivacy && device.trustPrivacy.length > 0" class="mt-3 pt-3 border-t border-slate-200">
-                    <div class="text-xs font-semibold text-slate-500 mb-2 uppercase">Trust & Privacy</div>
+                    <div class="text-xs font-semibold text-slate-500 mb-2 uppercase">
+                      {{ t('app.traceVisualization.trustPrivacy') }}
+                    </div>
                     <div class="flex flex-wrap gap-2">
                       <span
                         v-for="tp in device.trustPrivacy"
@@ -453,7 +472,7 @@ onBeforeUnmount(() => {
                         <span class="material-symbols-outlined text-sm">
                           {{ tp.trust ? 'verified' : 'warning' }}
                         </span>
-                        {{ tp.name }}: {{ tp.trust ? 'trusted' : 'untrusted' }}
+                        {{ tp.name }}: {{ tp.trust ? t('app.traceVisualization.trusted') : t('app.traceVisualization.untrusted') }}
                       </span>
                     </div>
                   </div>
@@ -467,7 +486,7 @@ onBeforeUnmount(() => {
                   class="w-full py-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-lg text-sm font-bold transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
                 >
                   <span class="material-symbols-outlined">highlight</span>
-                  Highlight on Canvas
+                  {{ t('app.traceVisualization.highlightOnCanvas') }}
                 </button>
               </div>
             </div>
@@ -476,7 +495,7 @@ onBeforeUnmount(() => {
             <div v-else class="flex items-center justify-center h-full text-slate-400">
               <div class="text-center">
                 <span class="material-symbols-outlined text-4xl mb-2">info</span>
-                <p>No state data available</p>
+                <p>{{ t('app.traceVisualization.noStateData') }}</p>
               </div>
             </div>
           </div>

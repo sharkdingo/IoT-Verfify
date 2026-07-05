@@ -9,7 +9,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { authApi } from '@/api/auth'
 import LogoutConfirmDialog from '@/components/LogoutConfirmDialog.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
 
 // Types
@@ -19,6 +19,8 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification } from '../types/spec'
+import type { Trace } from '@/types/verify'
+import type { SimulationTraceSummary } from '@/types/simulation'
 // Panel types removed
 
 // Utils
@@ -31,6 +33,7 @@ import {
 import { assertRuleHasTrigger, getLinkPoints } from '../utils/rule'
 import { cacheManifestForNode, getCachedManifestForNode, hydrateManifestCacheForNodes } from '@/utils/templateCache'
 import { canOpenTracePlayback, deriveTraceContext } from '@/utils/traceView'
+import { buildSimulationRequestPayload, buildVerificationRequestPayload } from '@/utils/modelRequest'
 
 // Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -48,6 +51,9 @@ import SystemInspector from '../components/SystemInspector.vue'
 import RuleBuilderDialog from '../components/RuleBuilderDialog.vue'
 import SimulationTimeline from '../components/SimulationTimeline.vue'
 import FixResultDialog from '../components/FixResultDialog.vue'
+import TraceHistoryPanel from '../components/TraceHistoryPanel.vue'
+import LanguageToggle from '@/components/common/LanguageToggle.vue'
+import ThemeToggle from '@/components/common/ThemeToggle.vue'
 
 // Styles
 import '../styles/board.css'
@@ -145,7 +151,7 @@ const assertRulesHaveTriggers = (candidateRules: RuleForm[]): boolean => {
     candidateRules.forEach((rule, index) => assertRuleHasTrigger(rule, index))
     return true
   } catch (error: any) {
-    ElMessage.warning({ message: error.message || 'Rule trigger source is required', type: 'warning' })
+    ElMessage.warning({ message: error.message || t('app.ruleTriggerSourceRequired'), type: 'warning' })
     return false
   }
 }
@@ -169,19 +175,24 @@ const notifyVerificationOutcome = (result: any) => {
   const counts = getGenerationWarningCounts(result)
   if (counts.total > 0) {
     const outcome = result?.safe
-      ? 'Verification passed'
-      : `Verification failed: Found ${result?.traces?.length || 0} violations`
+      ? t('app.verificationPassed')
+      : t('app.verificationFailedWithViolations', { count: result?.traces?.length || 0 })
     ElMessage.warning({
-      message: `${outcome}; ${counts.total} generation warning(s): ${counts.disabledRuleCount} disabled rule(s), ${counts.skippedSpecCount} skipped spec(s)`,
+      message: t('app.generationWarningSummary', {
+        outcome,
+        total: counts.total,
+        disabledRuleCount: counts.disabledRuleCount,
+        skippedSpecCount: counts.skippedSpecCount
+      }),
       type: 'warning'
     })
     return
   }
 
   if (result?.safe) {
-    ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
+    ElMessage.success({ message: t('app.verificationPassedSystemSafe'), type: 'success' })
   } else {
-    ElMessage.warning({ message: `Verification failed: Found ${result?.traces?.length || 0} violations`, type: 'warning' })
+    ElMessage.warning({ message: t('app.verificationFailedWithViolations', { count: result?.traces?.length || 0 }), type: 'warning' })
   }
 }
 
@@ -486,7 +497,6 @@ const handleAISuggestionAddDevice = async (event: Event) => {
   // 创建设备实例（失败会回滚并抛错，失败提示已弹出）
   try {
     await createDeviceInstanceAt(tpl, { x, y })
-    console.log(`AI Suggestion: Added device ${tpl.manifest.Name} at (${x}, ${y})`)
   } catch { /* 已回滚并提示 */ }
 }
 
@@ -519,7 +529,7 @@ const updateInternalVariableEdgePositions = () => {
 const handleAddRule = async (payload: RuleForm) => {
   const { sources, toId, toApi } = payload
   if (!sources || !sources.length || !toId || !toApi) {
-    ElMessage.warning(t('app.fillAllRuleFields') || '请完整选择源/目标设备及 API')
+    ElMessage.warning(t('app.fillAllRuleFields'))
     return
   }
   if (!assertRulesHaveTriggers([payload])) {
@@ -549,11 +559,11 @@ const handleAddRule = async (payload: RuleForm) => {
       // 动态生成 edges
       edges.value = generateEdgesFromRules()
 
-      ElMessage.success(t('app.addRuleSuccess') || '添加规则成功')
+      ElMessage.success(t('app.addRuleSuccess'))
     } catch (e: any) {
       console.error('saveRules error', e)
       // 如果后端返回了错误信息，显示它
-      const errorMsg = e?.response?.data?.message || e?.message || '保存规则失败'
+      const errorMsg = e?.response?.data?.message || e?.message || t('app.saveRulesFailed')
       ElMessage.error(errorMsg)
     }
   }
@@ -580,7 +590,7 @@ const applyRecommendation = async (rec: RuleRecommendation) => {
 
     // 验证必要字段
     if (!newRule.sources.length || !newRule.toId || !newRule.toApi) {
-      ElMessage.warning('Invalid recommendation format')
+      ElMessage.warning(t('app.invalidRecommendationFormat'))
       return
     }
     if (!assertRulesHaveTriggers([newRule])) {
@@ -595,12 +605,12 @@ const applyRecommendation = async (rec: RuleRecommendation) => {
     rules.value = allRules
     edges.value = generateEdgesFromRules()
 
-    ElMessage.success('Rule applied successfully')
+    ElMessage.success(t('app.ruleAppliedSuccessfully'))
     
     // 不关闭面板，允许继续应用更多规则
   } catch (e: any) {
     console.error('applyRecommendation error', e)
-    const errorMsg = e?.response?.data?.message || e?.message || 'Failed to apply rule'
+    const errorMsg = e?.response?.data?.message || e?.message || t('app.failedToApplyRule')
     ElMessage.error(errorMsg)
   }
 }
@@ -733,7 +743,7 @@ const renameRuleDeviceRefs = (oldLabel: string, newLabel: string): boolean => {
 const handleRenameDevice = async (nodeId: string, newLabel: string) => {
   const exists = nodes.value.some(n => n.label === newLabel && n.id !== nodeId)
   if (exists) {
-    ElMessage.error(t('app.nameExists') || '该名称已存在，请换一个')
+    ElMessage.error(t('app.nameExists'))
     return
   }
 
@@ -754,7 +764,7 @@ const handleRenameDevice = async (nodeId: string, newLabel: string) => {
       const specsToSave = specsChanged ? JSON.parse(JSON.stringify(specifications.value)) : undefined
       const rulesToSave = rulesChanged ? JSON.parse(JSON.stringify(rules.value)) : undefined
       await boardApi.saveBoardBatch({ nodes: nodesToSave, rules: rulesToSave, specs: specsToSave })
-      ElMessage.success(t('app.renameSuccess') || '重命名成功')
+      ElMessage.success(t('app.renameSuccess'))
     } catch {
       // 单事务保证未落库，回滚本地 node label / rules / specs 即完全一致。
       node.label = previousLabel
@@ -764,7 +774,7 @@ const handleRenameDevice = async (nodeId: string, newLabel: string) => {
       if (rulesChanged) {
         rules.value = rulesSnapshot
       }
-      ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
+      ElMessage.error(t('app.saveNodesFailed'))
     }
   }
 }
@@ -828,10 +838,10 @@ const forceDeleteNode = async (nodeId: string) => {
     await boardApi.saveBoardBatch({ nodes: nodesToSave, rules: rulesToSave, specs: specsToSave })
 
     if (ruleIdsToDelete.length > 0) {
-      ElMessage.info(`已同时删除 ${ruleIdsToDelete.length} 个与该设备相关的规则`)
+      ElMessage.info(t('app.relatedRulesRemoved', { count: ruleIdsToDelete.length }))
     }
     if (removedSpecs.length > 0) {
-      ElMessage.info('已同时删除与该设备相关的规约')
+      ElMessage.info(t('app.relatedSpecsRemoved'))
     }
   } catch (error) {
     console.error('删除设备保存失败，回滚本地状态', error)
@@ -841,7 +851,7 @@ const forceDeleteNode = async (nodeId: string) => {
     specifications.value = specsSnapshot
     edges.value = edgesSnapshot
     internalVariableEdges.value = internalEdgesSnapshot
-    ElMessage.error('删除设备保存失败，已恢复到删除前状态')
+    ElMessage.error(t('app.deleteDeviceSaveFailedRollback'))
   }
 }
 
@@ -910,7 +920,7 @@ const confirmDelete = async () => {
     deleteConfirmDialogData.node = null
   } catch (error) {
     console.error('删除设备失败:', error)
-    ElMessage.error('删除设备失败，请重试')
+    ElMessage.error(t('app.deleteDeviceFailedRetry'))
   }
 }
 
@@ -939,12 +949,12 @@ const deleteRule = async (ruleId: string) => {
     // 将 Proxy 对象转换为普通对象后再发送
     const rulesToSave = JSON.parse(JSON.stringify(rules.value))
     await boardApi.saveRules(rulesToSave)
-    ElMessage.success('删除规则成功')
+    ElMessage.success(t('app.deleteRuleSuccess'))
   } catch (e) {
     console.error('删除规则失败', e)
     // 保存失败，回滚（重新获取）
     await refreshRules()
-    ElMessage.error('删除规则失败')
+    ElMessage.error(t('app.deleteRuleFailed'))
   }
 }
 
@@ -957,12 +967,12 @@ const deleteSpecification = async (specId: string) => {
 
   try {
     await saveSpecsToServer()
-    ElMessage.success('删除规约成功')
+    ElMessage.success(t('app.deleteSpecSuccess'))
   } catch (e) {
     console.error('删除规约失败', e)
     // 保存失败，回滚（重新获取）
     await refreshSpecifications()
-    ElMessage.error('删除规约失败')
+    ElMessage.error(t('app.deleteSpecFailed'))
   }
 }
 
@@ -976,7 +986,7 @@ const saveNodesToServer = async () => {
   try {
     await boardApi.saveNodes(nodes.value)
   } catch (e) {
-    ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
+    ElMessage.error(t('app.saveNodesFailed'))
     // 必须 rethrow：否则调用方以为保存成功（会误报成功/无法回滚），本地状态与后端分叉。
     throw e
   }
@@ -1025,7 +1035,6 @@ const saveSpecsToServer = async () => {
   try {
     // 将 Proxy 对象转换为普通对象后再发送
     const specsToSave = JSON.parse(JSON.stringify(specifications.value))
-    console.log('[Board] Saving specs to server:', specsToSave)
     await boardApi.saveSpecs(specsToSave)
   }
   catch (e: any) {
@@ -1035,7 +1044,7 @@ const saveSpecsToServer = async () => {
       console.error('[Board] Server error response:', e.response.data)
       console.error('[Board] Server error status:', e.response.status)
     }
-    ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败')
+    ElMessage.error(t('app.saveSpecsFailed'))
     // 必须 rethrow：deleteSpecification 等调用方依赖抛错触发回滚（refreshSpecifications）。
     throw e
   }
@@ -1070,7 +1079,6 @@ const resetDeviceTemplatesToDefault = async () => {
 
 // 1. 定义刷新设备的函数
 const refreshDevices = async () => {
-  console.log('🔄 Board组件收到指令，正在刷新设备列表...')
   try { nodes.value = await boardApi.getNodes() } catch(e) {
     console.error('加载设备失败', e)
     nodes.value = [] }
@@ -1084,7 +1092,6 @@ const refreshRules = async () => {
   try {
     // 只获取规则列表
     const rulesData = await boardApi.getRules()
-    console.log('🔍 [Board] 刷新规则 - 原始数据:', JSON.parse(JSON.stringify(rulesData)))
     rules.value = rulesData
     // 动态生成 edges
     edges.value = generateEdgesFromRules()
@@ -1097,7 +1104,6 @@ const refreshRules = async () => {
 
 // 3.定义刷新规约的函数
 const refreshSpecifications = async () => {
-  console.log('🔄 Board组件收到指令，正在刷新规约列表...')
   try { specifications.value = await boardApi.getSpecs() } catch(e) {
     console.error('加载规约失败', e)
     specifications.value = []
@@ -1353,7 +1359,7 @@ const handleCreateDevice = async (data: { template: DeviceTemplate, customName: 
   try {
     await saveNodesToServer()
     // 成功提示放在保存成功后（ControlCenter 的 emit 不会 await 本函数，不能在子组件里提前报成功）。
-    ElMessage.success(t('app.deviceAdded') || 'Device added')
+    ElMessage.success(t('app.deviceAdded'))
   } catch {
     // 回滚本次新增的节点与内部变量连线（saveNodesToServer 已弹出失败提示）。
     nodes.value = nodes.value.filter(n => idsBefore.has(n.id))
@@ -1393,7 +1399,6 @@ const handleAddSpec = async (data: {
     devices: devices
   }
 
-  console.log('[Board] Creating new spec:', newSpec)
   specifications.value.push(newSpec)
   try {
     await saveSpecsToServer()
@@ -1504,6 +1509,23 @@ const verificationError = ref<string | null>(null)
 const isRecommendingRules = ref(false)
 const ruleRecommendations = ref<RuleRecommendation[]>([])
 const showRecommendationPanel = ref(false)
+const ruleRecommendationFilters = reactive({
+  maxRecommendations: 5,
+  category: 'all'
+})
+const ruleRecommendationCategories = [
+  { label: 'All', value: 'all' },
+  { label: 'Security', value: 'security' },
+  { label: 'Energy Saving', value: 'energy_saving' },
+  { label: 'Comfort', value: 'comfort' },
+  { label: 'Automation', value: 'automation' }
+]
+
+const normalizeRecommendationCount = (value: unknown): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 5
+  return Math.min(10, Math.max(1, Math.trunc(parsed)))
+}
 
 const fetchRuleRecommendations = async () => {
   // 如果正在推荐中，点击按钮则停止推荐
@@ -1511,43 +1533,49 @@ const fetchRuleRecommendations = async () => {
     // 调用取消函数
     rulesApi.cancelRecommendRules()
     isRecommendingRules.value = false
-    ElMessage.info('Rule recommendation cancelled')
+    ElMessage.info(t('app.ruleRecommendationCancelled'))
     return
   }
   
   // 互斥检查：如果模拟动画或反例路径动画正在显示，则不允许打开推荐面板
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
     return
   }
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
     return
   }
   // 互斥检查：如果设备推荐面板正在显示
   if (showDeviceRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeDeviceRecommendationFirst'), type: 'warning' })
     return
   }
   // 互斥检查：如果规约推荐面板正在显示
   if (showSpecRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeSpecRecommendationFirst'), type: 'warning' })
+    return
+  }
+  if (showHistoryPanel.value) {
+    ElMessage.warning({ message: t('app.closeHistoryFirst'), type: 'warning' })
     return
   }
   
   isRecommendingRules.value = true
   showRecommendationPanel.value = true
   try {
-    const response = await rulesApi.recommendRules(5, 'all')
+    const response = await rulesApi.recommendRules(
+      normalizeRecommendationCount(ruleRecommendationFilters.maxRecommendations),
+      ruleRecommendationFilters.category
+    )
     ruleRecommendations.value = response.recommendations || []
   } catch (error: any) {
     // 如果是取消请求，不显示错误
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
-      console.log('Rule recommendation request cancelled')
       return
     }
     console.error('Failed to fetch rule recommendations:', error)
-    ElMessage.error('Failed to fetch rule recommendations')
+    ElMessage.error(t('app.failedToFetchRuleRecommendations'))
   } finally {
     isRecommendingRules.value = false
   }
@@ -1573,6 +1601,18 @@ const deviceRecommendationAbortController = ref<AbortController | null>(null)
 const isRecommendingSpecs = ref(false)
 const specRecommendations = ref<any[]>([])
 const showSpecRecommendationPanel = ref(false)
+const specRecommendationAbortController = ref<AbortController | null>(null)
+const specRecommendationFilters = reactive({
+  maxRecommendations: 5,
+  category: 'all'
+})
+const specRecommendationCategories = [
+  { label: 'All', value: 'all' },
+  { label: 'Safety', value: 'safety' },
+  { label: 'Response', value: 'response' },
+  { label: 'Consistency', value: 'consistency' },
+  { label: 'Privacy', value: 'privacy' }
+]
 
 const fetchDeviceRecommendations = async () => {
   // 如果正在推荐中，点击按钮则停止推荐
@@ -1581,29 +1621,33 @@ const fetchDeviceRecommendations = async () => {
       deviceRecommendationAbortController.value.abort()
     }
     isRecommendingDevices.value = false
-    ElMessage.info('Device recommendation cancelled')
+    ElMessage.info(t('app.deviceRecommendationCancelled'))
     return
   }
   
   // 互斥检查
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
     return
   }
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
     return
   }
   if (showRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the rule recommendation panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeRuleRecommendationFirst'), type: 'warning' })
     return
   }
   if (showSpecRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeSpecRecommendationFirst'), type: 'warning' })
+    return
+  }
+  if (showHistoryPanel.value) {
+    ElMessage.warning({ message: t('app.closeHistoryFirst'), type: 'warning' })
     return
   }
   if (isAnimationLocked.value) {
-    ElMessage.warning({ message: 'Animation is running, please wait', type: 'warning' })
+    ElMessage.warning({ message: t('app.animationRunningWait'), type: 'warning' })
     return
   }
   
@@ -1620,11 +1664,10 @@ const fetchDeviceRecommendations = async () => {
     deviceRecommendations.value = response.recommendations || []
   } catch (error: any) {
     if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
-      console.log('Device recommendation request cancelled')
       return
     }
     console.error('Failed to fetch device recommendations:', error)
-    ElMessage.error('Failed to fetch device recommendations')
+    ElMessage.error(t('app.failedToFetchDeviceRecommendations'))
   } finally {
     isRecommendingDevices.value = false
   }
@@ -1645,49 +1688,68 @@ const closeDeviceRecommendationPanel = () => {
 const fetchSpecRecommendations = async () => {
   // 如果正在推荐中，点击按钮则停止推荐
   if (isRecommendingSpecs.value) {
+    if (specRecommendationAbortController.value) {
+      specRecommendationAbortController.value.abort()
+    }
     isRecommendingSpecs.value = false
-    ElMessage.info('Specification recommendation cancelled')
+    ElMessage.info(t('app.specificationRecommendationCancelled'))
     return
   }
   
   // 互斥检查
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
     return
   }
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
     return
   }
   if (showRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the rule recommendation panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeRuleRecommendationFirst'), type: 'warning' })
     return
   }
   if (showDeviceRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the device recommendation panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeDeviceRecommendationFirst'), type: 'warning' })
+    return
+  }
+  if (showHistoryPanel.value) {
+    ElMessage.warning({ message: t('app.closeHistoryFirst'), type: 'warning' })
     return
   }
   if (isAnimationLocked.value) {
-    ElMessage.warning({ message: 'Animation is running, please wait', type: 'warning' })
+    ElMessage.warning({ message: t('app.animationRunningWait'), type: 'warning' })
     return
   }
   
   isRecommendingSpecs.value = true
   showSpecRecommendationPanel.value = true
+  specRecommendationAbortController.value = new AbortController()
   
   try {
-    const response = await boardApi.recommendSpecifications(5, 'all')
+    const response = await boardApi.recommendSpecifications(
+      normalizeRecommendationCount(specRecommendationFilters.maxRecommendations),
+      specRecommendationFilters.category,
+      specRecommendationAbortController.value.signal
+    )
     specRecommendations.value = response.recommendations || []
   } catch (error: any) {
+    if (error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+      return
+    }
     console.error('Failed to fetch specification recommendations:', error)
-    ElMessage.error('Failed to fetch specification recommendations')
+    ElMessage.error(t('app.failedToFetchSpecificationRecommendations'))
   } finally {
     isRecommendingSpecs.value = false
+    specRecommendationAbortController.value = null
   }
 }
 
 // 关闭规约推荐面板
 const closeSpecRecommendationPanel = () => {
+  if (isRecommendingSpecs.value && specRecommendationAbortController.value) {
+    specRecommendationAbortController.value.abort()
+  }
   isRecommendingSpecs.value = false
   showSpecRecommendationPanel.value = false
 }
@@ -1699,7 +1761,7 @@ const applySpecRecommendation = async (recommendation: any) => {
   const templateId = recommendation.templateId
   if (!/^[1-7]$/.test(String(templateId ?? ''))) {
     ElMessage.warning({
-      message: `Skipped recommendation with invalid template id "${templateId ?? ''}"; expected 1-7`,
+      message: t('app.invalidRecommendedTemplateId', { templateId: templateId ?? '' }),
       type: 'warning'
     })
     return
@@ -1722,13 +1784,13 @@ const applySpecRecommendation = async (recommendation: any) => {
   try {
     await boardApi.saveSpecs(currentSpecs)
     specifications.value = currentSpecs
-    ElMessage.success('Specification added successfully')
+    ElMessage.success(t('app.specificationAddedSuccessfully'))
     
     // 关闭面板
     closeSpecRecommendationPanel()
   } catch (error) {
     console.error('Failed to save specification:', error)
-    ElMessage.error('Failed to save specification')
+    ElMessage.error(t('app.failedToSaveSpecification'))
   }
 }
 
@@ -1740,7 +1802,7 @@ const applyDeviceRecommendation = async (recommendation: any) => {
   )
   
   if (!template) {
-    ElMessage.error(`Template not found: ${templateName}`)
+    ElMessage.error(t('app.templateNotFoundWithName', { name: templateName }))
     return
   }
   
@@ -1758,7 +1820,7 @@ const applyDeviceRecommendation = async (recommendation: any) => {
   // createDeviceInstanceAt 内部已保存并在失败时回滚+抛错，这里只需处理成功/失败提示。
   try {
     await createDeviceInstanceAt(template, { x, y })
-    ElMessage.success(`Device "${templateName}" added successfully`)
+    ElMessage.success(t('app.deviceAddedWithName', { name: templateName }))
   } catch {
     // 失败提示已由 saveNodesToServer 弹出，节点已回滚，无需额外处理。
   }
@@ -1779,7 +1841,8 @@ const simulationForm = reactive({
   isAttack: false,
   intensity: 3,
   enablePrivacy: false,
-  isAsync: false
+  isAsync: false,
+  saveToHistory: true
 })
 
 // Verification form state (similar to simulation)
@@ -1798,33 +1861,105 @@ const asyncVerificationTask = ref<{
 }>({
   taskId: null,
   progress: 0,
-  status: 'Initializing...'
+  status: t('app.taskInitializing')
 })
 const cancellingVerificationTask = ref(false)
 const verificationCancelRequested = ref(false)
 
-// 历史验证 Traces
-const verificationTraces = ref<any[]>([])
-const showVerificationTracesPanel = ref(false)
+type HistoryTab = 'verification' | 'simulation'
+
+// History records are loaded through the same persisted-trace APIs used by AI tools.
+const verificationTraces = ref<Trace[]>([])
+const simulationTraces = ref<SimulationTraceSummary[]>([])
+const showHistoryPanel = ref(false)
+const activeHistoryTab = ref<HistoryTab>('verification')
+const loadingVerificationHistory = ref(false)
+const loadingSimulationHistory = ref(false)
+
+const historyActionLocked = computed(() =>
+  traceAnimationState.value.visible ||
+  simulationAnimationState.value.visible ||
+  isAnimationLocked.value
+)
 
 const loadVerificationTraces = async () => {
+  loadingVerificationHistory.value = true
   try {
     const traces = await boardApi.getVerificationTraces()
     verificationTraces.value = traces || []
   } catch (e: any) {
     console.error('Failed to load verification traces:', e)
-    ElMessage.error({ message: 'Failed to load verification traces', type: 'error' })
+    ElMessage.error({ message: t('app.failedToLoadVerificationTraces'), type: 'error' })
+  } finally {
+    loadingVerificationHistory.value = false
   }
+}
+
+const loadSimulationTraces = async () => {
+  loadingSimulationHistory.value = true
+  try {
+    const traces = await simulationApi.getUserSimulations()
+    simulationTraces.value = traces || []
+  } catch (e: any) {
+    console.error('Failed to load simulation traces:', e)
+    ElMessage.error({ message: t('app.failedToLoadSimulationHistory'), type: 'error' })
+  } finally {
+    loadingSimulationHistory.value = false
+  }
+}
+
+const refreshHistoryTab = async (tab: HistoryTab = activeHistoryTab.value) => {
+  if (tab === 'verification') {
+    await loadVerificationTraces()
+  } else {
+    await loadSimulationTraces()
+  }
+}
+
+const setHistoryTab = async (tab: HistoryTab) => {
+  activeHistoryTab.value = tab
+  await refreshHistoryTab(tab)
+}
+
+const closeHistoryPanel = () => {
+  showHistoryPanel.value = false
+}
+
+const toggleHistoryPanel = async (tab: HistoryTab = activeHistoryTab.value) => {
+  if (showHistoryPanel.value && activeHistoryTab.value === tab) {
+    closeHistoryPanel()
+    return
+  }
+
+  showSimulationPanel.value = false
+  showVerificationPanel.value = false
+  closeRecommendationPanel()
+  closeDeviceRecommendationPanel()
+  closeSpecRecommendationPanel()
+
+  activeHistoryTab.value = tab
+  showHistoryPanel.value = true
+  await refreshHistoryTab(tab)
 }
 
 const deleteVerificationTrace = async (traceId: number) => {
   try {
+    await ElMessageBox.confirm(
+      t('app.deleteVerificationTraceMessage', { id: traceId }),
+      t('app.deleteTraceTitle'),
+      {
+        confirmButtonText: t('app.delete'),
+        cancelButtonText: t('app.cancel'),
+        type: 'warning'
+      }
+    )
     await boardApi.deleteVerificationTrace(traceId)
     verificationTraces.value = verificationTraces.value.filter(t => t.id !== traceId)
-    ElMessage.success({ message: 'Trace deleted', type: 'success' })
+    ElMessage.success({ message: t('app.traceDeleted'), type: 'success' })
   } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
     console.error('Failed to delete trace:', e)
-    ElMessage.error({ message: 'Failed to delete trace', type: 'error' })
+    ElMessage.error({ message: t('app.failedToDeleteTrace'), type: 'error' })
   }
 }
 
@@ -1842,13 +1977,14 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
   try {
     const trace = await boardApi.getVerificationTrace(traceId)
     if (!trace?.states?.length) {
-      ElMessage.warning({ message: 'Trace has no states to play', type: 'warning' })
+      ElMessage.warning({ message: t('app.traceHasNoStates'), type: 'warning' })
       return
     }
     // Take the animation lock and close the result dialog, mirroring the current-result path so lock
     // state and open panels stay consistent regardless of which entry point started the animation.
     isAnimationLocked.value = true
     closeResultDialog()
+    closeHistoryPanel()
     savedTraces.value = [trace]
     traceAnimationState.value = {
       visible: true,
@@ -1856,8 +1992,6 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
       selectedStateIndex: 0,
       isPlaying: false
     }
-    showVerificationTracesPanel.value = false
-
     const currentTraceData = currentTrace.value
     if (currentTraceData) {
       highlightedTrace.value = {
@@ -1868,7 +2002,87 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
   } catch (e: any) {
     console.error('Failed to load trace:', e)
     isAnimationLocked.value = false
-    ElMessage.error({ message: 'Failed to load trace', type: 'error' })
+    ElMessage.error({ message: t('app.failedToLoadTrace'), type: 'error' })
+  }
+}
+
+const openFixForVerificationTrace = (trace: Trace) => {
+  if (!trace.violatedSpecId) {
+    ElMessage.warning({ message: t('app.traceMissingViolatedSpec'), type: 'warning' })
+    return
+  }
+  closeHistoryPanel()
+  openFixDialog(trace.id, trace.violatedSpecId)
+}
+
+const selectAndPlaySimulationTrace = async (traceId: number) => {
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    return
+  }
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    return
+  }
+  if (showRecommendationPanel.value || showDeviceRecommendationPanel.value || showSpecRecommendationPanel.value) {
+    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    return
+  }
+
+  try {
+    const trace = await simulationApi.getSimulation(traceId)
+    if (!trace?.states?.length) {
+      ElMessage.warning({ message: t('app.simulationRunHasNoStates'), type: 'warning' })
+      return
+    }
+
+    const result = {
+      states: trace.states,
+      steps: trace.steps,
+      requestedSteps: trace.requestedSteps,
+      logs: trace.logs || [],
+      nusmvOutput: trace.nusmvOutput || ''
+    }
+
+    isAnimationLocked.value = true
+    closeHistoryPanel()
+    lastSimulationResult.value = result
+    simulationResult.value = null
+    savedSimulationStates.value = [...trace.states]
+    simulationAnimationState.value = {
+      visible: true,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    highlightedTrace.value = {
+      states: savedSimulationStates.value,
+      selectedStateIndex: 0
+    }
+  } catch (e: any) {
+    console.error('Failed to load simulation trace:', e)
+    isAnimationLocked.value = false
+    ElMessage.error({ message: t('app.failedToLoadSimulationRun'), type: 'error' })
+  }
+}
+
+const deleteSimulationTrace = async (traceId: number) => {
+  try {
+    await ElMessageBox.confirm(
+      t('app.deleteSimulationRunMessage', { id: traceId }),
+      t('app.deleteSimulationRunTitle'),
+      {
+        confirmButtonText: t('app.delete'),
+        cancelButtonText: t('app.cancel'),
+        type: 'warning'
+      }
+    )
+    await simulationApi.deleteSimulation(traceId)
+    simulationTraces.value = simulationTraces.value.filter(t => t.id !== traceId)
+    ElMessage.success({ message: t('app.simulationRunDeleted'), type: 'success' })
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    console.error('Failed to delete simulation trace:', e)
+    ElMessage.error({ message: t('app.failedToDeleteSimulationRun'), type: 'error' })
   }
 }
 
@@ -1909,18 +2123,18 @@ const cancelAsyncVerification = async () => {
 
   verificationCancelRequested.value = true
   cancellingVerificationTask.value = true
-  asyncVerificationTask.value.status = 'Cancelling...'
+  asyncVerificationTask.value.status = t('app.taskCancelling')
   try {
     const cancelled = await boardApi.cancelTask(taskId)
     if (cancelled) {
-      ElMessage.info({ message: 'Verification cancellation requested', type: 'info' })
+      ElMessage.info({ message: t('app.verificationCancellationRequested'), type: 'info' })
     } else {
       verificationCancelRequested.value = false
-      ElMessage.warning({ message: 'Verification task is no longer cancellable', type: 'warning' })
+      ElMessage.warning({ message: t('app.verificationTaskNotCancellable'), type: 'warning' })
     }
   } catch (error: any) {
     verificationCancelRequested.value = false
-    const msg = error?.response?.data?.message || error?.message || 'Failed to cancel verification task'
+    const msg = error?.response?.data?.message || error?.message || t('app.failedToCancelVerificationTask')
     ElMessage.error({ message: msg, type: 'error' })
   } finally {
     cancellingVerificationTask.value = false
@@ -1933,18 +2147,18 @@ const cancelAsyncSimulation = async () => {
 
   simulationCancelRequested.value = true
   cancellingSimulationTask.value = true
-  asyncSimulationTask.value.status = 'Cancelling...'
+  asyncSimulationTask.value.status = t('app.taskCancelling')
   try {
     const cancelled = await simulationApi.cancelTask(taskId)
     if (cancelled) {
-      ElMessage.info({ message: 'Simulation cancellation requested', type: 'info' })
+      ElMessage.info({ message: t('app.simulationCancellationRequested'), type: 'info' })
     } else {
       simulationCancelRequested.value = false
-      ElMessage.warning({ message: 'Simulation task is no longer cancellable', type: 'warning' })
+      ElMessage.warning({ message: t('app.simulationTaskNotCancellable'), type: 'warning' })
     }
   } catch (error: any) {
     simulationCancelRequested.value = false
-    const msg = error?.response?.data?.message || error?.message || 'Failed to cancel simulation task'
+    const msg = error?.response?.data?.message || error?.message || t('app.failedToCancelSimulationTask')
     ElMessage.error({ message: msg, type: 'error' })
   } finally {
     cancellingSimulationTask.value = false
@@ -1961,19 +2175,20 @@ const handleFixApplied = async () => {
 const togglePanel = (panel: 'simulation' | 'verification') => {
   // 互斥检查：如果 Rule Recommendations 或 Device Recommendations 或 Specification Recommendations 面板正在显示，则不允许打开模拟/验证面板
   if (showRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeRuleRecommendationFirst'), type: 'warning' })
     return
   }
   
   if (showDeviceRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Device Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeDeviceRecommendationFirst'), type: 'warning' })
     return
   }
   
   if (showSpecRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Specification Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeSpecRecommendationFirst'), type: 'warning' })
     return
   }
+  closeHistoryPanel()
   
   if (panel === 'simulation') {
     if (showSimulationPanel.value) {
@@ -2050,13 +2265,13 @@ const activeTraceContext = computed(() => {
 const selectAndPlayTrace = (traceIndex: number) => {
   // 互斥检查：如果模拟动画正在显示，则不允许打开反例路径动画
   if (simulationAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the simulation timeline first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
     return
   }
   
   // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开反例路径动画
   if (showRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeRuleRecommendationFirst'), type: 'warning' })
     return
   }
   
@@ -2220,13 +2435,13 @@ const handleHighlightTrace = (trace: any) => {
 const openSimulationTimeline = () => {
   // 互斥检查：如果反例路径动画正在显示，则不允许打开模拟动画
   if (traceAnimationState.value.visible) {
-    ElMessage.warning({ message: 'Please close the counterexample trace first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
     return
   }
   
   // 互斥检查：如果 Rule Recommendations 面板正在显示，则不允许打开模拟动画
   if (showRecommendationPanel.value) {
-    ElMessage.warning({ message: 'Please close the Rule Recommendations panel first', type: 'warning' })
+    ElMessage.warning({ message: t('app.closeRuleRecommendationFirst'), type: 'warning' })
     return
   }
   
@@ -2285,7 +2500,7 @@ const stopSimulationAnimation = () => {
 
 const handleVerify = async () => {
   if (nodes.value.length === 0) {
-    ElMessage.warning({ message: 'No devices to verify', type: 'warning' })
+    ElMessage.warning({ message: t('app.noDevicesToVerify'), type: 'warning' })
     return
   }
   if (!assertRulesHaveTriggers(rules.value)) {
@@ -2299,140 +2514,16 @@ const handleVerify = async () => {
   verificationResult.value = null
 
   try {
-    // ==== Helper function to normalize device names for NuSMV ====
-    // NuSMV identifiers cannot start with a number, so we add a prefix
-    const normalizeDeviceName = (name: string): string => {
-      if (!name) return name
-      // If starts with a digit, add prefix
-      if (/^\d/.test(name)) {
-        return 'd_' + name
-      }
-      return name
-    }
-
-    // Helper to convert value: remove quotes for numeric values
-    const normalizeValue = (val: string): string => {
-      if (!val) return val
-      // If value is a quoted number, remove quotes
-      if (/^"\d+"$/.test(val) || /^'\d+'$/.test(val)) {
-        return val.replace(/^["']|["']$/g, '')
-      }
-      return val
-    }
-
-    // Create a mapping from original label to normalized name
-    const deviceNameMap = new Map<string, string>()
-    
-    // 过滤掉变量节点（templateName 以 variable_ 开头）
-    const deviceNodes = nodes.value.filter(node => !node.templateName.startsWith('variable_'))
-    
-    deviceNodes.forEach(node => {
-      deviceNameMap.set(node.label, normalizeDeviceName(node.label))
-    })
-
-    // Prepare devices: Add default variables/privacies if missing
-    const devices = deviceNodes.map(node => {
-      // Get template
-      const tpl = deviceTemplates.value.find(t => t.manifest?.Name === node.templateName)
-      const manifest = tpl?.manifest
-
-      // Determine variables
-      let variables = (node as any).variables || []
-      if ((!variables || variables.length === 0) && manifest?.InternalVariables) {
-        variables = manifest.InternalVariables.map((v: any) => ({
-          name: v.Name,
-          value: v.Default || '0', // Or some default
-          trust: 'trusted'
-        }))
-      }
-
-      // Determine privacies
-      let privacies = (node as any).privacies || []
-      if ((!privacies || privacies.length === 0) && manifest?.InternalVariables) {
-        privacies = manifest.InternalVariables.map((v: any) => ({
-          name: v.Name,
-          privacy: v.Privacy || 'public'
-        }))
-      }
-
-      // Map to backend DTO format - varName is required
-      // Use normalized name to ensure NuSMV compatibility
-      const normalizedVarName = normalizeDeviceName(node.label)
-      return {
-        varName: normalizedVarName,  // Backend expects varName
-        templateName: node.templateName,
-        state: node.state,
-        currentStateTrust: (node as any).currentStateTrust || 'trusted',
-        variables,
-        privacies
-      }
-    })
-
-    // Prepare rules - transform to backend DTO format
-    const rulesData = rules.value.map(r => ({
-      // Backend expects: conditions (not sources)
-      conditions: (r.sources || []).map(s => ({
-        deviceName: resolveNodeLabel(s.fromId),
-        attribute: s.fromApi || '',
-        relation: s.relation || '=',
-        value: s.value || 'true'
-      })),
-      // Backend expects: command with deviceName and action
-      command: {
-        deviceName: resolveNodeLabel(r.toId),
-        action: r.toApi || '',
-        contentDevice: null,
-        content: null
-      },
-      ruleString: r.name || ''
-    }))
-
-    // Prepare specs - resolve device refs to current label (symmetric with rules above),
-    // then normalize. 规约条件存的是创建时的 label；设备重命名后 node.id 不变而 label 变，
-    // 若不 resolve 就会引用旧 label，验证时在 deviceSmvMap 里找不到当前设备。
-    const resolveCondRef = (ref: any) => ref ? normalizeDeviceName(resolveNodeLabel(ref)) : ref
-    const mapSpecCond = (cond: any) => ({
-      ...cond,
-      deviceId: resolveCondRef(cond.deviceId),
-      deviceLabel: resolveCondRef(cond.deviceLabel),
-      value: normalizeValue(cond.value || '')
-    })
-    const specs = specifications.value.map(spec => ({
-      ...spec,
-      aConditions: (spec.aConditions || []).map(mapSpecCond),
-      ifConditions: (spec.ifConditions || []).map(mapSpecCond),
-      thenConditions: (spec.thenConditions || []).map((cond: any) => ({
-        ...cond,
-        deviceId: resolveCondRef(cond.deviceId),
-        deviceLabel: resolveCondRef(cond.deviceLabel),
-        value: normalizeValue(cond.value || '')
-      }))
-    }))
-
-    // Also normalize device names in rules
-    const normalizedRulesData = rulesData.map((r: any) => ({
-      ...r,
-      conditions: (r.conditions || []).map((c: any) => ({
-        ...c,
-        deviceName: c.deviceName ? normalizeDeviceName(c.deviceName) : c.deviceName,
-        value: normalizeValue(c.value || '')
-      })),
-      command: {
-        ...r.command,
-        deviceName: r.command.deviceName ? normalizeDeviceName(r.command.deviceName) : r.command.deviceName
-      }
-    }))
-
-    const req = {
-      devices,
-      rules: normalizedRulesData,
-      specs,
+    const req = buildVerificationRequestPayload({
+      nodes: nodes.value,
+      deviceTemplates: deviceTemplates.value,
+      rules: rules.value,
+      specifications: specifications.value,
+      resolveNodeLabel,
       isAttack: verificationForm.isAttack,
       intensity: verificationForm.intensity,
       enablePrivacy: verificationForm.enablePrivacy
-    }
-
-    console.log('Verification Request JSON:', JSON.stringify(req, null, 2))
+    })
 
     // Handle async or sync verification
     if (verificationForm.isAsync) {
@@ -2440,11 +2531,11 @@ const handleVerify = async () => {
       // (which sets isVerifying=false) only runs after polling truly ends — otherwise
       // the progress UI vanishes immediately and the button re-enables mid-run,
       // letting the user launch duplicate tasks.
-      asyncVerificationTask.value = { taskId: null, progress: 0, status: 'Initializing...' }
+      asyncVerificationTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
 
       const taskId = await boardApi.verifyAsync(req)
       asyncVerificationTask.value.taskId = taskId
-      asyncVerificationTask.value.status = 'Running verification...'
+      asyncVerificationTask.value.status = t('app.verificationRunning')
 
       await pollAsyncVerification(taskId)
       return
@@ -2456,14 +2547,14 @@ const handleVerify = async () => {
     notifyVerificationOutcome(result)
 
   } catch (error: any) {
-    const message = error?.message || 'Verification failed'
+    const message = error?.message || t('app.verificationFailed')
     if (verificationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       verificationError.value = null
-      ElMessage.info({ message: 'Verification cancelled', type: 'info' })
+      ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
     } else {
       console.error('Verification failed:', error)
       verificationError.value = message
-      ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
+      ElMessage.error({ message: verificationError.value || t('app.verificationFailed'), type: 'error' })
     }
   } finally {
     isVerifying.value = false
@@ -2488,9 +2579,10 @@ const handleSimulate = async (simConfig: {
   intensity: number
   enablePrivacy: boolean
   isAsync: boolean
+  saveToHistory?: boolean
 }) => {
   if (nodes.value.length === 0) {
-    ElMessage.warning({ message: 'No devices to simulate', type: 'warning' })
+    ElMessage.warning({ message: t('app.noDevicesToSimulate'), type: 'warning' })
     return
   }
   if (!assertRulesHaveTriggers(rules.value)) {
@@ -2505,129 +2597,72 @@ const handleSimulate = async (simConfig: {
 
   // 重置异步任务状态
   if (simConfig.isAsync) {
-    asyncSimulationTask.value = { taskId: null, progress: 0, status: 'Initializing...' }
+    asyncSimulationTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
   }
 
   try {
-    // 使用与验证相同的设备数据转换逻辑
-    const normalizeDeviceName = (name: string): string => {
-      if (!name) return name
-      if (/^\d/.test(name)) {
-        return 'd_' + name
-      }
-      return name
-    }
-
-    const normalizeValue = (val: string): string => {
-      if (!val) return val
-      if (/^"\d+"$/.test(val) || /^'\d+'$/.test(val)) {
-        return val.replace(/^["']|["']$/g, '')
-      }
-      return val
-    }
-
-    const deviceNameMap = new Map<string, string>()
-
-    // 过滤掉变量节点
-    const deviceNodes = nodes.value.filter(node => !node.templateName.startsWith('variable_'))
-
-    deviceNodes.forEach(node => {
-      deviceNameMap.set(node.label, normalizeDeviceName(node.label))
-    })
-
-    // Prepare devices
-    const devices = deviceNodes.map(node => {
-      const tpl = deviceTemplates.value.find(t => t.manifest?.Name === node.templateName)
-      const manifest = tpl?.manifest
-
-      let variables = (node as any).variables || []
-      if ((!variables || variables.length === 0) && manifest?.InternalVariables) {
-        variables = manifest.InternalVariables.map((v: any) => ({
-          name: v.Name,
-          value: v.Default || '0',
-          trust: 'trusted'
-        }))
-      }
-
-      let privacies = (node as any).privacies || []
-      if ((!privacies || privacies.length === 0) && manifest?.InternalVariables) {
-        privacies = manifest.InternalVariables.map((v: any) => ({
-          name: v.Name,
-          privacy: v.Privacy || 'public'
-        }))
-      }
-
-      const normalizedVarName = normalizeDeviceName(node.label)
-      return {
-        varName: normalizedVarName,
-        templateName: node.templateName,
-        state: node.state,
-        currentStateTrust: (node as any).currentStateTrust || 'trusted',
-        variables,
-        privacies
-      }
-    })
-
-    // Prepare rules
-    const rulesData = rules.value.map(r => ({
-      conditions: (r.sources || []).map(s => ({
-        deviceName: resolveNodeLabel(s.fromId),
-        attribute: s.fromApi || '',
-        relation: s.relation || '=',
-        value: s.value || 'true'
-      })),
-      command: {
-        deviceName: resolveNodeLabel(r.toId),
-        action: r.toApi || '',
-        contentDevice: null,
-        content: null
-      },
-      ruleString: r.name || ''
-    }))
-
-    // Normalize device names in rules
-    const normalizedRulesData = rulesData.map((r: any) => ({
-      ...r,
-      conditions: (r.conditions || []).map((c: any) => ({
-        ...c,
-        deviceName: c.deviceName ? normalizeDeviceName(c.deviceName) : c.deviceName,
-        value: normalizeValue(c.value || '')
-      })),
-      command: {
-        ...r.command,
-        deviceName: r.command.deviceName ? normalizeDeviceName(r.command.deviceName) : r.command.deviceName
-      }
-    }))
-
-    const req = {
-      devices,
-      rules: normalizedRulesData,
+    const req = buildSimulationRequestPayload({
+      nodes: nodes.value,
+      deviceTemplates: deviceTemplates.value,
+      rules: rules.value,
+      resolveNodeLabel,
       steps: simConfig.steps,
       isAttack: simConfig.isAttack,
       intensity: simConfig.intensity,
       enablePrivacy: simConfig.enablePrivacy
-    }
+    })
     
-    console.log('Simulation request:', { ...req, isAttack: req.isAttack, intensity: req.intensity })
-
     let result: any
 
     if (simConfig.isAsync) {
       // 异步模拟：创建任务并轮询进度
       const taskId = await simulationApi.simulateAsync(req)
       asyncSimulationTask.value.taskId = taskId
-      asyncSimulationTask.value.status = 'Task created, waiting...'
+      asyncSimulationTask.value.status = t('app.simulationTaskCreatedWaiting')
 
       // 轮询任务进度
       result = await pollAsyncSimulation(taskId)
     } else {
       // 同步模拟
-      result = await simulationApi.simulate(req)
+      if (simConfig.saveToHistory) {
+        const trace = await simulationApi.simulateAndSave(req)
+        result = {
+          traceId: trace.id,
+          states: trace.states,
+          steps: trace.steps,
+          requestedSteps: trace.requestedSteps,
+          createdAt: trace.createdAt,
+          logs: trace.logs || [],
+          nusmvOutput: trace.nusmvOutput || ''
+        }
+        simulationTraces.value = [
+          {
+            id: trace.id,
+            requestedSteps: trace.requestedSteps,
+            steps: trace.steps,
+            createdAt: trace.createdAt
+          },
+          ...simulationTraces.value.filter(item => item.id !== trace.id)
+        ]
+      } else {
+        result = await simulationApi.simulate(req)
+      }
     }
     
     // Keep the full result so its logs / raw NuSMV output remain reachable from the timeline via
     // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
     lastSimulationResult.value = result
+    if (result.traceId) {
+      simulationTraces.value = [
+        {
+          id: result.traceId,
+          requestedSteps: result.requestedSteps,
+          steps: result.steps,
+          createdAt: result.createdAt || new Date().toISOString()
+        },
+        ...simulationTraces.value.filter(item => item.id !== result.traceId)
+      ]
+    }
 
     // 直接打开时间轴动画，不显示结果对话框
     if (result.states && result.states.length > 0) {
@@ -2651,25 +2686,25 @@ const handleSimulate = async (simConfig: {
       }
       
       ElMessage.success({
-        message: `Simulation completed: ${result.states.length} states generated`,
+        message: t('app.simulationCompletedWithStates', { count: result.states.length }),
         type: 'success'
       })
     } else {
       ElMessage.warning({
-        message: 'Simulation completed but no states were generated',
+        message: t('app.simulationCompletedNoStates'),
         type: 'warning'
       })
     }
 
   } catch (error: any) {
-    const message = error?.message || 'Simulation failed'
+    const message = error?.message || t('app.simulationFailed')
     if (simulationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       simulationError.value = null
-      ElMessage.info({ message: 'Simulation cancelled', type: 'info' })
+      ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
     } else {
       console.error('Simulation failed:', error)
       simulationError.value = message
-      ElMessage.error({ message: simulationError.value || 'Simulation failed', type: 'error' })
+      ElMessage.error({ message: simulationError.value || t('app.simulationFailed'), type: 'error' })
     }
   } finally {
     isSimulating.value = false
@@ -2682,7 +2717,7 @@ const handleSimulate = async (simConfig: {
 // NuSMV output are reachable even though the success path goes straight to the timeline.
 const openSimulationLogs = () => {
   if (!lastSimulationResult.value) {
-    ElMessage.info({ message: 'No simulation logs available yet', type: 'info' })
+    ElMessage.info({ message: t('app.noSimulationLogsAvailable'), type: 'info' })
     return
   }
   simulationResult.value = lastSimulationResult.value
@@ -2751,7 +2786,7 @@ const pollAsyncVerification = async (taskId: number): Promise<void> => {
       showVerificationPanel.value = false
       return
     } else if (task.status === 'FAILED' || task.status === 'CANCELLED') {
-      throw new Error(task.errorMessage || 'Verification failed')
+      throw new Error(task.errorMessage || t('app.verificationFailed'))
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
@@ -2759,7 +2794,7 @@ const pollAsyncVerification = async (taskId: number): Promise<void> => {
     pollCount++
   }
 
-  throw new Error('Verification timeout - please check task status manually')
+  throw new Error(t('app.verificationTimeout'))
 }
 
 // 轮询异步模拟任务
@@ -2781,7 +2816,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
       // Permanent errors (401/403/404/task-not-found) fail fast; only transient
       // errors (network blips, 5xx) retry until the poll ceiling.
       if (isPermanentPollError(error)) {
-        throw new Error(error?.message || 'Failed to get simulation status')
+        throw new Error(error?.message || t('app.failedToGetSimulationStatus'))
       }
       console.error('Poll error (transient, will retry):', error)
       await new Promise(resolve => setTimeout(resolve, pollInterval))
@@ -2795,18 +2830,20 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
       if (task.simulationTraceId) {
         const trace = await simulationApi.getSimulation(task.simulationTraceId)
         return {
+          traceId: trace.id,
           states: trace.states,
           steps: trace.steps,
           requestedSteps: trace.requestedSteps,
+          createdAt: trace.createdAt,
           logs: trace.logs || [],
           nusmvOutput: trace.nusmvOutput
         }
       }
-      return { states: [], steps: 0, requestedSteps: 0, logs: ['Task completed but no trace found'] }
+      return { states: [], steps: 0, requestedSteps: 0, logs: [t('app.taskCompletedNoTraceFound')] }
     } else if (task.status === 'FAILED') {
-      throw new Error(task.errorMessage || 'Async simulation failed')
+      throw new Error(task.errorMessage || t('app.asyncSimulationFailed'))
     } else if (task.status === 'CANCELLED') {
-      throw new Error('Simulation task was cancelled')
+      throw new Error(t('app.simulationTaskCancelledByServer'))
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
@@ -2815,7 +2852,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
   }
 
   // 超出最大轮询次数
-  throw new Error('Simulation timeout - please check task status manually')
+  throw new Error(t('app.simulationTimeout'))
 }
 
 // ==== Results Dialog ====
@@ -2840,9 +2877,11 @@ const closeResultDialog = () => {
         </div>
 
         <div class="nav-actions">
+          <ThemeToggle tone="dark" compact />
+          <LanguageToggle tone="dark" compact />
           <button class="nav-action-btn ai-assistant-btn" @click="toggleChat">
             <span class="material-symbols-outlined">smart_toy</span>
-            <span>IoT Assistant</span>
+            <span>{{ t('app.aiAssistant') }}</span>
           </button>
           <button class="nav-logout-btn" @click="handleLogout">
             <span class="material-symbols-outlined">logout</span>
@@ -2908,7 +2947,7 @@ const closeResultDialog = () => {
     </div>
 
     <!-- Floating Action Buttons - Left of System Inspector -->
-    <div class="fixed top-20 right-[310px] z-40 flex flex-col gap-3">
+    <div class="board-floating-actions fixed top-20 z-40 flex flex-col gap-3">
       <!-- Simulation Button (Circle) -->
       <div class="relative group">
         <!-- Pulse animation when active -->
@@ -2925,15 +2964,15 @@ const closeResultDialog = () => {
               ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-blue-500 hover:bg-blue-600'
           ]"
-          title="Simulation"
+          :title="t('app.simulationTitle')"
         >
           <span class="material-symbols-outlined text-xl">play_circle</span>
           <!-- Active indicator badge -->
           <span v-if="simulationAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ simulationAnimationState.visible ? 'Simulation Running' : 'Simulation' }}
-            <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">(Active)</span>
+            {{ simulationAnimationState.visible ? t('app.simulationRunning') : t('app.simulationTitle') }}
+            <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
           </span>
         </button>
       </div>
@@ -2954,7 +2993,7 @@ const closeResultDialog = () => {
               ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-green-500 hover:bg-green-600'
           ]"
-          title="Verification Settings"
+          :title="t('app.verificationSettings')"
         >
           <span v-if="isVerifying" class="material-symbols-outlined text-xl animate-spin">sync</span>
           <span v-else class="material-symbols-outlined text-xl">verified_user</span>
@@ -2962,8 +3001,25 @@ const closeResultDialog = () => {
           <span v-if="traceAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isVerifying ? 'Verifying...' : 'Verification Settings' }}
-            <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">(Active)</span>
+            {{ isVerifying ? t('app.verifying') : t('app.verificationSettings') }}
+            <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">({{ t('app.active') }})</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- History Button (Circle) -->
+      <div class="relative group">
+        <button
+          @click="toggleHistoryPanel()"
+          :class="[
+            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
+            showHistoryPanel ? 'bg-cyan-700 text-white' : 'bg-cyan-600 hover:bg-cyan-700 text-white'
+          ]"
+          :title="t('app.runHistory')"
+        >
+          <span class="material-symbols-outlined text-xl">history</span>
+          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
+            {{ t('app.runHistory') }}
           </span>
         </button>
       </div>
@@ -2986,13 +3042,13 @@ const closeResultDialog = () => {
                 ? 'bg-red-500 hover:bg-red-600'
                 : 'bg-amber-500 hover:bg-amber-600'
           ]"
-          :title="isRecommendingRules ? 'Stop' : 'Rule Recommendations'"
+          :title="isRecommendingRules ? t('app.stop') : t('app.ruleRecommendations')"
         >
           <span v-if="isRecommendingRules" class="material-symbols-outlined text-xl">stop</span>
           <span v-else class="material-symbols-outlined text-xl">auto_awesome</span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingRules ? 'Stop' : 'Rule Recommendations' }}
+            {{ isRecommendingRules ? t('app.stop') : t('app.ruleRecommendations') }}
           </span>
         </button>
       </div>
@@ -3015,13 +3071,13 @@ const closeResultDialog = () => {
                 ? 'bg-red-500 hover:bg-red-600'
                 : 'bg-purple-500 hover:bg-purple-600'
           ]"
-          :title="isRecommendingDevices ? 'Stop' : 'Device Recommendations'"
+          :title="isRecommendingDevices ? t('app.stop') : t('app.deviceRecommendations')"
         >
           <span v-if="isRecommendingDevices" class="material-symbols-outlined text-xl">stop</span>
           <span v-else class="material-symbols-outlined text-xl">devices</span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingDevices ? 'Stop' : 'Device Recommendations' }}
+            {{ isRecommendingDevices ? t('app.stop') : t('app.deviceRecommendations') }}
           </span>
         </button>
       </div>
@@ -3044,22 +3100,41 @@ const closeResultDialog = () => {
                 ? 'bg-red-500 hover:bg-red-600'
                 : 'bg-red-500 hover:bg-red-600'
           ]"
-          :title="isRecommendingSpecs ? 'Stop' : 'Specification Recommendations'"
+          :title="isRecommendingSpecs ? t('app.stop') : t('app.specificationRecommendations')"
         >
           <span v-if="isRecommendingSpecs" class="material-symbols-outlined text-xl">stop</span>
           <span v-else class="material-symbols-outlined text-xl">verified</span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingSpecs ? 'Stop' : 'Specification Recommendations' }}
+            {{ isRecommendingSpecs ? t('app.stop') : t('app.specificationRecommendations') }}
           </span>
         </button>
       </div>
     </div>
 
+    <TraceHistoryPanel
+      v-if="showHistoryPanel"
+      :active-tab="activeHistoryTab"
+      :verification-traces="verificationTraces"
+      :simulation-traces="simulationTraces"
+      :loading-verification="loadingVerificationHistory"
+      :loading-simulation="loadingSimulationHistory"
+      :action-locked="historyActionLocked"
+      @update:active-tab="setHistoryTab"
+      @close="closeHistoryPanel"
+      @refresh-verification="loadVerificationTraces"
+      @refresh-simulation="loadSimulationTraces"
+      @view-verification="selectAndPlayVerificationTrace"
+      @fix-verification="openFixForVerificationTrace"
+      @delete-verification="deleteVerificationTrace"
+      @view-simulation="selectAndPlaySimulationTrace"
+      @delete-simulation="deleteSimulationTrace"
+    />
+
     <!-- Verification Panel -->
     <div 
       v-if="showVerificationPanel"
-      class="fixed top-20 right-[375px] z-30 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+      class="board-floating-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
     >
       <!-- Verification Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3071,8 +3146,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">verified_user</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">Verification</h3>
-              <p class="text-green-900/80 text-xs">Configure and run verification</p>
+              <h3 class="text-black font-bold text-base">{{ t('app.verification') }}</h3>
+              <p class="text-green-900/80 text-xs">{{ t('app.configureAndRunVerification') }}</p>
             </div>
           </div>
           <button 
@@ -3092,7 +3167,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Attack Mode
+              {{ t('app.attackMode') }}
             </label>
           </div>
           <button
@@ -3113,7 +3188,7 @@ const closeResultDialog = () => {
         <!-- Intensity (visible when attack is enabled) -->
         <div v-if="verificationForm.isAttack" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
           <label class="block text-[10px] font-bold text-red-700 uppercase tracking-wide mb-2">
-            Attack Intensity: <span class="text-red-500">{{ verificationForm.intensity }}</span>
+            {{ t('app.attackIntensity') }}: <span class="text-red-500">{{ verificationForm.intensity }}</span>
           </label>
           <input
             v-model.number="verificationForm.intensity"
@@ -3123,8 +3198,8 @@ const closeResultDialog = () => {
             class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
           />
           <div class="flex justify-between text-[10px] text-red-400 mt-1">
-            <span>Weak</span>
-            <span>Strong</span>
+            <span>{{ t('app.weak') }}</span>
+            <span>{{ t('app.strong') }}</span>
           </div>
         </div>
 
@@ -3135,7 +3210,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Privacy Analysis
+              {{ t('app.privacyAnalysis') }}
             </label>
           </div>
           <button
@@ -3160,7 +3235,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Async Mode
+              {{ t('app.asyncMode') }}
             </label>
           </div>
           <button
@@ -3188,7 +3263,7 @@ const closeResultDialog = () => {
                 type="button"
                 class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingVerificationTask"
-                title="Cancel verification task"
+                :title="t('app.cancelVerificationTask')"
                 @click="cancelAsyncVerification"
               >
                 <span class="material-symbols-outlined text-sm">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
@@ -3211,11 +3286,11 @@ const closeResultDialog = () => {
         >
           <template v-if="isVerifying">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            Verifying...
+            {{ t('app.verifying') }}
           </template>
           <template v-else>
             <span class="material-symbols-outlined text-sm">play_arrow</span>
-            Run
+            {{ t('app.run') }}
           </template>
         </button>
       </div>
@@ -3224,7 +3299,7 @@ const closeResultDialog = () => {
     <!-- Rule Recommendation Panel -->
     <div 
       v-if="showRecommendationPanel"
-      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3236,8 +3311,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">auto_awesome</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">Rule Recommendations</h3>
-              <p class="text-black/70 text-xs">AI-powered automation suggestions</p>
+              <h3 class="text-black font-bold text-base">{{ t('app.ruleRecommendations') }}</h3>
+              <p class="text-black/70 text-xs">{{ t('app.aiPoweredAutomationSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -3251,14 +3326,44 @@ const closeResultDialog = () => {
 
       <!-- Recommendation Content -->
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-amber-50/30 max-h-[500px] overflow-y-auto">
+        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-amber-100 bg-white p-2">
+          <label class="text-xs font-medium text-slate-600">
+            Category
+            <select
+              v-model="ruleRecommendationFilters.category"
+              :disabled="isRecommendingRules"
+              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-100"
+            >
+              <option
+                v-for="option in ruleRecommendationCategories"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="text-xs font-medium text-slate-600">
+            Count
+            <input
+              v-model.number="ruleRecommendationFilters.maxRecommendations"
+              :disabled="isRecommendingRules"
+              type="number"
+              min="1"
+              max="10"
+              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-200 disabled:bg-slate-100"
+            />
+          </label>
+        </div>
+
         <!-- Loading State -->
         <div v-if="isRecommendingRules" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
             <span class="material-symbols-outlined text-amber-500 text-5xl animate-spin">sync</span>
             <div class="absolute inset-0 bg-amber-400 rounded-full animate-ping opacity-20"></div>
           </div>
-          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your devices...</p>
-          <p class="text-slate-400 text-xs mt-1">Generating intelligent automation rules</p>
+          <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingDevices') }}</p>
+          <p class="text-slate-400 text-xs mt-1">{{ t('app.generatingAutomationRules') }}</p>
         </div>
 
         <!-- Empty State -->
@@ -3266,8 +3371,8 @@ const closeResultDialog = () => {
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-slate-300 text-3xl">psychology</span>
           </div>
-          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered automation suggestions</p>
+          <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.addMoreDevicesForAutomation') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -3298,7 +3403,7 @@ const closeResultDialog = () => {
                     <span class="material-symbols-outlined text-amber-600">smart_toy</span>
                   </div>
                   <div>
-                    <h4 class="text-sm font-bold text-slate-800">Automation Rule</h4>
+                    <h4 class="text-sm font-bold text-slate-800">{{ t('app.automationRule') }}</h4>
                     <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
                   </div>
                 </div>
@@ -3332,7 +3437,7 @@ const closeResultDialog = () => {
     <!-- Device Recommendation Panel -->
     <div 
       v-if="showDeviceRecommendationPanel"
-      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3344,8 +3449,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">devices</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">Device Recommendations</h3>
-              <p class="text-black/70 text-xs">AI-powered device suggestions</p>
+              <h3 class="text-black font-bold text-base">{{ t('app.deviceRecommendations') }}</h3>
+              <p class="text-black/70 text-xs">{{ t('app.aiPoweredDeviceSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -3365,8 +3470,8 @@ const closeResultDialog = () => {
             <span class="material-symbols-outlined text-purple-500 text-5xl animate-spin">sync</span>
             <div class="absolute inset-0 bg-purple-400 rounded-full animate-ping opacity-20"></div>
           </div>
-          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your board...</p>
-          <p class="text-slate-400 text-xs mt-1">Finding compatible devices</p>
+          <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingBoard') }}</p>
+          <p class="text-slate-400 text-xs mt-1">{{ t('app.findingCompatibleDevices') }}</p>
         </div>
 
         <!-- Empty State -->
@@ -3374,8 +3479,8 @@ const closeResultDialog = () => {
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-slate-300 text-3xl">devices</span>
           </div>
-          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered device suggestions</p>
+          <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.addMoreDevicesForDevices') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -3440,7 +3545,7 @@ const closeResultDialog = () => {
     <!-- Specification Recommendation Panel -->
     <div 
       v-if="showSpecRecommendationPanel"
-      class="fixed top-20 right-[375px] z-30 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3452,8 +3557,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">verified</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">Specification Recommendations</h3>
-              <p class="text-black/70 text-xs">AI-powered specification suggestions</p>
+              <h3 class="text-black font-bold text-base">{{ t('app.specificationRecommendations') }}</h3>
+              <p class="text-black/70 text-xs">{{ t('app.aiPoweredSpecificationSuggestions') }}</p>
             </div>
           </div>
           <button 
@@ -3467,14 +3572,44 @@ const closeResultDialog = () => {
 
       <!-- Recommendation Content -->
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-red-50/30 max-h-[500px] overflow-y-auto">
+        <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-red-100 bg-white p-2">
+          <label class="text-xs font-medium text-slate-600">
+            Category
+            <select
+              v-model="specRecommendationFilters.category"
+              :disabled="isRecommendingSpecs"
+              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:bg-slate-100"
+            >
+              <option
+                v-for="option in specRecommendationCategories"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="text-xs font-medium text-slate-600">
+            Count
+            <input
+              v-model.number="specRecommendationFilters.maxRecommendations"
+              :disabled="isRecommendingSpecs"
+              type="number"
+              min="1"
+              max="10"
+              class="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:bg-slate-100"
+            />
+          </label>
+        </div>
+
         <!-- Loading State -->
         <div v-if="isRecommendingSpecs" class="flex flex-col items-center justify-center py-10">
           <div class="relative">
             <span class="material-symbols-outlined text-red-500 text-5xl animate-spin">sync</span>
             <div class="absolute inset-0 bg-red-400 rounded-full animate-ping opacity-20"></div>
           </div>
-          <p class="text-slate-600 text-sm mt-4 font-medium">Analyzing your system...</p>
-          <p class="text-slate-400 text-xs mt-1">Generating formal specifications</p>
+          <p class="text-slate-600 text-sm mt-4 font-medium">{{ t('app.analyzingSystem') }}</p>
+          <p class="text-slate-400 text-xs mt-1">{{ t('app.generatingFormalSpecifications') }}</p>
         </div>
 
         <!-- Empty State -->
@@ -3482,8 +3617,8 @@ const closeResultDialog = () => {
           <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-slate-300 text-3xl">verified</span>
           </div>
-          <p class="text-slate-600 text-sm font-medium mt-2">No recommendations available</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">Add more devices to get AI-powered specification suggestions</p>
+          <p class="text-slate-600 text-sm font-medium mt-2">{{ t('app.noRecommendationsAvailable') }}</p>
+          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.addMoreDevicesForSpecifications') }}</p>
         </div>
 
         <!-- Recommendations List -->
@@ -3554,7 +3689,7 @@ const closeResultDialog = () => {
     <!-- Simulation Panel (Appears when clicking simulation button) -->
     <div 
       v-if="showSimulationPanel"
-      class="fixed top-20 right-[375px] z-30 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden"
+      class="board-floating-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
     >
       <!-- Simulation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3566,8 +3701,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">play_circle</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-black">Simulation</span>
-              <p class="text-indigo-900/80 text-xs">Configure simulation</p>
+              <span class="text-sm font-bold text-black">{{ t('app.simulationTitle') }}</span>
+              <p class="text-indigo-900/80 text-xs">{{ t('app.configureSimulation') }}</p>
             </div>
           </div>
           <button 
@@ -3583,7 +3718,7 @@ const closeResultDialog = () => {
         <!-- Steps -->
         <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
           <label class="block text-[10px] font-bold text-indigo-700 uppercase tracking-wide mb-2">
-            Simulation Steps: <span class="text-indigo-600">{{ simulationForm.steps }}</span>
+            {{ t('app.simulationSteps') }}: <span class="text-indigo-600">{{ simulationForm.steps }}</span>
           </label>
           <div class="flex items-center gap-3">
             <span class="material-symbols-outlined text-indigo-300">fast_rewind</span>
@@ -3605,7 +3740,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-red-500 text-lg">warning</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Attack Mode
+              {{ t('app.attackMode') }}
             </label>
           </div>
           <button
@@ -3626,7 +3761,7 @@ const closeResultDialog = () => {
         <!-- Intensity (visible when attack is enabled) -->
         <div v-if="simulationForm.isAttack" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
           <label class="block text-[10px] font-bold text-red-700 uppercase tracking-wide mb-2">
-            Attack Intensity: <span class="text-red-500">{{ simulationForm.intensity }}</span>
+            {{ t('app.attackIntensity') }}: <span class="text-red-500">{{ simulationForm.intensity }}</span>
           </label>
           <input
             v-model.number="simulationForm.intensity"
@@ -3636,8 +3771,8 @@ const closeResultDialog = () => {
             class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
           />
           <div class="flex justify-between text-[10px] text-red-400 mt-1">
-            <span>Weak</span>
-            <span>Strong</span>
+            <span>{{ t('app.weak') }}</span>
+            <span>{{ t('app.strong') }}</span>
           </div>
         </div>
 
@@ -3648,7 +3783,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-purple-500 text-lg">security</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Privacy Analysis
+              {{ t('app.privacyAnalysis') }}
             </label>
           </div>
           <button
@@ -3673,7 +3808,7 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              Async Mode
+              {{ t('app.asyncMode') }}
             </label>
           </div>
           <button
@@ -3691,17 +3826,44 @@ const closeResultDialog = () => {
           </button>
         </div>
 
+        <!-- Save History -->
+        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-cyan-100 rounded-lg flex items-center justify-center">
+              <span class="material-symbols-outlined text-cyan-600 text-lg">history</span>
+            </div>
+            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+              {{ t('app.saveToHistory') }}
+            </label>
+          </div>
+          <button
+            @click="simulationForm.saveToHistory = !simulationForm.saveToHistory"
+            :disabled="simulationForm.isAsync"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+            :class="(simulationForm.isAsync || simulationForm.saveToHistory) ? 'bg-cyan-600' : 'bg-slate-300'"
+            :title="simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory')"
+          >
+            <span
+              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+              :style="{
+                transform: (simulationForm.isAsync || simulationForm.saveToHistory) ? 'translateX(20px)' : 'translateX(4px)',
+                willChange: 'transform'
+              }"
+            />
+          </button>
+        </div>
+
         <!-- Async Progress (visible when async simulation is running) -->
         <div v-if="isSimulating && asyncSimulationTask.taskId" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
-            <span class="text-indigo-700 font-medium">Progress</span>
+            <span class="text-indigo-700 font-medium">{{ t('app.progress') }}</span>
             <div class="flex items-center gap-2">
               <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
               <button
                 type="button"
                 class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="cancellingSimulationTask"
-                title="Cancel simulation task"
+                :title="t('app.cancelSimulationTask')"
                 @click="cancelAsyncSimulation"
               >
                 <span class="material-symbols-outlined text-sm">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
@@ -3725,11 +3887,11 @@ const closeResultDialog = () => {
         >
           <template v-if="isSimulating">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
-            {{ simulationForm.isAsync ? 'Running Async...' : 'Running...' }}
+            {{ simulationForm.isAsync ? t('app.runningAsync') : t('app.running') }}
           </template>
           <template v-else>
             <span class="material-symbols-outlined text-sm">play_arrow</span>
-            Run
+            {{ t('app.run') }}
           </template>
         </button>
       </div>
@@ -3768,14 +3930,14 @@ const closeResultDialog = () => {
         class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
       >
         <span class="material-icons-round text-base">edit</span>
-        重命名
+        {{ t('app.rename') }}
       </button>
       <button
         @click="viewDeviceDetails"
         class="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
       >
         <span class="material-icons-round text-base">visibility</span>
-        查看详细
+        {{ t('app.viewDetails') }}
       </button>
       <div class="border-t border-slate-100 my-1"></div>
       <button
@@ -3783,7 +3945,7 @@ const closeResultDialog = () => {
         class="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
       >
         <span class="material-icons-round text-base">delete</span>
-        删除设备
+        {{ t('app.deleteDevice') }}
       </button>
     </div>
 
@@ -3803,13 +3965,13 @@ const closeResultDialog = () => {
     />
 
     <!-- Canvas Map - Fixed at bottom left -->
-    <div class="fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
+    <div class="canvas-map fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-[10px] uppercase font-bold text-slate-400">Canvas Map</span>
+        <span class="text-[10px] uppercase font-bold text-slate-400">{{ t('app.canvasMap') }}</span>
         <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>
       </div>
 
-      <div class="w-full h-32 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shadow-inner">
+      <div class="canvas-map__viewport w-full h-32 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shadow-inner">
         <!-- SVG for lines (background layer) -->
         <svg class="absolute inset-0 w-full h-full pointer-events-none">
           <!-- Test line to verify SVG works -->
@@ -3842,7 +4004,7 @@ const closeResultDialog = () => {
 
         <!-- Empty state message -->
         <div v-if="canvasMapDots.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-400 text-xs">
-          No devices on canvas
+          {{ t('app.noDevicesOnCanvas') }}
         </div>
       </div>
     </div>
@@ -3851,13 +4013,13 @@ const closeResultDialog = () => {
     <div v-if="renameDialogVisible" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="cancelRename">
       <div class="bg-white rounded-xl p-6 w-96 max-w-[90vw] shadow-2xl" @click.stop>
         <div class="mb-6">
-          <h3 class="text-lg font-semibold text-slate-800 mb-4">重命名设备</h3>
+          <h3 class="text-lg font-semibold text-slate-800 mb-4">{{ t('app.renameDevice') }}</h3>
           <div class="space-y-2">
             <input
               v-model="renameDialogData.newName"
               @keyup.enter="confirmRename"
               class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-              placeholder="输入设备名称"
+              :placeholder="t('app.enterDeviceName')"
             />
           </div>
         </div>
@@ -3866,14 +4028,14 @@ const closeResultDialog = () => {
             @click="cancelRename"
             class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors"
           >
-            取消
+            {{ t('app.cancel') }}
           </button>
           <button
             @click="confirmRename"
             :disabled="!renameDialogData.newName.trim() || renameDialogData.newName.trim() === renameDialogData.node?.label"
             class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            确定
+            {{ t('app.confirm') }}
           </button>
         </div>
       </div>
@@ -3888,8 +4050,8 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-red-600">warning</span>
             </div>
             <div class="ml-3">
-              <h3 class="text-lg font-semibold text-slate-800">确认删除设备</h3>
-              <p class="text-sm text-slate-600">此操作无法撤销</p>
+              <h3 class="text-lg font-semibold text-slate-800">{{ t('app.deleteDeviceTitle') }}</h3>
+              <p class="text-sm text-slate-600">{{ t('app.actionCannotBeUndone') }}</p>
             </div>
           </div>
 
@@ -3899,13 +4061,13 @@ const closeResultDialog = () => {
             <div class="flex items-start">
               <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5">info</span>
               <div>
-                <p class="text-sm font-medium text-yellow-800 mb-1">此设备有关联的规则和规约</p>
+                <p class="text-sm font-medium text-yellow-800 mb-1">{{ t('app.deviceHasRelations') }}</p>
                 <div class="text-xs text-yellow-700 space-y-1">
                   <div v-if="deleteConfirmDialogData.relationCount.rules > 0">
-                    • {{ deleteConfirmDialogData.relationCount.rules }} 个关联规则将被删除
+                    • {{ t('app.relatedRulesWillBeDeleted', { count: deleteConfirmDialogData.relationCount.rules }) }}
                   </div>
                   <div v-if="deleteConfirmDialogData.relationCount.specs > 0">
-                    • {{ deleteConfirmDialogData.relationCount.specs }} 个关联规约将被删除
+                    • {{ t('app.relatedSpecsWillBeDeleted', { count: deleteConfirmDialogData.relationCount.specs }) }}
                   </div>
                 </div>
               </div>
@@ -3920,13 +4082,13 @@ const closeResultDialog = () => {
             @click="cancelDelete"
             class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors"
           >
-            取消
+            {{ t('app.cancel') }}
           </button>
           <button
             @click="confirmDelete"
             class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors"
           >
-            删除设备
+            {{ t('app.deleteDevice') }}
           </button>
         </div>
       </div>
@@ -3946,9 +4108,9 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-2xl">play_circle</span>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-white">Simulation Result</h3>
+              <h3 class="text-xl font-bold text-white">{{ t('app.simulationResult') }}</h3>
               <p class="text-indigo-200/80 text-sm" v-if="simulationResult">
-                {{ simulationResult.steps || 0 }} states from {{ simulationResult.requestedSteps || 0 }} steps
+                {{ t('app.statesFromSteps', { states: simulationResult.steps || 0, steps: simulationResult.requestedSteps || 0 }) }}
               </p>
             </div>
           </div>
@@ -3970,21 +4132,21 @@ const closeResultDialog = () => {
       <div v-else-if="simulationResult" class="flex-1 overflow-hidden flex flex-col p-6 pt-4">
         <!-- Logs -->
         <div class="mb-4">
-          <h4 class="text-sm font-bold text-slate-700 mb-2">Execution Logs</h4>
+          <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.executionLogs') }}</h4>
           <div class="bg-slate-900 rounded-lg p-3 max-h-32 overflow-y-auto">
-            <pre class="text-xs text-green-400 font-mono whitespace-pre-wrap">{{ simulationResult.logs?.join('\n') || 'No logs available' }}</pre>
+            <pre class="text-xs text-green-400 font-mono whitespace-pre-wrap">{{ simulationResult.logs?.join('\n') || t('app.noLogsAvailableShort') }}</pre>
           </div>
         </div>
 
         <!-- States Preview -->
         <div class="flex-1 overflow-hidden flex flex-col">
-          <h4 class="text-sm font-bold text-slate-700 mb-2">Simulation States ({{ simulationResult.states?.length || 0 }})</h4>
+          <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.simulationStates') }} ({{ simulationResult.states?.length || 0 }})</h4>
           <div class="flex-1 overflow-y-auto border border-slate-200 rounded-lg">
             <table class="w-full text-xs">
               <thead class="bg-slate-50 sticky top-0">
                 <tr>
-                  <th class="text-left p-2 font-bold text-slate-600 border-b">State #</th>
-                  <th class="text-left p-2 font-bold text-slate-600 border-b">Devices</th>
+                  <th class="text-left p-2 font-bold text-slate-600 border-b">{{ t('app.stateNumber') }}</th>
+                  <th class="text-left p-2 font-bold text-slate-600 border-b">{{ t('app.devicesColumn') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -4012,10 +4174,10 @@ const closeResultDialog = () => {
         <!-- NuSMV Output (collapsed by default) -->
         <details class="mt-4">
           <summary class="text-xs font-bold text-slate-500 cursor-pointer hover:text-slate-700">
-            Show Raw NuSMV Output
+            {{ t('app.showRawNusmvOutput') }}
           </summary>
           <div class="mt-2 bg-slate-900 rounded-lg p-3 max-h-40 overflow-y-auto">
-            <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ simulationResult.nusmvOutput || 'No output' }}</pre>
+            <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ simulationResult.nusmvOutput || t('app.noOutput') }}</pre>
           </div>
         </details>
       </div>
@@ -4033,14 +4195,14 @@ const closeResultDialog = () => {
           ]"
         >
           <span class="material-symbols-outlined text-lg">play_circle</span>
-          View Timeline
-          <span v-if="traceAnimationState.visible" class="text-xs ml-1">(Active)</span>
+          {{ t('app.viewTimeline') }}
+          <span v-if="traceAnimationState.visible" class="text-xs ml-1">({{ t('app.active') }})</span>
         </button>
         <button
           @click="simulationResult = null; simulationError = null"
           class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
         >
-          Close
+          {{ t('app.close') }}
         </button>
       </div>
     </div>
@@ -4059,8 +4221,8 @@ const closeResultDialog = () => {
               </span>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-slate-800">Verification Result</h3>
-              <p class="text-sm text-slate-600">{{ verificationResult?.safe ? 'All specifications passed' : 'Violations detected' }}</p>
+              <h3 class="text-xl font-bold text-slate-800">{{ t('app.verificationResult') }}</h3>
+              <p class="text-sm text-slate-600">{{ verificationResult?.safe ? t('app.allSpecificationsPassed') : t('app.violationsDetected') }}</p>
             </div>
           </div>
           <button @click="closeResultDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
@@ -4088,10 +4250,10 @@ const closeResultDialog = () => {
               </div>
               <div>
                 <span class="text-lg font-bold" :class="verificationResult.safe ? 'text-green-800' : 'text-red-800'">
-                  {{ verificationResult.safe ? 'System is Safe' : 'System is Unsafe' }}
+                  {{ verificationResult.safe ? t('app.systemSafe') : t('app.systemUnsafe') }}
                 </span>
                 <p class="text-sm" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
-                  {{ verificationResult.safe ? 'All specifications passed verification' : `Found ${verificationResult.traces?.length || 0} violation(s)` }}
+                  {{ verificationResult.safe ? t('app.allSpecsPassedVerification') : t('app.foundViolations', { count: verificationResult.traces?.length || 0 }) }}
                 </p>
               </div>
             </div>
@@ -4101,17 +4263,16 @@ const closeResultDialog = () => {
             <div class="flex items-start gap-3">
               <span class="material-symbols-outlined text-amber-600">report</span>
               <div>
-                <div class="text-sm font-bold">Generation warnings</div>
+                <div class="text-sm font-bold">{{ t('app.generationWarnings') }}</div>
                 <p class="text-sm mt-1">
-                  {{ verificationGenerationWarningCounts.disabledRuleCount }} disabled rule(s),
-                  {{ verificationGenerationWarningCounts.skippedSpecCount }} skipped specification(s).
+                  {{ t('app.disabledRulesSkippedSpecs', { rules: verificationGenerationWarningCounts.disabledRuleCount, specs: verificationGenerationWarningCounts.skippedSpecCount }) }}
                 </p>
               </div>
             </div>
           </div>
 
           <div v-if="verificationCheckLogs.length > 0" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <h4 class="text-sm font-bold text-slate-700 mb-2">Check Logs</h4>
+            <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.checkLogs') }}</h4>
             <div class="space-y-1 max-h-44 overflow-y-auto">
               <div
                 v-for="(log, index) in verificationCheckLogs"
@@ -4125,56 +4286,11 @@ const closeResultDialog = () => {
         </div>
 
         <div v-if="verificationResult && !verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
-          <!-- Historical Verification Traces -->
-          <div class="mb-4">
-            <button 
-              @click="loadVerificationTraces(); showVerificationTracesPanel = !showVerificationTracesPanel"
-              class="flex items-center gap-2 text-sm font-bold text-green-700 hover:text-green-800 mb-2"
-            >
-              <span class="material-symbols-outlined text-lg">
-                {{ showVerificationTracesPanel ? 'expand_less' : 'history' }}
-              </span>
-              Historical Verification Traces ({{ verificationTraces.length }})
-            </button>
-            
-            <div v-if="showVerificationTracesPanel" class="bg-green-50 border border-green-200 rounded-lg p-3 max-h-48 overflow-y-auto">
-              <div v-if="verificationTraces.length === 0" class="text-sm text-slate-500 text-center py-4">
-                No historical traces found
-              </div>
-              <div v-else class="space-y-2">
-                <div v-for="trace in verificationTraces" :key="trace.id" class="border border-green-200 rounded p-2 bg-white hover:bg-green-50">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <div class="text-xs font-bold text-green-700">Trace #{{ trace.id }}</div>
-                      <div class="text-xs text-slate-500">Spec: {{ trace.violatedSpecId }} | States: {{ trace.states?.length || 0 }}</div>
-                      <div class="text-xs text-slate-400">{{ new Date(trace.createdAt).toLocaleString() }}</div>
-                    </div>
-                    <div class="flex gap-1">
-                      <button
-                        @click="selectAndPlayVerificationTrace(trace.id)"
-                        :disabled="simulationAnimationState.visible || showRecommendationPanel"
-                        class="px-2 py-1 bg-green-500 hover:bg-green-600 text-black rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        View
-                      </button>
-                      <button
-                        @click="deleteVerificationTrace(trace.id)"
-                        class="px-2 py-1 bg-red-400 hover:bg-red-500 text-black rounded text-xs"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <h4 class="text-sm font-bold text-slate-700 mb-2">Violations ({{ verificationResult.traces.length }})</h4>
+          <h4 class="text-sm font-bold text-slate-700 mb-2">{{ t('app.violationsTitle') }} ({{ verificationResult.traces.length }})</h4>
           <div class="space-y-2">
             <div v-for="(trace, i) in verificationResult.traces" :key="i" class="border border-slate-200 rounded p-3">
               <div class="flex items-center justify-between mb-1">
-                <div class="text-xs font-bold text-red-600">Violation #{{ Number(i) + 1 }}</div>
+                <div class="text-xs font-bold text-red-600">{{ t('app.violationNumber', { index: Number(i) + 1 }) }}</div>
                 <div class="flex gap-1">
                   <button
                     @click="openFixDialog(trace.id, trace.violatedSpecId)"
@@ -4183,7 +4299,7 @@ const closeResultDialog = () => {
                     :class="simulationAnimationState.visible ? 'bg-slate-300 cursor-not-allowed' : ''"
                   >
                     <span class="material-symbols-outlined text-xs">build</span>
-                    Fix
+                    {{ t('app.fix') }}
                   </button>
                   <button
                     @click="selectAndPlayTrace(Number(i))"
@@ -4196,17 +4312,17 @@ const closeResultDialog = () => {
                     ]"
                   >
                     <span class="material-symbols-outlined text-xs">play_arrow</span>
-                    View Trace
-                    <span v-if="simulationAnimationState.visible" class="text-[10px]">(Active)</span>
+                    {{ t('app.viewTrace') }}
+                    <span v-if="simulationAnimationState.visible" class="text-[10px]">({{ t('app.active') }})</span>
                   </button>
                 </div>
               </div>
-              <div class="text-xs font-bold text-slate-600 mb-1">Spec: {{ trace.violatedSpecId }}</div>
+              <div class="text-xs font-bold text-slate-600 mb-1">{{ t('app.specPrefix') }}: {{ trace.violatedSpecId }}</div>
               <div v-if="trace.violatedSpecJson" class="text-xs font-mono text-slate-700 bg-slate-50 p-2 rounded mt-1">
                 {{ formatSpec(trace.violatedSpecJson) }}
               </div>
               <div class="text-xs text-slate-500 mt-1">
-                States: {{ trace.states?.length || 0 }}
+                {{ t('app.statesCount', { count: trace.states?.length || 0 }) }}
               </div>
             </div>
           </div>
@@ -4240,7 +4356,9 @@ const closeResultDialog = () => {
         <!-- Violated Spec -->
         <div v-if="formattedSpec" class="p-2 bg-red-50 border border-red-200 rounded-lg">
           <div class="flex items-center justify-between mb-2">
-            <div class="text-xs font-semibold text-red-600 uppercase">Violated Specification</div>
+            <div class="text-xs font-semibold text-red-600 uppercase">
+              {{ t('app.traceVisualization.violatedSpecification') }}
+            </div>
             <button @click="closeTraceAnimation" class="text-slate-400 hover:text-slate-600">
               <span class="material-symbols-outlined">close</span>
             </button>
@@ -4253,21 +4371,21 @@ const closeResultDialog = () => {
       <div class="mb-3">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-sm font-bold text-slate-700">State Sequence</span>
+            <span class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.stateSequence') }}</span>
             <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
             <!-- Verification Info (from the viewed trace's own context, not the live form) -->
             <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
               <span class="material-symbols-outlined text-[10px]">warning</span>
-              Attack
+              {{ t('app.traceVisualization.attack') }}
             </span>
             <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
-              Intensity: {{ activeTraceContext.intensity }}
+              {{ t('app.traceVisualization.intensity') }}: {{ activeTraceContext.intensity }}
             </span>
             <span class="px-2 py-0.5 bg-blue-100 text-blue-600 text-xs rounded-full">
               <span class="material-symbols-outlined text-[10px]">security</span>
-              security
+              {{ t('app.traceVisualization.security') }}
             </span>
           </div>
           <div class="flex items-center gap-2">
@@ -4279,12 +4397,12 @@ const closeResultDialog = () => {
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
             >
               <span class="material-symbols-outlined text-sm">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
-              {{ traceAnimationState.isPlaying ? 'Stop' : 'Play' }}
+              {{ traceAnimationState.isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play') }}
             </button>
             <button
               @click="closeTraceAnimation"
               class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
-              title="Close"
+              :title="t('app.close')"
             >
               <span class="material-symbols-outlined text-slate-500">close</span>
             </button>

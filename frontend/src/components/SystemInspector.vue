@@ -5,6 +5,9 @@ import type { RuleForm } from '../types/rule'
 import type { Specification } from '../types/spec'
 import type { DeviceEdge } from '../types/edge'
 import { specTemplateDetails } from '../assets/config/specTemplates'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -41,7 +44,7 @@ const displayDevices = computed(() => {
     .map(device => ({
     id: device.id,
     name: device.label,
-    type: device.templateName || 'Device',
+    type: device.templateName || t('app.device'),
     status: 'online' as const // Simplified - in real app, this would come from device state
   }))
 })
@@ -65,11 +68,10 @@ const displayRules = computed(() => {
   let sourceRules = props.rules
 
   if ((!sourceRules || sourceRules.length === 0) && props.edges && props.edges.length > 0) {
-    console.log('⚠️ [SystemInspector] 规则为空，正在从连线恢复规则数据...')
     // 从连线构建规则对象
     sourceRules = props.edges.map(edge => ({
       id: edge.id, // 使用连线 ID 作为规则 ID
-      name: `Rule from ${edge.fromLabel}`,
+      name: t('app.ruleFrom', { source: edge.fromLabel }),
       sources: [{ 
         fromId: edge.from, 
         fromApi: edge.fromApi || '',
@@ -88,7 +90,7 @@ const displayRules = computed(() => {
     // 构建更详细的源设备描述
     const sourceDescriptions = rule.sources.map(s => {
       const sourceNode = props.devices.find(d => d.id === s.fromId)
-      let desc = `${sourceNode?.label || 'Unknown'}`
+      let desc = `${sourceNode?.label || t('app.unknown')}`
       
       // 如果有 itemType、relation、value 信息，显示更完整
       // 兼容 itemType 和 targetType 两种字段名
@@ -96,7 +98,7 @@ const displayRules = computed(() => {
       if (sourceType === 'variable' && s.relation && s.value) {
         desc += ` ${s.fromApi} ${getRelationLabel(s.relation)} ${s.value}`
       } else if (sourceType === 'api') {
-        desc += ` triggers ${s.fromApi}`
+        desc += ` ${t('app.triggers')} ${s.fromApi}`
       } else {
         // 如果有 relation 和 value，也显示
         if (s.relation && s.value) {
@@ -111,9 +113,13 @@ const displayRules = computed(() => {
     return {
       originalId: rule.id, // 保留原始id用于删除操作
       id: rule.id ? rule.id.replace('rule_', '') : 'unknown',
-      name: rule.name || `Rule ${(rule.id ? rule.id.replace('rule_', '') : '').split('_')[1] || 'unknown'}`,
-      description: `IF ${sourceDescriptions.join(' AND ')} THEN ${targetNode?.label || 'Unknown'} triggers ${rule.toApi || 'N/A'}`,
-      status: 'Active' as const,
+      name: rule.name || t('app.ruleFrom', { source: (rule.id ? rule.id.replace('rule_', '') : '').split('_')[1] || t('app.unknown') }),
+      description: t('app.ifThenDescription', {
+        source: sourceDescriptions.join(` ${t('app.and')} `),
+        target: targetNode?.label || t('app.unknown'),
+        action: rule.toApi || 'N/A'
+      }),
+      status: t('app.active'),
       color: 'blue' as const,
       enabled: true // Add enabled status
     }
@@ -177,7 +183,7 @@ const generateFormulaFromConditions = (spec: any): string => {
       const persThen = conditionsToString(spec.thenConditions)
       return persIf && persThen ? `□((${persIf}) → □(${persThen}))` : '□(A → □B)'
     default:
-      return 'No formula defined'
+      return t('app.noFormulaDefined')
   }
 }
 
@@ -188,15 +194,15 @@ const displaySpecs = computed(() => {
     // 覆盖全部 1-7，避免旧 switch 只处理 1-3 时把 4-7 显示成 "Unknown Property"。
     const specType = spec.templateLabel
       || specTemplateDetails.find(t => t.id === spec.templateId)?.label
-      || 'Unknown'
+      || t('app.unknown')
 
-    const deviceInfo = spec.deviceId ? ` (${spec.deviceLabel || spec.deviceId})` : ' (Global)'
+    const deviceInfo = spec.deviceId ? ` (${spec.deviceLabel || spec.deviceId})` : ` (${t('app.global')})`
 
     return {
       id: spec.id,
-      name: `${specType} Property${deviceInfo}`,
+      name: `${specType} ${t('app.property')}${deviceInfo}`,
       formula: generateFormulaFromConditions(spec),
-      status: 'Active' as const,
+      status: t('app.active'),
       color: 'red' as const, // All specifications use red theme
       deviceId: spec.deviceId,
       deviceLabel: spec.deviceLabel
@@ -242,8 +248,8 @@ const togglePanel = () => {
             <span class="material-symbols-outlined text-blue-600">fact_check</span>
           </div>
           <div>
-            <h2 class="text-sm font-bold text-slate-800 leading-none">System Inspector</h2>
-            <p class="text-[10px] text-slate-500 font-medium mt-0.5">Device Management</p>
+            <h2 class="text-sm font-bold text-slate-800 leading-none">{{ t('app.systemInspector') }}</h2>
+            <p class="text-[10px] text-slate-500 font-medium mt-0.5">{{ t('app.deviceManagement') }}</p>
           </div>
         </div>
         <button
@@ -272,7 +278,7 @@ const togglePanel = () => {
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-slate-400">devices</span>
-            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Device List</h3>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.deviceList') }}</h3>
           </div>
         </div>
 
@@ -302,7 +308,7 @@ const togglePanel = () => {
               <button
                 @click.stop="handleDeleteDevice(device.id)"
                 class="text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 p-1.5 rounded-lg"
-                title="Remove device"
+                :title="t('app.removeDevice')"
               >
                 <span class="material-symbols-outlined text-sm">close</span>
               </button>
@@ -316,7 +322,7 @@ const togglePanel = () => {
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-slate-400">rule</span>
-            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Global Rules</h3>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.globalRules') }}</h3>
           </div>
           <button
             @click="handleAddRule"
@@ -349,7 +355,7 @@ const togglePanel = () => {
               <button
                 @click="rule.originalId && handleDeleteRule(rule.originalId)"
                 class="text-blue-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-all"
-                title="Delete rule"
+                :title="t('app.deleteRule')"
               >
                 <span class="material-symbols-outlined text-sm">delete</span>
               </button>
@@ -363,7 +369,7 @@ const togglePanel = () => {
           <!-- Empty state when no rules -->
           <div v-if="displayRules.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">rule</span>
-            <p class="text-xs">No rules active</p>
+            <p class="text-xs">{{ t('app.noRulesActive') }}</p>
           </div>
         </div>
       </div>
@@ -373,7 +379,7 @@ const togglePanel = () => {
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-slate-400">verified</span>
-            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">Specifications</h3>
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.specifications') }}</h3>
           </div>
         </div>
 
@@ -396,7 +402,7 @@ const togglePanel = () => {
               <button
                 @click="handleDeleteSpec(spec.id)"
                 class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
-                title="Delete specification"
+                :title="t('app.deleteSpecification')"
               >
                 <span class="material-symbols-outlined text-xs">delete</span>
               </button>
@@ -410,7 +416,7 @@ const togglePanel = () => {
           <!-- Empty state when no specifications -->
           <div v-if="displaySpecs.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">verified</span>
-            <p class="text-xs">No specifications verified</p>
+            <p class="text-xs">{{ t('app.noSpecificationsVerified') }}</p>
           </div>
         </div>
       </div>

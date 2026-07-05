@@ -58,8 +58,9 @@ configure/           config classes, thread pools, ProductionSafetyCheck
 exception/           exception hierarchy + GlobalExceptionHandler
 util/                utilities
 resources/
-  application.yaml   main config (env-var overridable)
-  deviceTemplate/    default device template JSON (seeded into DB per user)
+  application.yaml              main config (env-var overridable)
+  device-template-schema.json   packaged copy of backend/device-template-schema.json
+  deviceTemplate/               default device template JSON (seeded into DB per user)
 ```
 
 Key service implementations: `AuthServiceImpl`, `BoardStorageServiceImpl`,

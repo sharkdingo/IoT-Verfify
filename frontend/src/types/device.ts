@@ -36,7 +36,7 @@ export interface WorkingState {
     Privacy?: string        // "public" | "private"
 }
 
-// Matches backend DeviceTemplateDto.DeviceManifest.API.Trigger (object form).
+// Matches backend device-template-schema.json Transition.Trigger.
 export interface DeviceTrigger {
     Attribute: string
     Relation: string
@@ -53,7 +53,8 @@ export interface DeviceAPI {
     Name: string
     StartState: string
     EndState: string
-    Trigger?: DeviceTrigger | null
+    // backend/device-template-schema.json is authoritative: API Trigger is always null.
+    Trigger?: null
     Assignments?: DeviceAssignment[]
     Signal?: boolean
     Description?: string
@@ -74,6 +75,7 @@ export interface DeviceManifest {
     ImpactedVariables: string[]
     InitState: string
     WorkingStates: WorkingState[]
+    // Transition.Trigger uses DeviceTrigger; custom form creation is API-only, JSON import may include transitions.
     Transitions?: any[]
     APIs: DeviceAPI[]
     Contents?: DeviceContent[]

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { reactive, computed, watch, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
 import boardApi from '../api/board'
+
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -54,15 +57,15 @@ const currentSource = reactive({
   value: ''  // 值（仅全局变量需要）
 })
 
-// 条件选项 - 使用 NuSMV 兼容的关系运算符
-const relationOptions = [
-  { label: '等于 (=)', value: '=' },
-  { label: '不等于 (≠)', value: '!=' },
-  { label: '大于 (>)', value: '>' },
-  { label: '小于 (<)', value: '<' },
-  { label: '大于等于 (≥)', value: '>=' },
-  { label: '小于等于 (≤)', value: '<=' }
-]
+// 条件选项 - 使用 NuSMV 兼容的关系运算符（label 走 i18n，符号语言无关）
+const relationOptions = computed(() => [
+  { label: `${t('app.relationEquals')} (=)`, value: '=' },
+  { label: `${t('app.relationNotEquals')} (≠)`, value: '!=' },
+  { label: `${t('app.relationGreater')} (>)`, value: '>' },
+  { label: `${t('app.relationLess')} (<)`, value: '<' },
+  { label: `${t('app.relationGreaterEqual')} (≥)`, value: '>=' },
+  { label: `${t('app.relationLessEqual')} (≤)`, value: '<=' }
+])
 
 // 获取设备图标
 const getDeviceApis = (templateName: string) => {
@@ -234,7 +237,7 @@ const removeSource = (index: number) => {
 
 const handleSave = () => {
   if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
-    ElMessage.warning('Please complete all required fields')
+    ElMessage.warning(t('app.completeRequiredFields'))
     return
   }
 
@@ -250,7 +253,7 @@ const checkingDuplicate = ref(false)
 const handleCheckDuplicate = async () => {
   // Validate before checking
   if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
-    ElMessage.warning('Please complete all required fields before checking for duplicates')
+    ElMessage.warning(t('app.completeRequiredFieldsBeforeDuplicateCheck'))
     return
   }
 
@@ -260,22 +263,22 @@ const handleCheckDuplicate = async () => {
 
     if (result.isDuplicate) {
       const message = result.reason
-        ? `This rule may be duplicate: ${result.reason}`
-        : 'This rule appears to be a duplicate of an existing rule.'
+        ? t('app.duplicateRuleMayExist', { reason: result.reason })
+        : t('app.duplicateRuleExists')
 
       await ElMessageBox.confirm(
         message,
-        'Duplicate Rule Detected',
+        t('app.duplicateRuleDetected'),
         {
-          confirmButtonText: 'Save Anyway',
-          cancelButtonText: 'Cancel',
+          confirmButtonText: t('app.saveAnyway'),
+          cancelButtonText: t('app.cancel'),
           type: 'warning'
         }
       )
       // User chose "Save Anyway" - proceed with save
       handleSave()
     } else {
-      ElMessage.success('No duplicates found. This rule appears unique.')
+      ElMessage.success(t('app.noDuplicatesFound'))
     }
   } catch (error: any) {
     if (error === 'cancel') {
@@ -283,7 +286,7 @@ const handleCheckDuplicate = async () => {
       return
     }
     console.error('Duplicate check failed:', error)
-    ElMessage.error('Failed to check for duplicates. You can still save the rule.')
+    ElMessage.error(t('app.duplicateCheckFailedCanStillSave'))
   } finally {
     checkingDuplicate.value = false
   }
@@ -400,7 +403,7 @@ const formatApiLabel = (api: string) => {
         <div class="flex items-center justify-between mb-4">
           <h1 class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
             <span class="material-icons-round text-blue-500">auto_fix_high</span>
-            Create New Rule
+            {{ t('app.createNewRule') }}
           </h1>
           <button
             @click="handleClose"
@@ -412,11 +415,11 @@ const formatApiLabel = (api: string) => {
 
         <!-- Rule Name Input -->
         <div class="space-y-2">
-          <label class="text-sm font-semibold text-slate-600 dark:text-slate-400">Rule Name</label>
+          <label class="text-sm font-semibold text-slate-600 dark:text-slate-400">{{ t('app.ruleName') }}</label>
           <input
             v-model="ruleData.name"
             type="text"
-            placeholder="Enter a name for this rule"
+            :placeholder="t('app.ruleNamePlaceholder')"
             class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
           />
         </div>
@@ -428,10 +431,10 @@ const formatApiLabel = (api: string) => {
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
             <span class="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
-              IF (Trigger)
+              {{ t('app.ifTrigger') }}
             </span>
             <h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-              Source Devices
+              {{ t('app.sourceDevices') }}
             </h2>
           </div>
 
@@ -439,7 +442,7 @@ const formatApiLabel = (api: string) => {
           <div class="grid grid-cols-5 gap-3">
             <!-- 设备选择 -->
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Device</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ currentSource.fromId ? getDeviceIcon(resolveDeviceNode(currentSource.fromId)) : 'sensors' }}
@@ -448,7 +451,7 @@ const formatApiLabel = (api: string) => {
                   v-model="currentSource.fromId"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
-                  <option value="" disabled hidden>Select</option>
+                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="node in deviceNodes" :key="node.id" :value="node.label">
                     {{ node.label }}
                   </option>
@@ -459,7 +462,7 @@ const formatApiLabel = (api: string) => {
 
             <!-- 类型选择 (API / Variable) -->
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Type</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.type') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ currentSource.itemType === 'variable' ? 'tune' : (currentSource.itemType === 'api' ? 'bolt' : 'category') }}
@@ -469,9 +472,9 @@ const formatApiLabel = (api: string) => {
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.fromId"
                 >
-                  <option value="" disabled hidden>Select</option>
-                  <option value="api">API</option>
-                  <option value="variable">Variable</option>
+                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option value="api">{{ t('app.api') }}</option>
+                  <option value="variable">{{ t('app.variable') }}</option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
               </div>
@@ -479,7 +482,7 @@ const formatApiLabel = (api: string) => {
 
             <!-- API选择 - 仅选择 API 类型时显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'api'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">API</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.api') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   bolt
@@ -488,7 +491,7 @@ const formatApiLabel = (api: string) => {
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
-                  <option value="" disabled hidden>Select</option>
+                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
                     {{ formatApiLabel(item.name) }}
                   </option>
@@ -499,7 +502,7 @@ const formatApiLabel = (api: string) => {
 
             <!-- Variable选择 - 仅选择 Variable 类型时显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Variable</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.variable') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   tune
@@ -508,7 +511,7 @@ const formatApiLabel = (api: string) => {
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
-                  <option value="" disabled hidden>Select</option>
+                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
                     {{ formatApiLabel(item.name) }}
                   </option>
@@ -519,7 +522,7 @@ const formatApiLabel = (api: string) => {
 
             <!-- 条件选择 - 仅变量显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Condition</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.condition') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   compare_arrows
@@ -539,11 +542,11 @@ const formatApiLabel = (api: string) => {
 
             <!-- 值输入 - 仅变量显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Value</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.value') }}</label>
               <input
                 v-model="currentSource.value"
                 type="text"
-                placeholder="Enter value"
+                :placeholder="t('app.enterValuePlaceholder')"
                 class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-400"
                 :disabled="!currentSource.relation"
                 @keydown.enter="tryAutoAddSource"
@@ -558,7 +561,7 @@ const formatApiLabel = (api: string) => {
             :disabled="!canAddSource"
           >
             <span class="material-icons-round text-lg group-hover:scale-110 transition-transform">add_circle_outline</span>
-            Add Source
+            {{ t('app.addSource') }}
           </button>
 
           <!-- Sources List -->
@@ -586,7 +589,7 @@ const formatApiLabel = (api: string) => {
                   {{ relationOptions.find(r => r.value === source.relation)?.label || source.relation || '=' }}
                 </span>
                 <span class="text-sm text-slate-600 dark:text-slate-300">
-                  {{ source.value || '(any)' }}
+                  {{ source.value || `(${t('app.anyValue')})` }}
                 </span>
               </template>
               <button
@@ -604,16 +607,16 @@ const formatApiLabel = (api: string) => {
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
             <span class="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-xs font-bold px-2 py-1 rounded uppercase tracking-wider">
-              THEN (Action)
+              {{ t('app.thenAction') }}
             </span>
             <h2 class="text-sm font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-              Target Device
+              {{ t('app.targetDevice') }}
             </h2>
           </div>
 
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Device</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ ruleData.toId ? getDeviceIcon(resolveDeviceNode(ruleData.toId)) : 'sensors' }}
@@ -622,7 +625,7 @@ const formatApiLabel = (api: string) => {
                   v-model="ruleData.toId"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
                 >
-                  <option value="" disabled hidden>Select device</option>
+                  <option value="" disabled hidden>{{ t('app.selectDevicePlaceholder') }}</option>
                   <option v-for="node in deviceNodes" :key="node.id" :value="node.label">
                     {{ node.label }}
                   </option>
@@ -632,7 +635,7 @@ const formatApiLabel = (api: string) => {
             </div>
 
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">Action</label>
+              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.action') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   bolt
@@ -642,7 +645,7 @@ const formatApiLabel = (api: string) => {
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
                   :disabled="!ruleData.toId"
                 >
-                  <option value="" disabled hidden>Select action</option>
+                  <option value="" disabled hidden>{{ t('app.selectAction') }}</option>
                   <option v-for="api in availableTargetApis" :key="api" :value="api">
                     {{ formatApiLabel(api) }}
                   </option>
@@ -655,14 +658,14 @@ const formatApiLabel = (api: string) => {
 
         <!-- Rule Preview -->
         <div v-if="rulePreview" class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-600">
-          <p class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Rule Preview</p>
+          <p class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">{{ t('app.rulePreview') }}</p>
           <div class="flex items-center gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
             <!-- Source devices with conditions -->
             <div class="flex flex-wrap items-center gap-2">
               <template v-for="(source, index) in rulePreview.sourceConditions" :key="source.fromId + index">
                 <div class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs">
                   <span class="material-icons-round text-blue-500 text-sm">sensors</span>
-                  <span>{{ resolveDeviceNode(source.fromId)?.label || source.fromId || 'Unknown' }}</span>
+                  <span>{{ resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown') }}</span>
                   <span class="text-slate-400">→</span>
                   <span class="text-blue-600 dark:text-blue-400">{{ formatApiLabel(source.fromApi) }}</span>
                   <span class="text-xs px-1 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600' : 'bg-green-100 text-green-600'">
@@ -676,7 +679,7 @@ const formatApiLabel = (api: string) => {
                 </div>
                 <!-- Add "AND" connector if not the last source -->
                 <span v-if="index < rulePreview.sourceConditions.length - 1" class="text-xs font-bold text-slate-400 dark:text-slate-500 px-1">
-                  AND
+                  {{ t('app.and') }}
                 </span>
               </template>
             </div>
@@ -693,13 +696,13 @@ const formatApiLabel = (api: string) => {
             <!-- Description -->
             <div class="ml-auto text-xs text-slate-400 italic max-w-xs">
               <template v-if="rulePreview.sources.length === 1">
-                "If {{ rulePreview.sources[0]?.label }} triggers, then {{ rulePreview.target?.label }} {{ formatApiLabel(rulePreview.action) }}"
+                {{ t('app.singleSourceRulePreview', { source: rulePreview.sources[0]?.label, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
               </template>
               <template v-else-if="rulePreview.sources.length === 2">
-                "If {{ rulePreview.sources[0]?.label }} and {{ rulePreview.sources[1]?.label }} trigger, then {{ rulePreview.target?.label }} {{ formatApiLabel(rulePreview.action) }}"
+                {{ t('app.twoSourceRulePreview', { sourceA: rulePreview.sources[0]?.label, sourceB: rulePreview.sources[1]?.label, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
               </template>
               <template v-else>
-                "If {{ rulePreview.sources[0]?.label }} and {{ rulePreview.sources.length - 1 }} other devices trigger, then {{ rulePreview.target?.label }} {{ formatApiLabel(rulePreview.action) }}"
+                {{ t('app.multiSourceRulePreview', { source: rulePreview.sources[0]?.label, count: rulePreview.sources.length - 1, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
               </template>
             </div>
           </div>
@@ -712,7 +715,7 @@ const formatApiLabel = (api: string) => {
           @click="handleClose"
           class="px-6 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="handleCheckDuplicate"
@@ -720,7 +723,7 @@ const formatApiLabel = (api: string) => {
           class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span v-if="checkingDuplicate" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
-          <span>{{ checkingDuplicate ? 'Checking...' : 'Check Duplicate' }}</span>
+          <span>{{ checkingDuplicate ? t('app.checking') : t('app.checkDuplicate') }}</span>
         </button>
         <button
           @click="handleSave"
@@ -728,7 +731,7 @@ const formatApiLabel = (api: string) => {
           class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
         >
 
-          Create Rule
+          {{ t('app.createRule') }}
         </button>
       </div>
     </div>

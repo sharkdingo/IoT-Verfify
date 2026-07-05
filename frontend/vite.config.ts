@@ -1,7 +1,5 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-
-// Element UI 自动导入支持
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
@@ -13,25 +11,30 @@ export default defineConfig({
     plugins: [
         vue(),
         AutoImport({
+            dts: false,
             resolvers: [
                 ElementPlusResolver(),
                 AntDesignVueResolver({
-                    importStyle: false, // 如果你已经全局引入了 CSS，这里设为 false；否则设为 'css' 或 'less'
+                    importStyle: false,
                 }),
             ],
         }),
         Components({
-            resolvers: [ElementPlusResolver()],
+            resolvers: [
+                ElementPlusResolver(),
+                AntDesignVueResolver({
+                    importStyle: false,
+                }),
+            ],
         }),
     ],
     server: {
-        port: 3000,   // 前端端口保持不变
-        open: true,
+        port: 3000,
+        open: false,
         proxy: {
             '/api': {
                 target: 'http://localhost:8080',
                 changeOrigin: true,
-                rewrite: (path) => path.replace(/^\/api/, '/api')
             }
         }
     },

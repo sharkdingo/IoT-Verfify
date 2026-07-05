@@ -133,8 +133,8 @@ public final class FixStrategyUtils {
 
     /**
      * §5: faultRules ∪ rules sharing devices with violated spec.
-     * [C5] Uses non-strict findDeviceSmvData() for inclusive matching
-     * (false-positive less harmful than false-negative in scope expansion).
+     * Uses the same device-reference resolver as the generator so scope expansion accepts
+     * verification-time ids, board labels, and normalized digit-leading labels consistently.
      * Known limitation: "domains" not supported — device-level only alignment.
      */
     public static Set<Integer> expandRuleIndices(
@@ -144,6 +144,9 @@ public final class FixStrategyUtils {
             Map<String, DeviceSmvData> deviceSmvMap) {
 
         Set<Integer> result = new LinkedHashSet<>();
+        if (allRules == null || allRules.isEmpty()) {
+            return result;
+        }
 
         // 1. Collect fault rule indices
         if (faultRules != null) {
@@ -166,11 +169,7 @@ public final class FixStrategyUtils {
             for (SpecConditionDto sc : allSpecConds) {
                 if ((sc.getDeviceId() == null || sc.getDeviceId().isBlank())
                         && (sc.getDeviceLabel() == null || sc.getDeviceLabel().isBlank())) continue;
-                // [C5] non-strict: inclusive matching for scope expansion
-                String varName = resolveVarNameInclusive(sc.getDeviceId(), deviceSmvMap);
-                if (varName == null) {
-                    varName = resolveVarNameInclusive(sc.getDeviceLabel(), deviceSmvMap);
-                }
+                String varName = resolveVarNameInclusive(sc.getDeviceId(), sc.getDeviceLabel(), deviceSmvMap);
                 if (varName != null) specVarNames.add(varName);
             }
         }
@@ -197,25 +196,31 @@ public final class FixStrategyUtils {
         if (rule.getConditions() != null) {
             for (RuleDto.Condition cond : rule.getConditions()) {
                 if (cond == null || cond.getDeviceName() == null) continue;
-                String varName = resolveVarNameInclusive(cond.getDeviceName(), deviceSmvMap);
+                String varName = resolveVarNameInclusive(cond.getDeviceName(), null, deviceSmvMap);
                 if (varName != null && targetVarNames.contains(varName)) return true;
             }
         }
         if (rule.getCommand() != null && rule.getCommand().getDeviceName() != null) {
-            String varName = resolveVarNameInclusive(rule.getCommand().getDeviceName(), deviceSmvMap);
+            String varName = resolveVarNameInclusive(rule.getCommand().getDeviceName(), null, deviceSmvMap);
             if (varName != null && targetVarNames.contains(varName)) return true;
         }
         return false;
     }
 
     /**
-     * [C5] Non-strict: resolve device name → varName for inclusive scope expansion.
-     * Ambiguity returns arbitrary first match (false-positive acceptable).
+     * Resolve device reference → varName for scope expansion. Ambiguity is fail-closed
+     * to match the generator's "do not silently bind to the wrong device" rule.
      */
     private static String resolveVarNameInclusive(
-            String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
-        DeviceSmvData smv = DeviceSmvDataFactory.findDeviceSmvData(deviceName, deviceSmvMap);
-        return smv != null ? smv.getVarName() : null;
+            String primaryRef, String secondaryRef, Map<String, DeviceSmvData> deviceSmvMap) {
+        try {
+            DeviceSmvData smv = DeviceReferenceResolver.resolve(primaryRef, secondaryRef, deviceSmvMap);
+            return smv != null ? smv.getVarName() : null;
+        } catch (SmvGenerationException e) {
+            log.warn("resolveVarNameInclusive: ambiguous device reference '{}/{}', skipping: {}",
+                    primaryRef, secondaryRef, e.getMessage());
+            return null;
+        }
     }
 
     /**

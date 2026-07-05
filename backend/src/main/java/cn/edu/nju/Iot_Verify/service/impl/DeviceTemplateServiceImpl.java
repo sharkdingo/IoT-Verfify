@@ -1,11 +1,14 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
@@ -29,6 +32,8 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             java.util.regex.Pattern.compile("^[\\x20-\\x7E]+$");
 
     private final DeviceTemplateRepository templateRepo;
+    private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional(readOnly = true)
@@ -81,7 +86,8 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                 try (InputStream is = resource.getInputStream()) {
                     String json = new String(is.readAllBytes(), StandardCharsets.UTF_8);
                     String filename = resource.getFilename();
-                    String name = extractManifestName(json);
+                    JsonNode manifestNode = objectMapper.readTree(json);
+                    String name = extractManifestName(manifestNode);
                     if (name == null || name.isBlank()) {
                         name = filename != null ? filename.replace(".json", "") : "Unknown";
                     }
@@ -94,6 +100,7 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                         log.warn("Skipping template '{}' with non-ASCII name from {}", name, resource.getFilename());
                         continue;
                     }
+                    deviceTemplateSchemaValidator.validateRawManifest(name, manifestNode);
 
                     templates.add(DeviceTemplatePo.builder()
                             .userId(userId)
@@ -118,9 +125,9 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
         return count;
     }
 
-    private String extractManifestName(String json) {
+    private String extractManifestName(JsonNode manifestNode) {
         DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
-                json,
+                manifestNode.toString(),
                 new TypeReference<DeviceManifest>() {},
                 null
         );

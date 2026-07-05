@@ -6,7 +6,7 @@ process exists, changes are recorded under `Unreleased` with dated entries.** Wh
 first tagged release is cut, the relevant entries will be moved under a version heading
 (e.g. `[1.0.0] - 2026-xx-xx`).
 
-These entries were migrated from the "同步更新 (implementation-alignment)" sections
+These entries were migrated from the implementation-alignment sections
 (§13, §14) of the former `backend/NuSMV_Module_Documentation.md`, which mixed change
 history into a technical spec. The spec content itself now lives under
 `docs/architecture/`.
@@ -99,12 +99,17 @@ history into a technical spec. The spec content itself now lives under
   recommendations with illegal template ids or unresolvable devices are filtered out.
   Tool validators, prompt schemas, and backend DTO validation now also converge on
   supported relation operators and non-empty condition values.
+- **Device template manifests now have an executed canonical schema.**
+  `backend/device-template-schema.json` is validated by REST template import,
+  AI `add_template`, and default-template initialization before DTO mapping and NuSMV
+  pre-checks. API triggers are now explicitly schema-invalid; conditional template
+  behavior must be modeled through `Transitions`.
 
 #### Configuration (breaking)
 - **Config keys renamed `volcengine.ark.*` → `llm.*`.** Env vars: `VOLCENGINE_API_KEY` →
   `OPENAI_API_KEY`, `VOLCENGINE_MODEL_ID` → `OPENAI_MODEL`, `VOLCENGINE_BASE_URL` →
   `OPENAI_BASE_URL`, `ARK_TIMEOUT_MINUTES` → `LLM_TIMEOUT_MINUTES`; new `LLM_PROVIDER`
-  (default `openai`). Point `OPENAI_BASE_URL` at the official API or a relay ("中转站").
+  (default `openai`). Point `OPENAI_BASE_URL` at the official API or a relay.
   `ProductionSafetyCheck` now guards `llm.api-key` (`OPENAI_API_KEY`).
 
 #### Dependencies

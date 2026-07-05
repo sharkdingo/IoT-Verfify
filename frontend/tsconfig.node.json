@@ -12,8 +12,9 @@
     "moduleDetection": "force",
     "composite": true,
     "declaration": true,
-    "noEmit": false,
-    "tsBuildInfoFile": "./.tsbuildinfo", // Moved and renamed from the previous location
+    "emitDeclarationOnly": true,
+    "outDir": "./node_modules/.tmp/tsconfig-node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
 
     /* Linting */
     "strict": true,

@@ -133,6 +133,24 @@ class FixStrategyUtilsTest {
     }
 
     @Test
+    void expandRuleIndices_usesSpecDeviceLabelWhenDeviceIdIsPersistentNodeId() {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("LivingRoomAC").attribute("temperature").relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("LivingRoomAC").action("on").build())
+                .build();
+        SpecConditionDto specCond = buildSpecCond("node-1", "variable", "temperature", ">", "25");
+        specCond.setDeviceLabel("LivingRoomAC");
+        SpecificationDto spec = buildSpec(specCond);
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("LivingRoomAC");
+
+        Set<Integer> result = FixStrategyUtils.expandRuleIndices(null, List.of(rule), spec, deviceMap);
+
+        assertEquals(Set.of(0), result,
+                "scope expansion should resolve spec.deviceLabel when the persisted node id is not in the SMV map");
+    }
+
+    @Test
     void expandRuleIndices_nullFaultRules_scansSharedDeviceOnly() {
         RuleDto rule0 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()

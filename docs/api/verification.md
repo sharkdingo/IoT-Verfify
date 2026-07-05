@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-04. Source:
+Verified against code on 2026-07-05. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -128,10 +128,21 @@ two carry privacy-rule content.
 | `ifConditions` | `SpecConditionDto[]` | `@NotNull` |
 | `thenConditions` | `SpecConditionDto[]` | `@NotNull` |
 
-`SpecConditionDto`: `{ id, side ('a'|'if'|'then'), deviceId, deviceLabel, targetType,
-key, relation, value }`; `side` is derived from the containing collection on save/read
-and, when supplied by a client, must match that collection. `relation` uses the same
-enum as rule conditions and `value` is required.
+`SpecConditionDto`:
+
+| Field | Rules |
+| :--- | :--- |
+| `id` | Optional client-side identifier |
+| `side` | Optional; when present must be `a`, `if`, or `then` and match the containing collection |
+| `deviceId` | **Required** (`@NotBlank`). This is the primary device reference for spec conditions |
+| `deviceLabel` | Optional display/secondary reference. It does **not** replace `deviceId` for request validation |
+| `targetType` | **Required**; `state`, `variable`, `api`, `trust`, or `privacy` |
+| `key` | **Required** |
+| `relation` | **Required**; same enum as rule conditions |
+| `value` | **Required** |
+
+`side` is derived from the containing collection on save/read and, when supplied by a
+client, must match that collection.
 `DeviceRefDto`: `{ deviceId, deviceLabel, selectedApis: String[] }`; at least one of
 `deviceId` / `deviceLabel` is required and `selectedApis` is non-null.
 

@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import boardApi from '@/api/board'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
 const router = useRouter()
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -33,9 +35,6 @@ const customTemplateForm = reactive({
     signal: boolean,
     startState: string,
     endState: string,
-    triggerAttribute: string,
-    triggerRelation: string,
-    triggerValue: string,
     assignments: Array<{attribute: string, value: string}>
   }>,
   variables: [] as Array<{
@@ -94,26 +93,9 @@ const editingApiData = reactive({
   signal: false,
   startState: '',
   endState: '',
-  // Trigger matches backend DeviceManifest.API.Trigger { Attribute, Relation, Value },
-  // all non-blank; Attribute must be a legal mode or internal-variable name (P1).
-  triggerAttribute: '',
-  triggerRelation: '=',
-  triggerValue: '',
   // Assignments match backend { Attribute, Value } (not variableName/changeRate).
   assignments: [] as Array<{attribute: string, value: string}>
 })
-
-// Legal Trigger.Attribute values = mode names + internal-variable names (backend P1,
-// SmvModelValidator.buildLegalAttributeSet). The dropdown offers exactly these so a
-// created template can't fail the NuSMV pre-check on an illegal trigger attribute.
-const triggerAttributeOptions = computed<string[]>(() => {
-  const modes = customTemplateForm.modes.filter(m => m.trim() !== '')
-  const vars = customTemplateForm.variables.map(v => v.name).filter(n => n.trim() !== '')
-  return [...modes, ...vars]
-})
-
-// Relation operators supported by the backend trigger parser (SmvRelationUtils).
-const triggerRelations = ['=', '!=', '>', '>=', '<', '<=']
 
 // JSON file upload handling
 const fileInput = ref<HTMLInputElement>()
@@ -128,7 +110,7 @@ const handleJsonFileUpload = (event: Event) => {
 
   if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
       ElMessage({
-        message: 'Invalid file format',
+        message: t('app.invalidFileFormat'),
         type: 'error',
         center: true
       })
@@ -136,15 +118,14 @@ const handleJsonFileUpload = (event: Event) => {
   }
 
   const reader = new FileReader()
-  reader.onload = (e) => {
+    reader.onload = (e) => {
     try {
       const jsonData = JSON.parse(e.target?.result as string)
-      console.log('Parsed JSON data:', jsonData)
 
       // Validate JSON structure
       if (!jsonData.Name || !jsonData.Description) {
         ElMessage({
-          message: 'Missing required fields in JSON',
+          message: t('app.missingRequiredFieldsInJson'),
           type: 'error',
           center: true
         })
@@ -155,7 +136,7 @@ const handleJsonFileUpload = (event: Event) => {
       createTemplateFromJson(jsonData)
     } catch (error) {
       ElMessage({
-        message: 'Invalid JSON format',
+        message: t('app.invalidJsonFormat'),
         type: 'error',
         center: true
       })
@@ -168,7 +149,7 @@ const handleJsonFileUpload = (event: Event) => {
 const createCustomTemplate = async () => {
   if (!customTemplateForm.name.trim()) {
     ElMessage({
-      message: 'Enter template name',
+      message: t('app.enterTemplateName'),
       type: 'warning',
       center: true
     })
@@ -224,15 +205,9 @@ const createCustomTemplate = async () => {
           Signal: api.signal,
           StartState: api.startState,
           EndState: api.endState,
-          // Trigger { Attribute, Relation, Value }; omit entirely when Attribute is
-          // blank (backend treats a null Trigger as "no trigger" and skips P1).
-          Trigger: api.triggerAttribute && api.triggerAttribute.trim() !== ''
-            ? {
-                Attribute: api.triggerAttribute,
-                Relation: api.triggerRelation || '=',
-                Value: api.triggerValue
-              }
-            : null,
+          // backend/device-template-schema.json is authoritative: API triggers are null.
+          // Triggered behavior belongs in Transitions, which are currently supported via JSON import.
+          Trigger: null,
           Assignments: api.assignments
             // Keep only fully-filled assignments; the backend rejects a blank Attribute
             // or Value. (confirmSaveApi already blocks half-filled rows, so this just
@@ -246,15 +221,13 @@ const createCustomTemplate = async () => {
     }
 
     // Call API to create template
-    console.log('Creating custom template:', { name: customTemplateForm.name, manifest })
-
     const result = await boardApi.addDeviceTemplate({
       name: customTemplateForm.name,
       manifest
     })
 
     ElMessage({
-      message: 'Template created',
+      message: t('app.templateCreated'),
       type: 'success',
       center: true
     })
@@ -278,9 +251,9 @@ const createCustomTemplate = async () => {
     return result
   } catch (error) {
     console.error('Failed to create custom template:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+    const errorMessage = error instanceof Error ? error.message : t('app.unknownErrorOccurred')
     ElMessage({
-      message: `Create failed: ${errorMessage}`,
+      message: t('app.createFailedWithReason', { reason: errorMessage }),
       type: 'error',
       center: true
     })
@@ -290,8 +263,6 @@ const createCustomTemplate = async () => {
 
 const createTemplateFromJson = async (jsonData: any) => {
   try {
-    console.log('Creating template from JSON:', jsonData)
-
     // Build manifest from JSON data
     const manifest = {
       Name: jsonData.Name,
@@ -339,27 +310,21 @@ const createTemplateFromJson = async (jsonData: any) => {
         Signal: api.Signal !== undefined ? api.Signal : (api.signal !== undefined ? api.signal : false),
         StartState: api.StartState || api.startState || jsonData.InitState || jsonData.initState || '',
         EndState: api.EndState || api.endState || jsonData.InitState || jsonData.initState || '',
-        // Preserve an object Trigger { Attribute, Relation, Value } as-is; drop a legacy
-        // pseudo-string trigger (e.g. "user") since it is not a valid backend Trigger.
-        Trigger: (api.Trigger && typeof api.Trigger === 'object') ? api.Trigger
-               : (api.trigger && typeof api.trigger === 'object') ? api.trigger
-               : null,
+        // API Trigger is intentionally null in the canonical schema. Transition triggers
+        // remain available through the Transitions array.
+        Trigger: null,
         Assignments: api.Assignments || api.assignments || []
       }))
     }
 
-    console.log('Built manifest:', manifest)
-
     // Send to backend
-    const result = await boardApi.addDeviceTemplate({
+    await boardApi.addDeviceTemplate({
       name: jsonData.Name,
       manifest: manifest
     })
 
-    console.log('Template created successfully:', result)
-
     ElMessage({
-      message: `Template "${jsonData.Name}" created`,
+      message: t('app.templateCreatedWithName', { name: jsonData.Name }),
       type: 'success',
       center: true,
       duration: 2000
@@ -376,7 +341,7 @@ const createTemplateFromJson = async (jsonData: any) => {
 
   } catch (error) {
     console.error('Failed to create template from JSON:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    const errorMessage = error instanceof Error ? error.message : t('app.unknownError')
     ElMessage({
       message: errorMessage,
       type: 'error',
@@ -419,7 +384,7 @@ const editWorkingState = (index: number) => {
 const confirmSaveWorkingState = () => {
   if (!editingWorkingStateData.name.trim()) {
     ElMessage({
-      message: 'Enter state name',
+      message: t('app.enterStateName'),
       type: 'warning',
       center: true
     })
@@ -471,7 +436,7 @@ const editVariable = (index: number) => {
 const confirmSaveVariable = () => {
   if (!editingVariableData.name.trim()) {
     ElMessage({
-      message: 'Enter variable name',
+      message: t('app.enterVariableName'),
       type: 'warning',
       center: true
     })
@@ -521,9 +486,6 @@ const addApiToTemplate = () => {
     signal: false,
     startState: customTemplateForm.initState || '',
     endState: customTemplateForm.initState || '',
-    triggerAttribute: '',
-    triggerRelation: '=',
-    triggerValue: '',
     assignments: []
   })
   showApiDialog.value = true
@@ -538,23 +500,15 @@ const editApi = (index: number) => {
 
 const confirmSaveApi = () => {
   if (!editingApiData.name.trim()) {
-    ElMessage({ message: 'Enter API name', type: 'warning', center: true })
+    ElMessage({ message: t('app.enterApiName'), type: 'warning', center: true })
     return
-  }
-  // Trigger is optional, but if an Attribute is chosen the backend requires Relation
-  // and Value too (P1 validateTriggerCompleteness) — enforce completeness here.
-  if (editingApiData.triggerAttribute && editingApiData.triggerAttribute.trim() !== '') {
-    if (!editingApiData.triggerRelation || !String(editingApiData.triggerValue).trim()) {
-      ElMessage({ message: 'Trigger needs a relation and a value (or clear the trigger attribute)', type: 'warning', center: true })
-      return
-    }
   }
   // Every assignment must have both Attribute and Value (backend rejects half-filled).
   const badAssignment = editingApiData.assignments.some(
     a => (a.attribute && a.attribute.trim() !== '') !== (a.value != null && String(a.value).trim() !== '')
   )
   if (badAssignment) {
-    ElMessage({ message: 'Each assignment needs both a variable and a value', type: 'warning', center: true })
+    ElMessage({ message: t('app.assignmentNeedsVariableAndValue'), type: 'warning', center: true })
     return
   }
   saveApi({ ...editingApiData })
@@ -595,8 +549,8 @@ const saveApi = (apiData: any) => {
             <span class="material-icons-round text-lg">upload_file</span>
         </div>
         <div class="text-left">
-          <h3 class="font-semibold text-orange-600 dark:text-orange-400 text-sm">Import JSON Template</h3>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Upload a JSON file to create template automatically</p>
+          <h3 class="font-semibold text-orange-600 dark:text-orange-400 text-sm">{{ t('app.importJsonTemplate') }}</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ t('app.uploadJsonCreateTemplate') }}</p>
         </div>
       </div>
     </div>
@@ -605,20 +559,20 @@ const saveApi = (apiData: any) => {
     <div class="space-y-3">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Template Name</label>
+          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.templateName') }}</label>
           <input
             v-model="customTemplateForm.name"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 outline-none text-sm"
-            placeholder="e.g. Smart Thermostat"
+            :placeholder="t('app.smartThermostatPlaceholder')"
             type="text"
           />
         </div>
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Description <span class="text-slate-400 font-normal">(optional)</span></label>
+          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.description') }} <span class="text-slate-400 font-normal">({{ t('app.optional') }})</span></label>
           <input
             v-model="customTemplateForm.description"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 outline-none text-sm"
-            placeholder="Brief description"
+            :placeholder="t('app.briefDescription')"
             type="text"
           />
         </div>
@@ -635,12 +589,12 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center gap-2">
             <span class="material-icons-round text-slate-400 dark:text-slate-500 text-sm">tune</span>
             <div class="flex flex-col">
-              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">Modes</span>
-              <span class="text-[10px] text-slate-500">{{ customTemplateForm.modes.length }} defined</span>
+              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">{{ t('app.modes') }}</span>
+              <span class="text-[10px] text-slate-500">{{ t('app.definedCount', { count: customTemplateForm.modes.length }) }}</span>
             </div>
           </div>
           <button @click="addModeToTemplate" class="text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-0.5">
-            <span class="material-icons-round text-base">add</span> Add
+            <span class="material-icons-round text-base">add</span> {{ t('app.add') }}
           </button>
         </div>
         <div class="flex flex-wrap gap-1.5">
@@ -648,11 +602,11 @@ const saveApi = (apiData: any) => {
             <input
               v-model="customTemplateForm.modes[idx]"
               class="bg-transparent border-none focus:ring-0 text-xs text-slate-700 dark:text-slate-300 w-20 outline-none"
-              placeholder="Mode name"
+              :placeholder="t('app.modeName')"
             />
             <button @click="removeModeFromTemplate(idx)" class="text-slate-400 hover:text-red-500 p-0.5">×</button>
           </div>
-          <div v-if="customTemplateForm.modes.length === 0" class="text-[10px] text-slate-400 italic py-1">No modes</div>
+          <div v-if="customTemplateForm.modes.length === 0" class="text-[10px] text-slate-400 italic py-1">{{ t('app.noModes') }}</div>
         </div>
       </div>
 
@@ -662,12 +616,12 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center gap-2">
             <span class="material-icons-round text-slate-400 dark:text-slate-500 text-sm">data_object</span>
             <div class="flex flex-col">
-              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">Variables</span>
-              <span class="text-[10px] text-slate-500">{{ customTemplateForm.variables.length }} defined</span>
+              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">{{ t('app.variables') }}</span>
+              <span class="text-[10px] text-slate-500">{{ t('app.definedCount', { count: customTemplateForm.variables.length }) }}</span>
             </div>
           </div>
           <button @click="addVariableToTemplate" class="text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-0.5">
-            <span class="material-icons-round text-base">add</span> Add
+            <span class="material-icons-round text-base">add</span> {{ t('app.add') }}
           </button>
         </div>
 
@@ -676,7 +630,7 @@ const saveApi = (apiData: any) => {
             <div class="flex items-center gap-2 overflow-hidden">
               <span class="material-icons-round text-slate-400 text-xs">tag</span>
               <div class="flex flex-col min-w-0">
-                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ variable.name || '(Unnamed)' }}</span>
+                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ variable.name || `(${t('app.unnamed')})` }}</span>
               </div>
             </div>
             <div class="flex items-center gap-1.5 ml-2">
@@ -697,12 +651,12 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center gap-2">
             <span class="material-icons-round text-slate-400 dark:text-slate-500 text-sm">toggle_on</span>
             <div class="flex flex-col">
-              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">States</span>
-              <span class="text-[10px] text-slate-500">{{ customTemplateForm.workingStates.length }} defined</span>
+              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">{{ t('app.workingStates') }}</span>
+              <span class="text-[10px] text-slate-500">{{ t('app.definedCount', { count: customTemplateForm.workingStates.length }) }}</span>
             </div>
           </div>
           <button @click="addWorkingStateToTemplate" class="text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-0.5">
-            <span class="material-icons-round text-base">add</span> Add
+            <span class="material-icons-round text-base">add</span> {{ t('app.add') }}
           </button>
         </div>
 
@@ -711,7 +665,7 @@ const saveApi = (apiData: any) => {
             <div class="flex items-center gap-2 overflow-hidden">
               <span class="material-icons-round text-slate-400 text-xs">settings</span>
               <div class="flex flex-col min-w-0">
-                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ state.name || '(Unnamed)' }}</span>
+                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ state.name || `(${t('app.unnamed')})` }}</span>
               </div>
             </div>
             <div class="flex items-center gap-1.5 ml-2">
@@ -729,12 +683,12 @@ const saveApi = (apiData: any) => {
       <!-- Initial State (Moved here) -->
       <div class="bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Initial State</label>
+          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.initState') }}</label>
           <select
             v-model="customTemplateForm.initState"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all outline-none text-sm"
           >
-            <option value="" disabled>Select state</option>
+            <option value="" disabled>{{ t('app.selectState') }}</option>
             <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
               {{ state.name }}
             </option>
@@ -748,12 +702,12 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center gap-2">
             <span class="material-icons-round text-slate-400 dark:text-slate-500 text-sm">api</span>
             <div class="flex flex-col">
-              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">APIs</span>
-              <span class="text-[10px] text-slate-500">{{ customTemplateForm.apis.length }} defined</span>
+              <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">{{ t('app.deviceApis') }}</span>
+              <span class="text-[10px] text-slate-500">{{ t('app.definedCount', { count: customTemplateForm.apis.length }) }}</span>
             </div>
           </div>
           <button @click="addApiToTemplate" class="text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-0.5">
-            <span class="material-icons-round text-base">add</span> Add
+            <span class="material-icons-round text-base">add</span> {{ t('app.add') }}
           </button>
         </div>
 
@@ -762,7 +716,7 @@ const saveApi = (apiData: any) => {
             <div class="flex items-center gap-2 overflow-hidden">
               <span class="material-symbols-outlined text-slate-400 text-xs">link</span>
               <div class="flex flex-col min-w-0">
-                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ api.name || '(Unnamed)' }}</span>
+                <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ api.name || `(${t('app.unnamed')})` }}</span>
               </div>
             </div>
             <div class="flex items-center gap-1.5 ml-2">
@@ -782,14 +736,14 @@ const saveApi = (apiData: any) => {
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
             <span class="material-icons-round text-slate-400 dark:text-slate-500 text-sm">bolt</span>
-            <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">Impacted Vars</span>
+            <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wide">{{ t('app.impactedVarsShort') }}</span>
           </div>
-          <span class="text-[10px] text-slate-500">{{ customTemplateForm.impactedVariables.length }} selected</span>
+          <span class="text-[10px] text-slate-500">{{ t('app.selectedCount', { count: customTemplateForm.impactedVariables.length }) }}</span>
         </div>
         <div class="min-h-[40px] rounded border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 flex flex-wrap items-center p-1.5 gap-1.5">
           
           <div v-if="customTemplateForm.variables.length === 0" class="w-full text-center py-1">
-            <span class="text-[10px] text-slate-400 italic">Add variables first</span>
+            <span class="text-[10px] text-slate-400 italic">{{ t('app.addVariablesFirst') }}</span>
           </div>
 
           <div v-for="variable in customTemplateForm.variables.filter(v => v.name.trim())" :key="`impacted-${variable.name}`" class="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-1 rounded shadow-sm">
@@ -816,7 +770,7 @@ const saveApi = (apiData: any) => {
         class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg shadow-orange-500/25 hover:shadow-orange-500/40 transform hover:-translate-y-0.5 transition-all duration-200 text-sm uppercase tracking-wider flex items-center justify-center gap-2 dark:bg-orange-600 dark:hover:bg-orange-700"
       >
         <span class="material-icons-round text-lg">check_circle</span>
-        Create Template
+        {{ t('app.createTemplate') }}
       </button>
     </div>
 
@@ -827,7 +781,7 @@ const saveApi = (apiData: any) => {
     <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100" @click.stop>
       <div class="flex justify-between items-center mb-4">
         <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
-          {{ editingVariableIndex >= 0 ? 'Edit Variable' : 'Add Variable' }}
+          {{ editingVariableIndex >= 0 ? t('app.editVariable') : t('app.addVariable') }}
         </h3>
         <button @click="showVariableDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
           <span class="material-symbols-outlined">close</span>
@@ -837,49 +791,49 @@ const saveApi = (apiData: any) => {
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Name</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
               v-model="editingVariableData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="Var name"
+              :placeholder="t('app.variableNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
               v-model="editingVariableData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="Desc"
+              :placeholder="t('app.descPlaceholder')"
             />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Trust</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
             <select
               v-model="editingVariableData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="trusted">Trusted</option>
-              <option value="untrusted">Untrusted</option>
+              <option value="trusted">{{ t('app.trusted') }}</option>
+              <option value="untrusted">{{ t('app.untrusted') }}</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Privacy</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
             <select
               v-model="editingVariableData.privacy"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="public">Public</option>
-              <option value="private">Private</option>
+              <option value="public">{{ t('app.public') }}</option>
+              <option value="private">{{ t('app.private') }}</option>
             </select>
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Lower Bound</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.lowerBound') }}</label>
             <input
               v-model.number="editingVariableData.lowerBound"
               type="number"
@@ -888,7 +842,7 @@ const saveApi = (apiData: any) => {
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Upper Bound</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.upperBound') }}</label>
             <input
               v-model.number="editingVariableData.upperBound"
               type="number"
@@ -905,7 +859,7 @@ const saveApi = (apiData: any) => {
               type="checkbox"
               class="w-3.5 h-3.5 text-orange-500 bg-slate-100 border-slate-300 rounded focus:ring-orange-500 dark:focus:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
             />
-            <span class="ml-2 text-xs text-slate-700 dark:text-slate-300">Internal</span>
+            <span class="ml-2 text-xs text-slate-700 dark:text-slate-300">{{ t('app.internal') }}</span>
           </label>
           <label class="flex items-center">
             <input
@@ -913,7 +867,7 @@ const saveApi = (apiData: any) => {
               type="checkbox"
               class="w-3.5 h-3.5 text-orange-500 bg-slate-100 border-slate-300 rounded focus:ring-orange-500 dark:focus:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
             />
-            <span class="ml-2 text-xs text-slate-700 dark:text-slate-300">Public</span>
+            <span class="ml-2 text-xs text-slate-700 dark:text-slate-300">{{ t('app.public') }}</span>
           </label>
         </div>
       </div>
@@ -923,13 +877,13 @@ const saveApi = (apiData: any) => {
           @click="showVariableDialog = false"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="confirmSaveVariable"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >
-          {{ editingVariableIndex >= 0 ? 'Update' : 'Add' }}
+          {{ editingVariableIndex >= 0 ? t('app.update') : t('app.add') }}
         </button>
       </div>
     </div>
@@ -940,7 +894,7 @@ const saveApi = (apiData: any) => {
     <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100" @click.stop>
       <div class="flex justify-between items-center mb-4">
         <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
-          {{ editingWorkingStateIndex >= 0 ? 'Edit Working State' : 'Add Working State' }}
+          {{ editingWorkingStateIndex >= 0 ? t('app.editWorkingState') : t('app.addWorkingState') }}
         </h3>
         <button @click="showWorkingStateDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
           <span class="material-symbols-outlined">close</span>
@@ -950,48 +904,48 @@ const saveApi = (apiData: any) => {
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Name</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
               v-model="editingWorkingStateData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="State name"
+              :placeholder="t('app.stateNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
               v-model="editingWorkingStateData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="Desc"
+              :placeholder="t('app.descPlaceholder')"
             />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Trust</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
             <select
               v-model="editingWorkingStateData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="trusted">Trusted</option>
-              <option value="untrusted">Untrusted</option>
+              <option value="trusted">{{ t('app.trusted') }}</option>
+              <option value="untrusted">{{ t('app.untrusted') }}</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Privacy</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
             <select
               v-model="editingWorkingStateData.privacy"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="public">Public</option>
-              <option value="private">Private</option>
+              <option value="public">{{ t('app.public') }}</option>
+              <option value="private">{{ t('app.private') }}</option>
             </select>
           </div>
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Invariant</label>
+          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.invariant') }}</label>
           <input
             v-model="editingWorkingStateData.invariant"
             class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
@@ -1005,13 +959,13 @@ const saveApi = (apiData: any) => {
           @click="showWorkingStateDialog = false"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="confirmSaveWorkingState"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >
-          {{ editingWorkingStateIndex >= 0 ? 'Update' : 'Add' }}
+          {{ editingWorkingStateIndex >= 0 ? t('app.update') : t('app.add') }}
         </button>
       </div>
     </div>
@@ -1022,7 +976,7 @@ const saveApi = (apiData: any) => {
     <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-md shadow-2xl dark:text-slate-100" @click.stop>
       <div class="flex justify-between items-center mb-4">
         <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
-          {{ editingApiIndex >= 0 ? 'Edit API' : 'Add API' }}
+          {{ editingApiIndex >= 0 ? t('app.editApi') : t('app.addApi') }}
         </h3>
         <button @click="showApiDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
           <span class="material-symbols-outlined">close</span>
@@ -1032,43 +986,43 @@ const saveApi = (apiData: any) => {
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Name</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
               v-model="editingApiData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="API name"
+              :placeholder="t('app.apiNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
               v-model="editingApiData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-              placeholder="Desc"
+              :placeholder="t('app.descPlaceholder')"
             />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Start State</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.startState') }}</label>
             <select
               v-model="editingApiData.startState"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="" hidden>Select</option>
+              <option value="" hidden>{{ t('app.selectPlaceholder') }}</option>
               <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
                 {{ state.name }}
               </option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">End State</label>
+            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.endState') }}</label>
             <select
               v-model="editingApiData.endState"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
-              <option value="" hidden>Select</option>
+              <option value="" hidden>{{ t('app.selectPlaceholder') }}</option>
               <option v-for="state in customTemplateForm.workingStates" :key="state.name" :value="state.name">
                 {{ state.name }}
               </option>
@@ -1076,33 +1030,6 @@ const saveApi = (apiData: any) => {
           </div>
         </div>
 
-        <!-- Trigger { Attribute, Relation, Value } — leave Attribute empty for no trigger -->
-        <div>
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Trigger <span class="text-slate-400 font-normal">(optional)</span></label>
-          <div class="grid grid-cols-3 gap-2">
-            <select
-              v-model="editingApiData.triggerAttribute"
-              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
-            >
-              <option value="">(none)</option>
-              <option v-for="attr in triggerAttributeOptions" :key="attr" :value="attr">{{ attr }}</option>
-            </select>
-            <select
-              v-model="editingApiData.triggerRelation"
-              :disabled="!editingApiData.triggerAttribute"
-              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm disabled:opacity-50"
-            >
-              <option v-for="op in triggerRelations" :key="op" :value="op">{{ op }}</option>
-            </select>
-            <input
-              v-model="editingApiData.triggerValue"
-              :disabled="!editingApiData.triggerAttribute"
-              placeholder="Value"
-              class="w-full px-2 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm disabled:opacity-50"
-            />
-          </div>
-          <p class="text-[10px] text-slate-400 mt-1">Attribute must be a mode or internal-variable name; all three are required when a trigger is set.</p>
-        </div>
         <div class="flex items-center">
           <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
             <input
@@ -1110,19 +1037,19 @@ const saveApi = (apiData: any) => {
               v-model="editingApiData.signal"
               class="w-3.5 h-3.5 text-orange-500 bg-slate-100 border-slate-300 rounded focus:ring-orange-500 dark:focus:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
             />
-             Signal
+             {{ t('app.signal') }}
           </label>
         </div>
 
         <!-- Assignments -->
         <div>
           <div class="flex items-center justify-between mb-1.5">
-            <label class="text-xs font-medium text-slate-700 dark:text-slate-300">Assignments</label>
+            <label class="text-xs font-medium text-slate-700 dark:text-slate-300">{{ t('app.assignments') }}</label>
             <button
               @click="editingApiData.assignments.push({attribute: '', value: ''})"
               class="text-[10px] text-orange-500 hover:text-orange-600 dark:text-orange-400 dark:hover:text-orange-300"
             >
-              + Add
+              + {{ t('app.add') }}
             </button>
           </div>
           <div class="space-y-1.5 max-h-24 overflow-y-auto">
@@ -1131,7 +1058,7 @@ const saveApi = (apiData: any) => {
                 v-model="assignment.attribute"
                 class="flex-1 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
               >
-                <option value="">Select</option>
+                <option value="">{{ t('app.selectPlaceholder') }}</option>
                 <option v-for="v in customTemplateForm.variables.filter(v => v.name.trim())" :key="v.name" :value="v.name">
                   {{ v.name }}
                 </option>
@@ -1139,7 +1066,7 @@ const saveApi = (apiData: any) => {
               <input
                 v-model="assignment.value"
                 class="w-16 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
-                placeholder="Value"
+                :placeholder="t('app.value')"
               />
               <button
                 @click="editingApiData.assignments.splice(index, 1)"
@@ -1157,13 +1084,13 @@ const saveApi = (apiData: any) => {
           @click="showApiDialog = false"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="confirmSaveApi"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >
-          {{ editingApiIndex >= 0 ? 'Update' : 'Add' }}
+          {{ editingApiIndex >= 0 ? t('app.update') : t('app.add') }}
         </button>
       </div>
     </div>

@@ -9,6 +9,9 @@ fix suggestions when a specification is violated.
 
 - **Visual canvas** — drag-and-drop device modeling with 40+ predefined smart-home
   device templates; create device instances and connections freely.
+- **Authoritative device-template schema** — `backend/device-template-schema.json`
+  defines the manifest contract used by REST import, AI template creation, default
+  templates, and documentation.
 - **Rule engine** — IFTTT-style multi-condition automation rules (conditions → command).
 - **Safety specifications** — 7 templates (Always / Eventually / Never / Immediate /
   Response / Persistence / Safety) mapped to CTL/LTL formulas.

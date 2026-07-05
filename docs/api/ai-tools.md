@@ -89,6 +89,11 @@ the supported operator enum, and non-empty `value`.
 | `delete_template` | Delete a device template by its template id. |
 | `list_templates` | List available device templates (modes, variables, transitions, and APIs). |
 
+`add_template` uses `backend/device-template-schema.json` as the manifest authority.
+The tool validates the raw `manifest` JSON before DTO mapping and persistence, matching
+the REST template-import path. Use PascalCase manifest keys; `APIs[].Trigger` must be
+`null`, while conditional behavior is represented by `Transitions[].Trigger`.
+
 ## Simulation
 
 | Tool | Summary |
@@ -113,3 +118,9 @@ the supported operator enum, and non-empty `value`.
 | `get_trace` | Get a saved verification trace by traceId, including its state sequence. |
 | `delete_trace` | Delete a saved verification trace by traceId. |
 | `fix_violation` | Analyze a violation trace to localize fault rules and suggest fixes via parameter, condition, or disable strategies (needs a traceId). |
+
+`fix_violation` is advisory only: it returns localized fault rules and verified
+suggestions, but it does not apply them to the board. Applying a fix remains a
+human-confirmed REST/UI action (`POST /api/verify/traces/{id}/fix/apply`) because it
+mutates persisted rules and must pass the server-side drift/recompute checks described
+in [auto-fix.md](../architecture/auto-fix.md).

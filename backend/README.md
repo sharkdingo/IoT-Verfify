@@ -43,9 +43,14 @@ configure/        config, thread pools, ProductionSafetyCheck
 exception/        exception hierarchy + GlobalExceptionHandler
 util/             utilities
 resources/
-  application.yaml     main config (env-var overridable)
-  deviceTemplate/      default device template JSON
+  application.yaml              main config (env-var overridable)
+  device-template-schema.json   packaged copy of ../device-template-schema.json
+  deviceTemplate/               default device template JSON
 ```
+
+`backend/device-template-schema.json` is the canonical device-template manifest schema.
+REST imports, AI `add_template`, and default-template initialization validate raw
+manifests against it before DTO and NuSMV-specific validation.
 
 Detailed package/architecture notes:
 [docs/architecture/overview.md](../docs/architecture/overview.md).

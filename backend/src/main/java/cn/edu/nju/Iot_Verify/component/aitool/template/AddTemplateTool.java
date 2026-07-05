@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.template;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -23,11 +24,15 @@ import java.util.Map;
 public class AddTemplateTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
+    private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private ObjectMapper tolerantMapper;
 
-    public AddTemplateTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+    public AddTemplateTool(BoardStorageService boardStorageService,
+                           ObjectMapper objectMapper,
+                           DeviceTemplateSchemaValidator deviceTemplateSchemaValidator) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
+        this.deviceTemplateSchemaValidator = deviceTemplateSchemaValidator;
     }
 
     @PostConstruct
@@ -59,9 +64,9 @@ public class AddTemplateTool extends AbstractAiTool {
                         "For stateful devices, must include: Name, Description, Modes (array of mode dimension names), InitState (semicolon-separated for multi-mode), " +
                         "WorkingStates (array of {Name, Description, Trust, Privacy, Dynamics[]}), " +
                         "Transitions (array of {Name, StartState (optional), EndState (optional for internal variable transitions), Trigger{Attribute,Relation,Value}, Signal, Assignments[{Attribute,Value}]}), " +
-                        "APIs (array of {Name, Description, StartState (optional, empty or '_' means from any state), EndState, Signal, Trigger{Attribute,Relation,Value}, Assignments[{Attribute,Value}]}). " +
+                        "APIs (array of {Name, Description, StartState (optional, empty or '_' means from any state), EndState, Signal, Trigger:null, Assignments[{Attribute,Value}]}). " +
                         "For stateless sensors (no modes), Modes/InitState/WorkingStates can all be empty. " +
-                        "Optional: InternalVariables, ImpactedVariables, Contents."
+                        "Optional: InternalVariables, ImpactedVariables, Contents. The manifest must match backend/device-template-schema.json exactly."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -89,6 +94,7 @@ public class AddTemplateTool extends AbstractAiTool {
             if (manifestNode.isMissingNode() || !manifestNode.isObject()) {
                 return errorJson("Manifest object is required.", "VALIDATION_ERROR", 400);
             }
+            deviceTemplateSchemaValidator.validateRawManifest(name, manifestNode);
 
             DeviceTemplateDto.DeviceManifest manifest = tolerantMapper.treeToValue(
                     manifestNode, DeviceTemplateDto.DeviceManifest.class);

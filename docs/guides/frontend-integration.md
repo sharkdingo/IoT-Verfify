@@ -88,7 +88,7 @@ import { authApi } from '@/api/auth';
 
 const res = await authApi.login({ phone: '13800138000', password: '123456' });
 if (res.code === 200) {
-  console.log(res.data.userId, res.data.token); // note: res.data, not res
+  const { userId, token } = res.data; // note: res.data, not res
 }
 ```
 
@@ -148,6 +148,14 @@ Contracts for board storage and board recommendation endpoints live in
 [../api/board.md](../api/board.md). Contracts for verification, traces, and fix live in
 [../api/verification.md](../api/verification.md).
 
+Template manifests submitted through `addDeviceTemplate` must match
+`backend/device-template-schema.json` exactly. The frontend may normalize legacy upload
+files into the PascalCase schema shape before submission, but it should not send
+lower-case aliases or extra fields and should keep `API.Trigger` as `null`; transition
+conditions belong in `Transitions[].Trigger`. The backend validates the raw manifest
+before DTO mapping, so schema violations return a `400` instead of being silently
+ignored.
+
 ---
 
 ## Simulation — `api/simulation.ts`
@@ -185,9 +193,12 @@ manually here. Protocol detail: [../api/chat-sse.md](../api/chat-sse.md).
 
 Backend↔frontend field alignment worth noting:
 
-- `types/spec.ts` `SpecCondition` (`side`, `deviceId`, `targetType`, `key`, `relation`,
-  `value`) and `Specification` (`aConditions`/`ifConditions`/`thenConditions`) match
-  the backend `SpecConditionDto` / `SpecificationDto`.
+- `types/spec.ts` `SpecCondition` (`side`, `deviceId`, `deviceLabel`, `targetType`,
+  `key`, `relation`, `value`) and `Specification`
+  (`aConditions`/`ifConditions`/`thenConditions`) match the backend
+  `SpecConditionDto` / `SpecificationDto` shape. For spec conditions the backend
+  validates `deviceId` as required; the frontend sends both `deviceId` and
+  `deviceLabel`, resolving legacy node ids to labels before request construction.
 - `types/verify.ts` holds `VerificationRequest`, `VerificationResult`,
   `VerificationTask`, generation warning counts, and the trace types.
 - `types/fix.ts` holds fix-related types.

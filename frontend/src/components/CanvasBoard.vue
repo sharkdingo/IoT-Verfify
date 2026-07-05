@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
@@ -13,6 +14,8 @@ import {
 import { getLinkPoints } from '../utils/rule'
 
 import { getDefaultDeviceIcon, getDeviceIconPath, getVariableIconPath } from '../utils/device'
+
+const { t } = useI18n()
 
 import {
   createNodeDragState,
@@ -984,7 +987,7 @@ onBeforeUnmount(() => {
             <div class="variable-tooltip-info">
               <span class="variable-tooltip-label">{{ node.label }}</span>
               <span v-if="isTraceActive && getTraceVariableValue(node)" class="variable-tooltip-value">
-                值: {{ getTraceVariableValue(node)?.value }}
+                {{ t('app.variableValue') }}: {{ getTraceVariableValue(node)?.value }}
               </span>
             </div>
           </div>
@@ -996,10 +999,10 @@ onBeforeUnmount(() => {
           <div 
             v-if="isDeviceAttacked(node.id, node.label)"
             class="attack-indicator"
-            title="This device is under attack"
+            :title="t('app.deviceUnderAttack')"
           >
             <span class="material-symbols-outlined">arrow_downward</span>
-            <span>Attacked</span>
+            <span>{{ t('app.attacked') }}</span>
           </div>
           <!-- 上部分：图标 -->
           <div class="device-top-row">

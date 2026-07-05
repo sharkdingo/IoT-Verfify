@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SimulationState } from '../types/simulation'
 
 const props = defineProps<{
@@ -11,6 +12,8 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
   'highlight-state': [data: { states: SimulationState[]; selectedStateIndex: number } | null]
 }>()
+
+const { t } = useI18n()
 
 // 当前选中的状态索引
 const selectedStateIndex = ref(0)
@@ -124,19 +127,19 @@ watch(selectedStateIndex, () => {
       <div>
         <div class="flex items-center justify-between mb-3 flex-shrink-0">
           <div class="flex items-center gap-2">
-            <span class="text-sm font-bold text-slate-700">State Sequence</span>
+            <span class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.stateSequence') }}</span>
             <span class="px-2 py-0.5 bg-indigo-100 text-indigo-600 text-xs rounded-full">
               {{ selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
             <!-- 显示攻击强度 -->
             <span v-if="intensity !== null" class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full flex items-center gap-1">
               <span class="material-symbols-outlined text-xs">warning</span>
-              Intensity: {{ intensity }}
+              {{ t('app.traceVisualization.intensity') }}: {{ intensity }}
             </span>
             <!-- 显示被攻击设备数量 -->
             <span v-if="hasAttackedDevices" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1 animate-pulse">
               <span class="material-symbols-outlined text-xs">security</span>
-              Attacked!
+              {{ t('app.traceVisualization.attackedBang') }}
             </span>
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
@@ -148,7 +151,7 @@ watch(selectedStateIndex, () => {
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
             >
               <span class="material-symbols-outlined text-sm">{{ isPlaying ? 'stop' : 'play_arrow' }}</span>
-              {{ isPlaying ? 'Stop' : 'Play' }}
+              {{ isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play') }}
             </button>
             <button
               @click="close"

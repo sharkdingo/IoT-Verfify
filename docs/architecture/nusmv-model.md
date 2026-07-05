@@ -95,9 +95,17 @@ ImpactedVariable) must not collide. InternalVariable and ImpactedVariable **are*
 allowed to share a name (a common pattern: a device's internal variable drives an
 identically named environment variable).
 
-### Rejected at persistence time — `validateTemplateManifestForNuSmv()`
+### Rejected at persistence time — schema + `validateTemplateManifestForNuSmv()`
 
-Applies to **InternalVariable and ImpactedVariable names**. These are **not**
+`backend/device-template-schema.json` is the authoritative structural contract for
+device template manifests. Custom template REST imports, AI `add_template`, and default
+template initialization validate raw manifest JSON against that schema before DTO
+mapping. This catches unknown fields, wrong casing, API triggers, and basic
+shape/type/required-field errors at the boundary.
+
+`validateTemplateManifestForNuSmv()` then applies semantic checks that JSON Schema is
+not well-suited to express. It applies to **InternalVariable and ImpactedVariable names**.
+These are **not**
 sanitized at generation time, because they are cross-referenced in many places and
 partial sanitization would break `.equals()` matching. Instead they must be legal
 NuSMV identifiers (`[a-zA-Z_][a-zA-Z0-9_]*`) and not reserved words, and this is
@@ -535,7 +543,7 @@ VAR
 	a_temperature: 15..39;
 ASSIGN
 	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
-	-- 状态转换（攻击劫持优先 + 规则条件驱动 + API startState 约束）
+	-- State transitions: attack override first, then rule guards and API start-state constraints
 	next(thermostat_1.ThermostatMode) := case
 		thermostat_1.is_attack=TRUE: {cool, heat, off};
 		TRUE: thermostat_1.ThermostatMode;
@@ -545,7 +553,7 @@ ASSIGN
 		thermostat_1.temperature > 30 & fan_1.is_attack=FALSE & fan_1.FanMode=off : auto;
 		TRUE : fan_1.FanMode;
 	esac;
-	-- API 信号（基于状态变化检测）
+	-- API signals derived from state changes
 	next(fan_1.fanAuto_a) := case
 		fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
 		TRUE: FALSE;
@@ -554,14 +562,14 @@ ASSIGN
 		thermostat_1.ThermostatMode!=cool & next(thermostat_1.ThermostatMode)=cool: TRUE;
 		TRUE: FALSE;
 	esac;
-	-- 环境变量 next() 转换（含 NaturalChangeRate 边界检查 + clamp 夹紧）
+	-- Environment-variable next() transition with NaturalChangeRate boundary checks and clamping
 	next(a_temperature) :=
 	case
-		a_temperature>=39: {max(15, min(39, a_temperature - 1)), a_temperature};   -- 上边界：候选值夹紧到声明区间
-		a_temperature<=15: {a_temperature, max(15, min(39, a_temperature + 1))};   -- 下边界：候选值夹紧到声明区间
+		a_temperature>=39: {max(15, min(39, a_temperature - 1)), a_temperature};   -- Upper bound: clamp candidates to the declared range
+		a_temperature<=15: {a_temperature, max(15, min(39, a_temperature + 1))};   -- Lower bound: clamp candidates to the declared range
 		TRUE: {max(15, min(39, a_temperature - 1)), max(15, min(39, a_temperature)), max(15, min(39, a_temperature + 1))};
 	esac;
-	-- 信任传播
+	-- Trust propagation
 	next(fan_1.trust_FanMode_auto) := case
 		fan_1.is_attack=TRUE: untrusted;
 		thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
@@ -576,7 +584,7 @@ ASSIGN
 		fan_1.is_attack=TRUE: untrusted;
 		TRUE: fan_1.trust_FanMode_off;
 	esac;
-	-- thermostat_1 状态级 trust（攻击优先 + 自保持）
+	-- thermostat_1 state-level trust: attack first, otherwise self-hold
 	next(thermostat_1.trust_ThermostatMode_cool) := case
 		thermostat_1.is_attack=TRUE: untrusted;
 		TRUE: thermostat_1.trust_ThermostatMode_cool;
@@ -589,22 +597,22 @@ ASSIGN
 		thermostat_1.is_attack=TRUE: untrusted;
 		TRUE: thermostat_1.trust_ThermostatMode_off;
 	esac;
-	-- 变量级 trust（自保持）
+	-- Variable-level trust self-hold
 	next(thermostat_1.trust_temperature) := thermostat_1.trust_temperature;
-	-- 隐私传播
+	-- Privacy propagation
 	next(fan_1.privacy_FanMode_auto) := case
 		thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
 		TRUE: fan_1.privacy_FanMode_auto;
 	esac;
 	next(fan_1.privacy_FanMode_manual) := fan_1.privacy_FanMode_manual;
 	next(fan_1.privacy_FanMode_off) := fan_1.privacy_FanMode_off;
-	-- thermostat_1 状态级 privacy（自保持）
+	-- thermostat_1 state-level privacy self-hold
 	next(thermostat_1.privacy_ThermostatMode_cool) := thermostat_1.privacy_ThermostatMode_cool;
 	next(thermostat_1.privacy_ThermostatMode_heat) := thermostat_1.privacy_ThermostatMode_heat;
 	next(thermostat_1.privacy_ThermostatMode_off) := thermostat_1.privacy_ThermostatMode_off;
-	-- 变量级 privacy（自保持）
+	-- Variable-level privacy self-hold
 	next(thermostat_1.privacy_temperature) := thermostat_1.privacy_temperature;
-	-- 外部变量赋值（简单赋值，非 next）
+	-- External-variable assignment: direct assignment, not next()
 	thermostat_1.temperature := a_temperature;
 -- Specifications
 	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
@@ -636,7 +644,7 @@ MODULE Sensor_ts1
 FROZENVAR
     is_attack: boolean;
 VAR
-    temperature: 0..110;   -- 原始 0..100，range=100，expansion=100/5*25/50=10
+    temperature: 0..110;   -- Original 0..100, range=100, expansion=100/5*25/50=10
 ASSIGN
     init(is_attack) := {TRUE, FALSE};
 

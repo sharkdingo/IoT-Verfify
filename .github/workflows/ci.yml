@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:unit -- --run
+
+      - name: Build
+        run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Install NuSMV 2.7.1
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          curl -fsSLO https://nusmv.fbk.eu/distrib/2.7.1/NuSMV-2.7.1-linux64.tar.xz
+          curl -fsSLO https://nusmv.fbk.eu/distrib/2.7.1/NuSMV-2.7.1-linux64.tar.xz.sha256sum
+          sha256sum -c NuSMV-2.7.1-linux64.tar.xz.sha256sum
+          tar -xf NuSMV-2.7.1-linux64.tar.xz
+          nusmv_bin="$(find "$PWD" -path '*/bin/NuSMV' -type f | head -n 1)"
+          test -n "$nusmv_bin"
+          chmod +x "$nusmv_bin"
+          echo "$(dirname "$nusmv_bin")" >> "$GITHUB_PATH"
+          echo "NUSMV_PATH=$nusmv_bin" >> "$GITHUB_ENV"
+
+      - name: Run backend tests
+        run: mvn test

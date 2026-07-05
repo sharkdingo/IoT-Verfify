@@ -18,7 +18,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '1',
     type: 'always',
     label: 'A holds forever',
-    description: '系统必须始终保持某个状态或条件为真',
+    labelKey: 'app.specTemplates.always.label',
+    description: 'The system must always maintain a given state or condition.',
+    descriptionKey: 'app.specTemplates.always.description',
     requiredSides: ['a'],
     ltlFormula: '□A'
   },
@@ -26,7 +28,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '2',
     type: 'eventually',
     label: 'A will happen later',
-    description: '某个状态或条件最终一定会发生',
+    labelKey: 'app.specTemplates.eventually.label',
+    description: 'A state or condition must eventually occur.',
+    descriptionKey: 'app.specTemplates.eventually.description',
     requiredSides: ['a'],
     ltlFormula: '◇A'
   },
@@ -34,7 +38,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '3',
     type: 'never',
     label: 'A never happens',
-    description: '某个状态或条件永远不能发生',
+    labelKey: 'app.specTemplates.never.label',
+    description: 'A state or condition must never occur.',
+    descriptionKey: 'app.specTemplates.never.description',
     requiredSides: ['a'],
     ltlFormula: '□¬A'
   },
@@ -42,7 +48,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '4',
     type: 'immediate',
     label: 'IF A happens, B should happen in the next state (immediately after)',
-    description: '当条件A发生时，条件B必须在下一状态满足（紧接其后）',
+    labelKey: 'app.specTemplates.immediate.label',
+    description: 'When condition A occurs, condition B must hold in the next state.',
+    descriptionKey: 'app.specTemplates.immediate.description',
     requiredSides: ['if', 'then'],
     ltlFormula: '□(A → ○B)'
   },
@@ -50,7 +58,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '5',
     type: 'response',
     label: 'IF A happens, B should happen later',
-    description: '当条件A发生后，条件B最终必须发生（响应模式）',
+    labelKey: 'app.specTemplates.response.label',
+    description: 'After condition A occurs, condition B must eventually occur.',
+    descriptionKey: 'app.specTemplates.response.description',
     requiredSides: ['if', 'then'],
     ltlFormula: '□(A → ◇B)'
   },
@@ -58,7 +68,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '6',
     type: 'persistence',
     label: 'IF A happens, B should happen later and last forever',
-    description: '当条件A发生后，条件B必须永远保持',
+    labelKey: 'app.specTemplates.persistence.label',
+    description: 'After condition A occurs, condition B must hold forever.',
+    descriptionKey: 'app.specTemplates.persistence.description',
     requiredSides: ['if', 'then'],
     ltlFormula: '□(A → □B)'
   },
@@ -66,7 +78,9 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     id: '7',
     type: 'safety',
     label: 'A will not happen because of something untrusted',
-    description: '当检测到不可信操作时，指定的事件A不会发生',
+    labelKey: 'app.specTemplates.safety.label',
+    description: 'When an untrusted operation is detected, event A must not occur.',
+    descriptionKey: 'app.specTemplates.safety.description',
     requiredSides: ['a'],
     ltlFormula: '□(untrusted → ¬A)'
   }

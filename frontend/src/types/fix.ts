@@ -16,6 +16,8 @@ export interface FaultRule {
   reason: string
 }
 
+export type FixStrategyName = 'parameter' | 'condition' | 'disable'
+
 // §5.1 参数调整结果
 export interface ParameterAdjustment {
   ruleIndex: number
@@ -42,7 +44,7 @@ export interface ConditionAdjustment {
 
 // 修复建议
 export interface FixSuggestion {
-  strategy: 'parameter' | 'condition' | 'disable'
+  strategy: FixStrategyName
   description: string
   parameterAdjustments?: ParameterAdjustment[]
   conditionAdjustments?: ConditionAdjustment[]
@@ -63,7 +65,7 @@ export interface FixResult {
 
 // 修复请求（可选）
 export interface FixRequest {
-  strategies?: ('parameter' | 'condition' | 'disable')[]
+  strategies?: FixStrategyName[]
   preferredRanges?: Record<string, PreferredRange>
 }
 
@@ -72,4 +74,19 @@ export interface FixRequest {
 export interface PreferredRange {
   lower: number
   upper: number
+}
+
+// 应用修复请求：客户端回传当前展示的建议，服务端会重算并校验等价后再落库。
+export interface FixApplyRequest {
+  strategy: FixStrategyName
+  suggestion: FixSuggestion
+  preferredRanges?: Record<string, PreferredRange>
+}
+
+// 应用修复结果：rules 为后端 RuleDto 形状，调用方通常成功后重新拉取画布规则。
+export interface FixApplyResult {
+  applied: boolean
+  strategy: FixStrategyName
+  message: string
+  rules: Record<string, unknown>[]
 }

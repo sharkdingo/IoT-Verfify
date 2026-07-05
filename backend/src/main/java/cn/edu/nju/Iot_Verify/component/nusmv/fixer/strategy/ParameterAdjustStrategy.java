@@ -10,8 +10,8 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
-import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
@@ -566,7 +566,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         DeviceSmvData smv;
         try {
-            smv = DeviceSmvDataFactory.findDeviceSmvDataStrict(deviceId, deviceSmvMap);
+            smv = DeviceReferenceResolver.resolve(deviceId, null, deviceSmvMap);
         } catch (Exception e) {
             return null;
         }

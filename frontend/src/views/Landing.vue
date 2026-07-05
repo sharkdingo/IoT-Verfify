@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import PublicHeader from '@/components/common/PublicHeader.vue';
 
 const router = useRouter();
+const { t } = useI18n();
 
 const goToLogin = () => {
   router.push('/login');
@@ -50,45 +53,35 @@ onUnmounted(() => {
     <!-- Dark Overlay -->
     <div class="video-overlay"></div>
 
-    <!-- Navigation -->
-    <nav class="nav-bar">
-      <div class="nav-content">
-        <div class="logo">
-          IoT-Verify<sup class="logo-sup">®</sup>
-        </div>
-        
-        <div class="nav-links">
-          <a href="#" class="nav-link active">Devices</a>
-          <a href="#" class="nav-link">Automation</a>
-          <a href="#" class="nav-link">Templates</a>
-          <a href="#" class="nav-link">Rules</a>
-        </div>
-
-        <button class="cta-button liquid-glass" @click="goToLogin">
-          Get Started
-        </button>
-      </div>
-    </nav>
+    <PublicHeader
+      variant="transparent"
+      show-nav
+      :show-theme="false"
+      :primary-label="t('app.getStarted')"
+      primary-to="/login"
+    />
 
     <!-- Hero Section -->
     <section class="hero-section">
       <h1 class="hero-title animate-fade-rise">
-        Orchestrate your <em class="emphasis">intelligent space</em> with visual precision.
+        {{ t('app.landingHeroLead') }} <em class="emphasis">{{ t('app.landingHeroEmphasis') }}</em> {{ t('app.landingHeroTail') }}
       </h1>
       
       <p class="hero-subtext animate-fade-rise-delay">
-        Design, connect, and automate your IoT ecosystem through an intuitive canvas. 
-        Build complex device rules with  visual logic — no coding required.
+        {{ t('app.landingHeroSubtext') }}
       </p>
       
       <button class="hero-cta liquid-glass animate-fade-rise-delay-2" @click="goToLogin">
-        Get Started
+        {{ t('app.getStarted') }}
       </button>
     </section>
   </div>
 </template>
 
 <style>
+/* Import Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500&display=swap');
+
 /* CSS Variables - Dark Theme */
 :root {
   --background: 201 100% 13%;
@@ -105,9 +98,6 @@ onUnmounted(() => {
   --font-display: 'Instrument Serif', serif;
   --font-body: 'Inter', sans-serif;
 }
-
-/* Import Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500&display=swap');
 
 /* Reset & Base */
 * {
@@ -152,64 +142,6 @@ onUnmounted(() => {
     rgba(10, 20, 35, 0.7) 100%
   );
   z-index: 1;
-}
-
-/* Navigation Bar */
-.nav-bar {
-  position: relative;
-  z-index: 10;
-  display: flex;
-  justify-content: center;
-  padding: 1.5rem 2rem;
-}
-
-.nav-content {
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  padding: 0 2rem;
-}
-
-.logo {
-  font-family: var(--font-display);
-  font-size: 1.875rem;
-  letter-spacing: -0.025em;
-  color: hsl(0, 0%, 100%);
-}
-
-.logo-sup {
-  font-size: 0.75rem;
-  vertical-align: super;
-}
-
-.nav-links {
-  display: flex;
-  gap: 2rem;
-}
-
-@media (max-width: 767px) {
-  .nav-links {
-    display: none;
-  }
-}
-
-.nav-link {
-  font-size: 0.875rem;
-  color: hsl(0, 0%, 80%);
-  text-decoration: none;
-  transition: color 0.2s, text-shadow 0.2s;
-}
-
-.nav-link:hover {
-  color: hsl(0, 0%, 100%);
-  text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-}
-
-.nav-link.active {
-  color: hsl(0, 0%, 100%);
-  text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
 }
 
 /* CTA Button - Liquid Glass */

@@ -66,6 +66,33 @@ class FaultLocalizerTest {
     }
 
     @Test
+    void localize_rawDigitLeadingDeviceLabel_resolvesLikeGenerator() {
+        DeviceSmvData lightSmv = buildDevice("d_1Light", "Light", List.of("LightMode"),
+                Map.of("LightMode", List.of("on", "off")),
+                buildManifest("Light", List.of(buildApi("turn_on", null, "on"))));
+
+        Map<String, DeviceSmvData> deviceMap = Map.of("d_1Light", lightSmv);
+
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("1Light").attribute("state").relation("=").value("off").build()))
+                .command(RuleDto.Command.builder().deviceName("1Light").action("turn_on").build())
+                .ruleString("if 1Light=off then 1Light.turn_on")
+                .build();
+
+        List<TraceStateDto> states = List.of(
+                buildState(0, List.of(buildDeviceTrace("d_1Light", "off"))),
+                buildState(1, List.of(buildDeviceTrace("d_1Light", "on")))
+        );
+
+        List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
+
+        assertEquals(1, faults.size());
+        assertEquals(0, faults.get(0).getRuleIndex());
+        assertEquals("1Light", faults.get(0).getTargetDevice());
+    }
+
+    @Test
     void localize_conditionNotSatisfied_returnsEmpty() {
         // Condition: sensor=cold, but trace has sensor=hot
         DeviceSmvData sensorSmv = buildDevice("sensor_1", "Sensor", List.of("SensorMode"),

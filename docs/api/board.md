@@ -103,7 +103,7 @@ active tab ids.
 | Method | Path | Body / Response | Notes |
 | :--- | :--- | :--- | :--- |
 | GET | `/api/board/templates` | → `DeviceTemplateDto[]` | The current user's templates |
-| POST | `/api/board/templates` | `DeviceTemplateDto` → `DeviceTemplateDto` | Create a custom template (runs a NuSMV probe pre-check) |
+| POST | `/api/board/templates` | `DeviceTemplateDto` → `DeviceTemplateDto` | Create a custom template (validates `manifest` against `backend/device-template-schema.json`, then runs NuSMV-specific validation and a probe pre-check) |
 | DELETE | `/api/board/templates/{id}` | → `null` | Delete one template |
 | POST | `/api/board/templates/reload` | → `Integer` | **Reset**: delete the user's templates, re-import defaults; returns the imported count |
 
@@ -119,23 +119,36 @@ active tab ids.
 `Description`, `Modes`, `InternalVariables`, `ImpactedVariables`, `InitState`,
 `WorkingStates`, `Transitions`, `APIs`, `Contents`. Key nested shapes:
 
+`backend/device-template-schema.json` is the authoritative structural schema for the
+`manifest` object. The backend validates the raw incoming `manifest` JSON against that
+schema before DTO mapping, so unknown fields and lower-case alternatives are rejected
+at the API boundary. Frontend helpers may normalize legacy upload files before sending,
+but the final request body must match this schema. The Maven build packages the same
+file to `classpath:device-template-schema.json`, and `DEVICE_TEMPLATE_SCHEMA_PATH` may
+override its filesystem location for deployments.
+
 - `InternalVariable`: `Name`, `Description`, `IsInside`, `PublicVisible`, `Trust`,
   `Privacy`, `LowerBound`, `UpperBound`, `NaturalChangeRate`, `Values`. **Provide either
   `Values` (enum) XOR `LowerBound`+`UpperBound` (numeric range), or neither — never
   both, and never only one bound** (backend `@AssertTrue isValidVariableDefinition`).
 - `WorkingState`: `Name`, `Description`, `Trust`, `Privacy`, `Invariant`, `Dynamics[]`
   (`Dynamic` = `VariableName`, `Value`, `ChangeRate`).
-- `API` / `Transition`: `Name`, `Description`, `Signal`, `StartState`, `EndState`,
-  `Trigger` (`Attribute`, `Relation`, `Value`), `Assignments[]` (`Attribute`, `Value`).
+- `Transition`: `Name`, `Description`, `Signal`, `StartState`, `EndState`, `Trigger`
+  (`Attribute`, `Relation`, `Value`), `Assignments[]` (`Attribute`, `Value`).
+- `API`: `Name`, `Description`, `Signal`, `StartState`, `EndState`,
+  `Trigger: null`, `Assignments[]` (`Attribute`, `Value`). API triggers are not a
+  supported generator semantic; conditional internal behavior belongs in `Transitions`.
 - `Content`: `Name`, `Privacy`, `IsChangeable`.
 
-The manifest constraints that matter for NuSMV (identifier legality, StartState/EndState
-format, trust/privacy values) are enforced by validation — see
+After schema validation, the NuSMV-specific constraints (identifier legality,
+StartState/EndState format, trust/privacy values) are enforced by runtime validation —
+see
 [../architecture/nusmv-model.md](../architecture/nusmv-model.md) and the P1–P5 rules in
 [../architecture/spec-templates.md](../architecture/spec-templates.md). In particular,
 `Trust` must be `trusted` or `untrusted` and `Privacy` must be `public` or `private`
 (case-insensitive; P4) — other values are rejected at generation time. Default template
-JSON lives in `backend/src/main/resources/deviceTemplate/`.
+JSON lives in `backend/src/main/resources/deviceTemplate/` and is also checked against
+the canonical schema when imported.
 
 ---
 

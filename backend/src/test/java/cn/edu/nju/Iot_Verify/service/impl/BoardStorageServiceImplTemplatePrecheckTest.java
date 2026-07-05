@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
@@ -84,6 +85,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     @Mock
     private DeviceTemplateMapper deviceTemplateMapper;
     @Mock
+    private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
+    @Mock
     private TransactionTemplate transactionTemplate;
 
     private BoardStorageServiceImpl service;
@@ -109,7 +112,8 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 deviceEdgeMapper,
                 boardLayoutMapper,
                 boardActiveMapper,
-                deviceTemplateMapper
+                deviceTemplateMapper,
+                deviceTemplateSchemaValidator
         );
     }
 

@@ -1,7 +1,11 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n';
+
 const props = defineProps<{
   visible: boolean;
 }>();
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void;
@@ -35,14 +39,14 @@ const confirm = () => {
               <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span class="material-symbols-outlined text-4xl text-red-500">logout</span>
               </div>
-              <h3 class="text-xl font-bold text-slate-800">Log Out</h3>
+              <h3 class="text-xl font-bold text-slate-800">{{ t('app.logoutTitle') }}</h3>
             </div>
           </div>
 
           <!-- Body -->
           <div class="px-8 py-6 text-center">
             <p class="text-slate-600 leading-relaxed">
-              Are you sure you want to log out? 
+              {{ t('app.logoutShortMessage') }}
             </p>
           </div>
 
@@ -52,14 +56,14 @@ const confirm = () => {
               @click="close"
               class="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-all shadow-sm hover:shadow"
             >
-              Cancel
+              {{ t('app.cancel') }}
             </button>
             <button 
               @click="confirm"
               class="px-5 py-2.5 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-xl transition-all shadow-lg hover:shadow-red-500/30 flex items-center gap-2"
             >
               <span class="material-symbols-outlined text-lg">logout</span>
-              Log Out
+              {{ t('app.logout') }}
             </button>
           </div>
         </div>

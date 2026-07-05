@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -27,6 +28,8 @@ class TemplateToolsFallbackTest {
 
     @Mock
     private BoardStorageService boardStorageService;
+    @Mock
+    private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
 
     private ObjectMapper objectMapper;
 
@@ -51,7 +54,7 @@ class TemplateToolsFallbackTest {
         saved.setName("Lamp");
         when(boardStorageService.addDeviceTemplate(anyLong(), any(DeviceTemplateDto.class))).thenReturn(saved);
 
-        AddTemplateTool tool = new AddTemplateTool(boardStorageService, failingMapper);
+        AddTemplateTool tool = new AddTemplateTool(boardStorageService, failingMapper, deviceTemplateSchemaValidator);
         tool.initTolerantMapper();
         String result = tool.execute("""
                 {
@@ -86,7 +89,7 @@ class TemplateToolsFallbackTest {
 
     @Test
     void addTemplate_invalidJsonArgs_shouldReturnValidationError() throws Exception {
-        AddTemplateTool tool = new AddTemplateTool(boardStorageService, objectMapper);
+        AddTemplateTool tool = new AddTemplateTool(boardStorageService, objectMapper, deviceTemplateSchemaValidator);
         tool.initTolerantMapper();
         String result = tool.execute("{");
         JsonNode json = objectMapper.readTree(result);

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> Verified against code on 2026-07-03. Source: root `README.md` (常见问题), `backend/README.md` (§10 Troubleshooting).
+> Verified against code on 2026-07-03. Source: root `README.md` (FAQ), `backend/README.md` (§10 Troubleshooting).
 
 Common issues and fixes. For every configuration key mentioned here, see [../getting-started/configuration.md](../getting-started/configuration.md) for the variable, its default, and how it is resolved — this page does not repeat defaults.
 

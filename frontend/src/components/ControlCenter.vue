@@ -12,12 +12,14 @@ import type {
   SpecCondition, 
   SpecSide,
 } from '@/types/spec'
+import { useI18n } from 'vue-i18n'
 import { getCachedManifestForNode } from '@/utils/templateCache'
 import { getDefaultDeviceIcon } from '@/utils/device'
 import boardApi from '@/api/board'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -130,6 +132,8 @@ const currentTemplateDetail = computed(() => {
   return specTemplateDetails.find(t => t.id === specForm.templateId)
 })
 
+const templateMessage = (key: string | undefined, fallback: string) => key ? t(key) : fallback
+
 // Get required sides for current template
 const requiredSides = computed(() => {
   return currentTemplateDetail.value?.requiredSides || []
@@ -185,21 +189,21 @@ const openConditionDialog = (side: SpecSide, index: number = -1) => {
 const saveCondition = () => {
   if (!editingConditionData.deviceId) {
     ElMessage.warning({
-      message: 'Please select a device',
+      message: t('app.selectDevice'),
       center: true
     })
     return
   }
   if (!editingConditionData.targetType) {
     ElMessage.warning({
-      message: 'Please select a type',
+      message: t('app.selectType'),
       center: true
     })
     return
   }
   if (editingConditionData.targetType !== 'state' && !editingConditionData.key) {
     ElMessage.warning({
-      message: 'Please select a property',
+      message: t('app.selectProperty'),
       center: true
     })
     return
@@ -210,7 +214,7 @@ const saveCondition = () => {
   if (editingConditionData.targetType !== 'api') {
     if (!editingConditionData.value || !editingConditionData.value.trim()) {
       ElMessage.warning({
-        message: 'Please enter a value',
+        message: t('app.enterValue'),
         center: true
       })
       return
@@ -225,7 +229,7 @@ const saveCondition = () => {
 
   if (!keyValue.trim()) {
     ElMessage.warning({
-      message: 'Please select a property',
+      message: t('app.selectProperty'),
       center: true
     })
     return
@@ -646,7 +650,7 @@ const handleTemplateChange = () => {
 const validateSpecification = () => {
   if (!specForm.templateId) {
     ElMessage.warning({
-      message: 'Please select a template',
+      message: t('app.selectSpecTemplate'),
       center: true
     })
     return false
@@ -660,7 +664,7 @@ const validateSpecification = () => {
     const conditions = getConditionsForSide(side)
     if (conditions.length === 0) {
       ElMessage.warning({
-        message: `Please add at least one condition for "${side.toUpperCase()}"`,
+        message: t('app.addConditionForSide', { side: side.toUpperCase() }),
         center: true
       })
       return false
@@ -702,12 +706,9 @@ const resetSpecForm = () => {
 }
 
 const handleCreateDevice = async () => {
-  console.log('Available templates:', props.deviceTemplates)
-  console.log('Selected type:', deviceForm.type)
-
   if (!deviceForm.name.trim()) {
     ElMessage({
-      message: 'Enter device name',
+      message: t('app.enterDeviceName'),
       type: 'warning',
       center: true
     })
@@ -716,7 +717,7 @@ const handleCreateDevice = async () => {
 
   if (!deviceForm.type) {
     ElMessage({
-      message: 'Please select a device template',
+      message: t('app.selectDeviceTemplate'),
       type: 'warning',
       center: true
     })
@@ -738,12 +739,11 @@ const handleCreateDevice = async () => {
   if (!template && props.deviceTemplates.length > 0) {
     // If still not found, use the first available template as fallback
     template = props.deviceTemplates[0]
-    console.warn(`Template for type "${deviceForm.type}" not found, using fallback:`, template.manifest?.Name || template.name)
   }
 
   if (!template) {
     ElMessage({
-      message: 'No templates available',
+      message: t('app.noTemplatesAvailable'),
       type: 'error',
       center: true
     })
@@ -817,10 +817,10 @@ const handleImportTemplate = async (event: Event) => {
       name: manifest.Name,
       manifest: manifest
     })
-    ElMessage.success({ message: 'Template imported successfully', type: 'success' })
+    ElMessage.success({ message: t('app.templateImportedSuccessfully'), type: 'success' })
     emit('refresh-templates')
   } catch (error: any) {
-    ElMessage.error({ message: error?.message || 'Invalid JSON file', type: 'error' })
+    ElMessage.error({ message: error?.message || t('app.invalidJsonFile'), type: 'error' })
   }
 
   // 清空 input 以便重新选择同一文件
@@ -839,23 +839,17 @@ const openDeleteConfirm = (template: any) => {
 const confirmDeleteTemplate = async () => {
   if (!templateToDelete.value) return
 
-  console.log('Deleting template:', {
-    id: templateToDelete.value.id,
-    idType: typeof templateToDelete.value.id,
-    name: templateToDelete.value.manifest.Name
-  })
-
   try {
     // Ensure templateId is a valid number
     const templateId = Number(templateToDelete.value.id)
     if (!templateId || isNaN(templateId)) {
-      throw new Error('Invalid template ID')
+      throw new Error(t('app.invalidTemplateId'))
     }
 
     await boardApi.deleteDeviceTemplate(templateId)
 
     ElMessage({
-      message: 'Template deleted',
+      message: t('app.templateDeleted'),
       type: 'success',
       center: true
     })
@@ -864,9 +858,9 @@ const confirmDeleteTemplate = async () => {
     templateToDelete.value = null
   } catch (error) {
     console.error('Failed to delete template:', error)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    const errorMessage = error instanceof Error ? error.message : t('app.unknownError')
     ElMessage({
-      message: `Delete failed: ${errorMessage}`,
+      message: t('app.deleteFailedWithReason', { reason: errorMessage }),
       type: 'error',
       center: true
     })
@@ -887,13 +881,13 @@ const exportTemplate = (template: any) => {
     linkElement.click()
 
     ElMessage.success({
-      message: 'Template exported',
+      message: t('app.templateExported'),
       center: true
     })
   } catch (error) {
     console.error('Failed to export template:', error)
     ElMessage.error({
-      message: 'Export failed',
+      message: t('app.exportFailed'),
       center: true
     })
   }
@@ -918,8 +912,8 @@ const exportTemplate = (template: any) => {
             <span class="material-symbols-outlined text-slate-600 text-xl">dashboard</span>
           </div>
           <div>
-            <h2 class="text-sm font-bold text-slate-800 tracking-wide">Control Center</h2>
-            <p class="text-xs text-slate-500">Device Management</p>
+            <h2 class="text-sm font-bold text-slate-800 tracking-wide">{{ t('app.controlCenter') }}</h2>
+            <p class="text-xs text-slate-500">{{ t('app.deviceManagement') }}</p>
           </div>
         </div>
         <button
@@ -952,7 +946,7 @@ const exportTemplate = (template: any) => {
           ]"
         >
           <span class="material-symbols-outlined text-sm">devices</span>
-          <span class="text-[10px]">Devices</span>
+          <span class="text-[10px]">{{ t('app.devices') }}</span>
         </button>
         <button
           @click="activeSection = 'templates'"
@@ -964,7 +958,7 @@ const exportTemplate = (template: any) => {
           ]"
         >
           <span class="material-symbols-outlined text-sm">inventory_2</span>
-          <span class="text-[10px]">Templates</span>
+          <span class="text-[10px]">{{ t('app.templates') }}</span>
         </button>
         <button
           @click="activeSection = 'rules'"
@@ -976,7 +970,7 @@ const exportTemplate = (template: any) => {
           ]"
         >
           <span class="material-symbols-outlined text-sm">rule</span>
-          <span class="text-[10px]">Rules</span>
+          <span class="text-[10px]">{{ t('app.rules') }}</span>
         </button>
         <button
           @click="activeSection = 'specs'"
@@ -988,7 +982,7 @@ const exportTemplate = (template: any) => {
           ]"
         >
           <span class="material-symbols-outlined text-sm">verified</span>
-          <span class="text-[10px]">Specs</span>
+          <span class="text-[10px]">{{ t('app.specifications') }}</span>
         </button>
       </div>
     </div>
@@ -1005,8 +999,8 @@ const exportTemplate = (template: any) => {
                 <span class="material-symbols-outlined text-black text-lg">add_circle</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-slate-800">Device Manager</span>
-              <p class="text-xs text-slate-500">Add and manage devices</p>
+              <span class="text-sm font-bold text-slate-800">{{ t('app.deviceManager') }}</span>
+              <p class="text-xs text-slate-500">{{ t('app.addAndManageDevices') }}</p>
             </div>
           </div>
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
@@ -1017,13 +1011,13 @@ const exportTemplate = (template: any) => {
           <div class="space-y-3">
             <!-- Device Name -->
             <div class="relative">
-              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">Device Name</label>
+              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.deviceName') }}</label>
               <div class="relative">
                 <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">badge</span>
                 <input
                   v-model="deviceForm.name"
                   class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50 placeholder:text-slate-400 transition-all shadow-sm"
-                  placeholder="e.g. Living Room AC"
+                  :placeholder="t('app.deviceNamePlaceholder')"
                   type="text"
                 />
               </div>
@@ -1031,7 +1025,7 @@ const exportTemplate = (template: any) => {
 
             <!-- Device Type -->
             <div class="relative">
-              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">Type</label>
+              <label class="block text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wide">{{ t('app.type') }}</label>
               <div class="relative">
                 <span class="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 text-xs">devices</span>
                 <select
@@ -1051,7 +1045,7 @@ const exportTemplate = (template: any) => {
                 class="w-full py-2.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-1.5"
               >
                 <span class="material-symbols-outlined text-sm">add_location</span>
-                + Drop Node
+                {{ t('app.add') }} {{ t('app.dropNode') }}
               </button>
             </div>
           </div>
@@ -1066,8 +1060,8 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-white text-lg">inventory_2</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-slate-800">Template Manager</span>
-              <p class="text-xs text-slate-500">Design and manage templates</p>
+              <span class="text-sm font-bold text-slate-800">{{ t('app.templateManager') }}</span>
+              <p class="text-xs text-slate-500">{{ t('app.designAndManageTemplates') }}</p>
             </div>
           </div>
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
@@ -1082,8 +1076,8 @@ const exportTemplate = (template: any) => {
                 <span class="material-symbols-outlined text-white text-base">upload_file</span>
               </div>
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-bold text-orange-700">Import JSON Template</div>
-                <p class="text-[10px] text-orange-600 truncate">Upload JSON file to create template</p>
+                <div class="text-xs font-bold text-orange-700">{{ t('app.importJsonTemplate') }}</div>
+                <p class="text-[10px] text-orange-600 truncate">{{ t('app.uploadJsonCreateTemplate') }}</p>
               </div>
             </div>
           </label>
@@ -1096,7 +1090,7 @@ const exportTemplate = (template: any) => {
               <input
                 v-model="templateSearchQuery"
                 class="w-full bg-white border-2 border-slate-200 rounded-lg px-8 py-2 text-xs text-slate-700 focus:border-orange-400 focus:ring-2 focus:ring-orange-100/50 placeholder:text-slate-400 transition-all shadow-sm"
-                placeholder="Search templates..."
+                :placeholder="t('app.searchTemplates')"
                 type="text"
               />
               <button
@@ -1116,7 +1110,7 @@ const exportTemplate = (template: any) => {
           <div class="flex items-center justify-between px-1">
             <div class="flex items-center gap-1.5">
               <span class="material-symbols-outlined text-slate-400 text-xs">folder_open</span>
-              <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Templates</span>
+              <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">{{ t('app.templates') }}</span>
             </div>
             <span class="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">
               {{ filteredTemplates.length }}
@@ -1139,8 +1133,8 @@ const exportTemplate = (template: any) => {
                       {{ template.manifest.Name }}
                     </h4>
                     <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-1.5">
-                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.InternalVariables?.length || 0 }} vars</span>
-                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.APIs?.length || 0 }} apis</span>
+                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.InternalVariables?.length || 0 }} {{ t('app.varsShort') }}</span>
+                      <span class="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">{{ template.manifest.APIs?.length || 0 }} {{ t('app.apisShort') }}</span>
                     </div>
                   </div>
                 </div>
@@ -1150,14 +1144,14 @@ const exportTemplate = (template: any) => {
                   <button
                     @click.stop="exportTemplate(template)"
                     class="p-1 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors"
-                    title="Export"
+                    :title="t('app.export')"
                   >
                     <span class="material-symbols-outlined text-xs">download</span>
                   </button>
                   <button
                     @click.stop="openDeleteConfirm(template)"
                     class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                    title="Delete"
+                    :title="t('app.delete')"
                   >
                     <span class="material-symbols-outlined text-xs">delete</span>
                   </button>
@@ -1174,17 +1168,17 @@ const exportTemplate = (template: any) => {
                 <span class="material-symbols-outlined text-orange-400 text-2xl">inventory_2</span>
               </div>
               <p class="text-xs text-slate-600 mb-1 font-semibold">
-                {{ templateSearchQuery ? 'No matching templates' : 'No templates yet' }}
+                {{ templateSearchQuery ? t('app.noMatchingTemplates') : t('app.noTemplatesYet') }}
               </p>
               <p class="text-[10px] text-slate-400">
-                {{ templateSearchQuery ? 'Try a different search term' : 'Import a JSON template to get started' }}
+                {{ templateSearchQuery ? t('app.tryDifferentSearchTerm') : t('app.importJsonTemplateHint') }}
               </p>
               <button
                 v-if="templateSearchQuery"
                 @click="templateSearchQuery = ''"
                 class="mt-3 px-4 py-1.5 text-[10px] font-semibold text-orange-600 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors"
               >
-                Clear Search
+                {{ t('app.clearSearch') }}
               </button>
             </div>
           </div>
@@ -1199,8 +1193,8 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-white text-lg">function</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-slate-800">IFTTT Rule</span>
-              <p class="text-xs text-slate-500">Create conditional logic</p>
+              <span class="text-sm font-bold text-slate-800">{{ t('app.iftttRule') }}</span>
+              <p class="text-xs text-slate-500">{{ t('app.createConditionalLogic') }}</p>
             </div>
           </div>
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
@@ -1217,8 +1211,8 @@ const exportTemplate = (template: any) => {
                 <span class="material-symbols-outlined text-black text-lg">add_circle</span>
               </div>
               <div class="flex-1">
-                <span class="text-sm font-bold text-white block">Create Rule</span>
-                <span class="text-xs text-blue-100">IF → THEN logic</span>
+                <span class="text-sm font-bold text-white block">{{ t('app.createRule') }}</span>
+                <span class="text-xs text-blue-100">{{ t('app.ifThenLogic') }}</span>
               </div>
               <div class="w-7 h-7 bg-blue-400 rounded-lg flex items-center justify-center">
                 <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
@@ -1236,8 +1230,8 @@ const exportTemplate = (template: any) => {
               <span class="material-symbols-outlined text-white text-lg">verified</span>
             </div>
             <div>
-              <span class="text-sm font-bold text-slate-800">Specifications</span>
-              <p class="text-xs text-slate-500">LTL verification rules</p>
+              <span class="text-sm font-bold text-slate-800">{{ t('app.specifications') }}</span>
+              <p class="text-xs text-slate-500">{{ t('app.ltlVerificationRules') }}</p>
             </div>
           </div>
           <span class="material-symbols-outlined text-slate-400 transition-transform group-open:rotate-180 text-lg">expand_more</span>
@@ -1248,30 +1242,32 @@ const exportTemplate = (template: any) => {
           <div class="space-y-3">
             <!-- Step 1: Select Template -->
             <div>
-              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">Select Template</label>
+              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-2">{{ t('app.selectTemplate') }}</label>
               <select
                 v-model="specForm.templateId"
                 @change="handleTemplateChange"
                 class="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-red-400 focus:ring-2 focus:ring-red-100/50 transition-all shadow-sm appearance-none cursor-pointer"
               >
-                <option value="" disabled hidden>Select a specification template</option>
+                <option value="" disabled hidden>{{ t('app.selectSpecificationTemplate') }}</option>
                 <option
                   v-for="template in specTemplateDetails"
                   :key="template.id"
                   :value="template.id"
                   class="truncate"
                 >
-                  {{ template.label }}
+                  {{ templateMessage(template.labelKey, template.label) }}
                 </option>
               </select>
               <p v-if="currentTemplateDetail" class="text-[10px] text-slate-500 mt-1.5 px-1">
-                <span class="line-clamp-2">{{ currentTemplateDetail.description }}</span>
+                <span class="line-clamp-2">
+                  {{ templateMessage(currentTemplateDetail.descriptionKey, currentTemplateDetail.description) }}
+                </span>
               </p>
             </div>
 
             <!-- Step 2: Add Conditions based on template requirements -->
             <div v-if="specForm.templateId" class="space-y-2">
-              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide">Configure Conditions</label>
+              <label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wide">{{ t('app.configureConditions') }}</label>
 
               <!-- A Conditions (Always/Forall) -->
               <div v-if="isSideRequired('a')" class="relative overflow-hidden rounded-lg bg-red-50 border border-red-200 p-2.5">
@@ -1282,7 +1278,7 @@ const exportTemplate = (template: any) => {
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">A Conditions</span>
+                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">{{ t('app.aConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('a')"
@@ -1291,7 +1287,7 @@ const exportTemplate = (template: any) => {
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
-                    Add
+                    {{ t('app.add') }}
                   </button>
                 </div>
                 <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
@@ -1321,12 +1317,12 @@ const exportTemplate = (template: any) => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('a', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                      <button @click="openConditionDialog('a', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('a', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete">
+                      <button @click="removeCondition('a', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" :title="t('app.delete')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -1334,7 +1330,7 @@ const exportTemplate = (template: any) => {
                     </div>
                   </div>
                   <div v-if="specForm.aConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
-                    No conditions added yet
+                    {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
               </div>
@@ -1348,7 +1344,7 @@ const exportTemplate = (template: any) => {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">IF Conditions</span>
+                    <span class="text-[10px] font-bold text-red-700 uppercase tracking-wide">{{ t('app.ifConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('if')"
@@ -1357,7 +1353,7 @@ const exportTemplate = (template: any) => {
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
-                    Add
+                    {{ t('app.add') }}
                   </button>
                 </div>
                 <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
@@ -1387,12 +1383,12 @@ const exportTemplate = (template: any) => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('if', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                      <button @click="openConditionDialog('if', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('if', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete">
+                      <button @click="removeCondition('if', index)" class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" :title="t('app.delete')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -1400,7 +1396,7 @@ const exportTemplate = (template: any) => {
                     </div>
                   </div>
                   <div v-if="specForm.ifConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-red-200">
-                    No conditions added yet
+                    {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
               </div>
@@ -1414,7 +1410,7 @@ const exportTemplate = (template: any) => {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
                       </svg>
                     </span>
-                    <span class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide">THEN Conditions</span>
+                    <span class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide">{{ t('app.thenConditions') }}</span>
                   </div>
                   <button
                     @click="openConditionDialog('then')"
@@ -1423,7 +1419,7 @@ const exportTemplate = (template: any) => {
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
-                    Add
+                    {{ t('app.add') }}
                   </button>
                 </div>
                 <div class="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scrollbar">
@@ -1453,12 +1449,12 @@ const exportTemplate = (template: any) => {
                       </div>
                     </div>
                     <div class="flex gap-1 ml-2 flex-shrink-0">
-                      <button @click="openConditionDialog('then', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Edit">
+                      <button @click="openConditionDialog('then', index)" class="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" :title="t('app.edit')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
                       </button>
-                      <button @click="removeCondition('then', index)" class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors" title="Delete">
+                      <button @click="removeCondition('then', index)" class="p-1 text-slate-400 hover:text-yellow-500 hover:bg-yellow-50 rounded transition-colors" :title="t('app.delete')">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                         </svg>
@@ -1466,7 +1462,7 @@ const exportTemplate = (template: any) => {
                     </div>
                   </div>
                   <div v-if="specForm.thenConditions.length === 0" class="text-center py-2 text-[10px] text-slate-400 italic bg-white/50 rounded border border-dashed border-yellow-200">
-                    No conditions added yet
+                    {{ t('app.noConditionsAdded') }}
                   </div>
                 </div>
               </div>
@@ -1481,7 +1477,7 @@ const exportTemplate = (template: any) => {
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/>
                     </svg>
                   </span>
-                  <span class="text-[10px] font-bold text-red-600 uppercase tracking-wide">Rule Description</span>
+                  <span class="text-[10px] font-bold text-red-600 uppercase tracking-wide">{{ t('app.ruleDescription') }}</span>
                 </div>
                 <div class="text-xs text-slate-700 leading-relaxed pl-8">
                   {{ naturalLanguageRule }}
@@ -1504,7 +1500,7 @@ const exportTemplate = (template: any) => {
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
-              Create Specification
+              {{ t('app.createSpecification') }}
             </button>
           </div>
         </div>
@@ -1532,9 +1528,9 @@ const exportTemplate = (template: any) => {
             </div>
             <div>
               <h3 class="text-xl font-bold text-black">
-                {{ editingConditionIndex >= 0 ? 'Edit Condition' : 'Add Condition' }}
+                {{ editingConditionIndex >= 0 ? t('app.editCondition') : t('app.addConditionTitle') }}
               </h3>
-              <p class="text-sm text-slate-600">Configure your specification</p>
+              <p class="text-sm text-slate-600">{{ t('app.configureSpecification') }}</p>
             </div>
           </div>
           <button 
@@ -1553,7 +1549,7 @@ const exportTemplate = (template: any) => {
         <!-- Device Selection -->
         <div class="space-y-2">
           <div class="flex items-center gap-2">
-            <span class="text-sm font-bold text-black">Device Selection</span>
+            <span class="text-sm font-bold text-black">{{ t('app.deviceSelection') }}</span>
           </div>
           <div class="relative w-full">
             <select
@@ -1561,7 +1557,7 @@ const exportTemplate = (template: any) => {
               @change="editingConditionData.key = ''"
               class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              <option value="" hidden>Select a device</option>
+              <option value="" hidden>{{ t('app.selectDevicePlaceholder') }}</option>
               <option
                 v-for="device in deviceNodes"
                 :key="device.id"
@@ -1579,7 +1575,7 @@ const exportTemplate = (template: any) => {
             <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/>
             </svg>
-            <span class="text-sm font-bold text-black">Type</span>
+            <span class="text-sm font-bold text-black">{{ t('app.type') }}</span>
           </div>
           <div class="relative w-full">
             <select
@@ -1587,7 +1583,7 @@ const exportTemplate = (template: any) => {
               @change="handleTargetTypeChange"
               class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              <option value="" hidden>Type</option>
+              <option value="" hidden>{{ t('app.type') }}</option>
               <option v-for="type in targetTypes" :key="type.value" :value="type.value">
                 {{ type.label }}
               </option>
@@ -1601,14 +1597,14 @@ const exportTemplate = (template: any) => {
             <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
             </svg>
-            <span class="text-sm font-bold text-black">Property</span>
+            <span class="text-sm font-bold text-black">{{ t('app.property') }}</span>
           </div>
           <div class="relative w-full">
             <select
               v-model="editingConditionData.key"
               class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
             >
-              <option value="" hidden>Property</option>
+              <option value="" hidden>{{ t('app.property') }}</option>
               <option
                 v-for="key in availableKeys"
                 :key="key.value"
@@ -1626,7 +1622,7 @@ const exportTemplate = (template: any) => {
             <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
             </svg>
-            <span class="text-sm font-bold text-black">Condition Details</span>
+            <span class="text-sm font-bold text-black">{{ t('app.conditionDetails') }}</span>
           </div>
           <div class="flex gap-2 w-full">
             <!-- Operator -->
@@ -1647,7 +1643,7 @@ const exportTemplate = (template: any) => {
                 v-model="editingConditionData.value"
                 class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
               >
-                <option value="" hidden>State</option>
+                <option value="" hidden>{{ t('app.state') }}</option>
                 <option v-for="state in availableStates" :key="state" :value="state">
                   {{ state }}
                 </option>
@@ -1657,7 +1653,7 @@ const exportTemplate = (template: any) => {
                 v-model="editingConditionData.value"
                 class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black focus:border-red-400 focus:outline-none appearance-none cursor-pointer"
               >
-                <option value="" hidden>Value</option>
+                <option value="" hidden>{{ t('app.value') }}</option>
                 <option v-for="val in trustPrivacyValues" :key="val" :value="val">
                   {{ val }}
                 </option>
@@ -1666,7 +1662,7 @@ const exportTemplate = (template: any) => {
                 v-else
                 v-model="editingConditionData.value"
                 class="w-full bg-white border-2 border-slate-300 rounded-lg px-3 py-2.5 text-sm text-black placeholder:text-slate-400 focus:border-red-400 focus:outline-none"
-                placeholder="Enter value"
+                :placeholder="t('app.enterValuePlaceholder')"
               />
             </div>
           </div>
@@ -1679,17 +1675,17 @@ const exportTemplate = (template: any) => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
             </svg>
-            <span class="text-xs font-bold uppercase text-black tracking-wider">Preview</span>
+            <span class="text-xs font-bold uppercase text-black tracking-wider">{{ t('app.preview') }}</span>
           </div>
           <div class="font-mono text-xs bg-slate-100 rounded-lg px-3 py-2.5 border border-slate-300 text-black break-all w-full">
-            <span class="text-red-600 font-bold">{{ getDeviceLabel(editingConditionData.deviceId || 'Device') }}</span>
+            <span class="text-red-600 font-bold">{{ getDeviceLabel(editingConditionData.deviceId || t('app.device')) }}</span>
             <template v-if="editingConditionData.targetType !== 'state' && editingConditionData.key">
               <span class="text-slate-400">.</span>
               <span class="text-red-600 font-bold">{{ editingConditionData.key }}</span>
             </template>
             <template v-if="showRelationAndValue">
               <span class="text-slate-500 mx-1">{{ getRelationLabel(editingConditionData.relation || '=') }}</span>
-              <span class="text-black">"{{ editingConditionData.value || 'value' }}"</span>
+              <span class="text-black">"{{ editingConditionData.value || t('app.value') }}"</span>
             </template>
           </div>
         </div>
@@ -1701,7 +1697,7 @@ const exportTemplate = (template: any) => {
           @click="showSpecDialog = false"
           class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="saveCondition"
@@ -1711,7 +1707,7 @@ const exportTemplate = (template: any) => {
           <svg class="w-4 h-4" :fill="editingConditionIndex >= 0 ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="editingConditionIndex >= 0 ? 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' : 'M12 4v16m8-8H4'"/>
           </svg>
-          {{ editingConditionIndex >= 0 ? 'Update' : 'Add' }}
+          {{ editingConditionIndex >= 0 ? t('app.update') : t('app.add') }}
         </button>
       </div>
     </div>
@@ -1726,7 +1722,7 @@ const exportTemplate = (template: any) => {
           <div class="w-16 h-16 mx-auto bg-white/20 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-white text-3xl">warning</span>
           </div>
-          <p class="text-base text-white/90">You are about to delete</p>
+          <p class="text-base text-white/90">{{ t('app.youAreAboutToDelete') }}</p>
         </div>
       </div>
 
@@ -1735,7 +1731,7 @@ const exportTemplate = (template: any) => {
           <span class="material-symbols-outlined text-red-500 text-xl">inventory_2</span>
           <p class="text-lg font-bold text-red-600">{{ templateToDelete.manifest.Name }}</p>
         </div>
-        <p class="text-xs text-slate-400 mt-3">This action cannot be undone</p>
+        <p class="text-xs text-slate-400 mt-3">{{ t('app.actionCannotBeUndone') }}</p>
       </div>
 
       <div class="flex justify-center gap-3">
@@ -1743,14 +1739,14 @@ const exportTemplate = (template: any) => {
           @click="showDeleteConfirmDialog = false"
           class="px-6 py-2.5 text-sm font-semibold text-slate-600 bg-white border-2 border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
         >
-          Cancel
+          {{ t('app.cancel') }}
         </button>
         <button
           @click="confirmDeleteTemplate"
           class="px-6 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-xl hover:bg-red-500 transition-all shadow-md flex items-center gap-2"
         >
           <span class="material-symbols-outlined text-sm">delete</span>
-          Delete Template
+          {{ t('app.deleteTemplate') }}
         </button>
       </div>
     </div>
@@ -1899,5 +1895,3 @@ button:not(:disabled):active {
   }
 }
 </style>
-
-

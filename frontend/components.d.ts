@@ -11,7 +11,9 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    ATextarea: typeof import('ant-design-vue/es')['Textarea']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
+    ChatMarkdown: typeof import('./src/components/ChatMarkdown.vue')['default']
     ChatView: typeof import('./src/components/ChatView.vue')['default']
     CodeBlock: typeof import('./src/components/CodeBlock.vue')['default']
     ControlCenter: typeof import('./src/components/ControlCenter.vue')['default']
@@ -21,6 +23,7 @@ declare module 'vue' {
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCol: typeof import('element-plus/es')['ElCol']
     ElForm: typeof import('element-plus/es')['ElForm']
+    ElFormItem: typeof import('element-plus/es')['ElFormItem']
     ElHeader: typeof import('element-plus/es')['ElHeader']
     ElInput: typeof import('element-plus/es')['ElInput']
     ElMain: typeof import('element-plus/es')['ElMain']
@@ -28,13 +31,17 @@ declare module 'vue' {
     ElRow: typeof import('element-plus/es')['ElRow']
     FixResultDialog: typeof import('./src/components/FixResultDialog.vue')['default']
     Header: typeof import('./src/components/Header.vue')['default']
+    LanguageToggle: typeof import('./src/components/common/LanguageToggle.vue')['default']
     LogoutConfirm: typeof import('./src/components/LogoutConfirm.vue')['default']
     LogoutConfirmDialog: typeof import('./src/components/LogoutConfirmDialog.vue')['default']
+    PublicHeader: typeof import('./src/components/common/PublicHeader.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     RuleBuilderDialog: typeof import('./src/components/RuleBuilderDialog.vue')['default']
     SimulationTimeline: typeof import('./src/components/SimulationTimeline.vue')['default']
     SystemInspector: typeof import('./src/components/SystemInspector.vue')['default']
+    ThemeToggle: typeof import('./src/components/common/ThemeToggle.vue')['default']
+    TraceHistoryPanel: typeof import('./src/components/TraceHistoryPanel.vue')['default']
     TraceVisualization: typeof import('./src/components/TraceVisualization.vue')['default']
   }
 }

@@ -53,7 +53,7 @@ class BoardStorageServiceImplBatchTest {
         service = new BoardStorageServiceImpl(
                 nodeRepo, null, specRepo, ruleRepo, null, null, null, null,
                 transactionTemplate, null, specificationMapper, ruleMapper, deviceNodeMapper,
-                null, null, null, null);
+                null, null, null, null, null);
         // Execute the transaction callback inline.
         when(transactionTemplate.execute(any())).thenAnswer(inv ->
                 ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));

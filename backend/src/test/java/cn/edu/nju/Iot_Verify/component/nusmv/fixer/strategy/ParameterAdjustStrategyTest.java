@@ -68,6 +68,19 @@ class ParameterAdjustStrategyTest {
         return Map.of("sensor_1", smv);
     }
 
+    private Map<String, DeviceSmvData> buildDigitLeadingDeviceMap() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("d_1Sensor");
+        smv.setModuleName("SensorModule");
+        DeviceManifest.InternalVariable tempVar = DeviceManifest.InternalVariable.builder()
+                .name("temperature")
+                .lowerBound(0)
+                .upperBound(50)
+                .build();
+        smv.setVariables(List.of(tempVar));
+        return Map.of("d_1Sensor", smv);
+    }
+
     private FixContext ctx(List<FaultRuleDto> faultRules, List<RuleDto> allRules,
                             List<SpecificationDto> specs, Map<String, DeviceSmvData> deviceSmvMap) {
         return FixContext.builder()
@@ -214,6 +227,55 @@ class ParameterAdjustStrategyTest {
         // NuSMV finds 29 in distance-bounded range, forward-verify passes → bestDist=1 → done
         assertEquals("29", suggestion.getParameterAdjustments().get(0).getNewValue());
         assertEquals("30", suggestion.getParameterAdjustments().get(0).getOriginalValue());
+    }
+
+    @Test
+    void tryFix_rawDigitLeadingDeviceLabel_resolvesBoundsLikeGenerator() throws Exception {
+        FixConfig noRefineConfig = new FixConfig();
+        noRefineConfig.setMaxRefineAttempts(0);
+        ParameterAdjustStrategy noRefineStrategy =
+                new ParameterAdjustStrategy(smvGenerator, nusmvExecutor, noRefineConfig);
+
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("1Sensor").attribute("temperature").relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                .thenReturn(createGenResult());
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean()))
+                .thenReturn(createGenResult());
+
+        SpecCheckResult failing = mock(SpecCheckResult.class);
+        when(failing.isPassed()).thenReturn(false);
+        NusmvResult negatedResult = mock(NusmvResult.class);
+        when(negatedResult.isSuccess()).thenReturn(true);
+        when(negatedResult.getSpecResults()).thenReturn(List.of(failing));
+        when(negatedResult.getOutput()).thenReturn(
+                "  -> State: 1.1 <-\n    param_r0_c0 = 25\n");
+
+        SpecCheckResult allPass = mock(SpecCheckResult.class);
+        when(allPass.isPassed()).thenReturn(true);
+        NusmvResult verifyResult = mock(NusmvResult.class);
+        when(verifyResult.isSuccess()).thenReturn(true);
+        when(verifyResult.getSpecResults()).thenReturn(List.of(allPass));
+
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(negatedResult)
+                .thenReturn(verifyResult);
+
+        FixSuggestionDto suggestion = noRefineStrategy.tryFix(
+                ctx(List.of(fault), List.of(rule), List.of(spec), buildDigitLeadingDeviceMap()));
+
+        assertNotNull(suggestion);
+        assertEquals("25", suggestion.getParameterAdjustments().get(0).getNewValue());
     }
 
     @Test

@@ -62,12 +62,12 @@ Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001` | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5175,http://127.0.0.1:5175,http://localhost:5176,http://127.0.0.1:5176` | Comma-separated allowed origins. The defaults cover the primary Vite dev port and common fallback ports for local development; set a tighter value in deployed environments. |
 
 ## LLM (AI)
 
 Any OpenAI-compatible endpoint — the official OpenAI API, a self-hosted gateway, or a
-relay ("中转站"). Point `OPENAI_BASE_URL` at the endpoint and supply the matching key.
+relay. Point `OPENAI_BASE_URL` at the endpoint and supply the matching key.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
@@ -101,6 +101,12 @@ relay ("中转站"). Point `OPENAI_BASE_URL` at the endpoint and supply the matc
 | `FIX_MAX_CANDIDATES_PER_RULE` | `5` | Max candidate fixes per rule |
 | `FIX_MAX_REFINE_ATTEMPTS` | `10` | Max refinement-loop iterations |
 | `FIX_TIMEOUT_MS` | `300000` | Overall fix timeout / soft deadline (ms) |
+
+## Device Templates
+
+| Env var | Default | Notes |
+| :--- | :--- | :--- |
+| `DEVICE_TEMPLATE_SCHEMA_PATH` | `device-template-schema.json` | Optional filesystem override for the canonical device-template manifest schema. The repository source of truth is `backend/device-template-schema.json`; the Maven build also packages that file onto the backend classpath. Leave this unset unless a deployment intentionally supplies the same schema from a mounted path. |
 
 ## Thread pools
 

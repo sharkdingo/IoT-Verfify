@@ -18,6 +18,7 @@ export interface SpecCondition {
 export interface SpecTemplate {
     id: SpecTemplateId
     label: string
+    labelKey?: string
 }
 
 /**
@@ -35,6 +36,7 @@ export type SpecTemplateType =
 export interface SpecTemplateDetail extends SpecTemplate {
     type: SpecTemplateType
     description: string
+    descriptionKey?: string
     requiredSides: SpecSide[]  // 需要配置的条件位置
     ltlFormula: string         // 对应的LTL公式
 }
