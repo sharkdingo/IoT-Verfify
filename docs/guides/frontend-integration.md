@@ -127,16 +127,27 @@ Async pattern:
 ```ts
 import boardApi from '@/api/board';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const taskId = await boardApi.verifyAsync(request);   // server returns the id
-const poll = setInterval(async () => {
+let task;
+
+while (true) {
   const progress = await boardApi.getTaskProgress(taskId);
-  if (progress >= 100) {
-    clearInterval(poll);
-    const task = await boardApi.getTask(taskId);       // VerificationTask
+  task = await boardApi.getTask(taskId);               // VerificationTask
+  if (task.status === 'COMPLETED' || task.status === 'FAILED' || task.status === 'CANCELLED') {
+    break;
   }
-}, 2000);
+  await sleep(2000);
+}
+
 // cancel: await boardApi.cancelTask(taskId);
 ```
+
+Use a serial `while`/`await sleep` loop rather than `setInterval(async ...)` so polling
+does not re-enter while a previous request is still in flight. Keep any page-level
+`isVerifying`/loading state alive until this loop exits, including the cancelled and
+failed terminal states.
 
 Verification results and completed async verification tasks include `disabledRuleCount`
 and `skippedSpecCount`, and generation warnings appear in `checkLogs` with

@@ -1,6 +1,8 @@
 # Production Deployment
 
-> Verified against code on 2026-07-05. Source: root `README.md` (production deployment / Nginx), `backend/pom.xml`, `frontend/package.json`, `ProductionSafetyCheck`.
+> Verified against code on 2026-07-05. Source: `backend/pom.xml`,
+> `backend/src/main/java/cn/edu/nju/Iot_Verify/configure/ProductionSafetyCheck.java`,
+> `frontend/package.json`, `frontend/src/api/`, `frontend/vite.config.ts`.
 
 This guide covers packaging and deploying IoT-Verify for production. For the full list of environment variables and their defaults, see [configuration.md](./configuration.md) — it is the single source of truth. This page only names the variables that matter for a production rollout.
 
@@ -37,7 +39,17 @@ cd frontend
 npm run build
 ```
 
-This produces a `dist/` directory. Deploy `dist/` behind a web server (for example Nginx). The frontend expects the backend API to be reachable at `/api`, so the web server should proxy `/api` to the backend.
+This produces a `dist/` directory. Deploy `dist/` behind a web server (for example
+Nginx). In the default same-origin build, frontend requests go to relative `/api`, so
+the web server should proxy `/api` to the backend.
+
+That same-origin proxy is the default and recommended production shape: leave
+`VITE_API_BASE_URL` empty when building the frontend and proxy `/api` from the SPA host
+to the backend. For a cross-origin deployment, build the frontend with an absolute
+`VITE_API_BASE_URL` such as `https://api.example.com`; `src/api/http.ts` and
+`src/api/chat.ts` append `/api` themselves. In that cross-origin shape, configure
+`CORS_ORIGINS` on the backend to include the frontend origin, and the SPA host does not
+need an `/api` reverse proxy.
 
 ## Nginx reference configuration
 

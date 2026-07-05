@@ -51,6 +51,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libedit2 libxml2 xz-utils
+          libedit_path="$(ldconfig -p | awk '/libedit\.so\.2/{print $NF; exit}')"
+          test -n "$libedit_path"
+          sudo ln -sf "$libedit_path" "$(dirname "$libedit_path")/libedit.so.0"
           curl -fsSLO https://nusmv.fbk.eu/distrib/2.7.1/NuSMV-2.7.1-linux64.tar.xz
           curl -fsSLO https://nusmv.fbk.eu/distrib/2.7.1/NuSMV-2.7.1-linux64.tar.xz.sha256sum
           sha256sum -c NuSMV-2.7.1-linux64.tar.xz.sha256sum

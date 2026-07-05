@@ -1,6 +1,8 @@
 # Installation
 
-> Verified against code on 2026-07-05. Source: root `README.md`, `backend/README.md` (§3 Prerequisites & Installation), `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`.
+> Verified against code on 2026-07-05. Source: root `README.md`, `backend/README.md`,
+> `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`,
+> `frontend/playwright.config.ts`.
 
 This guide covers a local development setup of the IoT-Verify platform (Vue 3 frontend + Spring Boot backend + NuSMV model checker). For the complete list of environment variables and their defaults, see [configuration.md](./configuration.md) — it is the single source of truth. This page only names the variables you must set.
 

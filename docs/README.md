@@ -7,7 +7,9 @@ source material currently lives.
 
 > **Language policy**: all documentation is written in **English** — this resolved the
 > earlier split (root README in Chinese, backend README in English, NuSMV doc in
-> Chinese). The policy is enforced in [CONTRIBUTING.md](../CONTRIBUTING.md).
+> Chinese). Archived binary showcase assets under `docs/assets/` may retain their
+> original titles/language for provenance; Markdown around them remains English. The
+> policy is enforced in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 > **Source of truth**: where documentation and code disagree, **code wins**. Each
 > document names the code paths it is derived from so it can be re-verified.
@@ -86,6 +88,10 @@ deleted rather than kept as stubs):
 
 - `docs/assets/智链未来企划书.docx` — project proposal (binary; see `.gitattributes`).
 - `docs/assets/智护安居.pdf` — project document (binary; see `.gitattributes`).
+
+These are archived binary/showcase materials. They are tracked for project provenance,
+not as primary Markdown documentation, so their original filenames and source language
+are intentionally preserved.
 
 ---
 

@@ -58,6 +58,9 @@ Include this line in the PR description and tick it:
 - **All documentation is written in English** — `README.md`, everything under `docs/`,
   `CHANGELOG.md`, and this file. This avoids the historical split (mixed Chinese/English
   docs).
+- Binary/archive showcase assets under `docs/assets/` may keep their original titles
+  and source language for provenance. Markdown documentation that describes or links to
+  those assets remains English.
 - Code identifiers, comments, and commit messages follow the existing conventions of
   the file/module you are editing.
 - If a Chinese-language showcase README is ever needed (e.g. for competition display),
