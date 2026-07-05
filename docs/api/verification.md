@@ -25,21 +25,23 @@ and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 | :--- | :--- | :--- | :--- | :--- |
 | `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | Device instances |
 | `rules` | `RuleDto[]` | no | `[]` | Automation rules |
-| `specs` | `SpecificationDto[]` | yes (`@NotNull`) | — | Specifications to check |
+| `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | Specifications to check |
 | `isAttack` | `boolean` | no | `false` | Serialized as `isAttack` (`@JsonProperty`) |
 | `intensity` | `int` (0–50) | no | `3` | Attack budget; `0` forces all `is_attack` to FALSE |
 | `enablePrivacy` | `boolean` | no | `false` | Adds `privacy_*` variables; enlarges state space |
 
 > Note: there is **no** `saveTrace` field. Traces are saved automatically when a
 > violation is detected.
+> Verification requires at least one specification for both synchronous and asynchronous
+> requests. Use the simulation endpoint for no-spec state exploration.
 
 **Response**: `VerificationResultDto`
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
-| `safe` | `boolean` | `true` = all specs satisfied |
+| `safe` | `boolean` | `true` = all emitted specs satisfied |
 | `traces` | `TraceDto[]` | Counterexample traces (present when `safe = false`) |
-| `specResults` | `Boolean[]` | Per-spec result, index-aligned to `specs` |
+| `specResults` | `Boolean[]` | Per-emitted-spec result; specs skipped before SMV emission are counted/logged separately |
 | `checkLogs` | `String[]` | Human-readable check log |
 | `nusmvOutput` | `String` | Raw NuSMV output |
 | `disabledRuleCount` | `Integer` | Count of rules whose generated guard failed closed to `FALSE` |
@@ -52,8 +54,9 @@ the model as intended.
 
 ### `POST /api/verify/async` — asynchronous
 
-Same request body. **Response `data`**: `Long` — the `taskId` (the **server**
-generates and returns it; the client does not supply it).
+Same request body, including the non-empty `specs` constraint. **Response `data`**:
+`Long` — the `taskId` (the **server** generates and returns it; the client does not
+supply it).
 
 ### `GET /api/verify/tasks/{id}` — task status
 

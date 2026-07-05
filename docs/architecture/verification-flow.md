@@ -16,7 +16,7 @@ Verified against code on 2026-07-05. Source: `controller/VerificationController.
 ## Pipeline
 
 ```
-User: devices + rules + specs (+ isAttack, intensity, enablePrivacy)
+User: devices + rules + at least one spec (+ isAttack, intensity, enablePrivacy)
         │  POST /api/verify   (VerificationRequestDto)
         ▼
 VerificationController.verify(userId, request)
@@ -36,7 +36,7 @@ VerificationServiceImpl.doVerify()
 VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput,
 disabledRuleCount, skippedSpecCount }
         │
-        ├─ all specs pass → safe: true
+        ├─ all emitted specs pass → safe: true
         └─ a violation    → counterexample trace(s) saved + optional auto-fix
 ```
 
@@ -44,6 +44,8 @@ disabledRuleCount, skippedSpecCount }
   model. Validation (P1–P5) runs before any text is emitted — see
   [spec-templates.md](spec-templates.md) for the rules and
   [nusmv-model.md](nusmv-model.md) for the builders and identifier handling.
+  The REST DTO rejects empty `specs` before this stage; generator-level skipped specs
+  still surface through `skippedSpecCount` and `[spec-skipped]` logs.
 - **[2] Execution** invokes NuSMV as a subprocess through `NusmvExecutor`, which bounds
   concurrency with a semaphore (`NUSMV_MAX_CONCURRENT`) and enforces `NUSMV_TIMEOUT_MS`.
   Output parsing depends on NuSMV's standard English output format (2.6–2.7; not

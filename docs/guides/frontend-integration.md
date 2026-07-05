@@ -155,6 +155,9 @@ and `skippedSpecCount`, and generation warnings appear in `checkLogs` with
 when `safe === true`, because they mean the generated SMV model omitted or degraded part
 of the requested rules/specs.
 
+Verification requests (`verify` and `verifyAsync`) must include at least one specification.
+Simulation remains the no-spec workflow.
+
 Contracts for board storage and board recommendation endpoints live in
 [../api/board.md](../api/board.md). Contracts for verification, traces, and fix live in
 [../api/verification.md](../api/verification.md).

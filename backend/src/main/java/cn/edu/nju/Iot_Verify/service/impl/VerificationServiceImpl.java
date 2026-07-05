@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
@@ -126,9 +127,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             return buildErrorResult("", List.of("Error: devices list cannot be empty"));
         }
         if (specs == null || specs.isEmpty()) {
-            return VerificationResultDto.builder()
-                    .safe(true).traces(List.of()).specResults(List.of())
-                    .checkLogs(List.of("No specifications to verify")).nusmvOutput("").build();
+            throw new ValidationException("specs", "Specs list cannot be empty");
         }
 
         log.info("Starting sync verification: userId={}, devices={}, specs={}, attack={}, intensity={}",
@@ -396,11 +395,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 return;
             }
             if (specs == null || specs.isEmpty()) {
-                List<String> logs = List.of("No specifications to verify");
-                completeTask(task, true, 0, logs, "", 0, 0);
-                finalResult = VerificationResultDto.builder()
-                        .safe(true).traces(List.of()).specResults(List.of())
-                        .checkLogs(logs).disabledRuleCount(0).skippedSpecCount(0).nusmvOutput("").build();
+                String msg = "Invalid input: specs list cannot be empty";
+                failTask(task, msg);
+                finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
 

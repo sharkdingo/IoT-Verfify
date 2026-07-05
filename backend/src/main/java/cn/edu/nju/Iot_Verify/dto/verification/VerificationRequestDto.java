@@ -10,7 +10,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -44,7 +43,7 @@ public class VerificationRequestDto {
      * 规格列表
      */
     @Valid
-    @NotNull(message = "Specs list cannot be null")
+    @NotEmpty(message = "Specs list cannot be empty")
     private List<SpecificationDto> specs;
     
     /**

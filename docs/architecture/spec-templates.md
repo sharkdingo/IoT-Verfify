@@ -229,17 +229,9 @@ The following chains are closed loops in the current backend implementation:
 
 Runtime prerequisites still required:
 
-- MySQL, Redis, JWT, and the NuSMV executable path must be configured correctly. Redis is
-  used only for the JWT blacklist (SHA-256 key); if unavailable it degrades fail-open (does
-  not block login/verification, but logout-revocation semantics are lost — a logged-out
-  token stays usable until it expires; every 10 consecutive failures raise a periodic ERROR
-  alert). `commons-pool2` is needed to enable the Lettuce connection pool.
-- In production (`spring.profiles.active` includes `prod`/`production`),
-  `ProductionSafetyCheck` requires `jwt.secret` to be non-null/non-blank and not an unsafe
-  default prefix, `spring.datasource.password` (`DB_PASSWORD`) to be replaced with a
-  non-default value, and `llm.api-key` (`OPENAI_API_KEY`) to be
-  non-null/non-blank and not a placeholder; otherwise startup is refused. `PRODUCTION_MODE`
-  has been removed; local development with no profile is unrestricted.
+- MySQL, Redis, JWT, LLM, CORS, thread-pool, and NuSMV runtime settings are centralized in
+  [../getting-started/configuration.md](../getting-started/configuration.md), including the
+  production startup guards.
 - The current user's templates are initialized and consistent with the `templateName` in
   the frontend request.
 - The `device_templates` table gains a `(user_id, name)` unique constraint; confirm there

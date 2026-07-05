@@ -2503,6 +2503,10 @@ const handleVerify = async () => {
     ElMessage.warning({ message: t('app.noDevicesToVerify'), type: 'warning' })
     return
   }
+  if (specifications.value.length === 0) {
+    ElMessage.warning({ message: t('app.noSpecsToVerify'), type: 'warning' })
+    return
+  }
   if (!assertRulesHaveTriggers(rules.value)) {
     return
   }

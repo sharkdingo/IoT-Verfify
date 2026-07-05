@@ -18,6 +18,12 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-05
 
 #### Fixed
+- **Empty verification requests no longer succeed vacuously.** Sync and async verification now
+  require at least one specification at the DTO boundary (`@NotEmpty`), the Board UI blocks
+  no-spec verification before calling the API, and service-layer defensive paths fail instead of
+  returning `safe=true` with empty `specResults`. NuSMV generation warnings and fix forward
+  verification remain fail-closed: skipped/degraded specs surface as warnings, and empty NuSMV
+  result sets are not treated as verified fixes.
 - **Fix-apply now blocks spec/device-only drift.** Applying a verified fix previously replayed the
   trace's stored context on the server, so editing spec conditions or device instance state
   (variables, privacies, initial state, trust) after verifying — without touching rules or templates —
@@ -307,7 +313,8 @@ history into a technical spec. The spec content itself now lives under
   `spring.datasource.password` (`DB_PASSWORD`), or `volcengine.ark.api-key`
   (`VOLCENGINE_API_KEY`) still hold unsafe defaults. `PRODUCTION_MODE` removed; profile
   matching is case-insensitive. `JwtUtil.@PostConstruct` also WARN-logs a default key
-  under prod.
+  under prod. Superseded by the 2026-07-04 LLM config rename above: the production guard now
+  checks `llm.api-key` / `OPENAI_API_KEY`.
 - **Exception handling**: `IllegalArgumentException` → masked generic 400,
   `IllegalStateException` → 500, new `DataIntegrityViolationException` → 409 CONFLICT.
 - **Thread-pool context propagation**: `ThreadConfig.TaskDecorator` deep-copies
