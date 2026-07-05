@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.service.ChatService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -26,11 +27,14 @@ public class ChatController {
 
     private final ChatService chatService;
     private final Executor executor;
+    private final long sseTimeoutMs;
 
     public ChatController(ChatService chatService,
-                          @Qualifier("chatExecutor") Executor executor) {
+                          @Qualifier("chatExecutor") Executor executor,
+                          @Value("${chat.sse-timeout-ms:600000}") long sseTimeoutMs) {
         this.chatService = chatService;
         this.executor = executor;
+        this.sseTimeoutMs = sseTimeoutMs;
     }
 
     @GetMapping("/sessions")
@@ -51,7 +55,7 @@ public class ChatController {
     @PostMapping("/completions")
     public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
-        SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
+        SseEmitter emitter = new SseEmitter(sseTimeoutMs);
         try {
             executor.execute(() -> {
                 try {

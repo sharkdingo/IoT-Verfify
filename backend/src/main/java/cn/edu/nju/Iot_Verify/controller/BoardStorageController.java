@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
@@ -86,6 +87,15 @@ public class BoardStorageController {
     @PostMapping("/rules")
     public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<RuleDto> rules) {
         return Result.success(boardService.saveRules(userId, rules));
+    }
+
+    /**
+     * Atomic save of nodes + rules + specs in one transaction.
+     * Used for device delete / rename so the three collections can't end up half-saved.
+     */
+    @PostMapping("/batch")
+    public Result<BoardBatchDto> saveBatch(@CurrentUser Long userId, @NotNull @Valid @RequestBody BoardBatchDto batch) {
+        return Result.success(boardService.saveBoardBatch(userId, batch));
     }
 
     @GetMapping("/layout")

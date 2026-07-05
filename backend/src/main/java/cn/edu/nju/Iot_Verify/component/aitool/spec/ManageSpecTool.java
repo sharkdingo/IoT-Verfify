@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
@@ -10,8 +11,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -45,7 +44,7 @@ public class ManageSpecTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> conditionItemSchema = Map.of(
                 "type", "object",
                 "properties", Map.of(
@@ -96,14 +95,7 @@ public class ManageSpecTool extends AbstractAiTool {
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, List.of("action"));
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Add or delete a formal specification. Use list_specs to inspect existing specs before deleting.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Add or delete a formal specification. Use list_specs to inspect existing specs before deleting.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {

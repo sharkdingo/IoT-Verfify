@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -9,8 +10,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -37,7 +36,7 @@ public class ListSpecsTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
@@ -46,14 +45,7 @@ public class ListSpecsTool extends AbstractAiTool {
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("List formal specifications on the current board.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "List formal specifications on the current board.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {

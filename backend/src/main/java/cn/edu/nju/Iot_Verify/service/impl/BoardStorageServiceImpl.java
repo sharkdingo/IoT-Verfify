@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
@@ -97,8 +98,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     }
 
     @Override
-    @Transactional
     public List<DeviceNodeDto> saveNodes(Long userId, List<DeviceNodeDto> nodes) {
+        synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> saveNodesInternal(userId, nodes));
+        }
+    }
+
+    /** Lock-free/transaction-free node save; safe to call inside transactionTemplate lambdas. */
+    private List<DeviceNodeDto> saveNodesInternal(Long userId, List<DeviceNodeDto> nodes) {
         nodeRepo.deleteByUserId(userId);
         List<DeviceNodePo> pos = nodes.stream()
                 .map(dto -> deviceNodeMapper.toEntity(dto, userId))
@@ -190,7 +197,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
     /** Non-transactional read; safe to call inside transactionTemplate lambdas. */
     private List<RuleDto> getRulesInternal(Long userId) {
-        return ruleRepo.findByUserId(userId).stream()
+        // Ordered by id: this read feeds the fix positional drift check, which requires a stable order.
+        return ruleRepo.findByUserIdOrderByIdAsc(userId).stream()
                 .map(ruleMapper::toDto)
                 .toList();
     }
@@ -198,48 +206,90 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     @Override
     public List<RuleDto> saveRules(Long userId, List<RuleDto> rules) {
         synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> saveRulesInternal(userId, rules));
+        }
+    }
+
+    @Override
+    public List<RuleDto> updateRules(Long userId, java.util.function.UnaryOperator<List<RuleDto>> mutator) {
+        // Read → mutate → write inside ONE lock + transaction, so the snapshot the mutator decides on
+        // (e.g. drift check) is exactly the snapshot that gets written; no concurrent save can slip in
+        // between the read and the write.
+        synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
-                // 增量更新：获取现有规则
-                Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
-                        .collect(Collectors.toMap(RulePo::getId, r -> r));
-
-                // 新规则 ID 集合
-                Set<Long> newRuleIds = new HashSet<>();
-
-                // 处理每个规则
-                for (RuleDto r : rules) {
-                    Long ruleId = r.getId();
-                    if (ruleId != null) {
-                        newRuleIds.add(ruleId);
-                    }
-
-                    RulePo po = ruleMapper.toEntity(r, userId);
-                    if (ruleId == null) {
-                        // 新规则，直接插入 (@PrePersist sets createdAt)
-                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-                    } else if (existingRules.containsKey(ruleId)) {
-                        // 已有规则且属于当前用户，更新 (preserve original createdAt)
-                        po.setId(ruleId);
-                        po.setCreatedAt(existingRules.get(ruleId).getCreatedAt());
-                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-                    } else {
-                        // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
-                        log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
-                        po.setId(null);
-                        ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
-                    }
-                }
-
-                // 删除不再存在的规则
-                for (Long existingId : existingRules.keySet()) {
-                    if (!newRuleIds.contains(existingId)) {
-                        ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
-                    }
-                }
-
-                return getRulesInternal(userId);
+                List<RuleDto> current = getRulesInternal(userId);
+                List<RuleDto> next = mutator.apply(current);
+                return saveRulesInternal(userId, next);
             });
         }
+    }
+
+    /** Lock-free/transaction-free incremental rule upsert; call inside transactionTemplate lambdas. */
+    private List<RuleDto> saveRulesInternal(Long userId, List<RuleDto> rules) {
+        // 增量更新：获取现有规则
+        Map<Long, RulePo> existingRules = ruleRepo.findByUserId(userId).stream()
+                .collect(Collectors.toMap(RulePo::getId, r -> r));
+
+        // 新规则 ID 集合
+        Set<Long> newRuleIds = new HashSet<>();
+
+        // 处理每个规则
+        for (RuleDto r : rules) {
+            Long ruleId = r.getId();
+            if (ruleId != null) {
+                newRuleIds.add(ruleId);
+            }
+
+            RulePo po = ruleMapper.toEntity(r, userId);
+            if (ruleId == null) {
+                // 新规则，直接插入 (@PrePersist sets createdAt)
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+            } else if (existingRules.containsKey(ruleId)) {
+                // 已有规则且属于当前用户，更新 (preserve original createdAt)
+                po.setId(ruleId);
+                po.setCreatedAt(existingRules.get(ruleId).getCreatedAt());
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+            } else {
+                // ruleId 不属于当前用户，忽略该 ID 作为新规则插入
+                log.warn("Rule id {} does not belong to user {}, inserting as new rule", ruleId, userId);
+                po.setId(null);
+                ruleRepo.save(Objects.requireNonNull(po, "rule to save must not be null"));
+            }
+        }
+
+        // 删除不再存在的规则
+        for (Long existingId : existingRules.keySet()) {
+            if (!newRuleIds.contains(existingId)) {
+                ruleRepo.deleteById(Objects.requireNonNull(existingId, "rule id to delete must not be null"));
+            }
+        }
+
+        return getRulesInternal(userId);
+    }
+
+    @Override
+    public BoardBatchDto saveBoardBatch(Long userId, BoardBatchDto batch) {
+        // Atomic save of nodes + rules + specs in ONE transaction under the user write lock.
+        // Used by delete-device / rename-device so the three collections can never end up half-saved
+        // (a partial save would leave e.g. a renamed node with specs still referencing the old label).
+        synchronized (getUserWriteLock(userId)) {
+            return transactionTemplate.execute(status -> {
+                List<DeviceNodeDto> savedNodes = batch.getNodes() != null
+                        ? saveNodesInternal(userId, batch.getNodes()) : getNodesInternal(userId);
+                List<RuleDto> savedRules = batch.getRules() != null
+                        ? saveRulesInternal(userId, batch.getRules()) : getRulesInternal(userId);
+                List<SpecificationDto> savedSpecs = batch.getSpecs() != null
+                        ? saveSpecsInternal(userId, batch.getSpecs()) : getSpecsInternal(userId);
+                return new BoardBatchDto(savedNodes, savedRules, savedSpecs);
+            });
+        }
+    }
+
+    /** Non-transactional node read; safe to call inside transactionTemplate lambdas. */
+    private List<DeviceNodeDto> getNodesInternal(Long userId) {
+        return nodeRepo.findByUserId(userId).stream()
+                .map(deviceNodeMapper::toDto)
+                .toList();
     }
 
     @Override

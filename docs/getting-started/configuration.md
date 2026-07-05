@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-03. Source:
+Verified against code on 2026-07-05. Source:
 `backend/src/main/resources/application.yaml`, `configure/ProductionSafetyCheck`,
 `frontend/src/api/`, `frontend/.env.example`.
 
@@ -64,14 +64,24 @@ Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 
 | :--- | :--- | :--- |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001` | Comma-separated allowed origins |
 
-## Volcengine Ark (AI)
+## LLM (AI)
+
+Any OpenAI-compatible endpoint — the official OpenAI API, a self-hosted gateway, or a
+relay ("中转站"). Point `OPENAI_BASE_URL` at the endpoint and supply the matching key.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `VOLCENGINE_API_KEY` | `your_api_key_here` | Ark API key. **Placeholder default — must be overridden in production.** |
-| `VOLCENGINE_MODEL_ID` | `ep-20260316142708-t2vbn` | Ark model endpoint ID |
-| `VOLCENGINE_BASE_URL` | `https://ark.cn-beijing.volces.com` | Ark API base URL |
-| `ARK_TIMEOUT_MINUTES` | `5` | AI request timeout (minutes) |
+| `OPENAI_API_KEY` | `your_api_key_here` | API key for the endpoint. **Placeholder default — must be overridden in production.** |
+| `OPENAI_MODEL` | `gpt-4o` | Model id / deployment name sent to the endpoint |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL (official API or relay) |
+| `LLM_PROVIDER` | `openai` | Provider implementation selector (currently only `openai`) |
+| `LLM_TIMEOUT_MINUTES` | `5` | AI request timeout (minutes) |
+
+## Chat Streaming
+
+| Env var | Default | Notes |
+| :--- | :--- | :--- |
+| `CHAT_SSE_TIMEOUT_MS` | `600000` | SSE emitter timeout for `/api/chat/completions`; keep it higher than `LLM_TIMEOUT_MINUTES` so provider errors can be sent as SSE frames. |
 
 ## NuSMV
 
@@ -113,7 +123,7 @@ Example override: `THREAD_POOL_CHAT_CORE=20`.
 
 When `spring.profiles.active` contains `prod` or `production` (case-insensitive),
 `ProductionSafetyCheck` (`@PostConstruct`) refuses to start if any of these still hold
-their unsafe default: `JWT_SECRET`, `DB_PASSWORD`, `VOLCENGINE_API_KEY`. Override all
+their unsafe default: `JWT_SECRET`, `DB_PASSWORD`, `OPENAI_API_KEY`. Override all
 three before deploying.
 
 ---

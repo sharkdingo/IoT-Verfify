@@ -183,6 +183,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     userId, devices, rules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             deviceSmvMap = genResult.deviceSmvMap();
+            appendGenerationWarnings(checkLogs, genResult);
             if (smvFile == null || !smvFile.exists()) {
                 checkLogs.add("Failed to generate NuSMV model file");
                 finalResult = buildErrorResult("", checkLogs);
@@ -207,7 +208,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             checkLogs.add("NuSMV execution completed.");
 
             // Build per-spec results and reuse deviceSmvMap from generation stage.
-            finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap, requestJson);
+            finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap,
+                    requestJson, genResult.disabledRuleCount(), genResult.skippedSpecCount());
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
@@ -259,6 +261,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         } catch (IOException e) {
             log.warn("Failed to save verification request JSON: {}", e.getMessage());
         }
+    }
+
+    private void appendGenerationWarnings(List<String> checkLogs, SmvGenerator.GenerateResult genResult) {
+        if (checkLogs == null || genResult == null || genResult.generationWarnings() == null
+                || genResult.generationWarnings().isEmpty()) {
+            return;
+        }
+        checkLogs.addAll(genResult.generationWarnings());
     }
 
     private String buildRequestSnapshot(VerificationRequestDto request) {
@@ -387,10 +397,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
             if (specs == null || specs.isEmpty()) {
                 List<String> logs = List.of("No specifications to verify");
-                completeTask(task, true, 0, logs, "");
+                completeTask(task, true, 0, logs, "", 0, 0);
                 finalResult = VerificationResultDto.builder()
                         .safe(true).traces(List.of()).specResults(List.of())
-                        .checkLogs(logs).nusmvOutput("").build();
+                        .checkLogs(logs).disabledRuleCount(0).skippedSpecCount(0).nusmvOutput("").build();
                 return;
             }
 
@@ -399,6 +409,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
+            List<String> generationWarnings = genResult.generationWarnings() != null
+                    ? new ArrayList<>(genResult.generationWarnings())
+                    : new ArrayList<>();
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
@@ -427,12 +440,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
             updateTaskProgress(taskId, 80, "Parsing results");
             finalResult = buildVerificationResult(
-                    result, devices, safeRules, specs, userId, taskId, new ArrayList<>(), deviceSmvMap, requestJson);
+                    result, devices, safeRules, specs, userId, taskId, generationWarnings, deviceSmvMap, requestJson,
+                    genResult.disabledRuleCount(), genResult.skippedSpecCount());
 
             updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(task, finalResult.isSafe(),
                     finalResult.getTraces() != null ? finalResult.getTraces().size() : 0,
-                    finalResult.getCheckLogs(), truncateOutput(result.getOutput()));
+                    finalResult.getCheckLogs(), truncateOutput(result.getOutput()),
+                    finalResult.getDisabledRuleCount(), finalResult.getSkippedSpecCount());
 
         } catch (Exception e) {
             if (isTaskCancelled(taskId)) {
@@ -477,6 +492,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     @Override
     @Transactional(readOnly = true)
+    public List<TraceDto> getTracesByTask(Long userId, Long taskId) {
+        return traceMapper.toDtoList(traceRepository.findByUserIdAndVerificationTaskId(userId, taskId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public TraceDto getTrace(Long userId, Long traceId) {
         return traceRepository.findByIdAndUserId(traceId, userId)
                 .map(traceMapper::toDto)
@@ -517,7 +538,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                                           Long userId, Long taskId,
                                                           List<String> checkLogs,
                                                           Map<String, DeviceSmvData> deviceSmvMap,
-                                                          String requestJson) {
+                                                          String requestJson,
+                                                          int disabledRuleCount,
+                                                          int skippedSpecCount) {
         List<Boolean> specResults = new ArrayList<>();
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> specCheckResults = result.getSpecResults();
@@ -534,7 +557,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             checkLogs.add("No valid specifications to verify (all filtered out)");
             return VerificationResultDto.builder()
                     .safe(true).traces(List.of()).specResults(List.of())
-                    .checkLogs(checkLogs).nusmvOutput(truncateOutput(result.getOutput())).build();
+                    .checkLogs(checkLogs)
+                    .disabledRuleCount(disabledRuleCount)
+                    .skippedSpecCount(skippedSpecCount)
+                    .nusmvOutput(truncateOutput(result.getOutput())).build();
         }
 
         // Fail-closed: mark unsafe when per-spec results cannot be reliably parsed.
@@ -640,6 +666,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .traces(traces)
                 .specResults(specResults)
                 .checkLogs(checkLogs)
+                .disabledRuleCount(disabledRuleCount)
+                .skippedSpecCount(skippedSpecCount)
                 .nusmvOutput(truncateOutput(result.getOutput()))
                 .build();
     }
@@ -647,7 +675,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     // ==================== Task Status Management ====================
 
     private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
-                              List<String> checkLogs, String nusmvOutput) {
+                              List<String> checkLogs, String nusmvOutput,
+                              int disabledRuleCount, int skippedSpecCount) {
         try {
             LocalDateTime completedAt = LocalDateTime.now();
             Long processingTimeMs = task.getStartedAt() != null
@@ -657,6 +686,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     task.getId(),
                     VerificationTaskPo.TaskStatus.COMPLETED,
                     completedAt, isSafe, traceCount,
+                    disabledRuleCount, skippedSpecCount,
                     checkLogsJson, truncateOutput(nusmvOutput),
                     null, processingTimeMs,
                     VerificationTaskPo.TaskStatus.CANCELLED);

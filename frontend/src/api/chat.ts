@@ -3,45 +3,41 @@ import api from '@/api/http'
 import { ChatMessage, ChatSession, StreamCommand } from "@/types/chat"
 import { useAuth } from '@/stores/auth'
 
-// 辅助函数：解包Result（后端返回 { code, message, data }）
+export class ChatStreamError extends Error {
+    readonly serverFrame: boolean
+    readonly status?: number
+
+    constructor(message: string, options: { serverFrame?: boolean; status?: number } = {}) {
+        super(message)
+        this.name = 'ChatStreamError'
+        this.serverFrame = options.serverFrame ?? false
+        this.status = options.status
+    }
+}
+
 const unpack = <T>(response: any): T => {
   return response.data.data;
 };
 
-/**
- * 获取会话列表（使用 JWT token 中的 userId）
- */
 export const getSessionList = async (): Promise<ChatSession[]> => {
   const response = await api.get<any>('/chat/sessions');
   return unpack<ChatSession[]>(response);
 }
 
-/**
- * 创建新会话（使用 JWT token 中的 userId）
- */
 export const createSession = async (): Promise<ChatSession> => {
   const response = await api.post<any>('/chat/sessions', null);
   return unpack<ChatSession>(response);
 }
 
-/**
- * 获取会话历史记录
- */
 export const getSessionHistory = async (sessionId: string): Promise<ChatMessage[]> => {
   const response = await api.get<any>(`/chat/sessions/${sessionId}/messages`);
   return unpack<ChatMessage[]>(response);
 }
 
-/**
- * 删除会话
- */
 export const deleteSession = async (sessionId: string): Promise<void> => {
   await api.delete(`/chat/sessions/${sessionId}`);
 }
 
-/**
- * 发送流式消息（添加Authorization header）
- */
 export const sendStreamChat = async (
     sessionId: string,
     content: string,
@@ -54,19 +50,18 @@ export const sendStreamChat = async (
     controller?: AbortController
 ) => {
     try {
-        const { getToken } = useAuth();
+        const { getToken, logout } = useAuth();
         const token = getToken();
-        // Relative by default → dev Vite proxy / prod same-origin proxy; override with VITE_API_BASE_URL.
         const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-        
+
         const headers: Record<string, string> = {
             'Content-Type': 'application/json'
         };
-        
+
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
         }
-        
+
         const response = await fetch(`${API_BASE}/api/chat/completions`, {
             method: 'POST',
             headers,
@@ -75,9 +70,13 @@ export const sendStreamChat = async (
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            if (response.status === 401 || response.status === 403) {
+                logout();
+            }
+            const detail = await readErrorDetail(response);
+            throw new ChatStreamError(`HTTP ${response.status}: ${detail}`, { status: response.status });
         }
-        
+
         if (!response.body) {
             throw new Error('No response body');
         }
@@ -85,43 +84,87 @@ export const sendStreamChat = async (
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
-        let hasReceivedContent = false;
+        let hasReceivedFrame = false;
+
+        const serverErrorMessage = (content: string) => {
+            const trimmed = content.trimStart();
+            if (!trimmed.startsWith('[ERROR]')) return '';
+            return trimmed.replace(/^\[ERROR\]\s*/, '').trim() || trimmed;
+        };
+
+        const handlePayload = (dataStr: string) => {
+            const trimmed = dataStr.trim();
+            if (!trimmed || trimmed === '[DONE]') return;
+
+            hasReceivedFrame = true;
+
+            if (trimmed.startsWith('{')) {
+                const json = JSON.parse(dataStr);
+                const content = typeof json.content === 'string' ? json.content : '';
+                const errorMessage = content ? serverErrorMessage(content) : '';
+                if (errorMessage) {
+                    throw new ChatStreamError(errorMessage, { serverFrame: true });
+                }
+                if (json.command && callbacks.onCommand) {
+                    callbacks.onCommand(json.command);
+                }
+                if (content) {
+                    callbacks.onMessage(content);
+                }
+                return;
+            }
+
+            const errorMessage = serverErrorMessage(dataStr);
+            if (errorMessage) {
+                throw new ChatStreamError(errorMessage, { serverFrame: true });
+            }
+
+            try {
+                callbacks.onMessage(dataStr);
+            } catch (error) {
+                throw error;
+            }
+        };
+
+        const handleEvent = (rawEvent: string) => {
+            const dataLines = rawEvent
+                .split(/\r?\n/)
+                .map(line => line.trimEnd())
+                .filter(line => line.trimStart().startsWith('data:'))
+                .map(line => line.replace(/^\s*data:\s?/, ''));
+
+            if (dataLines.length > 0) {
+                handlePayload(dataLines.join('\n'));
+            }
+        };
+
+        const drainEvents = () => {
+            while (true) {
+                const match = buffer.match(/\r?\n\r?\n/);
+                if (!match || match.index === undefined) break;
+                const eventText = buffer.slice(0, match.index);
+                buffer = buffer.slice(match.index + match[0].length);
+                handleEvent(eventText);
+            }
+        };
 
         while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-                if (line.trim().startsWith('data:')) {
-                    const dataStr = line.replace(/^data:\s?/, '');
-                    if (dataStr.trim() === '[DONE]') continue;
-
-                    try {
-                        const json = JSON.parse(dataStr);
-                        if (json.content) {
-                            hasReceivedContent = true;
-                            callbacks.onMessage(json.content);
-                        }
-                        if (json.command && callbacks.onCommand) {
-                            callbacks.onCommand(json.command);
-                        }
-                    } catch (e) {
-                        // 如果不是有效的 JSON，直接作为文本处理
-                        if (dataStr.trim() && !dataStr.startsWith('[ERROR]')) {
-                            hasReceivedContent = true;
-                            callbacks.onMessage(dataStr);
-                        }
-                    }
-                }
+            if (done) {
+                buffer += decoder.decode();
+                break;
             }
+            buffer += decoder.decode(value, { stream: true });
+            drainEvents();
         }
 
-        // 只有在没有收到任何内容时才视为失败
-        if (!hasReceivedContent) {
-            throw new Error('No content received from server');
+        drainEvents();
+        if (buffer.trim()) {
+            handleEvent(buffer);
+        }
+
+        if (!hasReceivedFrame) {
+            throw new ChatStreamError('No content received from server');
         }
 
         if (callbacks.onFinish) callbacks.onFinish();
@@ -131,8 +174,24 @@ export const sendStreamChat = async (
             if (callbacks.onFinish) callbacks.onFinish();
             return;
         }
-        console.error('[Chat] 流式请求错误:', error.message);
+        console.error('[Chat] Streaming request error:', error.message);
         if (callbacks.onError) callbacks.onError(error);
         throw error;
     }
 }
+
+const readErrorDetail = async (response: Response) => {
+    const fallback = response.statusText || 'Request failed';
+    try {
+        const body = await response.text();
+        if (!body) return fallback;
+        try {
+            const json = JSON.parse(body);
+            return json?.message || json?.error || fallback;
+        } catch {
+            return body.slice(0, 200);
+        }
+    } catch {
+        return fallback;
+    }
+};

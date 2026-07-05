@@ -20,7 +20,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-		<volcengine.version>0.2.53</volcengine.version>
+		<openai.version>4.41.0</openai.version>
 		<bouncycastle.version>1.78.1</bouncycastle.version>
 	</properties>
 
@@ -64,9 +64,9 @@
 		</dependency>
 
 		<dependency>
-			<groupId>com.volcengine</groupId>
-			<artifactId>volcengine-java-sdk-ark-runtime</artifactId>
-			<version>${volcengine.version}</version>
+			<groupId>com.openai</groupId>
+			<artifactId>openai-java</artifactId>
+			<version>${openai.version}</version>
 		</dependency>
 
 		<dependency>

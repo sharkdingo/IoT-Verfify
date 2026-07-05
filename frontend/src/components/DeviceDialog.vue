@@ -354,35 +354,26 @@ const deviceSpecs = computed(() => {
       // 使用templateLabel或根据templateId映射
       let specType = spec.templateLabel || 'Unknown'
       
-      // 根据templateId设置类型
+      // 根据templateId设置类型（运行时 templateId 恒为 '1'-'7'，后端 @Pattern 强制）
       switch (spec.templateId) {
-        case 'safety':
         case '1':
           specType = spec.templateLabel || 'Safety'
           break
-        case 'liveness':
         case '2':
           specType = spec.templateLabel || 'Liveness'
           break
-        case 'fairness':
         case '3':
           specType = spec.templateLabel || 'Fairness'
           break
-        case 'always':
         case '4':
           specType = spec.templateLabel || 'Always'
           break
-        case 'eventually':
         case '5':
           specType = spec.templateLabel || 'Eventually'
           break
-        case 'never':
         case '6':
           specType = spec.templateLabel || 'Never'
           break
-        case 'immediate':
-        case 'response':
-        case 'persistence':
         case '7':
           specType = spec.templateLabel || 'Response'
           break

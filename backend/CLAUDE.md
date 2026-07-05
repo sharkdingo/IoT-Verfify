@@ -10,10 +10,11 @@ fix the doc in the same change (see [../CONTRIBUTING.md](../CONTRIBUTING.md)).
 Spring Boot backend for a smart-home IoT formal-verification platform: users define
 devices, rules, and specifications; the backend generates an SMV model, runs NuSMV,
 parses counterexamples, and suggests automatic fixes. There is also an AI assistant
-(Volcengine Ark, SSE streaming) with tool/function-calling.
+(any OpenAI-compatible LLM endpoint, SSE streaming) with tool/function-calling.
 
 Stack: Java 17, Spring Boot 3.5.7, Spring Data JPA + MySQL, Redis (JWT blacklist,
-fail-open), Spring Security + JWT, NuSMV 2.6–2.7 (**not** nuXmv), Volcengine Ark SDK.
+fail-open), Spring Security + JWT, NuSMV 2.6–2.7 (**not** nuXmv), OpenAI Java SDK
+(`com.openai:openai-java`, any OpenAI-compatible endpoint).
 
 ## Commands
 
@@ -24,7 +25,7 @@ mvn test               # unit tests
 mvn clean package -DskipTests   # build jar → target/Iot-Verify-0.0.1-SNAPSHOT.jar
 ```
 
-Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `VOLCENGINE_API_KEY`,
+Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `OPENAI_API_KEY`,
 `NUSMV_PATH`. Full list and defaults: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md).
 
 ## Codebase map
@@ -41,7 +42,7 @@ component/
     parser/        SmvTraceParser — counterexample parsing
     fixer/         FaultLocalizer + parameter/condition/disable fix strategies
   aitool/          30 AI tools (board/node/rule/spec/template/simulation/verification)
-client/            ArkAiClient wrapper
+  ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
 security/          JWT + Spring Security
 configure/         config, thread pools, ProductionSafetyCheck
@@ -79,12 +80,20 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
 - **Async task state** uses atomic conditional UPDATEs (`WHERE status <> CANCELLED`) to
   avoid TOCTOU races — don't replace with read-then-write.
+- **NuSMV generation must fail closed and be observable.** Invalid/empty rule
+  conditions must not become `TRUE`; route them through the request-scoped
+  `SmvGenerationContext` so `checkLogs`, `disabledRuleCount`, and `skippedSpecCount`
+  stay accurate without global mutable state.
+- **AI rule/spec tools are label-first.** Recommendation prompts and parsed output should
+  use board device labels as the public reference; node ids are only a legacy fallback.
+  Specification recommendation `templateId` values must stay constrained to `"1"` through
+  `"7"`.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
   make request flow hard-depend on it.
 - **Temp files are kept on purpose**: `cleanupTempFile()` is a no-op so `nusmv_*` dirs
   (`model.smv`, `request.json`, `output.txt`, `result.json`) survive for debugging.
 - **`ProductionSafetyCheck`** refuses to start under a `prod`/`production` profile if
-  `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY` hold unsafe defaults.
+  `JWT_SECRET` / `DB_PASSWORD` / `OPENAI_API_KEY` hold unsafe defaults.
 - Attack-mode transitions take priority over template transitions in `next()` — an
   attacked device can jump to any mode regardless of rules.
 
@@ -106,4 +115,7 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 `device_templates`, `verification_task`, `simulation_task`, `trace`,
 `simulation_trace`, `chat_session`, `chat_message`. Notable: `device_node` has a
 composite PK `(id, user_id)` for user isolation; `device_templates` has a unique
-constraint on `(user_id, name)`.
+constraint on `(user_id, name)`; `specification` carries `formula` (TEXT) and
+`devices_json` (JSON) for authored-formula/device-binding persistence; `verification_task`
+carries `disabled_rule_count` / `skipped_spec_count` mirroring the generation-warning
+counts surfaced in `VerificationResultDto`.

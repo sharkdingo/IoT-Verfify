@@ -22,7 +22,7 @@ import rehypeKatex from "rehype-katex";
 import java from "@shikijs/langs/java";
 
 import type { ChatMessage, ChatSession, StreamCommand } from '@/types/chat';
-import { createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
+import { ChatStreamError, createSession, deleteSession, getSessionHistory, getSessionList, sendStreamChat } from '@/api/chat';
 import { useChatStore } from '@/stores/chat';
 
 const emit = defineEmits(['command']);
@@ -133,6 +133,14 @@ const copyFullMessage = async (content: string) => {
 };
 
 // ================= 交互逻辑 =================
+
+const formatStreamError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof ChatStreamError && error.serverFrame) {
+    return message || 'Server stream error';
+  }
+  return message || 'Request failed';
+};
 
 const startListening = () => {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -266,6 +274,8 @@ const handleSend = async () => {
 
   // 用于跟踪是否收到了任何内容
   let hasReceivedContent = false;
+  let streamErrorHandled = false;
+  let aiMsgIndex = -1;
 
   try {
     let targetSessionId = currentSessionId.value;
@@ -278,8 +288,26 @@ const handleSend = async () => {
     }
 
     // 先插入一条空的 AI 消息占位
-    const aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
+    aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
     scrollToBottom(true);
+
+    const renderStreamError = (error: unknown) => {
+      streamErrorHandled = true;
+      const msg = messages.value[aiMsgIndex];
+      if (!msg) return;
+
+      const prefix = error instanceof ChatStreamError && error.serverFrame
+          ? 'Server error'
+          : 'Request failed';
+      const errorText = `${prefix}: ${formatStreamError(error)}`;
+      if (hasReceivedContent && msg.content) {
+        msg.content += `\n\n> ${errorText}`;
+      } else {
+        msg.content = errorText;
+        hasReceivedContent = true;
+      }
+      scrollToBottom(false);
+    };
 
     await sendStreamChat(
         targetSessionId,
@@ -300,11 +328,8 @@ const handleSend = async () => {
             emit('command', cmd); // 转发指令emit
           },
           onError: (err: any) => {
+            renderStreamError(err);
             console.error('[Chat] 流式错误:', err);
-            // 只有在没有收到任何内容时才显示失败
-            if (abortController.value && !hasReceivedContent) {
-              messages.value[aiMsgIndex].content += '\n[发送失败]';
-            }
           },
           onFinish: async () => {
             isLoading.value = false;
@@ -318,10 +343,11 @@ const handleSend = async () => {
   } catch (error) {
     console.error('[Chat] 发送消息失败:', error);
     // 只有在没有收到内容时才显示错误提示
-    if (!hasReceivedContent) {
+    if (!streamErrorHandled && !hasReceivedContent) {
       ElMessage.error('发送消息失败: ' + (error instanceof Error ? error.message : String(error)));
     }
     isLoading.value = false;
+    abortController.value = null;
   }
 };
 

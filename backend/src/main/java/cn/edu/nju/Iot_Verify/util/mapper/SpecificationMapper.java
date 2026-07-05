@@ -6,6 +6,9 @@ import cn.edu.nju.Iot_Verify.po.SpecificationPo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Specification PO 与 DTO 之间的转换映射器
  */
@@ -24,9 +27,11 @@ public class SpecificationMapper {
         dto.setTemplateId(po.getTemplateId());
         dto.setTemplateLabel(po.getTemplateLabel());
 
-        dto.setAConditions(JsonUtils.fromJsonList(po.getAConditionsJson(), SpecConditionDto.class));
-        dto.setIfConditions(JsonUtils.fromJsonList(po.getIfConditionsJson(), SpecConditionDto.class));
-        dto.setThenConditions(JsonUtils.fromJsonList(po.getThenConditionsJson(), SpecConditionDto.class));
+        dto.setAConditions(withSide(JsonUtils.fromJsonList(po.getAConditionsJson(), SpecConditionDto.class), "a"));
+        dto.setIfConditions(withSide(JsonUtils.fromJsonList(po.getIfConditionsJson(), SpecConditionDto.class), "if"));
+        dto.setThenConditions(withSide(JsonUtils.fromJsonList(po.getThenConditionsJson(), SpecConditionDto.class), "then"));
+        dto.setFormula(po.getFormula());
+        dto.setDevices(JsonUtils.fromJsonList(po.getDevicesJson(), SpecificationDto.DeviceRefDto.class));
 
         return dto;
     }
@@ -44,14 +49,43 @@ public class SpecificationMapper {
         po.setTemplateId(dto.getTemplateId());
         po.setTemplateLabel(dto.getTemplateLabel());
 
-        po.setAConditionsJson(JsonUtils.toJsonOrEmpty(dto.getAConditions()));
-        po.setIfConditionsJson(JsonUtils.toJsonOrEmpty(dto.getIfConditions()));
-        po.setThenConditionsJson(JsonUtils.toJsonOrEmpty(dto.getThenConditions()));
+        po.setAConditionsJson(JsonUtils.toJsonOrEmpty(withSide(dto.getAConditions(), "a")));
+        po.setIfConditionsJson(JsonUtils.toJsonOrEmpty(withSide(dto.getIfConditions(), "if")));
+        po.setThenConditionsJson(JsonUtils.toJsonOrEmpty(withSide(dto.getThenConditions(), "then")));
+        po.setFormula(dto.getFormula());
+        po.setDevicesJson(JsonUtils.toJsonOrEmpty(dto.getDevices()));
 
         return po;
     }
 
     public String toJson(SpecificationDto dto) {
         return JsonUtils.toJson(dto);
+    }
+
+    private List<SpecConditionDto> withSide(List<SpecConditionDto> conditions, String side) {
+        if (conditions == null) {
+            return new ArrayList<>();
+        }
+        List<SpecConditionDto> normalized = new ArrayList<>(conditions.size());
+        for (SpecConditionDto condition : conditions) {
+            normalized.add(copyWithSide(condition, side));
+        }
+        return normalized;
+    }
+
+    private SpecConditionDto copyWithSide(SpecConditionDto condition, String side) {
+        if (condition == null) {
+            return null;
+        }
+        SpecConditionDto copy = new SpecConditionDto();
+        copy.setId(condition.getId());
+        copy.setSide(side);
+        copy.setDeviceId(condition.getDeviceId());
+        copy.setDeviceLabel(condition.getDeviceLabel());
+        copy.setTargetType(condition.getTargetType());
+        copy.setKey(condition.getKey());
+        copy.setRelation(condition.getRelation());
+        copy.setValue(condition.getValue());
+        return copy;
     }
 }

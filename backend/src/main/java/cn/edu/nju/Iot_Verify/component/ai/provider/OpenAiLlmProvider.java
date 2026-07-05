@@ -1,0 +1,248 @@
+package cn.edu.nju.Iot_Verify.component.ai.provider;
+
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
+import cn.edu.nju.Iot_Verify.configure.LlmConfig;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import com.openai.client.OpenAIClient;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
+import com.openai.errors.OpenAIServiceException;
+import com.openai.core.http.StreamResponse;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
+import com.openai.models.chat.completions.ChatCompletion;
+import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
+import com.openai.models.chat.completions.ChatCompletionChunk;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionFunctionTool;
+import com.openai.models.chat.completions.ChatCompletionMessage;
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
+import com.openai.models.chat.completions.ChatCompletionMessageParam;
+import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
+import com.openai.models.chat.completions.ChatCompletionSystemMessageParam;
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+
+/**
+ * OpenAI-compatible {@link LlmProvider} implementation and the sole anti-corruption layer
+ * between the application and the {@code com.openai:openai-java} SDK. All SDK imports live
+ * here; the rest of the codebase sees only {@code component.ai.model} types.
+ *
+ * <p>Works against any endpoint speaking the OpenAI chat-completions protocol (official API,
+ * gateways, relays) via {@code llm.base-url}.
+ *
+ * <p>Registered only when {@code llm.provider=openai} (the default), leaving room for
+ * additional providers without touching this class.
+ */
+@Slf4j
+@Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        prefix = "llm", name = "provider", havingValue = "openai", matchIfMissing = true)
+public class OpenAiLlmProvider implements LlmProvider {
+
+    private final LlmConfig config;
+    private OpenAIClient client;
+
+    public OpenAiLlmProvider(LlmConfig config) {
+        this.config = config;
+    }
+
+    @PostConstruct
+    public void init() {
+        this.client = OpenAIOkHttpClient.builder()
+                .apiKey(config.getApiKey())
+                .baseUrl(config.getBaseUrl())
+                .putHeader("Accept-Charset", "utf-8")
+                .timeout(Duration.ofMinutes(config.getTimeoutMinutes()))
+                .build();
+        log.info("OpenAiLlmProvider initialized: model={}, baseUrl={}", config.getModel(), config.getBaseUrl());
+    }
+
+    @PreDestroy
+    public void destroy() {
+        if (client != null) {
+            try {
+                client.close();
+                log.info("OpenAiLlmProvider client closed");
+            } catch (Exception e) {
+                log.warn("Error closing OpenAI client: {}", e.getMessage());
+            }
+        }
+    }
+
+    // ── LlmProvider ──────────────────────────────────────────────────────
+
+    @Override
+    public LlmChatResponse chat(LlmChatRequest request) {
+        ChatCompletionCreateParams params = toParams(request, false);
+        ChatCompletion completion;
+        try {
+            completion = client.chat().completions().create(params);
+        } catch (Exception e) {
+            logProviderError("OpenAI chat completion failed", e);
+            throw ServiceUnavailableException.aiService(e);
+        }
+        return parseResponse(completion);
+    }
+
+    @Override
+    public void streamChat(LlmChatRequest request, Consumer<String> onDelta, BooleanSupplier shouldStop) {
+        ChatCompletionCreateParams params = toParams(request, true);
+        try (StreamResponse<ChatCompletionChunk> stream = client.chat().completions().createStreaming(params)) {
+            Stream<ChatCompletionChunk> chunks = stream.stream();
+            for (ChatCompletionChunk chunk : (Iterable<ChatCompletionChunk>) chunks::iterator) {
+                if (shouldStop.getAsBoolean()) {
+                    break;
+                }
+                if (chunk.choices().isEmpty()) {
+                    continue;
+                }
+                chunk.choices().get(0).delta().content()
+                        .filter(delta -> !delta.isEmpty())
+                        .ifPresent(onDelta);
+            }
+        } catch (Exception e) {
+            if (shouldStop.getAsBoolean()) {
+                log.info("OpenAI streaming chat stopped after cancellation: {}", e.toString());
+                return;
+            }
+            logProviderError("OpenAI streaming chat error", e);
+            throw ServiceUnavailableException.aiService(e);
+        }
+    }
+
+    // ── domain → SDK ─────────────────────────────────────────────────────
+
+    private ChatCompletionCreateParams toParams(LlmChatRequest request, boolean streaming) {
+        String model = (request.model() != null && !request.model().isBlank())
+                ? request.model() : config.getModel();
+
+        ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
+                .model(model);
+
+        for (LlmMessage msg : request.messages()) {
+            builder.addMessage(toMessageParam(msg));
+        }
+
+        if (!streaming && request.hasTools()) {
+            for (LlmToolSpec spec : request.tools()) {
+                builder.addTool(toFunctionTool(spec));
+            }
+        }
+        if (request.temperature() != null) {
+            builder.temperature(request.temperature());
+        }
+        if (request.maxTokens() != null) {
+            builder.maxCompletionTokens(request.maxTokens().longValue());
+        }
+        return builder.build();
+    }
+
+    private ChatCompletionMessageParam toMessageParam(LlmMessage msg) {
+        return switch (msg.role()) {
+            case SYSTEM -> ChatCompletionMessageParam.ofSystem(
+                    ChatCompletionSystemMessageParam.builder().content(msg.content()).build());
+            case USER -> ChatCompletionMessageParam.ofUser(
+                    ChatCompletionUserMessageParam.builder().content(msg.content()).build());
+            case TOOL -> ChatCompletionMessageParam.ofTool(
+                    ChatCompletionToolMessageParam.builder()
+                            .toolCallId(msg.toolCallId() == null ? "" : msg.toolCallId())
+                            .content(msg.content())
+                            .build());
+            case ASSISTANT -> ChatCompletionMessageParam.ofAssistant(toAssistantParam(msg));
+        };
+    }
+
+    private ChatCompletionAssistantMessageParam toAssistantParam(LlmMessage msg) {
+        ChatCompletionAssistantMessageParam.Builder builder = ChatCompletionAssistantMessageParam.builder();
+        if (msg.hasToolCalls()) {
+            for (LlmToolCall call : msg.toolCalls()) {
+                builder.addToolCall(ChatCompletionMessageFunctionToolCall.builder()
+                        .id(call.id())
+                        .function(ChatCompletionMessageFunctionToolCall.Function.builder()
+                                .name(call.name())
+                                .arguments(call.argumentsJson())
+                                .build())
+                        .build());
+            }
+            // OpenAI requires assistant tool-call messages to omit/empty content.
+        } else {
+            builder.content(msg.content());
+        }
+        return builder.build();
+    }
+
+    private ChatCompletionFunctionTool toFunctionTool(LlmToolSpec spec) {
+        FunctionParameters parameters = FunctionParameters.builder()
+                .putAdditionalProperty("type", JsonValue.from(spec.parameters().type))
+                .putAdditionalProperty("properties", JsonValue.from(spec.parameters().properties))
+                .putAdditionalProperty("required", JsonValue.from(spec.parameters().required))
+                .build();
+
+        FunctionDefinition definition = FunctionDefinition.builder()
+                .name(spec.name())
+                .description(spec.description() == null ? "" : spec.description())
+                .parameters(parameters)
+                .build();
+
+        return ChatCompletionFunctionTool.builder().function(definition).build();
+    }
+
+    // ── SDK → domain ─────────────────────────────────────────────────────
+
+    private LlmChatResponse parseResponse(ChatCompletion completion) {
+        if (completion.choices().isEmpty()) {
+            return LlmChatResponse.empty();
+        }
+        ChatCompletionMessage message = completion.choices().get(0).message();
+
+        List<LlmToolCall> toolCalls = message.toolCalls()
+                .map(this::toDomainToolCalls)
+                .orElseGet(List::of);
+        if (!toolCalls.isEmpty()) {
+            return LlmChatResponse.ofToolCalls(toolCalls);
+        }
+        return LlmChatResponse.ofText(message.content().orElse(""));
+    }
+
+    private List<LlmToolCall> toDomainToolCalls(List<ChatCompletionMessageToolCall> sdkCalls) {
+        List<LlmToolCall> result = new ArrayList<>();
+        for (ChatCompletionMessageToolCall call : sdkCalls) {
+            if (!call.isFunction()) {
+                continue; // custom tools are not used by this application
+            }
+            ChatCompletionMessageFunctionToolCall fn = call.asFunction();
+            result.add(new LlmToolCall(fn.id(), fn.function().name(), fn.function().arguments()));
+        }
+        return result;
+    }
+
+    private void logProviderError(String message, Exception e) {
+        if (e instanceof OpenAIServiceException serviceException) {
+            log.error("{}: status={}, type={}, code={}, body={}",
+                    message,
+                    serviceException.statusCode(),
+                    serviceException.type().orElse(""),
+                    serviceException.code().orElse(""),
+                    serviceException.body(),
+                    e);
+            return;
+        }
+        log.error("{}: {}", message, e.getMessage(), e);
+    }
+}

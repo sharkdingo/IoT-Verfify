@@ -18,6 +18,7 @@ import lombok.Data;
 @Data
 public class SpecConditionDto {
     private String id;
+    @Pattern(regexp = "^(a|if|then)$", message = "Side must be one of: a, if, then")
     private String side;        // 'a' | 'if' | 'then'
     @NotBlank(message = "Device ID is required for spec condition")
     private String deviceId;
@@ -32,6 +33,10 @@ public class SpecConditionDto {
     @NotBlank(message = "Key is required for spec condition")
     private String key;
     @NotBlank(message = "Relation is required for spec condition")
+    @Pattern(
+            regexp = "^(=|!=|>|>=|<|<=|(?i:in|not_in|not in))$",
+            message = "Relation must be one of =, !=, >, >=, <, <=, in, not_in, not in"
+    )
     private String relation;
     @NotBlank(message = "Value is required for spec condition")
     private String value;

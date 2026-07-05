@@ -66,6 +66,8 @@ const messages = {
 
             /* 校验 & 弹窗提示 */
             nameExists: '该名称已存在，请换一个',
+            renameSuccess: '重命名成功',
+            deviceAdded: '设备已添加',
             fillAllRuleFields: '请完整选择源/目标设备及 API',
             deleteNodeWithRelationsConfirm: '该设备存在与其他设备的规则（连线）或已参与规约，删除设备将同时删除这些规则和相关规约，是否继续？',
             specsDeletedWithNode: '已同时删除与该设备相关的规约。',
@@ -214,6 +216,8 @@ const messages = {
 
             /* validations / messages */
             nameExists: 'Name already exists, please choose another one',
+            renameSuccess: 'Renamed successfully',
+            deviceAdded: 'Device added',
             fillAllRuleFields: 'Please select source/target device and API completely',
             deleteNodeWithRelationsConfirm: 'This device has rules (edges) or is involved in specifications. Deleting it will also remove those rules and related specifications. Continue?',
             specsDeletedWithNode: 'Specifications related to this device have been removed as well.',

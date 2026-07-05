@@ -1,5 +1,6 @@
 // src/api/board.ts - Board API（自动解包Result<T>）
 import api from './http';
+import { ElMessage } from 'element-plus'
 
 // 引入类型
 import type { DeviceNode } from '../types/node'
@@ -10,6 +11,7 @@ import type { PanelActive } from '../types/panel'
 import type { RuleForm } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
 import type { VerificationRequest, VerificationResult, VerificationTask, Trace } from '@/types/verify'
+import { assertRuleHasTrigger } from '../utils/rule'
 
 // 辅助函数：解包Result（后端返回 { code, message, data }）
 const unpack = <T>(response: any): T => {
@@ -25,12 +27,6 @@ interface BackendEdgeDto {
     toLabel: string
     fromPos: { x: number; y: number }
     toPos: { x: number; y: number }
-    // 规则相关的字段
-    fromApi?: string
-    toApi?: string
-    itemType?: 'api' | 'variable'
-    relation?: string
-    value?: string
 }
 
 // 后端 RuleDto 接口（用于 API 通信）
@@ -51,6 +47,37 @@ interface BackendRuleDto {
     ruleString: string
 }
 
+// RuleForm -> BackendRuleDto. Shared by saveRules and saveBatch so both send identical shapes.
+// Client-created rules use a `rule_<timestamp>` id → send null (insert). Existing rules carry their
+// raw numeric DB id → send it back so the backend upserts in place (preserves createdAt / id).
+const toBackendRuleDto = (rule: RuleForm): BackendRuleDto => {
+    let id: number | null = null;
+    if (rule.id && rule.id.startsWith('rule_')) {
+        id = null;
+    } else if (rule.id) {
+        const num = Number(rule.id);
+        if (!isNaN(num)) {
+            id = num;
+        }
+    }
+    return {
+        id,
+        conditions: rule.sources.map(source => ({
+            deviceName: String(source.fromId || ''),
+            attribute: String(source.fromApi || ''),
+            relation: String(source.relation || '='),
+            value: String(source.value || 'true')
+        })),
+        command: {
+            deviceName: String(rule.toId || ''),
+            action: String(rule.toApi || ''),
+            contentDevice: null,
+            content: null
+        },
+        ruleString: String(rule.name || '')
+    };
+};
+
 export default {
     // ==== 节点 ====
     getNodes: async (): Promise<DeviceNode[]> => {
@@ -70,13 +97,7 @@ export default {
             fromLabel: edge.fromLabel || '',
             toLabel: edge.toLabel || '',
             fromPos: edge.fromPos || { x: 0, y: 0 },
-            toPos: edge.toPos || { x: 0, y: 0 },
-            // 映射规则相关的字段，用于从连线恢复规则数据
-            fromApi: edge.fromApi || '',
-            toApi: edge.toApi || '',
-            itemType: edge.itemType as 'api' | 'variable' | undefined,
-            relation: edge.relation || '',
-            value: edge.value || ''
+            toPos: edge.toPos || { x: 0, y: 0 }
         }));
     },
     saveEdges: async (edges: DeviceEdge[]): Promise<DeviceEdge[]> => {
@@ -139,51 +160,39 @@ export default {
     // frontend RuleForm), and no caller consumes it. Re-fetch via getRules() if you need
     // the persisted rules mapped to RuleForm (e.g. to pick up server-assigned ids).
     saveRules: async (rules: RuleForm[]): Promise<void> => {
+        try {
+            rules.forEach((rule, index) => assertRuleHasTrigger(rule, index))
+        } catch (error: any) {
+            ElMessage.warning({ message: error.message || 'Rule trigger source is required', type: 'warning' })
+            throw error
+        }
+
         // 转换为后端 DTO，确保所有必填字段都有值
-        const ruleDtos: BackendRuleDto[] = rules.map(rule => {
-            // Client-created rules use a `rule_<timestamp>` id → send null so the backend
-            // inserts them. Existing rules carry their raw numeric DB id (from getRules)
-            // → send it back so the backend updates in place (incremental upsert).
-            let id: number | null = null;
-            if (rule.id && rule.id.startsWith('rule_')) {
-                id = null;
-            } else if (rule.id) {
-                // Existing rule — parse its numeric DB id.
-                const num = Number(rule.id);
-                if (!isNaN(num)) {
-                    id = num;
-                }
-            }
-
-            // 确保 conditions 是有效数组，不为 null，不是空数组
-            const conditions = (rule.sources && rule.sources.length > 0)
-                ? rule.sources.map(source => ({
-                    deviceName: String(source.fromId || ''),
-                    attribute: String(source.fromApi || ''),
-                    relation: String(source.relation || '='),
-                    value: String(source.value || 'true')
-                }))
-                : [{ deviceName: 'dummy', attribute: 'dummy', relation: '=', value: 'true' }];
-
-            // 确保 command 是有效对象，不为 null
-            const command = {
-                deviceName: String(rule.toId || ''),
-                action: String(rule.toApi || ''),
-                contentDevice: null as string | null,
-                content: null as string | null
-            };
-
-            const dto = {
-                id: id,
-                conditions: conditions,
-                command: command,
-                ruleString: String(rule.name || '')
-            };
-            
-            return dto;
-        });
-
+        const ruleDtos: BackendRuleDto[] = rules.map(toBackendRuleDto);
         await api.post('/board/rules', ruleDtos);
+    },
+
+    /**
+     * 原子保存 nodes + rules + specs（后端单事务）。用于删除/重命名设备，避免三集合半保存分叉。
+     * 传 undefined 的集合表示“保持不变”。返回后端保存后的最新三集合。
+     */
+    saveBoardBatch: async (batch: {
+        nodes?: DeviceNode[],
+        rules?: RuleForm[],
+        specs?: Specification[]
+    }): Promise<{ nodes: DeviceNode[], rules: BackendRuleDto[], specs: Specification[] }> => {
+        if (batch.rules) {
+            // 与 saveRules 相同的校验：任一规则缺触发源则整体拒绝，不发请求。
+            batch.rules.forEach((rule, index) => assertRuleHasTrigger(rule, index));
+        }
+        const payload = {
+            nodes: batch.nodes ?? null,
+            rules: batch.rules ? batch.rules.map(toBackendRuleDto) : null,
+            specs: batch.specs ?? null
+        };
+        return unpack<{ nodes: DeviceNode[], rules: BackendRuleDto[], specs: Specification[] }>(
+            await api.post('/board/batch', payload)
+        );
     },
 
     /**
@@ -192,9 +201,18 @@ export default {
      */
     checkDuplicateRule: async (rule: RuleForm): Promise<{
         isDuplicate: boolean;
+        duplicateWith?: string;
+        similarity?: number;
         reason?: string;
-        similarRules?: any[];
+        message?: string;
     }> => {
+        try {
+            assertRuleHasTrigger(rule)
+        } catch (error: any) {
+            ElMessage.warning({ message: error.message || 'Rule trigger source is required', type: 'warning' })
+            throw error
+        }
+
         // 复用 RuleForm -> RuleDto 映射逻辑（单条规则）
         const dto: BackendRuleDto = {
             id: rule.id && !rule.id.startsWith('rule_') ? Number(rule.id) : null,
@@ -216,8 +234,10 @@ export default {
         const response = await api.post<any>('/board/rules/check-duplicate', dto);
         return unpack<{
             isDuplicate: boolean;
+            duplicateWith?: string;
+            similarity?: number;
             reason?: string;
-            similarRules?: any[];
+            message?: string;
         }>(response);
     },
 
@@ -242,9 +262,6 @@ export default {
         return unpack<DeviceTemplate[]>(await api.get('/board/templates'));
     },
     addDeviceTemplate: async (tpl: DeviceTemplate): Promise<DeviceTemplate> => {
-        return unpack<DeviceTemplate>(await api.post('/board/templates', tpl));
-    },
-    createDeviceTemplate: async (tpl: DeviceTemplate): Promise<DeviceTemplate> => {
         return unpack<DeviceTemplate>(await api.post('/board/templates', tpl));
     },
     reloadDeviceTemplates: async (): Promise<number> => {
@@ -272,6 +289,10 @@ export default {
     // 获取用户所有验证 Trace
     getVerificationTraces: async (): Promise<Trace[]> => {
         return unpack<Trace[]>(await api.get('/verify/traces'));
+    },
+    // 获取某个验证任务产生的反例 Trace（按 task 维度过滤，避免拿到旧任务/并发任务的反例）
+    getTaskTraces: async (taskId: number): Promise<Trace[]> => {
+        return unpack<Trace[]>(await api.get(`/verify/tasks/${taskId}/traces`));
     },
     // 获取单个 Trace
     getVerificationTrace: async (id: number): Promise<Trace> => {
@@ -336,5 +357,22 @@ export default {
         preferredRanges?: Record<string, any>
     }): Promise<any> => {
         return unpack<any>(await api.post(`/verify/traces/${traceId}/fix`, request || {}));
+    },
+
+    /**
+     * 应用某条修复建议（把用户所见的、已验证的建议原样回传后端落库）。
+     * 后端返回落库后的完整规则列表；当前 UI 成功后会重新拉取规则以刷新画布。
+     */
+    applyFix: async (traceId: number, strategy: string, suggestion: any,
+                     preferredRanges?: Record<string, any>): Promise<{
+        applied: boolean,
+        strategy: string,
+        message: string,
+        rules: any[]
+    }> => {
+        // preferredRanges 必须与生成该建议时 /fix 用的一致，否则后端重算无法复现 → 被拒。
+        return unpack<{ applied: boolean, strategy: string, message: string, rules: any[] }>(
+            await api.post(`/verify/traces/${traceId}/fix/apply`, { strategy, suggestion, preferredRanges })
+        );
     }
 }

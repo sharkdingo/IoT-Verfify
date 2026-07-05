@@ -78,6 +78,13 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   `response.body.getReader()`, so it sets the `Authorization` header manually and the
   axios interceptors do not apply. Protocol:
   [../docs/api/chat-sse.md](../docs/api/chat-sse.md).
+- **Rule references are label-first.** `RuleBuilderDialog` stores new rule source/target
+  device references as `node.label`; lookup code must continue accepting legacy node ids.
+  Never synthesize dummy trigger conditions in `board.ts`; validate and surface an error
+  instead.
+- **Verification warnings are user-visible.** `disabledRuleCount`,
+  `skippedSpecCount`, and `[rule-disabled]` / `[spec-skipped]` entries in `checkLogs`
+  must be shown even when `safe === true`.
 
 ## Reference (link, don't duplicate)
 

@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -8,12 +9,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -22,7 +17,7 @@ import java.util.stream.Collectors;
 
 /**
  * 智能规则推荐工具
- * 基于 Ark AI 实现智能规则推荐，根据当前面板上的设备信息生成自动化规则建议
+ * 基于 LLM 实现智能规则推荐，根据当前面板上的设备信息生成自动化规则建议
  */
 @Slf4j
 @Component
@@ -30,7 +25,11 @@ public class RecommendRulesTool extends AbstractAiTool {
 
     private final DeviceInfoHelper deviceInfoHelper;
     private final BoardStorageService boardStorageService;
-    private final ArkAiClient arkAiClient;
+    private final PromptCompletionService promptCompletionService;
+
+    private static final double TEMPERATURE = 0.7;
+    private static final int MAX_TOKENS = 4000;
+    private static final Set<String> ALLOWED_RELATIONS = Set.of("=", "!=", ">", ">=", "<", "<=", "in", "not_in", "not in");
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)自动化规则推荐助手。你的任务是根据用户面板上的设备信息，
@@ -54,16 +53,16 @@ public class RecommendRulesTool extends AbstractAiTool {
       "requiresUserInput": true|false,
       "conditions": [
         {
-          "deviceName": "设备节点ID",
+          "deviceName": "设备 label（必须来自设备列表的 label 字段）",
           "attribute": "触发属性（必须是该设备实际存在的变量）",
           "relation": "=|>|<|>=|<=|!=",
           "value": "触发值"
         }
       ],
       "command": {
-        "deviceName": "目标设备节点ID",
+        "deviceName": "目标设备 label（必须来自设备列表的 label 字段）",
         "action": "动作名称（必须是该设备实际存在的API）",
-        "contentDevice": null或"内容设备节点ID",
+        "contentDevice": null或"内容设备 label",
         "content": null或"内容值"
       }
     }
@@ -88,12 +87,12 @@ public class RecommendRulesTool extends AbstractAiTool {
 
     public RecommendRulesTool(DeviceInfoHelper deviceInfoHelper,
                               BoardStorageService boardStorageService,
-                              ArkAiClient arkAiClient,
+                              PromptCompletionService promptCompletionService,
                               ObjectMapper objectMapper) {
         super(objectMapper);
         this.deviceInfoHelper = deviceInfoHelper;
         this.boardStorageService = boardStorageService;
-        this.arkAiClient = arkAiClient;
+        this.promptCompletionService = promptCompletionService;
     }
 
     @Override
@@ -102,7 +101,7 @@ public class RecommendRulesTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("maxRecommendations", Map.of(
@@ -120,16 +119,11 @@ public class RecommendRulesTool extends AbstractAiTool {
                 "object", props, Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Analyze current board devices and recommend intelligent automation rules using AI. " +
-                                "This tool uses AI to analyze each device's capabilities (APIs, variables, states) and suggests " +
-                                "meaningful rules based on device linkage, security, energy saving, or comfort scenarios.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(),
+                "Analyze current board devices and recommend intelligent automation rules using AI. " +
+                        "This tool uses AI to analyze each device's capabilities (APIs, variables, states) and suggests " +
+                        "meaningful rules based on device linkage, security, energy saving, or comfort scenarios.",
+                schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {
@@ -195,7 +189,7 @@ public class RecommendRulesTool extends AbstractAiTool {
             // 构建现有规则的简要信息
             String existingRulesInfo = buildExistingRulesInfo(existingRules);
 
-            // 调用 Ark AI 生成智能推荐
+            // 调用配置的 LLM 生成智能推荐
             String aiResponse = generateRecommendationsWithAI(
                     devices,
                     existingRulesInfo,
@@ -225,7 +219,7 @@ public class RecommendRulesTool extends AbstractAiTool {
     }
 
     /**
-     * 调用 Ark AI 生成智能推荐
+     * 调用配置的 LLM 生成智能推荐
      */
     private String generateRecommendationsWithAI(
             List<DeviceInfoHelper.DeviceInfo> devices,
@@ -236,38 +230,14 @@ public class RecommendRulesTool extends AbstractAiTool {
         String deviceInfoJson = buildDeviceInfoJson(devices);
         String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, maxRecommendations, category);
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(SYSTEM_PROMPT).build());
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build());
+        log.info("Calling LLM for rule recommendations...");
+        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(arkAiClient.getModelId())
-                .messages(messages)
-                .temperature(0.7)
-                .maxTokens(4000)
-                .build();
-
-        ChatCompletionResult result;
-        try {
-            log.info("Calling Ark AI for recommendations...");
-            result = arkAiClient.getArkService().createChatCompletion(request);
-        } catch (Exception e) {
-            log.error("Failed to call Ark AI for recommendations", e);
-            throw ServiceUnavailableException.aiService();
-        }
-
-        if (result.getChoices() == null || result.getChoices().isEmpty()) {
-            log.warn("AI returned empty choices");
+        if (content == null || content.isBlank()) {
+            log.warn("AI returned empty content");
             return "{\"recommendations\": []}";
         }
 
-        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-        if (responseMsg == null || responseMsg.getContent() == null) {
-            log.warn("AI returned null message content");
-            return "{\"recommendations\": []}";
-        }
-
-        String content = responseMsg.getContent().toString();
         log.info("AI response content length: {}", content.length());
         return content;
     }
@@ -310,7 +280,6 @@ public class RecommendRulesTool extends AbstractAiTool {
 
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 Map<String, Object> deviceMap = new LinkedHashMap<>();
-                deviceMap.put("nodeId", device.nodeId());
                 deviceMap.put("label", device.label());
                 deviceMap.put("templateName", device.templateName());
                 deviceMap.put("currentState", device.currentState());
@@ -400,8 +369,10 @@ public class RecommendRulesTool extends AbstractAiTool {
 
             // 构建设备能力映射，用于验证
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap = new HashMap<>();
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap = new HashMap<>();
             for (DeviceInfoHelper.DeviceInfo device : devices) {
-                deviceMap.put(device.nodeId(), device);
+                deviceMap.put(device.label(), device);
+                legacyNodeMap.put(device.nodeId(), device);
             }
 
             // 尝试解析 AI 返回的 JSON
@@ -423,7 +394,7 @@ public class RecommendRulesTool extends AbstractAiTool {
                     Map<String, Object> recommendation = objectMapper.convertValue(rec, Map.class);
 
                     // 验证并过滤推荐
-                    if (isValidRecommendation(recommendation, deviceMap)) {
+                    if (isValidRecommendation(recommendation, deviceMap, legacyNodeMap)) {
                         recommendations.add(recommendation);
                         count++;
                     } else {
@@ -467,7 +438,8 @@ public class RecommendRulesTool extends AbstractAiTool {
      */
     @SuppressWarnings("unchecked")
     private boolean isValidRecommendation(Map<String, Object> recommendation,
-            Map<String, DeviceInfoHelper.DeviceInfo> deviceMap) {
+            Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap) {
 
         if (!recommendation.containsKey("conditions") || !recommendation.containsKey("command")) {
             return false;
@@ -482,19 +454,31 @@ public class RecommendRulesTool extends AbstractAiTool {
 
         // 验证每个触发条件
         for (Map<String, Object> condition : conditions) {
-            String deviceName = (String) condition.get("deviceName");
-            String attribute = (String) condition.get("attribute");
+            String deviceName = asTrimmedString(condition.get("deviceName"));
+            String attribute = asTrimmedString(condition.get("attribute"));
+            String relation = asTrimmedString(condition.get("relation"));
+            String value = asTrimmedString(condition.get("value"));
 
             if (deviceName == null || attribute == null) {
                 return false;
             }
+            if (value == null) {
+                return false;
+            }
+            if (relation != null && !isAllowedRelation(relation)) {
+                return false;
+            }
 
             // 检查设备是否存在
-            DeviceInfoHelper.DeviceInfo device = deviceMap.get(deviceName);
+            DeviceInfoHelper.DeviceInfo device = resolveDevice(deviceName, deviceMap, legacyNodeMap);
             if (device == null) {
                 log.debug("Device {} not found in board", deviceName);
                 return false;
             }
+            condition.put("deviceName", device.label());
+            condition.put("attribute", attribute);
+            condition.put("relation", relation != null ? relation : "=");
+            condition.put("value", value);
 
             // 检查属性是否存在于设备的变量中
             boolean attrExists = false;
@@ -514,18 +498,20 @@ public class RecommendRulesTool extends AbstractAiTool {
         }
 
         // 验证执行动作
-        String actionDeviceName = (String) command.get("deviceName");
-        String action = (String) command.get("action");
+        String actionDeviceName = asTrimmedString(command.get("deviceName"));
+        String action = asTrimmedString(command.get("action"));
 
         if (actionDeviceName == null || action == null) {
             return false;
         }
 
-        DeviceInfoHelper.DeviceInfo actionDevice = deviceMap.get(actionDeviceName);
+        DeviceInfoHelper.DeviceInfo actionDevice = resolveDevice(actionDeviceName, deviceMap, legacyNodeMap);
         if (actionDevice == null) {
             log.debug("Action device {} not found in board", actionDeviceName);
             return false;
         }
+        command.put("deviceName", actionDevice.label());
+        command.put("action", action);
 
         // 检查动作是否存在于设备的API中
         boolean actionExists = false;
@@ -543,6 +529,41 @@ public class RecommendRulesTool extends AbstractAiTool {
             return false;
         }
 
+        String contentDevice = asTrimmedString(command.get("contentDevice"));
+        if (contentDevice != null) {
+            DeviceInfoHelper.DeviceInfo resolvedContentDevice = resolveDevice(contentDevice, deviceMap, legacyNodeMap);
+            if (resolvedContentDevice == null) {
+                log.debug("Content device {} not found in board", contentDevice);
+                return false;
+            }
+            command.put("contentDevice", resolvedContentDevice.label());
+        }
+
         return true;
+    }
+
+    private DeviceInfoHelper.DeviceInfo resolveDevice(String deviceRef,
+            Map<String, DeviceInfoHelper.DeviceInfo> labelMap,
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap) {
+        if (deviceRef == null) {
+            return null;
+        }
+        DeviceInfoHelper.DeviceInfo device = labelMap.get(deviceRef);
+        if (device != null) {
+            return device;
+        }
+        return legacyNodeMap.get(deviceRef);
+    }
+
+    private String asTrimmedString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private boolean isAllowedRelation(String relation) {
+        return relation != null && ALLOWED_RELATIONS.contains(relation.toLowerCase(Locale.ROOT));
     }
 }

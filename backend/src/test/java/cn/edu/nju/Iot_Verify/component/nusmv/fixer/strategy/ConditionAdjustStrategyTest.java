@@ -166,6 +166,60 @@ class ConditionAdjustStrategyTest {
     }
 
     @Test
+    void tryFix_removingOnlyConditionEmptiesRule_rejectedAndRetries() throws Exception {
+        // Single-condition rule. NuSMV proposes removing that one condition (lambda=FALSE), which would
+        // leave the rule with zero conditions. NuSMV treats an empty-condition rule as fail-closed so it
+        // "verifies", but RuleDto forbids empty conditions and apply rejects it — so the strategy must
+        // NOT return this candidate; it should exclude the config and retry until attempts run out.
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(
+                        RuleDto.Condition.builder()
+                                .deviceName("sensor_1").attribute("temperature").relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                .thenReturn(createGenResult());
+
+        // lambda_r0_c0 = FALSE → remove the only condition → would empty the rule.
+        SpecCheckResult failing = mock(SpecCheckResult.class);
+        when(failing.isPassed()).thenReturn(false);
+        NusmvResult negatedResult = mock(NusmvResult.class);
+        when(negatedResult.isSuccess()).thenReturn(true);
+        when(negatedResult.getSpecResults()).thenReturn(List.of(failing));
+        when(negatedResult.getOutput()).thenReturn(
+                "  -> State: 1.1 <-\n    lambda_r0_c0 = FALSE\n");
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(negatedResult);
+
+        FixContext context = FixContext.builder()
+                .faultRules(List.of(fault))
+                .allRules(List.of(rule))
+                .devices(List.of())
+                .specs(List.of(spec))
+                .deviceSmvMap(Map.of())
+                .violatedSpecIndex(0)
+                .userId(1L)
+                .isAttack(false)
+                .intensity(0)
+                .enablePrivacy(false)
+                .maxAttempts(2)
+                .build();
+
+        // The empty-rule candidate is rejected (never forward-verified), so no suggestion is returned;
+        // the config is excluded and the loop retries until attempts are exhausted.
+        assertNull(strategy.tryFix(context));
+        verify(nusmvExecutor, times(2)).execute(any(File.class));
+        // Forward verification must never run for the empty-rule candidate.
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean());
+    }
+
+    @Test
     void tryFix_allKept_exhaustsAttemptsAndReturnsNull() throws Exception {
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(

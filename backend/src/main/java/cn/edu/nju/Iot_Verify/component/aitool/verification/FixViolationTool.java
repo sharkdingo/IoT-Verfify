@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
@@ -12,8 +13,6 @@ import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -36,7 +35,7 @@ public class FixViolationTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
 
         props.put("traceId", Map.of(
@@ -69,16 +68,9 @@ public class FixViolationTool extends AbstractAiTool {
                 "object", props, List.of("traceId")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Analyze a violation trace to localize fault rules and suggest fixes. " +
-                                "Supports 'parameter' (adjust numeric thresholds), 'condition' (remove triggering conditions), " +
-                                "and 'disable' (disable entire rules) strategies. Requires a traceId from a previous verification.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Analyze a violation trace to localize fault rules and suggest fixes. " +
+                "Supports 'parameter' (adjust numeric thresholds), 'condition' (remove triggering conditions), " +
+                "and 'disable' (disable entire rules) strategies. Requires a traceId from a previous verification.", schema);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -8,8 +9,6 @@ import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -35,7 +34,7 @@ public class AddNodeTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         String templateDesc = "Device template type name. Use board_overview tool to see available templates. " +
@@ -57,14 +56,7 @@ public class AddNodeTool extends AbstractAiTool {
                 "object", props, List.of("templateName")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Add a new device")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Add a new device", schema);
     }
 
     @Override

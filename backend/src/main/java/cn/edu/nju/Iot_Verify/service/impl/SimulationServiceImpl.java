@@ -382,9 +382,14 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            log.error("Simulation error", e);
-            logs.add("Error: " + e.getMessage());
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                log.info("Simulation interrupted");
+                logs.add("Simulation interrupted");
+            } else {
+                log.error("Simulation error", e);
+                logs.add("Error: " + e.getMessage());
+            }
             finalResult = SimulationResultDto.builder()
                     .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
             return finalResult;

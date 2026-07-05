@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -8,8 +9,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -41,7 +40,7 @@ public class ManageRuleTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("action", Map.of(
@@ -86,14 +85,7 @@ public class ManageRuleTool extends AbstractAiTool {
                 "object", props, List.of("action")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Add or delete an automation rule. Use list_rules first to see existing rules before deleting.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Add or delete an automation rule. Use list_rules first to see existing rules before deleting.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {

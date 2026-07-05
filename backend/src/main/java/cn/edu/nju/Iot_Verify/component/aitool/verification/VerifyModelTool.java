@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -16,8 +17,6 @@ import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -52,7 +51,7 @@ public class VerifyModelTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("isAttack", Map.of(
@@ -72,17 +71,10 @@ public class VerifyModelTool extends AbstractAiTool {
                 "object", props, Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Run NuSMV formal verification on the current board. " +
-                                "Automatically reads all devices, rules, and specifications from the board. " +
-                                "Returns whether the model is safe and details of any property violations. " +
-                                "Requires at least one device and one specification on the board.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Run NuSMV formal verification on the current board. " +
+                "Automatically reads all devices, rules, and specifications from the board. " +
+                "Returns whether the model is safe and details of any property violations. " +
+                "Requires at least one device and one specification on the board.", schema);
     }
 
     @Override
@@ -127,6 +119,8 @@ public class VerifyModelTool extends AbstractAiTool {
 
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("safe", result.isSafe());
+            summary.put("disabledRuleCount", result.getDisabledRuleCount());
+            summary.put("skippedSpecCount", result.getSkippedSpecCount());
             summary.put("specsChecked", specs.size());
             summary.put("specResults", result.getSpecResults());
 

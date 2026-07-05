@@ -6,7 +6,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-03. Source:
+Verified against code on 2026-07-05. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -33,12 +33,13 @@ Verified against code on 2026-07-03. Source:
 | :--- | :--- | :--- | :--- |
 | GET | `/api/board/nodes` | → `DeviceNodeDto[]` | List device instances |
 | POST | `/api/board/nodes` | `DeviceNodeDto[]` → `DeviceNodeDto[]` | Full replace |
-| GET | `/api/board/edges` | → `DeviceEdgeDto[]` | List connections |
-| POST | `/api/board/edges` | `DeviceEdgeDto[]` → `DeviceEdgeDto[]` | Full replace |
+| GET | `/api/board/edges` | → `DeviceEdgeDto[]` | List optional persisted canvas-geometry connections |
+| POST | `/api/board/edges` | `DeviceEdgeDto[]` → `DeviceEdgeDto[]` | Full replace of optional persisted canvas-geometry connections |
 | GET | `/api/board/rules` | → `RuleDto[]` | List rules |
 | POST | `/api/board/rules` | `RuleDto[]` → `RuleDto[]` | **Incremental upsert** (see write-strategy note above) — send existing `id`s back |
 | GET | `/api/board/specs` | → `SpecificationDto[]` | List specs |
 | POST | `/api/board/specs` | `SpecificationDto[]` → `SpecificationDto[]` | Full replace |
+| POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Atomic** save of `nodes` + `rules` + `specs` in one transaction; a `null` collection is left unchanged. Used for device delete/rename so the three collections can't end up half-saved |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
 | POST | `/api/board/layout` | `BoardLayoutDto` → `BoardLayoutDto` | |
 | GET | `/api/board/active` | → `BoardActiveDto` | Active tabs |
@@ -65,11 +66,23 @@ Verified against code on 2026-07-03. Source:
 ### `DeviceEdgeDto`
 
 `{ id, from, to, fromLabel, toLabel, fromPos: {x,y}, toPos: {x,y} }` — all required.
+Backend edges persist only optional canvas geometry and endpoint labels. The current
+Board UI derives visible rule connections from `RuleDto` instead of persisting them in
+`/board/edges`, so AI board summaries and verification should treat rules as the
+authoritative topology. The frontend `DeviceEdge` display type may carry rule-derived
+fields such as `fromApi`, `toApi`, `itemType`, `relation`, or `value`; API mappers must
+strip those fields before sending a `DeviceEdgeDto`.
 
 ### `RuleDto` / `SpecificationDto`
 
 Defined in [verification.md](verification.md) (they are shared with the verification
 request).
+
+Rule sources and targets created by the frontend use device `label` values as their
+stored references; legacy node ids are still resolved when reading old board data. Before
+calling `POST /api/board/rules`, duplicate-check, verification, or simulation, the
+frontend must ensure each rule has at least one trigger source. The backend enforces the
+same rule with `@NotEmpty` on `RuleDto.conditions`.
 
 ### `BoardLayoutDto`
 
@@ -137,7 +150,7 @@ status by `throwIfToolError`.
 | GET | `/api/board/rules/recommend` | `maxRecommendations` (default 5), `category` (default `all`) | AI rule recommendations |
 | GET | `/api/board/specs/recommend` | `maxRecommendations` (default 5), `category` (default `all`) | AI specification recommendations |
 | POST | `/api/board/devices/recommend` | body: `{ devices, templates }` (Map) | AI device recommendations |
-| POST | `/api/board/rules/check-duplicate` | body: `RuleDto` | AI duplicate-rule check; frontend integrated in `RuleBuilderDialog` as an optional manual pre-save check (non-blocking) |
+| POST | `/api/board/rules/check-duplicate` | body: `RuleDto` | AI duplicate-rule check; returns fields such as `isDuplicate`, `duplicateWith`, `similarity`, and `reason` (no `similarRules` payload); frontend integrated in `RuleBuilderDialog` as an optional manual pre-save check (non-blocking) |
 
 > For the `devices/recommend` body, the frontend maps template fields to lowercase
 > camelCase keys (`variables`, `apis`, `workingStates`) — see

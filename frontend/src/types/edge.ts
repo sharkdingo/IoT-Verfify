@@ -6,7 +6,8 @@ export interface DeviceEdge {
     toLabel: string
     fromPos: { x: number; y: number }
     toPos: { x: number; y: number }
-    // 动态添加的字段，用于规则显示
+    // Rule-derived display metadata. These fields are not part of the backend
+    // DeviceEdgeDto; boardApi.saveEdges strips them before sending edge payloads.
     fromApi?: string
     toApi?: string
     itemType?: 'api' | 'variable'

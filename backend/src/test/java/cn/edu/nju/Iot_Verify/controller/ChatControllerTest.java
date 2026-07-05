@@ -36,7 +36,7 @@ class ChatControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ChatController(chatService, executor);
+        controller = new ChatController(chatService, executor, 600000L);
     }
 
     @Test

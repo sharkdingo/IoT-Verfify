@@ -1,8 +1,12 @@
 package cn.edu.nju.Iot_Verify.dto.rule;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -25,6 +29,7 @@ public class RuleDto {
 
     @Valid
     @NotNull(message = "Conditions cannot be null")
+    @NotEmpty(message = "Conditions cannot be empty")
     private List<Condition> conditions;
 
     @Valid
@@ -58,12 +63,26 @@ public class RuleDto {
         /**
          * 关系（=、>、<），API 信号条件时可为 null
          */
+        @Pattern(
+                regexp = "^(=|!=|>|>=|<|<=|(?i:in|not_in|not in))$",
+                message = "Condition relation must be one of =, !=, >, >=, <, <=, in, not_in, not in"
+        )
         private String relation;
 
         /**
          * 值，API 信号条件时可为 null
          */
         private String value;
+
+        @JsonIgnore
+        @AssertTrue(message = "Condition value is required when relation is provided")
+        public boolean isValuePresentWhenRelationProvided() {
+            return !hasText(relation) || hasText(value);
+        }
+
+        private boolean hasText(String input) {
+            return input != null && !input.isBlank();
+        }
     }
 
     /**

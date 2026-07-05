@@ -4,60 +4,62 @@
 # machine-dependent. .gitattributes makes line-ending policy part of the repo, so every
 # checkout is consistent regardless of a contributor's OS or local git settings. This
 # prevents "the whole file changed" CRLF/LF diffs between Windows and Linux/macOS.
+#
+# Note: .gitattributes does not support EditorConfig keys such as `root`, `charset`,
+# or `end_of_line`. Use .editorconfig for editor behavior and this file for Git's
+# normalization behavior.
+
+[attr]utf8lf text eol=lf working-tree-encoding=UTF-8
 
 # ---------------------------------------------------------------------------
-# Default: let git detect text vs binary and normalize text to LF in the repo.
+# Default: let git detect text vs binary and normalize detected text to LF.
 # ---------------------------------------------------------------------------
-* text=auto
+* text=auto eol=lf
 
 # ---------------------------------------------------------------------------
-# Text files — store as LF in the repo AND check out as LF everywhere.
-# Pinning eol=lf (not just `text`) stops Windows checkouts from re-introducing CRLF
-# into files that tooling runs on cross-platform (scripts, YAML, source).
+# Text files — UTF-8 in the working tree, LF in the repo and checkout.
 # ---------------------------------------------------------------------------
 
 # Source
-*.java   text eol=lf
-*.ts     text eol=lf
-*.tsx    text eol=lf
-*.js     text eol=lf
-*.jsx    text eol=lf
-*.vue    text eol=lf
-*.mjs    text eol=lf
-*.cjs    text eol=lf
-*.css    text eol=lf
-*.scss   text eol=lf
-*.html   text eol=lf
+*.java   utf8lf
+*.ts     utf8lf
+*.tsx    utf8lf
+*.js     utf8lf
+*.jsx    utf8lf
+*.vue    utf8lf
+*.mjs    utf8lf
+*.cjs    utf8lf
+*.css    utf8lf
+*.scss   utf8lf
+*.html   utf8lf
 
 # Config & data
-*.json   text eol=lf
-*.yaml   text eol=lf
-*.yml    text eol=lf
-*.xml    text eol=lf
-*.properties text eol=lf
-*.toml   text eol=lf
-*.env    text eol=lf
-.editorconfig text eol=lf
+*.json   utf8lf
+*.yaml   utf8lf
+*.yml    utf8lf
+*.xml    utf8lf
+*.properties utf8lf
+*.toml   utf8lf
+*.env    utf8lf
+.editorconfig utf8lf
+.gitattributes utf8lf
+.gitignore utf8lf
 
 # Docs
-*.md     text eol=lf
-*.txt    text eol=lf
+*.md     utf8lf
+*.txt    utf8lf
 
 # NuSMV model / verification sources are plain text — keep LF so behavior matches the
 # parser (which depends on NuSMV's line-based output) on every platform.
-*.smv    text eol=lf
+*.smv    utf8lf
 
-# Shell / POSIX scripts MUST be LF or they break when run on Linux/macOS.
-*.sh     text eol=lf
-mvnw     text eol=lf
-gradlew  text eol=lf
-
-# ---------------------------------------------------------------------------
-# Windows-only scripts — must stay CRLF to run under cmd.exe.
-# ---------------------------------------------------------------------------
-*.bat    text eol=crlf
-*.cmd    text eol=crlf
-*.ps1    text eol=crlf
+# Scripts
+*.sh     utf8lf
+*.bat    utf8lf
+*.cmd    utf8lf
+*.ps1    utf8lf
+mvnw     utf8lf
+gradlew  utf8lf
 
 # ---------------------------------------------------------------------------
 # Binary files — never normalize, never diff as text (avoids corruption and noise).

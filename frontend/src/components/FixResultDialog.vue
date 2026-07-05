@@ -20,6 +20,8 @@ const fixResult = ref<FixResult | null>(null)
 const faultRules = ref<FaultRule[]>([])
 const selectedStrategy = ref<string>('parameter')
 const applyingFix = ref(false)
+// 记录本次 /fix 用的 preferredRanges，apply 时原样回传，保证后端重算复现同一建议。
+const lastPreferredRanges = ref<Record<string, any> | undefined>(undefined)
 
 const strategyLabels: Record<string, string> = {
   parameter: 'Parameter Adjustment',
@@ -54,6 +56,8 @@ const fetchFixSuggestions = async () => {
   
   loading.value = true
   try {
+    // 此 UI 目前不带 preferredRanges；若将来支持，记录下来供 apply 复用。
+    lastPreferredRanges.value = undefined
     fixResult.value = await boardApi.fixTrace(props.traceId, {
       strategies: [selectedStrategy.value]
     })
@@ -86,17 +90,24 @@ const switchStrategy = async (strategy: string) => {
   await fetchFixSuggestions()
 }
 
-// Apply fix
+// Apply fix：把当前展示的（已验证的）建议原样回传后端落库，成功后通知父组件刷新规则。
 const applyFix = async (suggestion: FixSuggestion) => {
+  if (!props.traceId) return
+  if (!suggestion.verified) {
+    ElMessage.warning('This suggestion was not verified and cannot be applied.')
+    return
+  }
   applyingFix.value = true
   try {
-    console.log('Applying fix:', suggestion)
-    ElMessage.success('Fix applied successfully')
+    const result = await boardApi.applyFix(props.traceId, suggestion.strategy, suggestion, lastPreferredRanges.value)
+    ElMessage.success(result.message || 'Fix applied successfully')
     emit('applied')
     emit('update:visible', false)
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to apply fix:', error)
-    ElMessage.error('Failed to apply fix')
+    // 后端会在 board 规则漂移、索引越界等情况下返回带原因的 400，优先展示它。
+    const msg = error?.response?.data?.message || error?.message || 'Failed to apply fix'
+    ElMessage.error(msg)
   } finally {
     applyingFix.value = false
   }

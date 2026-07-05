@@ -33,6 +33,16 @@ public class VerificationResultDto {
     private List<String> checkLogs;
 
     /**
+     * Number of automation rules disabled during SMV generation.
+     */
+    private int disabledRuleCount;
+
+    /**
+     * Number of specifications skipped or replaced with CTLSPEC FALSE during SMV generation.
+     */
+    private int skippedSpecCount;
+
+    /**
      * 原始 NuSMV 输出
      */
     private String nusmvOutput;

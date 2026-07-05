@@ -37,4 +37,10 @@ public class SpecificationPo {
 
     @Column(name = "then_conditions", columnDefinition = "JSON", nullable = false)
     private String thenConditionsJson;
+
+    @Column(name = "formula", columnDefinition = "TEXT")
+    private String formula;
+
+    @Column(name = "devices_json", columnDefinition = "JSON")
+    private String devicesJson;
 }

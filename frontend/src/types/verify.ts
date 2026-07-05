@@ -15,6 +15,8 @@ export interface VerificationResult {
   specResults: boolean[];
   checkLogs: string[];
   nusmvOutput: string;
+  disabledRuleCount?: number;
+  skippedSpecCount?: number;
 }
 
 export interface Trace {
@@ -24,6 +26,11 @@ export interface Trace {
   violatedSpecId: string;
   violatedSpecJson: string;
   states: TraceState[];
+  // Verification-context flags derived from the trace's stored request snapshot (backend TraceDto).
+  // Null/undefined for legacy traces recorded before the snapshot was saved.
+  isAttack?: boolean;
+  intensity?: number;
+  enablePrivacy?: boolean;
   createdAt: string;
 }
 
@@ -71,15 +78,11 @@ export interface VerificationTask {
   isSafe?: boolean;
   violatedSpecCount?: number;
   checkLogs?: string[];
+  disabledRuleCount?: number;
+  skippedSpecCount?: number;
   nusmvOutput?: string;    // 后端 TaskDto 不返回，但 Board.vue 仍在读取，保留为可选
   errorMessage?: string;
 }
-
-
-
-
-
-
 
 
 

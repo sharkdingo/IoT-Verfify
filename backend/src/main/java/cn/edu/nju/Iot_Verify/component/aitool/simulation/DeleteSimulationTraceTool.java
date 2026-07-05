@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -8,8 +9,6 @@ import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -35,21 +34,14 @@ public class DeleteSimulationTraceTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
                 Map.of("simulationId", Map.of("type", "integer", "description", "Simulation trace ID.")),
                 List.of("simulationId")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Delete a saved simulation trace by simulationId.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Delete a saved simulation trace by simulationId.", schema);
     }
 
     @Override

@@ -4,12 +4,16 @@ When verification finds a violation, the fix system localizes the responsible ru
 tries, in order, three repair strategies — each candidate re-verified against all specs
 before being offered.
 
-API contract (`fault-rules`, `fix`) → [../api/verification.md](../api/verification.md).
+A suggestion is only advisory until the user chooses to **apply** it; applying writes the
+repaired rules back to the board (see [Applying a suggestion](#applying-a-suggestion-fixstrategyapplier)).
+
+API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-03. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-05. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
-DisableFixStrategy, FixStrategyUtils}`, `parameterize/ParameterExtractor`. Config keys
+DisableFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
+`parameterize/ParameterExtractor`; `service/impl/FixServiceImpl` (apply flow). Config keys
 (`FIX_*`) → [../getting-started/configuration.md](../getting-started/configuration.md).
 
 ---
@@ -83,4 +87,63 @@ conditionAdjustments[], disabledRuleIndices[], verified }`.
 The `summary` string carries human-readable notes, including timeout or
 value-drift warnings and (when localization cannot resolve the violated spec) a note
 that the parameter/condition strategies were skipped. Full field tables are in
+[../api/verification.md](../api/verification.md).
+
+---
+
+## Applying a suggestion (`FixStrategyApplier`)
+
+`/fix` only *offers* verified suggestions; nothing is written to the board until the user
+applies one (`POST /api/verify/traces/{id}/fix/apply`, handled by
+`FixServiceImpl.applyFix`). Because a suggestion is computed against the trace's
+verification-time snapshot, apply cannot trust that the board still matches — so it
+**never trusts the client** and re-derives everything server-side before persisting.
+
+**The server recomputes, it does not replay the client's suggestion.** The client sends
+back the exact suggestion it displayed (WYSIWYG) plus the same `preferredRanges` `/fix`
+used. Apply re-runs the requested strategy against the trace's own context and requires
+the submitted suggestion to match that freshly recomputed, NuSMV-verified result (by the
+operations it encodes). The client's `verified` flag is ignored; if the server cannot
+reproduce a verified suggestion, or the submitted one differs, apply rejects with `400`.
+It then applies its *own* recomputed suggestion to a deep copy of the persisted rules, so
+what is saved is exactly what NuSMV just verified.
+
+**Drift guards** (all reject with `400` unless noted) run because the recompute replays
+the trace's *stored* context and would otherwise re-prove the same fix against a stale
+model or write it onto a changed board:
+
+- **Template drift** — apply rebuilds the device model from the **current** templates; if
+  a template used by the trace changed, apply blocks with `400` (`/fix` only warns).
+  Checked before the expensive recompute. Fails **closed**: if the template repo errors
+  so drift cannot be confirmed, the unverifiable check is treated as drift and apply
+  rejects with `400` ("re-run verification") rather than proceeding.
+- **Board-rule drift** — the suggestion's `ruleIndex`/`conditionIndex` are relative to
+  the snapshot; apply aligns snapshot and current rules by index + an **order-preserving**
+  fingerprint and rejects if rules were added/removed/edited/reordered, so a stale index
+  never edits the wrong rule.
+- **Spec/device drift** — a spec- or device-only edit touches neither rules nor
+  templates, so the recompute alone would miss it. Apply compares a canonical
+  **semantic fingerprint** (`BoardSemanticFingerprint`) of the trace snapshot against the
+  current board — not raw-JSON equality: both sides run through the same normalization
+  (device names canonicalized via `DeviceNameNormalizer`, empty variable/privacy lists
+  manifest-defaulted, values de-quoted) so an untouched board matches its
+  frontend-transformed snapshot instead of misfiring. If the current board no longer
+  builds a valid model it fails **closed**, distinguishing a genuinely changed/invalid
+  board (`400`, "re-run verification") from an infrastructure error that leaves drift
+  unconfirmable (`503`, "retry later").
+- **Strategy mismatch** — `strategy` ≠ `suggestion.strategy` is rejected.
+
+The board-rule and spec/device checks run **inside the same per-user write lock +
+transaction** as the save (read → check → apply → write is one atomic critical section),
+so a concurrent save cannot slip in between the check and the write.
+
+**Per-strategy effect** (`FixStrategyApplier.apply`): `parameter` overwrites the target
+condition's value (and relation); `condition` adds/removes conditions; `disable` deletes
+the flagged rules. A `condition` fix that would leave a rule with **no** trigger
+conditions is rejected — and `ConditionAdjustStrategy` already excludes such solutions
+during the search, since an empty-condition rule is fail-closed in NuSMV (never fires) and
+so could otherwise verify yet be un-appliable (`RuleDto.conditions` is `@NotEmpty`).
+
+The response (`FixApplyResultDto`) returns the full persisted rule list after applying.
+Full request/response field tables and the exact `400`-vs-`503` semantics are in
 [../api/verification.md](../api/verification.md).

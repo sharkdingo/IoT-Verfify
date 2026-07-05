@@ -2,7 +2,7 @@
 
 export type SpecSide = 'a' | 'if' | 'then'
 export type SpecTargetType = 'state' | 'variable' | 'api' | 'trust' | 'privacy'
-export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7' | 'safety' | 'liveness' | 'fairness' | 'always' | 'eventually' | 'never' | 'immediate' | 'response' | 'persistence'
+export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7'
 
 export interface SpecCondition {
     id: string

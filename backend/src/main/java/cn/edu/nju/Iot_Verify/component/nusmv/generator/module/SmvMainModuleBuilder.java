@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvBoundsUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
@@ -33,6 +34,19 @@ public class SmvMainModuleBuilder {
                                      int intensity,
                                      boolean enablePrivacy,
                                      ParameterizationConfig config) {
+        return buildParameterized(userId, devices, rules, deviceSmvMap, isAttack, intensity,
+                enablePrivacy, config, null);
+    }
+
+    public String buildParameterized(Long userId,
+                                     List<DeviceVerificationDto> devices,
+                                     List<RuleDto> rules,
+                                     Map<String, DeviceSmvData> deviceSmvMap,
+                                     boolean isAttack,
+                                     int intensity,
+                                     boolean enablePrivacy,
+                                     ParameterizationConfig config,
+                                     SmvGenerationContext context) {
         Map<RuleDto, Integer> ruleIndexMap = new IdentityHashMap<>();
         if (rules != null) {
             for (int i = 0; i < rules.size(); i++) {
@@ -40,7 +54,7 @@ public class SmvMainModuleBuilder {
             }
         }
         ParamCtx ctx = new ParamCtx(config, ruleIndexMap);
-        return buildInternal(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, ctx);
+        return buildInternal(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, ctx, context);
     }
 
     private static boolean hasParameterizationFrozenVars(ParamCtx ctx) {
@@ -81,7 +95,18 @@ public class SmvMainModuleBuilder {
                        boolean isAttack,
                        int intensity,
                        boolean enablePrivacy) {
-        return buildInternal(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, null);
+        return build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, SmvGenerationContext.noop());
+    }
+
+    public String build(Long userId,
+                       List<DeviceVerificationDto> devices,
+                       List<RuleDto> rules,
+                       Map<String, DeviceSmvData> deviceSmvMap,
+                       boolean isAttack,
+                       int intensity,
+                       boolean enablePrivacy,
+                       SmvGenerationContext context) {
+        return buildInternal(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, null, context);
     }
 
     private String buildInternal(Long userId,
@@ -91,7 +116,8 @@ public class SmvMainModuleBuilder {
                                   boolean isAttack,
                                   int intensity,
                                   boolean enablePrivacy,
-                                  ParamCtx paramCtx) {
+                                  ParamCtx paramCtx,
+                                  SmvGenerationContext context) {
 
         // Parameter validation
         if (devices == null) {
@@ -205,18 +231,18 @@ public class SmvMainModuleBuilder {
             content.append(";");
         }
 
-        appendStateTransitions(content, devices, rules, deviceSmvMap, isAttack, paramCtx);
+        appendStateTransitions(content, devices, rules, deviceSmvMap, isAttack, paramCtx, context);
         appendEnvTransitions(content, devices, deviceSmvMap, isAttack, intensity);
         appendApiSignalTransitions(content, devices, deviceSmvMap);
         appendTransitionSignalTransitions(content, devices, deviceSmvMap);
-        appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.TRUST, paramCtx);
+        appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.TRUST, paramCtx, context);
         if (enablePrivacy) {
-            appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.PRIVACY, paramCtx);
+            appendPropertyTransitions(content, devices, rules, deviceSmvMap, isAttack, PropertyDimension.PRIVACY, paramCtx, context);
         }
         appendVariablePropertyTransitions(content, devices, deviceSmvMap, PropertyDimension.TRUST);
         if (enablePrivacy) {
             appendVariablePropertyTransitions(content, devices, deviceSmvMap, PropertyDimension.PRIVACY);
-            appendContentPrivacyTransitions(content, devices, rules, deviceSmvMap, paramCtx);
+            appendContentPrivacyTransitions(content, devices, rules, deviceSmvMap, paramCtx, context);
         }
         appendVariableRateTransitions(content, devices, deviceSmvMap);
         appendExternalVariableAssignments(content, devices, deviceSmvMap);
@@ -277,7 +303,8 @@ public class SmvMainModuleBuilder {
                                        List<RuleDto> rules,
                                        Map<String, DeviceSmvData> deviceSmvMap,
                                        boolean isAttack,
-                                       ParamCtx paramCtx) {
+                                       ParamCtx paramCtx,
+                                       SmvGenerationContext context) {
         Map<String, List<RuleDto>> rulesByTarget = groupRulesByResolvedTarget(rules, deviceSmvMap);
 
         for (DeviceVerificationDto device : devices) {
@@ -318,7 +345,7 @@ public class SmvMainModuleBuilder {
                             String startState = getStateForMode(matchedApi.getStartState(), modeIdx, true);
 
                             content.append("\t\t");
-                            appendRuleConditions(content, rule, deviceSmvMap, true, varName, paramCtx);
+                            appendRuleConditions(content, rule, deviceSmvMap, true, varName, paramCtx, context);
 
                             if (startState != null && !startState.isEmpty()) {
                                 content.append(" & ").append(varName).append(".").append(mode).append("=").append(startState);
@@ -366,9 +393,13 @@ public class SmvMainModuleBuilder {
     }
 
     private void appendRuleConditions(StringBuilder content, RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap,
-                                      boolean useNext, String transitionTargetVarName, ParamCtx paramCtx) {
+                                      boolean useNext, String transitionTargetVarName, ParamCtx paramCtx,
+                                      SmvGenerationContext context) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
-            content.append("TRUE");
+            String reason = "Rule has no trigger conditions and was disabled during SMV generation";
+            log.warn(reason);
+            recordDisabledRule(context, rule, reason);
+            content.append("FALSE");
             return;
         }
 
@@ -381,7 +412,9 @@ public class SmvMainModuleBuilder {
             RuleDto.Condition condition = rule.getConditions().get(condIdx);
             if (condition == null) {
                 // fail-closed: malformed condition entry disables this rule
-                log.warn("Rule contains a null condition entry - rule will never fire");
+                String reason = "Rule contains a null condition entry and was disabled";
+                log.warn("{} - rule will never fire", reason);
+                recordDisabledRule(context, rule, reason);
                 content.append("FALSE");
                 return;
             }
@@ -400,8 +433,10 @@ public class SmvMainModuleBuilder {
                 parts.add(part);
             } else {
                 // fail-closed: unresolved condition disables this rule
-                log.warn("Rule condition on device '{}' attribute '{}' could not be resolved - rule will never fire",
-                        condition.getDeviceName(), condition.getAttribute());
+                String reason = "Rule condition on device '" + condition.getDeviceName()
+                        + "' attribute '" + condition.getAttribute() + "' could not be resolved";
+                log.warn("{} - rule will never fire", reason);
+                recordDisabledRule(context, rule, reason);
                 content.append("FALSE");
                 return;
             }
@@ -409,10 +444,18 @@ public class SmvMainModuleBuilder {
 
         if (parts.isEmpty()) {
             // fail-closed: non-empty input but no resolvable condition
-            log.warn("Rule has non-empty condition list but no resolvable condition - rule will never fire");
+            String reason = "Rule has non-empty condition list but no resolvable condition";
+            log.warn("{} - rule will never fire", reason);
+            recordDisabledRule(context, rule, reason);
             content.append("FALSE");
         } else {
             content.append(String.join(" & ", parts));
+        }
+    }
+
+    private void recordDisabledRule(SmvGenerationContext context, RuleDto rule, String reason) {
+        if (context != null) {
+            context.disabledRule(rule, reason);
         }
     }
 
@@ -1055,7 +1098,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                            Map<String, DeviceSmvData> deviceSmvMap,
                                            boolean isAttack,
                                            PropertyDimension dim,
-                                           ParamCtx paramCtx) {
+                                           ParamCtx paramCtx,
+                                           SmvGenerationContext context) {
 
         Map<String, List<RuleDto>> rulesByTarget = groupRulesByResolvedTarget(rules, deviceSmvMap);
 
@@ -1093,9 +1137,9 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                             String endState = getStateForMode(api.getEndState(), i);
                             if (endState != null && endState.replace(" ", "").equals(cleanState)) {
                                 content.append("\t\t");
-                                appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx);
+                                appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx, context);
                                 content.append(" & (");
-                                appendRulePropertyConditions(content, rule, deviceSmvMap, dim);
+                                appendRulePropertyConditions(content, rule, deviceSmvMap, dim, context);
                                 // Content privacy condition: check if rule references contentDevice.content for content privacy
                                 if (dim == PropertyDimension.PRIVACY) {
                                     String contentCond = buildContentPrivacyCondition(rule, deviceSmvMap);
@@ -1107,7 +1151,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
                                 if (dim == PropertyDimension.TRUST) {
                                     content.append("\t\t");
-                                    appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx);
+                                    appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx, context);
                                     content.append(": untrusted;\n");
                                 }
                             }
@@ -1143,9 +1187,13 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
 
     private void appendRulePropertyConditions(StringBuilder content, RuleDto rule,
                                               Map<String, DeviceSmvData> deviceSmvMap,
-                                              PropertyDimension dim) {
+                                              PropertyDimension dim,
+                                              SmvGenerationContext context) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
-            content.append("TRUE");
+            String reason = "Rule has no trigger conditions and cannot produce " + dim.name() + " property conditions";
+            log.warn(reason);
+            recordDisabledRule(context, rule, reason);
+            content.append("FALSE");
             return;
         }
 
@@ -1166,8 +1214,10 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
         // output FALSE rather than TRUE to avoid silently relaxing the property constraint.
         if (parts.isEmpty()) {
             if (attemptedConditions > 0) {
-                log.warn("Rule has {} condition(s) but none produced a {} property part; using fail-closed FALSE",
-                        attemptedConditions, dim.name());
+                String reason = "Rule has " + attemptedConditions + " condition(s) but none produced a "
+                        + dim.name() + " property part";
+                log.warn("{}; using fail-closed FALSE", reason);
+                recordDisabledRule(context, rule, reason);
                 content.append("FALSE");
             } else {
                 content.append("TRUE");
@@ -1449,7 +1499,8 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                                                   List<DeviceVerificationDto> devices,
                                                   List<RuleDto> rules,
                                                   Map<String, DeviceSmvData> deviceSmvMap,
-                                                  ParamCtx paramCtx) {
+                                                  ParamCtx paramCtx,
+                                                  SmvGenerationContext context) {
         for (DeviceVerificationDto device : devices) {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv == null || smv.getContents() == null) continue;
@@ -1472,7 +1523,7 @@ private String buildRuleStateCondition(RuleDto.Condition condition, DeviceSmvDat
                     content.append("\tcase\n");
                     for (RuleDto rule : matchingRules) {
                         content.append("\t\t");
-                        appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx);
+                        appendRuleConditions(content, rule, deviceSmvMap, false, null, paramCtx, context);
                         content.append(": private;\n");
                     }
                     content.append("\t\tTRUE: ").append(propVar).append(";\n");

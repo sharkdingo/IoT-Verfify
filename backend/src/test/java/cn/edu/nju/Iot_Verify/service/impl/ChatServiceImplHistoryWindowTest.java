@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
+import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
+import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -37,7 +39,7 @@ class ChatServiceImplHistoryWindowTest {
     @Mock
     private ChatMessageRepository messageRepo;
     @Mock
-    private ArkAiClient arkAiClient;
+    private LlmChatService llmChatService;
     @Mock
     private AiToolManager aiToolManager;
     @Mock
@@ -54,7 +56,9 @@ class ChatServiceImplHistoryWindowTest {
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
-                arkAiClient,
+                llmChatService,
+                new LlmMessageCodec(new ObjectMapper()),
+                new ChatIntentRouter(),
                 aiToolManager,
                 new ObjectMapper(),
                 chatMapper,

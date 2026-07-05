@@ -60,6 +60,10 @@ public class VerificationTaskDto {
      */
     private Integer violatedSpecCount;
 
+    private Integer disabledRuleCount;
+
+    private Integer skippedSpecCount;
+
     /**
      * 检查日志
      */

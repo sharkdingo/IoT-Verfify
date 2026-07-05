@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -9,12 +10,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +24,10 @@ import java.util.*;
 public class CheckDuplicateRuleTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final ArkAiClient arkAiClient;
+    private final PromptCompletionService promptCompletionService;
+
+    private static final double TEMPERATURE = 0.3;
+    private static final int MAX_TOKENS = 2000;
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)规则重复性检查助手。你的任务是检查用户新添加的规则是否与现有规则重复。
@@ -64,11 +62,11 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
 """;
 
     public CheckDuplicateRuleTool(BoardStorageService boardStorageService,
-                                  ArkAiClient arkAiClient,
+                                  PromptCompletionService promptCompletionService,
                                   ObjectMapper objectMapper) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
-        this.arkAiClient = arkAiClient;
+        this.promptCompletionService = promptCompletionService;
     }
 
     @Override
@@ -77,7 +75,7 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("newRule", Map.of(
@@ -86,18 +84,13 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
-                "object", props, Collections.emptyList()
+                "object", props, List.of("newRule")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Check if a new rule is duplicate with existing rules on the board. " +
-                                "Analyzes trigger conditions and actions to determine if the rule already exists.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(),
+                "Check if a new rule is duplicate with existing rules on the board. " +
+                        "Analyzes trigger conditions and actions to determine if the rule already exists.",
+                schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {
@@ -142,13 +135,15 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
             }
 
             if (existingRules.isEmpty()) {
-                // 没有现有规则，直接返回不重复
-                return objectMapper.writeValueAsString(Map.of(
-                        "isDuplicate", false,
-                        "duplicateWith", null,
-                        "similarity", 0.0,
-                        "message", "No existing rules to compare. This is the first rule."
-                ));
+                // 没有现有规则，直接返回不重复。
+                // 注意：不能用 Map.of(...)，因为它禁止 null 值，会在 "duplicateWith"=null 时抛 NPE，
+                // 导致库中第一条规则做重复检查时被 catch(Exception) 转成 500 而非 {isDuplicate:false}。
+                Map<String, Object> body = new HashMap<>();
+                body.put("isDuplicate", false);
+                body.put("duplicateWith", null);
+                body.put("similarity", 0.0);
+                body.put("message", "No existing rules to compare. This is the first rule.");
+                return objectMapper.writeValueAsString(body);
             }
 
             // 构建新规则信息
@@ -157,7 +152,7 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
             // 构建现有规则列表
             String existingRulesInfo = buildRulesListJson(existingRules);
 
-            // 调用 Ark AI 进行重复检查
+            // 调用 LLM 进行重复检查
             String aiResponse = checkDuplicateWithAI(newRuleInfo, existingRulesInfo);
 
             log.info("AI Response: {}", aiResponse);
@@ -289,38 +284,14 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
     private String checkDuplicateWithAI(String newRuleInfo, String existingRulesInfo) {
         String userPrompt = buildUserPrompt(newRuleInfo, existingRulesInfo);
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(SYSTEM_PROMPT).build());
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build());
+        log.info("Calling LLM for duplicate rule check...");
+        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(arkAiClient.getModelId())
-                .messages(messages)
-                .temperature(0.3)
-                .maxTokens(2000)
-                .build();
-
-        ChatCompletionResult result;
-        try {
-            log.info("Calling Ark AI for duplicate rule check...");
-            result = arkAiClient.getArkService().createChatCompletion(request);
-        } catch (Exception e) {
-            log.error("Failed to call Ark AI for duplicate check", e);
-            throw ServiceUnavailableException.aiService();
-        }
-
-        if (result.getChoices() == null || result.getChoices().isEmpty()) {
-            log.warn("AI returned empty choices");
+        if (content == null || content.isBlank()) {
+            log.warn("AI returned empty content");
             return "{\"isDuplicate\": false, \"similarity\": 0.0}";
         }
 
-        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-        if (responseMsg == null || responseMsg.getContent() == null) {
-            log.warn("AI returned null message content");
-            return "{\"isDuplicate\": false, \"similarity\": 0.0}";
-        }
-
-        String content = responseMsg.getContent().toString();
         log.info("AI response content length: {}", content.length());
         return content;
     }

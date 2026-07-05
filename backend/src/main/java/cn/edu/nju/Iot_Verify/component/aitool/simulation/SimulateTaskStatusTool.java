@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -8,8 +9,6 @@ import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -34,21 +33,14 @@ public class SimulateTaskStatusTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
                 Map.of("taskId", Map.of("type", "integer", "description", "Simulation task ID returned by simulate_model_async.")),
                 List.of("taskId")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Query async simulation task status and progress by taskId.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Query async simulation task status and progress by taskId.", schema);
     }
 
     @Override

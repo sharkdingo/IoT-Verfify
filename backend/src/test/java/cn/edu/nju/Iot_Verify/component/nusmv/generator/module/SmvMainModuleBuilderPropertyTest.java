@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import org.junit.jupiter.api.BeforeEach;
@@ -313,19 +314,20 @@ class SmvMainModuleBuilderPropertyTest {
                                                           PropertyDimension dim) throws Exception {
             Method m = SmvMainModuleBuilder.class.getDeclaredMethod(
                     "appendRulePropertyConditions",
-                    StringBuilder.class, RuleDto.class, Map.class, PropertyDimension.class);
+                    StringBuilder.class, RuleDto.class, Map.class, PropertyDimension.class,
+                    SmvGenerationContext.class);
             m.setAccessible(true);
             StringBuilder sb = new StringBuilder();
-            m.invoke(builder, sb, rule, deviceSmvMap, dim);
+            m.invoke(builder, sb, rule, deviceSmvMap, dim, SmvGenerationContext.noop());
             return sb.toString();
         }
 
         @Test
-        @DisplayName("no conditions → TRUE")
-        void noConditions_returnsTrue() throws Exception {
+        @DisplayName("no conditions → FALSE (fail-closed)")
+        void noConditions_returnsFalse() throws Exception {
             RuleDto rule = RuleDto.builder().conditions(List.of()).build();
             String result = invokeAppendRulePropertyConditions(rule, Map.of(), PropertyDimension.TRUST);
-            assertEquals("TRUE", result);
+            assertEquals("FALSE", result);
         }
 
         @Test

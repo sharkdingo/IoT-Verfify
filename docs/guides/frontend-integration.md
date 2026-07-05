@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-03. Source: `frontend/src/api/`, `frontend/src/types/`.
+Verified against code on 2026-07-05. Source: `frontend/src/api/`, `frontend/src/types/`.
 
 ---
 
@@ -58,7 +58,7 @@ frontend does **not** unwrap it uniformly:
 
 | Module | Returns | Caller must read |
 | :--- | :--- | :--- |
-| `board.ts`, `simulation.ts`, `rules.ts` (rule recommendation only) | already-unwrapped `T` (via a local `unpack` that returns `response.data.data`) | the value directly |
+| `board.ts`, `simulation.ts`, `rules.ts` (rule recommendation only) | already-unwrapped `T` (via a local `unpack` that returns `response.data.data`); `boardApi.saveRules(...)` is the intentional exception and returns `void` | the value directly, except re-fetch rules after `saveRules` if server-assigned ids are needed |
 | `auth.ts` | the full `Result<T>` (returns `response.data`) | `.data` for the payload, `.code` for status |
 
 So `authApi.login(...)` resolves to `Result<LoginResponse>` — read `result.data.token`,
@@ -99,8 +99,10 @@ if (res.code === 200) {
 `board.ts` default-exports one object that covers board CRUD **and** verification/fix.
 Its methods return already-unwrapped values. Non-exhaustive:
 
-- Board CRUD: `getNodes`/`saveNodes`, `getEdges`/`saveEdges`, `getSpecs`/`saveSpecs`,
-  `getRules`/`saveRules`, `getLayout`/`saveLayout`, `getActive`/`saveActive`.
+- Board CRUD: `getNodes`/`saveNodes`, `getSpecs`/`saveSpecs`, `getRules`/`saveRules`,
+  `getLayout`/`saveLayout`, `getActive`/`saveActive`. `getEdges`/`saveEdges` remain
+  available for optional persisted canvas-geometry edges, but the current Board view
+  derives visible rule connections from `rules`.
 - Templates: `getDeviceTemplates`, `addDeviceTemplate`, `deleteDeviceTemplate`, `reloadDeviceTemplates`.
 - Recommendation: `recommendRelatedDevices`, `recommendSpecifications`.
 - Verification: `verify(req)`, `verifyAsync(req): Promise<number>`, `getTask`,
@@ -110,6 +112,15 @@ Its methods return already-unwrapped values. Non-exhaustive:
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<number>` — it takes only the
 > request and resolves to the **server-generated** `taskId`. The client does not pass
 > a taskId in.
+
+Rules sent through `saveRules`, `checkDuplicateRule`, `verify`, or `simulate` must have
+at least one concrete trigger source. The frontend stores new rule source/target device
+references as device labels (legacy node ids are still resolved for old board data), and
+`board.ts` maps them to backend `RuleDto.conditions` / `command`.
+
+`saveRules` deliberately returns `Promise<void>` even though the backend responds with
+saved `RuleDto[]`; callers that need persisted ids should call `getRules()` after the
+save so the backend shape is mapped back to `RuleForm`.
 
 Async pattern:
 
@@ -126,6 +137,12 @@ const poll = setInterval(async () => {
 }, 2000);
 // cancel: await boardApi.cancelTask(taskId);
 ```
+
+Verification results and completed async verification tasks include `disabledRuleCount`
+and `skippedSpecCount`, and generation warnings appear in `checkLogs` with
+`[rule-disabled]` / `[spec-skipped]` markers. UI code must surface these warnings even
+when `safe === true`, because they mean the generated SMV model omitted or degraded part
+of the requested rules/specs.
 
 Contracts for board storage and board recommendation endpoints live in
 [../api/board.md](../api/board.md). Contracts for verification, traces, and fix live in
@@ -172,7 +189,7 @@ Backend↔frontend field alignment worth noting:
   `value`) and `Specification` (`aConditions`/`ifConditions`/`thenConditions`) match
   the backend `SpecConditionDto` / `SpecificationDto`.
 - `types/verify.ts` holds `VerificationRequest`, `VerificationResult`,
-  `VerificationTask`, and the trace types.
+  `VerificationTask`, generation warning counts, and the trace types.
 - `types/fix.ts` holds fix-related types.
 - **Runtime option lists** (`relationOperators`, `targetTypes`, `specTemplateDetails`)
   live only in `assets/config/specTemplates.ts` — that is the single source components

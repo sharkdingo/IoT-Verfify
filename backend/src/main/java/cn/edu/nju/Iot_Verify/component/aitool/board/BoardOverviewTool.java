@@ -1,8 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.board;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -10,11 +10,10 @@ import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,32 +38,25 @@ public class BoardOverviewTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", Collections.emptyMap(), Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Get an overview of the current board: devices, edges, rules, and specifications summary.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Get an overview of the current board: devices, edges, rules, and specifications summary.", schema);
     }
 
     @Override
     protected String doExecute(Long userId, String argsJson) {
         try {
             List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
-            List<DeviceEdgeDto> edges = safeList(boardStorageService.getEdges(userId));
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
+            List<Map<String, Object>> edgeSummaries = buildRuleDerivedEdgeSummaries(nodes, rules);
 
             Map<String, Object> overview = new LinkedHashMap<>();
             overview.put("deviceCount", nodes.size());
-            overview.put("edgeCount", edges.size());
+            overview.put("edgeCount", edgeSummaries.size());
             overview.put("ruleCount", rules.size());
             overview.put("specCount", specs.size());
 
@@ -80,17 +72,6 @@ public class BoardOverviewTool extends AbstractAiTool {
             }).toList();
             overview.put("devices", deviceSummaries);
 
-            List<Map<String, Object>> edgeSummaries = edges.stream()
-                    .filter(Objects::nonNull)
-                    .map(e -> {
-                        Map<String, Object> es = new LinkedHashMap<>();
-                        es.put("id", e.getId());
-                        es.put("from", e.getFrom());
-                        es.put("to", e.getTo());
-                        es.put("fromLabel", e.getFromLabel());
-                        es.put("toLabel", e.getToLabel());
-                        return es;
-                    }).toList();
             overview.put("edges", edgeSummaries);
 
             List<Map<String, Object>> ruleSummaries = rules.stream()
@@ -146,5 +127,80 @@ public class BoardOverviewTool extends AbstractAiTool {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private List<Map<String, Object>> buildRuleDerivedEdgeSummaries(List<DeviceNodeDto> nodes,
+                                                                    List<RuleDto> rules) {
+        Map<String, BoardNodeRef> nodeRefs = indexNodeRefs(nodes);
+        List<Map<String, Object>> summaries = new ArrayList<>();
+
+        for (int ruleIndex = 0; ruleIndex < rules.size(); ruleIndex++) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (rule == null || rule.getCommand() == null || !hasText(rule.getCommand().getDeviceName())) {
+                continue;
+            }
+
+            RuleDto.Command command = rule.getCommand();
+            BoardNodeRef target = resolveNodeRef(command.getDeviceName(), nodeRefs);
+            List<RuleDto.Condition> conditions = rule.getConditions() == null ? List.of() : rule.getConditions();
+
+            for (int conditionIndex = 0; conditionIndex < conditions.size(); conditionIndex++) {
+                RuleDto.Condition condition = conditions.get(conditionIndex);
+                if (condition == null || !hasText(condition.getDeviceName())) {
+                    continue;
+                }
+
+                BoardNodeRef source = resolveNodeRef(condition.getDeviceName(), nodeRefs);
+                Map<String, Object> summary = new LinkedHashMap<>();
+                summary.put("id", derivedEdgeId(rule, ruleIndex, conditionIndex));
+                summary.put("from", source.id());
+                summary.put("to", target.id());
+                summary.put("fromLabel", source.label());
+                summary.put("toLabel", target.label());
+                summary.put("ruleId", rule.getId());
+                summary.put("conditionIndex", conditionIndex);
+                summary.put("sourceAttribute", safe(condition.getAttribute()));
+                summary.put("relation", condition.getRelation() != null ? condition.getRelation() : "=");
+                summary.put("value", safe(condition.getValue()));
+                summary.put("targetAction", safe(command.getAction()));
+                summaries.add(summary);
+            }
+        }
+
+        return summaries;
+    }
+
+    private Map<String, BoardNodeRef> indexNodeRefs(List<DeviceNodeDto> nodes) {
+        Map<String, BoardNodeRef> refs = new LinkedHashMap<>();
+        for (DeviceNodeDto node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            BoardNodeRef ref = new BoardNodeRef(safe(node.getId()), safe(node.getLabel()));
+            if (hasText(node.getId())) {
+                refs.putIfAbsent(node.getId(), ref);
+            }
+            if (hasText(node.getLabel())) {
+                refs.putIfAbsent(node.getLabel(), ref);
+            }
+        }
+        return refs;
+    }
+
+    private BoardNodeRef resolveNodeRef(String rawRef, Map<String, BoardNodeRef> refs) {
+        String ref = safe(rawRef);
+        return refs.getOrDefault(ref, new BoardNodeRef(ref, ref));
+    }
+
+    private String derivedEdgeId(RuleDto rule, int ruleIndex, int conditionIndex) {
+        String rulePart = rule.getId() != null ? String.valueOf(rule.getId()) : "index_" + ruleIndex;
+        return "rule_" + rulePart + "_condition_" + conditionIndex;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private record BoardNodeRef(String id, String label) {
     }
 }

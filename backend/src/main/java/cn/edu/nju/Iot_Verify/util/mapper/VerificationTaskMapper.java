@@ -30,6 +30,8 @@ public class VerificationTaskMapper {
                 .processingTimeMs(po.getProcessingTimeMs())
                 .isSafe(po.getIsSafe())
                 .violatedSpecCount(po.getViolatedSpecCount())
+                .disabledRuleCount(po.getDisabledRuleCount())
+                .skippedSpecCount(po.getSkippedSpecCount())
                 .checkLogs(po.getCheckLogs() != null ? po.getCheckLogs() : JsonUtils.fromJsonToStringList(po.getCheckLogsJson()))
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())

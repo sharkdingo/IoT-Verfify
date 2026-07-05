@@ -86,7 +86,8 @@ class VerificationServiceImplBuildResultTest {
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
                 NusmvResult.class, List.class, List.class, List.class,
-                Long.class, Long.class, List.class, Map.class, String.class);
+                Long.class, Long.class, List.class, Map.class, String.class,
+                int.class, int.class);
         buildVerificationResult.setAccessible(true);
     }
 
@@ -100,7 +101,7 @@ class VerificationServiceImplBuildResultTest {
                                          List<SpecificationDto> specs,
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
-                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null);
+                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null, 0, 0);
     }
 
     private List<DeviceVerificationDto> singleDevice() {
@@ -436,19 +437,19 @@ class VerificationServiceImplBuildResultTest {
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(taskRepository.completeTaskIfNotCancelled(
                 eq(70L), any(), any(), anyBoolean(), anyInt(),
-                any(), any(), any(), any(), any()))
+                anyInt(), anyInt(), any(), any(), any(), any(), any()))
                 .thenReturn(0);
 
         Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
                 "completeTask", VerificationTaskPo.class, boolean.class, int.class,
-                List.class, String.class);
+                List.class, String.class, int.class, int.class);
         completeTask.setAccessible(true);
-        completeTask.invoke(service, task, true, 0, List.of("done"), "");
+        completeTask.invoke(service, task, true, 0, List.of("done"), "", 1, 2);
 
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(taskRepository).completeTaskIfNotCancelled(
                 eq(70L), any(), any(), anyBoolean(), anyInt(),
-                any(), any(), any(), any(), any());
+                eq(1), eq(2), any(), any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasTaskSaveCalled());
     }

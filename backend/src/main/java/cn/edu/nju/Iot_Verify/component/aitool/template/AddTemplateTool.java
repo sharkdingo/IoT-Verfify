@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -9,8 +10,6 @@ import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -46,7 +45,7 @@ public class AddTemplateTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("name", Map.of(
@@ -69,15 +68,8 @@ public class AddTemplateTool extends AbstractAiTool {
                 "object", props, List.of("name", "manifest")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Add a custom device template. Templates define device behavior including states, transitions, and APIs. " +
-                                "Use list_templates to see existing templates for reference.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Add a custom device template. Templates define device behavior including states, transitions, and APIs. " +
+                "Use list_templates to see existing templates for reference.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {

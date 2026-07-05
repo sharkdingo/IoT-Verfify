@@ -7,7 +7,7 @@ auto-fix.
 Request/response field contract → [../api/verification.md](../api/verification.md).
 SMV generation internals → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-03. Source: `controller/VerificationController.java`,
+Verified against code on 2026-07-04. Source: `controller/VerificationController.java`,
 `service/impl/VerificationServiceImpl.java`, `component/nusmv/`.
 
 ---
@@ -32,7 +32,8 @@ VerificationServiceImpl.doVerify()
         │
         └─ [3] SmvTraceParser.parseCounterexampleStates(...)  → List<TraceStateDto>
         ▼
-VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput }
+VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput,
+disabledRuleCount, skippedSpecCount }
         │
         ├─ all specs pass → safe: true
         └─ a violation    → counterexample trace(s) saved + optional auto-fix

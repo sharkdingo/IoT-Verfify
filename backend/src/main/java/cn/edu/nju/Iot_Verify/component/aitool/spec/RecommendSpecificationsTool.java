@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.DeviceInfoHelper;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -11,12 +12,6 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +27,12 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 
     private final DeviceInfoHelper deviceInfoHelper;
     private final BoardStorageService boardStorageService;
-    private final ArkAiClient arkAiClient;
+    private final PromptCompletionService promptCompletionService;
+
+    private static final double TEMPERATURE = 0.7;
+    private static final int MAX_TOKENS = 4000;
+    private static final Set<String> ALLOWED_TEMPLATE_IDS = Set.of("1", "2", "3", "4", "5", "6", "7");
+    private static final Set<String> ALLOWED_RELATIONS = Set.of("=", "!=", ">", ">=", "<", "<=", "in", "not_in", "not in");
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)规约推荐助手。你的任务是分析用户面板中现有的设备、规则和规约，
@@ -45,8 +45,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 
 ## 设备属性结构说明（非常重要！）
 每个设备的信息结构如下：
-- **nodeId**: 设备节点ID（如 "AC", "ts"）
-- **label**: 设备显示名称
+- **label**: 设备显示名称，也是推荐结果中 deviceId 必须使用的设备引用值
 - **templateName**: 设备模板名称
 - **currentState**: 设备当前状态值
 - **variables**: 设备的内部变量列表，每个变量包含：
@@ -61,14 +60,14 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
    - targetType: "variable", key: "humidity", relation: ">=", value: 70
    - targetType: "variable", key: "contact", relation: "=", value: "open"
 
-2. **引用工作状态**：使用 states 列表中的值作为 key 和 value，如：
+2. **引用工作状态**：使用 targetType: "state"。key 固定使用 "state"，value 使用 states 列表中的状态值，如：
    - 如果要检查空调是否开启，应该用：
-     targetType: "variable", key: "thermostatMode", relation: "!=", value: "off"
-   - 而不是用 "currentState"，因为 currentState 不是有效的属性名
+     targetType: "state", key: "state", relation: "!=", value: "off"
+   - 如果设备模板暴露了更具体的状态变量，也可以用 targetType: "variable" 引用该变量
 
 3. **禁止使用 currentState 作为 key**，因为它不是设备模板中定义的属性名
 
-4. 确保 targetType 和 key 的组合在设备的 variables 或 states 中确实存在
+4. 确保 targetType 和 key/value 的组合在设备的 variables、APIs 或 states 中确实存在
 
 ## 输出要求
 请分析现有设备和规则的功能，推荐可以验证系统正确性的规约，返回符合以下JSON格式的推荐：
@@ -80,34 +79,34 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
       "description": "用自然语言描述这条规约的作用",
       "priority": "high|medium|low",
       "confidence": 0.0-1.0,
-      "templateId": "规约模板ID（可选）",
+      "templateId": "规约模板ID（必填，只能是 1|2|3|4|5|6|7）",
       "templateLabel": "规约模板标签（可选）",
       "aConditions": [
         {
-          "deviceId": "设备节点ID",
-          "deviceLabel": "设备名称",
-          "targetType": "variable|api|trust|privacy",
-          "key": "变量名称（必须是设备variables中定义的变量名）",
+          "deviceId": "设备 label（必须来自设备列表的 label 字段）",
+          "deviceLabel": "设备 label",
+          "targetType": "state|variable|api|trust|privacy",
+          "key": "状态/变量/API名称（state 固定使用 state；variable 必须是设备variables中定义的变量名）",
           "relation": "=|>|<|>=|<=|!=",
           "value": "期望值"
         }
       ],
       "ifConditions": [
         {
-          "deviceId": "设备节点ID",
-          "deviceLabel": "设备名称",
-          "targetType": "variable|api|trust|privacy",
-          "key": "变量名称（必须是设备variables中定义的变量名）",
+          "deviceId": "设备 label（必须来自设备列表的 label 字段）",
+          "deviceLabel": "设备 label",
+          "targetType": "state|variable|api|trust|privacy",
+          "key": "状态/变量/API名称（state 固定使用 state；variable 必须是设备variables中定义的变量名）",
           "relation": "=|>|<|>=|<=|!=",
           "value": "期望值"
         }
       ],
       "thenConditions": [
         {
-          "deviceId": "设备节点ID",
-          "deviceLabel": "设备名称",
-          "targetType": "variable|api|trust|privacy",
-          "key": "变量名称（必须是设备variables中定义的变量名）",
+          "deviceId": "设备 label（必须来自设备列表的 label 字段）",
+          "deviceLabel": "设备 label",
+          "targetType": "state|variable|api|trust|privacy",
+          "key": "状态/变量/API名称（state 固定使用 state；variable 必须是设备variables中定义的变量名）",
           "relation": "=|>|<|>=|<=|!=",
           "value": "期望值"
         }
@@ -117,7 +116,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 }
 ```
 
-注意：不要使用 targetType: "state"，应该使用 "variable"。key 必须是设备 variables 列表中定义的变量名，或者参考设备的 states 列表来理解可用的状态值。
+注意：不要使用 "currentState" 作为 key。工作状态优先使用 targetType: "state" 且 key 固定为 "state"，value 必须来自设备 states 列表；内部变量使用 targetType: "variable"，key 必须来自设备 variables 列表。
 
 ## 规约模板类型
 1. **always (AG)**: 总是满足 - "如果条件A满足，则状态B必须始终保持"
@@ -135,24 +134,25 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 4. **隐私类**: 敏感数据隐私保护验证
 
 ## 重要约束
-- aConditions、ifConditions、thenConditions 中的 targetType、key 必须是该设备 variables 中实际存在的变量名
+- aConditions、ifConditions、thenConditions 中的 targetType、key/value 必须引用该设备实际存在的 states、variables 或 APIs
 - 禁止使用 "currentState" 作为 key，它不是有效的属性名
+- 每条推荐必须包含合法 templateId，且 templateId 必须严格枚举为 "1" 到 "7"
 - 确保每个推荐都有合理的置信度(confidence)
 - 优先推荐置信度高、实用性强的规约
 - 不要推荐与现有规约重复的规约
 - 如果没有找到合适的推荐，返回空的recommendations数组
 - 最多返回5个推荐
-- 推荐中需要包含对设备ID和变量的准确引用
+- 推荐中需要包含对设备 label 和变量的准确引用
 """;
 
     public RecommendSpecificationsTool(DeviceInfoHelper deviceInfoHelper,
                                        BoardStorageService boardStorageService,
-                                       ArkAiClient arkAiClient,
+                                       PromptCompletionService promptCompletionService,
                                        ObjectMapper objectMapper) {
         super(objectMapper);
         this.deviceInfoHelper = deviceInfoHelper;
         this.boardStorageService = boardStorageService;
-        this.arkAiClient = arkAiClient;
+        this.promptCompletionService = promptCompletionService;
     }
 
     @Override
@@ -161,7 +161,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("maxRecommendations", Map.of(
@@ -179,15 +179,10 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                 "object", props, Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Analyze current board devices, rules, and existing specifications to recommend new formal specifications using AI. " +
-                                "This tool uses AI to find suitable specifications that can verify system correctness, safety, and reliability.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(),
+                "Analyze current board devices, rules, and existing specifications to recommend new formal specifications using AI. " +
+                        "This tool uses AI to find suitable specifications that can verify system correctness, safety, and reliability.",
+                schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {
@@ -255,7 +250,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             String existingRulesInfo = buildExistingRulesInfo(existingRules);
             String existingSpecsInfo = buildExistingSpecsInfo(existingSpecs);
 
-            // 调用 Ark AI 生成智能推荐
+            // 调用 LLM 生成智能推荐
             String aiResponse = generateRecommendationsWithAI(
                     devices,
                     existingRulesInfo,
@@ -286,7 +281,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     }
 
     /**
-     * 调用 Ark AI 生成智能推荐
+     * 调用配置的 LLM 生成智能推荐
      */
     private String generateRecommendationsWithAI(
             List<DeviceInfoHelper.DeviceInfo> devices,
@@ -298,38 +293,14 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
         String deviceInfoJson = buildDeviceInfoJson(devices);
         String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, existingSpecsInfo, maxRecommendations, category);
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(SYSTEM_PROMPT).build());
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build());
+        log.info("Calling LLM for specification recommendations...");
+        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(arkAiClient.getModelId())
-                .messages(messages)
-                .temperature(0.7)
-                .maxTokens(4000)
-                .build();
-
-        ChatCompletionResult result;
-        try {
-            log.info("Calling Ark AI for specification recommendations...");
-            result = arkAiClient.getArkService().createChatCompletion(request);
-        } catch (Exception e) {
-            log.error("Failed to call Ark AI for specification recommendations", e);
-            throw ServiceUnavailableException.aiService();
-        }
-
-        if (result.getChoices() == null || result.getChoices().isEmpty()) {
-            log.warn("AI returned empty choices");
+        if (content == null || content.isBlank()) {
+            log.warn("AI returned empty content");
             return "{\"recommendations\": []}";
         }
 
-        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-        if (responseMsg == null || responseMsg.getContent() == null) {
-            log.warn("AI returned null message content");
-            return "{\"recommendations\": []}";
-        }
-
-        String content = responseMsg.getContent().toString();
         log.info("AI response content length: {}", content.length());
         return content;
     }
@@ -379,7 +350,6 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 Map<String, Object> deviceMap = new LinkedHashMap<>();
-                deviceMap.put("nodeId", device.nodeId());
                 deviceMap.put("label", device.label());
                 deviceMap.put("templateName", device.templateName());
                 deviceMap.put("currentState", device.currentState());
@@ -504,10 +474,10 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 
             // 构建设备能力映射，用于验证
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap = new HashMap<>();
-            Map<String, DeviceInfoHelper.DeviceInfo> deviceLabelMap = new HashMap<>();
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap = new HashMap<>();
             for (DeviceInfoHelper.DeviceInfo device : devices) {
-                deviceMap.put(device.nodeId(), device);
-                deviceLabelMap.put(device.label(), device);
+                deviceMap.put(device.label(), device);
+                legacyNodeMap.put(device.nodeId(), device);
             }
 
             // 尝试解析 AI 返回的 JSON
@@ -528,7 +498,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                     Map<String, Object> recommendation = objectMapper.convertValue(rec, Map.class);
 
                     // 验证并过滤推荐
-                    if (isValidRecommendation(recommendation, deviceMap, deviceLabelMap)) {
+                    if (isValidRecommendation(recommendation, deviceMap, legacyNodeMap)) {
                         recommendations.add(recommendation);
                         count++;
                     } else {
@@ -571,7 +541,14 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     @SuppressWarnings("unchecked")
     private boolean isValidRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
-            Map<String, DeviceInfoHelper.DeviceInfo> deviceLabelMap) {
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap) {
+
+        String templateId = asTrimmedString(recommendation.get("templateId"));
+        if (!ALLOWED_TEMPLATE_IDS.contains(templateId)) {
+            log.info("Rejecting recommendation without legal templateId: {}", recommendation.get("description"));
+            return false;
+        }
+        recommendation.put("templateId", templateId);
 
         // 验证所有条件列表中的设备属性
         String[] conditionTypes = {"aConditions", "ifConditions", "thenConditions"};
@@ -583,76 +560,47 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             }
 
             for (Map<String, Object> condition : conditions) {
-                String deviceId = (String) condition.get("deviceId");
-                String deviceLabel = (String) condition.get("deviceLabel");
-                String targetType = (String) condition.get("targetType");
-                String key = (String) condition.get("key");
+                String deviceId = asTrimmedString(condition.get("deviceId"));
+                String deviceLabel = asTrimmedString(condition.get("deviceLabel"));
+                String targetType = asTrimmedString(condition.get("targetType"));
+                String key = asTrimmedString(condition.get("key"));
+                String relation = asTrimmedString(condition.get("relation"));
+                String value = asTrimmedString(condition.get("value"));
 
-                if (deviceId == null && deviceLabel == null || targetType == null || key == null) {
+                if ((deviceId == null && deviceLabel == null) || targetType == null || key == null) {
+                    return false;
+                }
+                if (value == null) {
+                    return false;
+                }
+                if (relation != null && !isAllowedRelation(relation)) {
                     return false;
                 }
 
-                // 优先通过 deviceId（nodeId）查找，再通过 deviceLabel 查找
-                DeviceInfoHelper.DeviceInfo device = deviceId != null ? deviceMap.get(deviceId) : null;
-                if (device == null && deviceLabel != null) {
-                    device = deviceLabelMap.get(deviceLabel);
-                }
+                DeviceInfoHelper.DeviceInfo device = resolveDevice(deviceId, deviceLabel, deviceMap, legacyNodeMap);
                 if (device == null) {
                     log.info("Device {} (label: {}) not found in board. Available devices: {}", deviceId, deviceLabel, deviceMap.keySet());
                     return false;
                 }
+                condition.put("deviceId", device.label());
+                condition.put("deviceLabel", device.label());
 
-                // 特殊处理：如果 key 是 "currentState"，尝试映射到实际的状态变量
                 String actualKey = key;
                 if ("currentState".equalsIgnoreCase(key)) {
-                    // currentState 不是一个有效的属性名，检查是否应该使用 thermostatMode 或类似的状态变量
-                    // 先尝试查找是否有 thermostatMode 等常见状态变量
-                    actualKey = mapCurrentStateToVariable(device);
-                    if (actualKey == null) {
-                        log.info("Attribute currentState (type: {}) not found in device {}. Variables: {}, WorkingStates: {}",
-                                targetType, deviceId, device.variables(), device.workingStates());
-                        return false;
-                    }
-                    log.info("Mapped currentState to actual variable: {} for device {}", actualKey, deviceId);
+                    log.info("Rejecting currentState key for device {}. Use targetType=state with key=state and a valid state value.", deviceId);
+                    return false;
                 }
 
                 // 根据 targetType 验证属性是否存在
                 boolean attrExists = false;
                 String targetTypeLower = targetType.toLowerCase();
-                // 安全地获取 value，支持数字和字符串类型
-                Object valueObj = condition.get("value");
-                String value = valueObj != null ? String.valueOf(valueObj) : null;
+                condition.put("targetType", targetTypeLower);
+                condition.put("key", actualKey);
+                condition.put("relation", relation != null ? relation : "=");
+                condition.put("value", value);
 
                 if ("state".equals(targetTypeLower)) {
-                    // 对于 state 类型，key 应该是 "currentState" 或类似的概念
-                    // value 应该是有效的 workingState 值
-                    // 允许 key 为 "currentState" 或空，只要 value 是有效的 workingState 即可
-                    if ("currentState".equalsIgnoreCase(key) || key == null || key.isEmpty()) {
-                        // 验证 value 是否是有效的 workingState
-                        if (device.workingStates() != null && value != null) {
-                            String valueStr = String.valueOf(value);
-                            for (String state : device.workingStates()) {
-                                if (state.equalsIgnoreCase(valueStr)) {
-                                    attrExists = true;
-                                    break;
-                                }
-                            }
-                        }
-                        // 如果没有 workingStates 但有 variables，也接受（可能是其他类型的设备）
-                        if (!attrExists && device.variables() != null && !device.variables().isEmpty()) {
-                            attrExists = true;
-                        }
-                    } else {
-                        // 如果 key 不是 currentState，也检查 key 是否在 workingStates 中
-                        if (device.workingStates() != null) {
-                            for (String state : device.workingStates()) {
-                                if (state.equalsIgnoreCase(key)) {
-                                    attrExists = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    attrExists = stateValueExists(device, value);
                 } else if ("variable".equals(targetTypeLower)) {
                     // 首先检查 variables
                     if (device.variables() != null && !device.variables().isEmpty()) {
@@ -677,8 +625,14 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                         }
                     }
                 } else if ("api".equals(targetTypeLower)) {
-                    // API 暂时不验证
-                    attrExists = true;
+                    if (device.apis() != null) {
+                        for (DeviceInfoHelper.ApiInfo api : device.apis()) {
+                            if (api.name() != null && api.name().equalsIgnoreCase(actualKey)) {
+                                attrExists = true;
+                                break;
+                            }
+                        }
+                    }
                 } else if ("trust".equals(targetTypeLower) || "privacy".equals(targetTypeLower)) {
                     // trust/privacy 检查变量
                     if (device.variables() != null) {
@@ -703,30 +657,59 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     }
 
     /**
-     * 尝试将 currentState 映射到设备实际的状态变量
-     * 常见的空调状态变量有：thermostatMode, currentMode, mode, state 等
+     * 验证状态条件的 value 是否来自设备工作状态列表。
      */
-    private String mapCurrentStateToVariable(DeviceInfoHelper.DeviceInfo device) {
-        if (device.variables() == null) {
-            return null;
+    private DeviceInfoHelper.DeviceInfo resolveDevice(String deviceId,
+            String deviceLabel,
+            Map<String, DeviceInfoHelper.DeviceInfo> labelMap,
+            Map<String, DeviceInfoHelper.DeviceInfo> legacyNodeMap) {
+        DeviceInfoHelper.DeviceInfo device = deviceId != null ? labelMap.get(deviceId) : null;
+        if (device == null && deviceLabel != null) {
+            device = labelMap.get(deviceLabel);
         }
+        if (device == null && deviceId != null) {
+            device = legacyNodeMap.get(deviceId);
+        }
+        if (device == null && deviceLabel != null) {
+            device = legacyNodeMap.get(deviceLabel);
+        }
+        return device;
+    }
 
-        // 常见的状态变量名列表，按优先级排序
-        String[] commonStateVars = {"thermostatMode", "currentMode", "mode", "state", "currentState", "powerState"};
-
-        for (String varName : commonStateVars) {
-            for (DeviceInfoHelper.VariableInfo var : device.variables()) {
-                if (var.name() != null && var.name().equalsIgnoreCase(varName)) {
-                    return var.name();
+    private boolean stateValueExists(DeviceInfoHelper.DeviceInfo device, String value) {
+        if (device.workingStates() == null || value == null) {
+            return false;
+        }
+        boolean foundCandidate = false;
+        for (String candidate : value.split("[,;]")) {
+            String trimmed = candidate.trim();
+            if (trimmed.isEmpty() || "_".equals(trimmed)) {
+                continue;
+            }
+            foundCandidate = true;
+            boolean exists = false;
+            for (String state : device.workingStates()) {
+                if (state != null && state.equalsIgnoreCase(trimmed)) {
+                    exists = true;
+                    break;
                 }
             }
+            if (!exists) {
+                return false;
+            }
         }
+        return foundCandidate;
+    }
 
-        // 如果没找到常见变量，返回第一个变量
-        if (!device.variables().isEmpty()) {
-            return device.variables().get(0).name();
+    private String asTrimmedString(Object value) {
+        if (value == null) {
+            return null;
         }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
 
-        return null;
+    private boolean isAllowedRelation(String relation) {
+        return relation != null && ALLOWED_RELATIONS.contains(relation.toLowerCase(Locale.ROOT));
     }
 }

@@ -51,6 +51,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
          + "t.progress = 100, t.isSafe = :isSafe, t.violatedSpecCount = :violatedSpecCount, "
+         + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
          + "t.checkLogsJson = :checkLogsJson, t.nusmvOutput = :nusmvOutput, "
          + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs "
          + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
@@ -59,6 +60,8 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                                    @Param("completedAt") LocalDateTime completedAt,
                                    @Param("isSafe") Boolean isSafe,
                                    @Param("violatedSpecCount") Integer violatedSpecCount,
+                                   @Param("disabledRuleCount") Integer disabledRuleCount,
+                                   @Param("skippedSpecCount") Integer skippedSpecCount,
                                    @Param("checkLogsJson") String checkLogsJson,
                                    @Param("nusmvOutput") String nusmvOutput,
                                    @Param("errorMessage") String errorMessage,

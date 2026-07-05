@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Map;
@@ -48,6 +49,19 @@ class GlobalExceptionHandlerSmvTest {
         assertNotNull(body);
         assertEquals(400, body.getCode());
         assertTrue(body.getMessage().contains("id"));
+    }
+
+    @Test
+    void handleHttpMessageNotReadable_shouldReturn400() {
+        HttpMessageNotReadableException ex = new HttpMessageNotReadableException("bad json");
+
+        ResponseEntity<Result<Void>> response = handler.handleHttpMessageNotReadableException(ex);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        Result<Void> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(400, body.getCode());
+        assertEquals("Malformed request body", body.getMessage());
     }
 
     @SuppressWarnings("unused")

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -14,8 +15,6 @@ import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -49,7 +48,7 @@ public class SimulateModelTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("steps", Map.of(
@@ -73,17 +72,10 @@ public class SimulateModelTool extends AbstractAiTool {
                 "object", props, Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Run NuSMV random simulation on the current board. " +
-                                "Automatically reads all devices and rules from the board. " +
-                                "Returns a sequence of states showing how the system evolves over N steps. " +
-                                "Requires at least one device on the board.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Run NuSMV random simulation on the current board. " +
+                "Automatically reads all devices and rules from the board. " +
+                "Returns a sequence of states showing how the system evolves over N steps. " +
+                "Requires at least one device on the board.", schema);
     }
 
     @Override

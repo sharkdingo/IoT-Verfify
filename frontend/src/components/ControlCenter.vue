@@ -750,16 +750,12 @@ const handleCreateDevice = async () => {
     return
   }
 
-  // Emit device creation event with template
+  // Emit device creation event with template.
+  // 成功提示由父组件在保存成功后弹出：emit 不会 await 父组件的异步保存，
+  // 若在此提前报成功，父组件保存失败并回滚时会同时出现「Device added」和保存失败提示。
   emit('create-device', {
     template,
     customName: deviceForm.name
-  })
-
-  ElMessage({
-    message: 'Device added',
-    type: 'success',
-    center: true
   })
 
   // Reset form

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
@@ -14,8 +15,6 @@ import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Component;
@@ -49,7 +48,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("isAttack", Map.of("type", "boolean", "description", "Enable attack mode. Default false."));
         props.put("intensity", Map.of("type", "integer", "description", "Attack intensity (0-50). Default 3."));
@@ -57,14 +56,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Start an async NuSMV verification task. Returns taskId for later polling.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(), "Start an async NuSMV verification task. Returns taskId for later polling.", schema);
     }
 
     @Override

@@ -41,7 +41,16 @@ public interface VerificationService {
      * @return Trace 列表
      */
     List<TraceDto> getUserTraces(Long userId);
-    
+
+    /**
+     * 获取某个验证任务产生的反例 Trace（按 task 维度过滤，避免拿到旧任务/并发任务的反例）。
+     *
+     * @param userId 当前用户
+     * @param taskId 验证任务 id
+     * @return 该任务的 Trace 列表
+     */
+    List<TraceDto> getTracesByTask(Long userId, Long taskId);
+
     /**
      * 获取单个 Trace
      * 

@@ -1,6 +1,6 @@
 # Installation
 
-> Verified against code on 2026-07-03. Source: root `README.md`, `backend/README.md` (§3 Prerequisites & Installation), `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`.
+> Verified against code on 2026-07-05. Source: root `README.md`, `backend/README.md` (§3 Prerequisites & Installation), `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`.
 
 This guide covers a local development setup of the IoT-Verify platform (Vue 3 frontend + Spring Boot backend + NuSMV model checker). For the complete list of environment variables and their defaults, see [configuration.md](./configuration.md) — it is the single source of truth. This page only names the variables you must set.
 
@@ -33,7 +33,7 @@ NuSMV -version   # should report 2.6+ (not nuXmv)
 
 ### AI features
 
-AI-powered assistance (chat, rule/spec/device recommendations) requires a Volcengine Ark API key. Set it via `VOLCENGINE_API_KEY` (see [configuration.md](./configuration.md)).
+AI-powered assistance (chat, rule/spec/device recommendations) requires an API key for an OpenAI-compatible endpoint (the official OpenAI API or a relay). Set it via `OPENAI_API_KEY`, and point `OPENAI_BASE_URL` at your endpoint (see [configuration.md](./configuration.md)).
 
 ## Steps
 
@@ -53,13 +53,15 @@ All backend settings can be overridden by environment variables. At minimum you 
 
 - `DB_PASSWORD` — your MySQL password
 - `JWT_SECRET` — signing key for JWT auth (min 256 bits)
-- `VOLCENGINE_API_KEY` — required for AI features
+- `OPENAI_API_KEY` — required for AI features
+- `OPENAI_BASE_URL` — OpenAI-compatible endpoint (defaults to the official API; set for a relay)
 - `NUSMV_PATH` — absolute path to the NuSMV executable (required for verification)
 
 ```bash
 export DB_PASSWORD="your_mysql_password"
 export JWT_SECRET="your-secret-key-here-min-256-bits"
-export VOLCENGINE_API_KEY="your-api-key"
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
 export NUSMV_PATH="/path/to/NuSMV"
 ```
 

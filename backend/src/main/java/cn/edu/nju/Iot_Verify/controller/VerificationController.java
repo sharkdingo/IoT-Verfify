@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixApplyRequestDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
@@ -87,6 +89,16 @@ public class VerificationController {
     }
 
     /**
+     * 获取某个验证任务产生的反例 Trace（按 task 维度过滤）
+     */
+    @GetMapping("/tasks/{id}/traces")
+    public Result<List<TraceDto>> getTaskTraces(
+            @CurrentUser Long userId,
+            @PathVariable Long id) {
+        return Result.success(verificationService.getTracesByTask(userId, id));
+    }
+
+    /**
      * 获取单个 Trace
      */
     @GetMapping("/traces/{id}")
@@ -141,5 +153,18 @@ public class VerificationController {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
         var preferredRanges = (request != null) ? request.getPreferredRanges() : null;
         return Result.success(fixService.fix(userId, id, strategies, preferredRanges));
+    }
+
+    /**
+     * 应用修复建议：把用户所见的（已验证的）修复建议落库到其规则集。
+     */
+    @PostMapping("/traces/{id}/fix/apply")
+    public Result<FixApplyResultDto> applyFix(
+            @CurrentUser Long userId,
+            @PathVariable Long id,
+            @Valid @RequestBody FixApplyRequestDto request) {
+        FixApplyResultDto result = fixService.applyFix(
+                userId, id, request.getStrategy(), request.getSuggestion(), request.getPreferredRanges());
+        return Result.success(result);
     }
 }

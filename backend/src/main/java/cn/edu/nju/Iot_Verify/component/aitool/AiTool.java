@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 
 /**
  * AI 工具策略接口
@@ -8,15 +8,15 @@ import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
  */
 public interface AiTool {
     /**
-     * 获取工具名称 (例如 "add_node")
+     * 获取工具名称 (例如 "add_device")
      * 作为策略的唯一标识 Key
      */
     String getName();
 
     /**
-     * 获取工具定义 (用于发送给 AI 进行意图识别)
+     * 获取工具定义 (用于发送给 AI 进行意图识别)。返回与厂商无关的 {@link LlmToolSpec}。
      */
-    ChatTool getDefinition();
+    LlmToolSpec getDefinition();
 
     /**
      * 执行工具逻辑

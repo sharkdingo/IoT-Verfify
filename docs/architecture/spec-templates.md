@@ -6,7 +6,7 @@ rules run before SMV generation.
 Request field contract for specs → [../api/verification.md](../api/verification.md).
 Modeling pipeline → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-03. Source:
+Verified against code on 2026-07-04. Source:
 `component/nusmv/generator/module/SmvSpecificationBuilder.java`,
 `component/nusmv/generator/SmvModelValidator.java`.
 
@@ -100,6 +100,13 @@ ambiguity throws `AMBIGUOUS_DEVICE_REFERENCE` (not fail-closed).
 - Privacy specs when `enablePrivacy = false` degrade to
   `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false` (defense-in-depth;
   `validateNoPrivacySpecs` upstream is the primary guard).
+- Specs with an unsupported `templateId` throw `InvalidConditionException` during
+  generation and are recorded as `[spec-skipped]` warnings. Empty A/IF specs are also
+  skipped explicitly. Both paths increment `skippedSpecCount` and surface in verification
+  `checkLogs`; they are never treated as silently satisfied.
+- `SpecificationDto.templateId` is also constrained at the DTO boundary to `"1"` through
+  `"7"`; AI recommendation prompts and validators enforce the same enum before data reaches
+  persistence or SMV generation.
 
 ### Attack budget and vacuity
 
@@ -143,7 +150,8 @@ INVAR intensity <= 3;
 
 - Rule-condition parse failure (missing device, empty/unknown attribute, unsupported
   relation, empty value, empty `IN`/`NOT_IN` list, illegal API-signal relation/value)
-  → the rule guard becomes `FALSE`.
+  → the rule guard becomes `FALSE`, a `[rule-disabled]` warning is emitted, and
+  `disabledRuleCount` increments.
 - Ambiguous templateName reference in a rule/command/spec device → throws
   `AMBIGUOUS_DEVICE_REFERENCE` (does not fail-closed).
 - Transition triggers referencing an environment variable are rewritten to `a_<attr>`
@@ -229,7 +237,7 @@ Runtime prerequisites still required:
 - In production (`spring.profiles.active` includes `prod`/`production`),
   `ProductionSafetyCheck` requires `jwt.secret` to be non-null/non-blank and not an unsafe
   default prefix, `spring.datasource.password` (`DB_PASSWORD`) to be replaced with a
-  non-default value, and `volcengine.ark.api-key` (`VOLCENGINE_API_KEY`) to be
+  non-default value, and `llm.api-key` (`OPENAI_API_KEY`) to be
   non-null/non-blank and not a placeholder; otherwise startup is refused. `PRODUCTION_MODE`
   has been removed; local development with no profile is unrestricted.
 - The current user's templates are initialized and consistent with the `templateName` in

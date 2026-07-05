@@ -1,21 +1,22 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
+import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
+import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
+import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionChoice;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,15 +32,21 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -51,11 +58,12 @@ class ChatServiceImplToolLoopControlTest {
     @Mock
     private ChatMessageRepository messageRepo;
     @Mock
-    private ArkAiClient arkAiClient;
+    private LlmChatService llmChatService;
     @Mock
     private AiToolManager aiToolManager;
     @Mock
     private ChatMapper chatMapper;
+    private LlmMessageCodec messageCodec;
     private TransactionTemplate transactionTemplate;
 
     private ChatServiceImpl service;
@@ -71,10 +79,13 @@ class ChatServiceImplToolLoopControlTest {
             }
         };
 
+        messageCodec = new LlmMessageCodec(new ObjectMapper());
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
-                arkAiClient,
+                llmChatService,
+                messageCodec,
+                new ChatIntentRouter(),
                 aiToolManager,
                 new ObjectMapper(),
                 chatMapper,
@@ -104,13 +115,13 @@ class ChatServiceImplToolLoopControlTest {
     void executeToolLoop_whenDisconnected_shouldSkipIntentCall() throws Exception {
         invokeToolLoop(new AtomicBoolean(true), new LinkedHashSet<>());
 
-        verify(arkAiClient, never()).checkIntent(anyList(), anyList());
+        verify(llmChatService, never()).chatWithTools(anyList(), anyList());
         verify(aiToolManager, never()).execute(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
     void executeToolLoop_whenToolReturnsError_shouldNotCollectRefreshCommand() throws Exception {
-        when(arkAiClient.checkIntent(anyList(), anyList()))
+        when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
@@ -124,7 +135,7 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void executeToolLoop_whenToolSucceeds_shouldCollectRefreshCommand() throws Exception {
-        when(arkAiClient.checkIntent(anyList(), anyList()))
+        when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
@@ -141,7 +152,7 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void executeToolLoop_whenToolReturnsNonJson_shouldNotCollectRefreshCommand() throws Exception {
-        when(arkAiClient.checkIntent(anyList(), anyList()))
+        when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
@@ -155,7 +166,7 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void executeToolLoop_shouldNotEmitInternalProgressChunk() throws Exception {
-        when(arkAiClient.checkIntent(anyList(), anyList()))
+        when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
                 .thenReturn(textResult("done"));
         when(aiToolManager.execute("manage_rule", "{}"))
@@ -172,7 +183,7 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void executeToolLoop_whenFunctionNameMissing_shouldPersistStructuredErrorAndSkipToolExecution() throws Exception {
-        when(arkAiClient.checkIntent(anyList(), anyList()))
+        when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("   ", "{}"))
                 .thenReturn(textResult("done"));
 
@@ -216,6 +227,118 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals(400, json.path("status").asInt());
     }
 
+    @Test
+    void processStreamChat_whenStreamingProviderFails_shouldSendSseErrorFrame() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        doThrow(ServiceUnavailableException.aiService(new RuntimeException("Invalid UTF-8 middle byte 0xe3")))
+                .when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "hello", emitter);
+
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "assistant".equalsIgnoreCase(msg.getRole())));
+    }
+
+    @Test
+    void processStreamChat_whenSessionMissing_shouldSendSseErrorFrame() throws Exception {
+        when(sessionRepo.findByIdAndUserId("missing", 1L)).thenReturn(Optional.empty());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "missing", "hello", emitter);
+
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verifyNoInteractions(aiToolManager);
+    }
+
+    @Test
+    void processStreamChat_whenToolIntentDetected_shouldStreamVisibleFinalAnswerAfterPlanning() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"))
+                .thenReturn(textResult("planning done"));
+        when(aiToolManager.execute("list_rules", "{}")).thenReturn("{\"rules\":[]}");
+        AtomicReference<List<LlmMessage>> streamedMessages = new AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<LlmMessage> messages = invocation.getArgument(0, List.class);
+            streamedMessages.set(messages);
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("stream ");
+            onDelta.accept("final");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verify(llmChatService).streamReply(anyList(), any(), any());
+        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && "stream final".equals(msg.getContent())));
+        String systemPrompt = streamedMessages.get().get(0).content();
+        assertTrue(systemPrompt.contains("Tool executions may already be present"));
+        assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));
+        assertFalse(systemPrompt.contains("Available tools:"));
+        verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenNoToolIntent_shouldSkipToolPlanningAndStreamReply() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        AtomicReference<List<LlmMessage>> streamedMessages = new AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<LlmMessage> messages = invocation.getArgument(0, List.class);
+            streamedMessages.set(messages);
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("ok");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "hello", emitter);
+
+        verify(aiToolManager, never()).getAllToolDefinitions();
+        verify(llmChatService, never()).chatWithTools(anyList(), anyList());
+        verify(llmChatService).streamReply(anyList(), any(), any());
+        String systemPrompt = streamedMessages.get().get(0).content();
+        assertTrue(systemPrompt.contains("No tools are available for this response"));
+        assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));
+        assertFalse(systemPrompt.contains("Available tools:"));
+        verify(emitter).complete();
+    }
+
     private Object invokeToolLoop(AtomicBoolean disconnected, Set<StreamResponseDto.CommandDto> commandSet) throws Exception {
         return invokeToolLoop(disconnected, commandSet, mock(SseEmitter.class));
     }
@@ -226,46 +349,20 @@ class ChatServiceImplToolLoopControlTest {
         return executeToolLoopMethod.invoke(
                 service,
                 "s1",
-                new ArrayList<ChatMessage>(),
-                new ArrayList<ChatTool>(),
+                new ArrayList<LlmMessage>(),
+                new ArrayList<LlmToolSpec>(),
                 commandSet,
                 emitter,
                 disconnected
         );
     }
 
-    private ChatCompletionResult toolCallResult(String functionName, String argsJson) {
-        ChatToolCall call = new ChatToolCall();
-        call.setId("tc_1");
-        call.setType("function");
-        call.setFunction(new ChatFunctionCall(functionName, argsJson));
-
-        ChatMessage message = ChatMessage.builder()
-                .role(ChatMessageRole.ASSISTANT)
-                .content("")
-                .toolCalls(List.of(call))
-                .build();
-
-        ChatCompletionChoice choice = new ChatCompletionChoice();
-        choice.setMessage(message);
-
-        ChatCompletionResult result = new ChatCompletionResult();
-        result.setChoices(List.of(choice));
-        return result;
+    private LlmChatResponse toolCallResult(String functionName, String argsJson) {
+        return LlmChatResponse.ofToolCalls(List.of(new LlmToolCall("tc_1", functionName, argsJson)));
     }
 
-    private ChatCompletionResult textResult(String text) {
-        ChatMessage message = ChatMessage.builder()
-                .role(ChatMessageRole.ASSISTANT)
-                .content(text)
-                .build();
-
-        ChatCompletionChoice choice = new ChatCompletionChoice();
-        choice.setMessage(message);
-
-        ChatCompletionResult result = new ChatCompletionResult();
-        result.setChoices(List.of(choice));
-        return result;
+    private LlmChatResponse textResult(String text) {
+        return LlmChatResponse.ofText(text);
     }
 
 }

@@ -1,6 +1,30 @@
 // src/utils/rule.ts
 import type { DeviceEdge } from '../types/edge'
 import type { DeviceNode } from '../types/node'
+import type { RuleForm, SourceEntry } from '../types/rule'
+
+export const assertRuleHasTrigger = (rule: RuleForm, index = 0): void => {
+    const ruleName = rule.name || rule.id || `Rule ${index + 1}`
+    if (!rule.sources || rule.sources.length === 0) {
+        throw new Error(`${ruleName}: at least one trigger source is required`)
+    }
+
+    rule.sources.forEach((source: SourceEntry, sourceIndex: number) => {
+        const sourceName = `source ${sourceIndex + 1}`
+        if (!source.fromId || !source.fromApi) {
+            throw new Error(`${ruleName}: ${sourceName} must select a device and trigger attribute`)
+        }
+
+        const sourceType = source.itemType || source.targetType
+        if (sourceType === 'variable') {
+            const hasRelation = !!source.relation
+            const hasValue = source.value != null && String(source.value).trim().length > 0
+            if (!hasRelation || !hasValue) {
+                throw new Error(`${ruleName}: ${sourceName} variable trigger requires relation and value`)
+            }
+        }
+    })
+}
 
 /**
  * 节点重命名时：更新所有相关规则（边）上的 fromLabel / toLabel

@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-03.
+Verified against code on 2026-07-05.
 
 ---
 
@@ -33,12 +33,13 @@ Verified against code on 2026-07-03.
 | :--- | :--- | :--- | :--- |
 | GET | `/api/board/nodes` | List device instances | `docs/api/board.md` |
 | POST | `/api/board/nodes` | Save device instances (full replace) | `docs/api/board.md` |
-| GET | `/api/board/edges` | List device connections | `docs/api/board.md` |
-| POST | `/api/board/edges` | Save device connections (full replace) | `docs/api/board.md` |
+| GET | `/api/board/edges` | List optional persisted canvas-geometry connections | `docs/api/board.md` |
+| POST | `/api/board/edges` | Save optional persisted canvas-geometry connections (full replace) | `docs/api/board.md` |
 | GET | `/api/board/specs` | List specifications | `docs/api/board.md` |
 | POST | `/api/board/specs` | Save specifications | `docs/api/board.md` |
 | GET | `/api/board/rules` | List automation rules | `docs/api/board.md` |
 | POST | `/api/board/rules` | Save rules | `docs/api/board.md` |
+| POST | `/api/board/batch` | Atomic save of nodes+rules+specs (one transaction) | `docs/api/board.md` |
 | GET | `/api/board/layout` | Get board layout | `docs/api/board.md` |
 | POST | `/api/board/layout` | Save board layout | `docs/api/board.md` |
 | GET | `/api/board/active` | Get active board state | `docs/api/board.md` |
@@ -66,6 +67,8 @@ Verified against code on 2026-07-03.
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}/fault-rules` | Fault localization | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix` | Fix suggestions | `docs/api/verification.md` |
+| POST | `/api/verify/traces/{id}/fix/apply` | Apply a fix suggestion (server re-verifies) to board rules | `docs/api/verification.md` |
+| GET | `/api/verify/tasks/{id}/traces` | Traces for a specific async verification task | `docs/api/verification.md` |
 
 ## Simulation — `SimulationController`
 

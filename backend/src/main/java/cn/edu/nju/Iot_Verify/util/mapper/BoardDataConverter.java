@@ -30,9 +30,15 @@ public class BoardDataConverter {
         return nodes.stream()
                 .filter(n -> n != null && !isVariableNode(n))
                 .map(n -> {
-                    String varName = trimToNull(n.getId());
+                    // Label-first: rules and spec conditions store the device's LABEL as their reference
+                    // (the frontend resolves refs to the current label before verify/simulate). A device's
+                    // node.id stays fixed across renames while its label changes, so using id here would
+                    // make the device's varName diverge from how rules/specs name it — NuSMV name
+                    // resolution would then miss or mismatch the device. Fall back to id only when a node
+                    // has no label. (For never-renamed devices id == label, so this changes nothing.)
+                    String varName = trimToNull(n.getLabel());
                     if (varName == null) {
-                        varName = trimToNull(n.getLabel());
+                        varName = trimToNull(n.getId());
                     }
                     if (varName == null) {
                         return null;

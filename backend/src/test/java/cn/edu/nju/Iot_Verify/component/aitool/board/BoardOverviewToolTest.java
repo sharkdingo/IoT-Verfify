@@ -1,7 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.board;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
@@ -18,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,26 +52,33 @@ class BoardOverviewToolTest {
     }
 
     @Test
-    void execute_shouldIncludeEdgeSummary() throws Exception {
+    void execute_shouldDeriveEdgeSummaryFromRules() throws Exception {
         UserContextHolder.setUserId(1L);
 
-        DeviceNodeDto node = new DeviceNodeDto();
-        node.setId("n1");
-        node.setLabel("Light");
-        node.setTemplateName("LightTemplate");
-        node.setState("off");
+        DeviceNodeDto light = new DeviceNodeDto();
+        light.setId("n1");
+        light.setLabel("Light");
+        light.setTemplateName("LightTemplate");
+        light.setState("off");
 
-        DeviceEdgeDto edge = new DeviceEdgeDto();
-        edge.setId("e1");
-        edge.setFrom("n1");
-        edge.setTo("n2");
-        edge.setFromLabel("Light");
-        edge.setToLabel("Sensor");
+        DeviceNodeDto sensor = new DeviceNodeDto();
+        sensor.setId("n2");
+        sensor.setLabel("Sensor");
+        sensor.setTemplateName("SensorTemplate");
+        sensor.setState("idle");
 
         RuleDto rule = RuleDto.builder()
                 .id(1L)
-                .conditions(List.of())
-                .command(null)
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("Light")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("Sensor")
+                        .action("turnOn")
+                        .build())
                 .build();
 
         SpecificationDto spec = new SpecificationDto();
@@ -81,18 +89,22 @@ class BoardOverviewToolTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.getEdges(1L)).thenReturn(List.of(edge));
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(light, sensor));
         when(boardStorageService.getRules(1L)).thenReturn(List.of(rule));
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
 
         String result = tool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
 
-        assertEquals(1, json.path("deviceCount").asInt());
+        assertEquals(2, json.path("deviceCount").asInt());
         assertEquals(1, json.path("edgeCount").asInt());
-        assertEquals("e1", json.path("edges").get(0).path("id").asText());
+        assertEquals("rule_1_condition_0", json.path("edges").get(0).path("id").asText());
         assertEquals("n1", json.path("edges").get(0).path("from").asText());
         assertEquals("n2", json.path("edges").get(0).path("to").asText());
+        assertEquals("Light", json.path("edges").get(0).path("fromLabel").asText());
+        assertEquals("Sensor", json.path("edges").get(0).path("toLabel").asText());
+        assertEquals("state", json.path("edges").get(0).path("sourceAttribute").asText());
+        assertEquals("turnOn", json.path("edges").get(0).path("targetAction").asText());
+        verify(boardStorageService, never()).getEdges(1L);
     }
 }

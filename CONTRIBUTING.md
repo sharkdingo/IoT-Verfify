@@ -85,11 +85,11 @@ under a version heading.
 
 ## Repository hygiene
 
-- **Line endings** are governed by `.gitattributes`, not by each developer's local git
-  config. Source/scripts/docs are stored and checked out as LF; `.bat`/`.cmd`/`.ps1`
-  stay CRLF; images, fonts, archives, and office docs (`.pdf`/`.docx`) are `binary`. Do
-  not hand-edit line endings or add per-file `eol` overrides — extend `.gitattributes`
-  instead, so the policy stays repo-wide.
+- **Encoding and line endings** are governed by `.editorconfig` and `.gitattributes`,
+  not by each developer's local editor or git config. Tracked text files must be
+  UTF-8 without BOM and LF; images, fonts, archives, and office docs
+  (`.pdf`/`.docx`) are `binary`. Do not hand-edit line endings, add BOMs, or add
+  per-file `eol` overrides — extend the repo-wide policy instead.
 - **Ignored vs tracked**: real env files (`.env`) and generated output (`node_modules/`,
   `target/`, `dist/`, `nusmv_*/` verification artifacts, `.codex-review/`,
   `.claude/settings.local.json`) are gitignored. Committed counterparts: `*.env.example`

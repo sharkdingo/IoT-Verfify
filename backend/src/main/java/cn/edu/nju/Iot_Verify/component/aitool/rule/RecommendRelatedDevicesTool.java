@@ -1,18 +1,13 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
-import cn.edu.nju.Iot_Verify.client.ArkAiClient;
+import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -26,7 +21,10 @@ import java.util.*;
 @Component
 public class RecommendRelatedDevicesTool extends AbstractAiTool {
 
-    private final ArkAiClient arkAiClient;
+    private final PromptCompletionService promptCompletionService;
+
+    private static final double TEMPERATURE = 0.7;
+    private static final int MAX_TOKENS = 4000;
 
     private static final String SYSTEM_PROMPT = """
 你是智能物联网(IoT)设备推荐助手。你的任务是分析用户画布中现有的设备，
@@ -61,9 +59,9 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
 - 最多返回5个推荐
 """;
 
-    public RecommendRelatedDevicesTool(ArkAiClient arkAiClient, ObjectMapper objectMapper) {
+    public RecommendRelatedDevicesTool(PromptCompletionService promptCompletionService, ObjectMapper objectMapper) {
         super(objectMapper);
-        this.arkAiClient = arkAiClient;
+        this.promptCompletionService = promptCompletionService;
     }
 
     @Override
@@ -72,7 +70,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
         props.put("devices", Map.of(
@@ -86,18 +84,13 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
-                "object", props, Collections.emptyList()
+                "object", props, List.of("devices", "templates")
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Analyze current board devices and recommend new devices from available templates. " +
-                                "This tool uses AI to find suitable devices that can enhance the IoT system.")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(),
+                "Analyze current board devices and recommend new devices from available templates. " +
+                        "This tool uses AI to find suitable devices that can enhance the IoT system.",
+                schema);
     }
 
     /**
@@ -236,36 +229,13 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
     private String generateBoardRecommendationsWithAI(String currentDevicesInfo, String availableTemplatesInfo) {
         String userPrompt = "## 现有设备\n" + currentDevicesInfo + "\n\n## 可用模板\n" + availableTemplatesInfo + "\n\n请直接返回JSON格式的推荐结果，不要包含其他文字。";
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(SYSTEM_PROMPT).build());
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build());
+        log.info("Calling LLM for board device recommendations...");
+        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(arkAiClient.getModelId())
-                .messages(messages)
-                .temperature(0.7)
-                .maxTokens(4000)
-                .build();
-
-        ChatCompletionResult result;
-        try {
-            log.info("Calling Ark AI for board device recommendations...");
-            result = arkAiClient.getArkService().createChatCompletion(request);
-        } catch (Exception e) {
-            log.error("Failed to call Ark AI for board recommendations", e);
-            throw ServiceUnavailableException.aiService();
-        }
-
-        if (result.getChoices() == null || result.getChoices().isEmpty()) {
+        if (content == null || content.isBlank()) {
             return "{\"recommendations\": []}";
         }
-
-        ChatMessage responseMsg = result.getChoices().get(0).getMessage();
-        if (responseMsg == null || responseMsg.getContent() == null) {
-            return "{\"recommendations\": []}";
-        }
-
-        return responseMsg.getContent().toString();
+        return content;
     }
 
     private String parseBoardRecommendationsResponse(String aiResponse, JsonNode availableTemplatesNode, JsonNode currentDevicesNode) {

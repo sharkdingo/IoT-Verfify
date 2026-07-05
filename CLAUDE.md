@@ -16,7 +16,7 @@ paste reference material here that already lives in `docs/`.
 A formal-verification platform for smart-home IoT systems. Users build a device
 topology on a visual canvas, define automation rules and safety specifications, and the
 NuSMV model checker verifies them — with counterexample analysis and automatic fix
-suggestions. Includes an AI assistant (Volcengine Ark, SSE streaming).
+suggestions. Includes an AI assistant (any OpenAI-compatible LLM endpoint, SSE streaming).
 
 ## Monorepo map
 
@@ -60,6 +60,10 @@ docs, one is wrong: delete the copy and link to the owner.
 - **Language**: all documentation is written in **English** (README, `docs/`,
   CHANGELOG, CONTRIBUTING, both sub-CLAUDE.md). Code identifiers follow each file's
   existing style. Chat replies to the user may be in the user's language.
+- **Encoding**: all tracked text files are **UTF-8 without BOM** and use LF line
+  endings. Keep `.editorconfig` and `.gitattributes` aligned; when writing repo files
+  from PowerShell, prefer PowerShell 7 (`pwsh`) and avoid Windows PowerShell 5.1
+  `-Encoding utf8`, which can add a BOM.
 - **Frontend↔backend contract**: field names are camelCase on both sides
   (e.g. `userId`, not `user_id`). All REST responses use the `Result<T>` envelope
   except SSE. Keep TypeScript types in `frontend/src/types/` aligned with the backend
@@ -89,7 +93,7 @@ Full git/PR conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Safety / gotchas that bite across the stack
 
 - **`ProductionSafetyCheck`** refuses to start the backend under a `prod`/`production`
-  profile if `JWT_SECRET` / `DB_PASSWORD` / `VOLCENGINE_API_KEY` hold unsafe defaults.
+  profile if `JWT_SECRET` / `DB_PASSWORD` / `OPENAI_API_KEY` hold unsafe defaults.
 - **Redis is fail-open**: logout token-revocation degrades silently if Redis is down —
   never make request flow hard-depend on it.
 - **NuSMV 2.6–2.7 only** (not nuXmv); the trace parser depends on its English output

@@ -3,7 +3,7 @@
 System topology, the front/back boundary, and the backend package layout. Deep dives
 link out to the focused architecture documents.
 
-Verified against code on 2026-07-03. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
+Verified against code on 2026-07-05. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
 `frontend/src/`.
 
 ---
@@ -18,7 +18,7 @@ Verified against code on 2026-07-03. Source: `backend/src/main/java/cn/edu/nju/I
                                            │
                                   ┌────────┴────────┐
                                   │ MySQL   Redis   │  (Redis fail-open)
-                                  │ Volcengine Ark  │  (AI, SSE streaming)
+                                  │  LLM endpoint   │  (OpenAI-compatible; AI, SSE streaming)
                                   └─────────────────┘
 ```
 
@@ -28,8 +28,9 @@ Verified against code on 2026-07-03. Source: `backend/src/main/java/cn/edu/nju/I
 - **Backend**: Spring Boot REST API. Owns auth, canvas persistence, NuSMV
   orchestration, auto-fix, and the AI assistant.
 - **NuSMV**: external model checker invoked as a subprocess (semaphore-bounded).
-- **Stores**: MySQL (persistence), Redis (JWT blacklist, fail-open), Volcengine Ark
-  (LLM for the AI assistant and recommendations).
+- **Stores**: MySQL (persistence), Redis (JWT blacklist, fail-open), and an
+  OpenAI-compatible LLM endpoint (AI assistant and recommendations), reached through the
+  `LlmProvider` abstraction in `component/ai/`.
 
 ---
 
@@ -47,7 +48,8 @@ component/
     parser/          SmvTraceParser — counterexample parsing
     fixer/           FaultLocalizer + parameter/condition/disable fix strategies
   aitool/            the 30 AI tools (board/node/rule/spec/template/simulation/verification)
-client/              ArkAiClient — AI client wrapper
+  ai/                LLM abstraction: domain model + LlmProvider (OpenAiLlmProvider adapter)
+                     + LlmChatService / PromptCompletionService / LlmMessageCodec facades
 dto/                 request/response DTOs
 po/                  JPA entities
 repository/          Spring Data repositories

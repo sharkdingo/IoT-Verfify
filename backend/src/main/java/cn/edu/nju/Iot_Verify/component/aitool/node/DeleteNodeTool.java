@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -10,8 +11,6 @@ import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -42,23 +41,28 @@ public class DeleteNodeTool extends AbstractAiTool {
     }
 
     @Override
-    public ChatTool getDefinition() {
+    public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
-        props.put("label", Map.of("type", "string", "description", "Device name (label)."));
-        props.put("id", Map.of("type", "string", "description", "Device node ID (optional alternative to label)."));
+        props.put("identifier", Map.of(
+                "type", "string",
+                "description", "Preferred device identifier. Use either the device label or node id."
+        ));
+        props.put("label", Map.of(
+                "type", "string",
+                "description", "Device label. Backward-compatible alternative to identifier."
+        ));
+        props.put("id", Map.of(
+                "type", "string",
+                "description", "Device node id. Backward-compatible alternative to identifier."
+        ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", props, Collections.emptyList()
         );
 
-        return new ChatTool(
-                "function",
-                new ChatFunction.Builder()
-                        .name(getName())
-                        .description("Delete a device node")
-                        .parameters(schema)
-                        .build()
-        );
+        return LlmToolSpec.of(getName(),
+                "Delete a device node. Provide one of: identifier, label, or id.",
+                schema);
     }
 
     @Override
@@ -70,11 +74,14 @@ public class DeleteNodeTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
+            String identifier = trimToNull(args.path("identifier").asText(null));
             String label = trimToNull(args.path("label").asText(null));
             String id = trimToNull(args.path("id").asText(null));
-            String identifier = label != null ? label : id;
             if (identifier == null) {
-                return errorJson("Missing device identifier. Provide 'label' or 'id'.",
+                identifier = label != null ? label : id;
+            }
+            if (identifier == null) {
+                return errorJson("Missing device identifier. Provide 'identifier', 'label', or 'id'.",
                         "VALIDATION_ERROR", 400);
             }
 

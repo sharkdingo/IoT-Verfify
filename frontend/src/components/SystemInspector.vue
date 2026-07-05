@@ -4,6 +4,7 @@ import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
 import type { Specification } from '../types/spec'
 import type { DeviceEdge } from '../types/edge'
+import { specTemplateDetails } from '../assets/config/specTemplates'
 
 // Props
 interface Props {
@@ -183,23 +184,11 @@ const generateFormulaFromConditions = (spec: any): string => {
 // Convert real specifications to display format
 const displaySpecs = computed(() => {
   return props.specifications.map(spec => {
-    let specType = 'Unknown'
-
-    // Handle both string and number templateId
-    switch (spec.templateId) {
-      case 'safety':
-      case '1':
-        specType = 'Safety'
-        break
-      case 'liveness':
-      case '2':
-        specType = 'Liveness'
-        break
-      case 'fairness':
-      case '3':
-        specType = 'Fairness'
-        break
-    }
+    // 优先用后端持久化的 templateLabel（@NotBlank，恒非空）；回退到模板配置；最后 Unknown。
+    // 覆盖全部 1-7，避免旧 switch 只处理 1-3 时把 4-7 显示成 "Unknown Property"。
+    const specType = spec.templateLabel
+      || specTemplateDetails.find(t => t.id === spec.templateId)?.label
+      || 'Unknown'
 
     const deviceInfo = spec.deviceId ? ` (${spec.deviceLabel || spec.deviceId})` : ' (Global)'
 

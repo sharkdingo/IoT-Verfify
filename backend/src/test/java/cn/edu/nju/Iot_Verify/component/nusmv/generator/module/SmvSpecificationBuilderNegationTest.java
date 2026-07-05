@@ -51,6 +51,24 @@ class SmvSpecificationBuilderNegationTest {
         return Map.of("sensor_1", smv);
     }
 
+    @Test
+    void generateSpecString_resolvesDeviceLabelWhenDeviceIdIsPersistentNodeId() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("LivingRoomAC");
+        smv.setModuleName("AcModule");
+        smv.setModes(List.of("AcState"));
+        smv.setModeStates(Map.of("AcState", List.of("on", "off")));
+
+        SpecConditionDto cond = buildCondition("ac_1", "state", null, "=", "on");
+        cond.setDeviceLabel("LivingRoomAC");
+        SpecificationDto spec = buildSpec("1", List.of(cond), null, null);
+
+        String generated = builder.generateSpecString(
+                spec, false, 0, Map.of("LivingRoomAC", smv));
+
+        assertTrue(generated.contains("LivingRoomAC.AcState=on"));
+    }
+
     // ===== Template 1: always AG(A) → EF(!A) =====
 
     @Test

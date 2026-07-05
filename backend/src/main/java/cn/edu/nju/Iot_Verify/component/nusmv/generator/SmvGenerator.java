@@ -43,7 +43,23 @@ public class SmvGenerator {
     private final SmvModelValidator modelValidator;
 
     /** generate() 的返回值，包含 SMV 文件和构建过程中使用的 deviceSmvMap */
-    public record GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {}
+    public record GenerateResult(File smvFile,
+                                 Map<String, DeviceSmvData> deviceSmvMap,
+                                 List<String> generationWarnings,
+                                 int disabledRuleCount,
+                                 int skippedSpecCount) {
+        public GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {
+            this(smvFile, deviceSmvMap, List.of(), 0, 0);
+        }
+
+        private static GenerateResult from(File smvFile,
+                                           Map<String, DeviceSmvData> deviceSmvMap,
+                                           SmvGenerationContext context) {
+            SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
+            return new GenerateResult(smvFile, deviceSmvMap, snapshot.checkLogWarnings(),
+                    snapshot.disabledRuleCount(), snapshot.skippedSpecCount());
+        }
+    }
 
     public enum GeneratePurpose {
         VERIFICATION,
@@ -74,7 +90,9 @@ public class SmvGenerator {
                 userId, devices.size(), safeRules.size(), safeSpecs.size(), isAttack, intensity, enablePrivacy);
 
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
-        String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, safeSpecs, isAttack, intensity, enablePrivacy);
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String smvContent = buildSmvContent(deviceSmvMap, userId, devices, safeRules, safeSpecs,
+                isAttack, intensity, enablePrivacy, context);
 
         Path tempDir = Files.createTempDirectory(resolveTempDirPrefix(purpose));
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -85,7 +103,7 @@ public class SmvGenerator {
         }
 
         log.info("Generated NuSMV model file: {}", smvFile.getAbsolutePath());
-        return new GenerateResult(smvFile, deviceSmvMap);
+        return GenerateResult.from(smvFile, deviceSmvMap, context);
     }
 
     /**
@@ -112,8 +130,9 @@ public class SmvGenerator {
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
 
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
+        SmvGenerationContext context = SmvGenerationContext.collecting();
         String smvContent = buildParameterizedSmvContent(deviceSmvMap, userId, devices, safeRules, safeSpecs,
-                isAttack, intensity, enablePrivacy, config);
+                isAttack, intensity, enablePrivacy, config, context);
 
         Path tempDir = Files.createTempDirectory("nusmv_fix_");
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -124,7 +143,7 @@ public class SmvGenerator {
         }
 
         log.info("Generated parameterized NuSMV model: {}", smvFile.getAbsolutePath());
-        return new GenerateResult(smvFile, deviceSmvMap);
+        return GenerateResult.from(smvFile, deviceSmvMap, context);
     }
 
     // ==================== 内部方法 ====================
@@ -136,9 +155,10 @@ public class SmvGenerator {
                                    List<SpecificationDto> specs,
                                    boolean isAttack,
                                    int intensity,
-                                   boolean enablePrivacy) {
+                                   boolean enablePrivacy,
+                                   SmvGenerationContext context) {
         return buildSmvContentInternal(deviceSmvMap, userId, devices, rules, specs,
-                isAttack, intensity, enablePrivacy, null);
+                isAttack, intensity, enablePrivacy, null, context);
     }
 
     private String buildParameterizedSmvContent(Map<String, DeviceSmvData> deviceSmvMap,
@@ -149,9 +169,10 @@ public class SmvGenerator {
                                                 boolean isAttack,
                                                 int intensity,
                                                 boolean enablePrivacy,
-                                                ParameterizationConfig config) {
+                                                ParameterizationConfig config,
+                                                SmvGenerationContext context) {
         return buildSmvContentInternal(deviceSmvMap, userId, devices, rules, specs,
-                isAttack, intensity, enablePrivacy, config);
+                isAttack, intensity, enablePrivacy, config, context);
     }
 
     private String buildSmvContentInternal(Map<String, DeviceSmvData> deviceSmvMap,
@@ -162,7 +183,8 @@ public class SmvGenerator {
                                            boolean isAttack,
                                            int intensity,
                                            boolean enablePrivacy,
-                                           ParameterizationConfig config) {
+                                           ParameterizationConfig config,
+                                           SmvGenerationContext context) {
 
         log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, intensity={}, privacy={}",
             devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, intensity, enablePrivacy);
@@ -188,15 +210,15 @@ public class SmvGenerator {
         }
 
         content.append(config != null
-                ? mainModuleBuilder.buildParameterized(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, config)
-                : mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy));
+                ? mainModuleBuilder.buildParameterized(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, config, context)
+                : mainModuleBuilder.build(userId, devices, rules, deviceSmvMap, isAttack, intensity, enablePrivacy, context));
 
         if (config != null) {
             // Only emit the negated spec (¬ρ)
             content.append(specBuilder.buildNegated(specs, config.getNegatedSpecIndex(),
                     isAttack, intensity, deviceSmvMap, enablePrivacy));
         } else {
-            content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy));
+            content.append(specBuilder.build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy, context));
         }
 
         return content.toString();

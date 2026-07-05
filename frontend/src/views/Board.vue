@@ -7,6 +7,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
+import { authApi } from '@/api/auth'
 import LogoutConfirmDialog from '@/components/LogoutConfirmDialog.vue'
 import { ElMessage } from 'element-plus'
 // Icons
@@ -27,8 +28,9 @@ import {
   isSpecRelatedToNode,
   removeSpecsForNode
 } from '../utils/spec'
-import { getLinkPoints } from '../utils/rule'
+import { assertRuleHasTrigger, getLinkPoints } from '../utils/rule'
 import { cacheManifestForNode, getCachedManifestForNode, hydrateManifestCacheForNodes } from '@/utils/templateCache'
+import { canOpenTracePlayback, deriveTraceContext } from '@/utils/traceView'
 
 // Config
 import { defaultSpecTemplates } from '../assets/config/specTemplates'
@@ -61,10 +63,17 @@ const handleLogout = () => {
   showLogoutDialog.value = true
 }
 
-const handleLogoutConfirm = () => {
-  logout()
-  showLogoutDialog.value = false
-  router.push('/login')
+const handleLogoutConfirm = async () => {
+  // 调用后端 logout 把 JWT 加入黑名单；失败也要清本地登录态（与 Header.vue 保持一致）。
+  try {
+    await authApi.logout()
+  } catch {
+    // API 失败不影响本地登出
+  } finally {
+    logout()
+    showLogoutDialog.value = false
+    router.push('/login')
+  }
 }
 
 const handleLogoutCancel = () => {
@@ -118,6 +127,63 @@ const allEdges = computed(() => {
 })
 const specifications = ref<Specification[]>([])
 
+const resolveNodeRef = (refValue?: string | null): DeviceNode | undefined => {
+  if (!refValue) return undefined
+  return nodes.value.find(n => n.label === refValue || n.id === refValue)
+}
+
+const resolveNodeLabel = (refValue?: string | null): string => {
+  return resolveNodeRef(refValue)?.label || refValue || ''
+}
+
+const isNodeReference = (refValue: string | undefined, node: DeviceNode): boolean => {
+  return !!refValue && (refValue === node.id || refValue === node.label)
+}
+
+const assertRulesHaveTriggers = (candidateRules: RuleForm[]): boolean => {
+  try {
+    candidateRules.forEach((rule, index) => assertRuleHasTrigger(rule, index))
+    return true
+  } catch (error: any) {
+    ElMessage.warning({ message: error.message || 'Rule trigger source is required', type: 'warning' })
+    return false
+  }
+}
+
+const countLogMarker = (logs: string[] | undefined, marker: string): number => {
+  return (logs || []).filter(log => String(log).includes(marker)).length
+}
+
+const getGenerationWarningCounts = (result: any) => {
+  const logs = result?.checkLogs || []
+  const disabledRuleCount = Number(result?.disabledRuleCount ?? countLogMarker(logs, '[rule-disabled]') ?? 0)
+  const skippedSpecCount = Number(result?.skippedSpecCount ?? countLogMarker(logs, '[spec-skipped]') ?? 0)
+  return {
+    disabledRuleCount,
+    skippedSpecCount,
+    total: disabledRuleCount + skippedSpecCount
+  }
+}
+
+const notifyVerificationOutcome = (result: any) => {
+  const counts = getGenerationWarningCounts(result)
+  if (counts.total > 0) {
+    const outcome = result?.safe
+      ? 'Verification passed'
+      : `Verification failed: Found ${result?.traces?.length || 0} violations`
+    ElMessage.warning({
+      message: `${outcome}; ${counts.total} generation warning(s): ${counts.disabledRuleCount} disabled rule(s), ${counts.skippedSpecCount} skipped spec(s)`,
+      type: 'warning'
+    })
+    return
+  }
+
+  if (result?.safe) {
+    ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
+  } else {
+    ElMessage.warning({ message: `Verification failed: Found ${result?.traces?.length || 0} violations`, type: 'warning' })
+  }
+}
 
 const draggingTplName = ref<string | null>(null)
 
@@ -248,6 +314,9 @@ const onCanvasPointerUp = async (e: PointerEvent) => {
 
 
 const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: number }) => {
+  // 快照，保存失败时回滚本次新增的全部节点/连线，避免本地与后端分叉。
+  const idsBefore = new Set(nodes.value.map(n => n.id))
+  const edgeIdsBefore = new Set(internalVariableEdges.value.map(edge => edge.id))
   const uniqueLabel = getUniqueLabel(tpl.manifest.Name, nodes.value)
   const node: DeviceNode = {
     id: uniqueLabel,
@@ -301,7 +370,14 @@ const createDeviceInstanceAt = async (tpl: DeviceTemplate, pos: { x: number; y: 
     })
   }
 
-  await saveNodesToServer()
+  try {
+    await saveNodesToServer()
+  } catch (e) {
+    // 回滚本次新增的节点与内部变量连线（saveNodesToServer 已弹出失败提示），再向上抛出让调用方感知。
+    nodes.value = nodes.value.filter(n => idsBefore.has(n.id))
+    internalVariableEdges.value = internalVariableEdges.value.filter(edge => edgeIdsBefore.has(edge.id))
+    throw e
+  }
 }
 
 /**
@@ -369,7 +445,10 @@ const onCanvasDrop = async (e: DragEvent) => {
   const x = (Sx - canvasPan.value.x) / canvasZoom.value
   const y = (Sy - canvasPan.value.y) / canvasZoom.value
 
-  await createDeviceInstanceAt(tpl, { x, y })
+  // createDeviceInstanceAt 失败会回滚并抛错，这里吞掉（失败提示已弹出），确保 draggingTplName 被清理。
+  try {
+    await createDeviceInstanceAt(tpl, { x, y })
+  } catch { /* 已回滚并提示 */ }
   draggingTplName.value = null
 }
 
@@ -404,17 +483,21 @@ const handleAISuggestionAddDevice = async (event: Event) => {
   const x = (centerX - canvasPan.value.x) / canvasZoom.value
   const y = (centerY - canvasPan.value.y) / canvasZoom.value
 
-  // 创建设备实例
-  await createDeviceInstanceAt(tpl, { x, y })
-  
-  console.log(`AI Suggestion: Added device ${tpl.manifest.Name} at (${x}, ${y})`)
+  // 创建设备实例（失败会回滚并抛错，失败提示已弹出）
+  try {
+    await createDeviceInstanceAt(tpl, { x, y })
+    console.log(`AI Suggestion: Added device ${tpl.manifest.Name} at (${x}, ${y})`)
+  } catch { /* 已回滚并提示 */ }
 }
 
 const handleNodeMovedOrResized = async () => {
   // 更新内部变量连线的位置
   updateInternalVariableEdgePositions()
 
-  await saveNodesToServer()
+  // 保存失败提示已由 saveNodesToServer 弹出；位置类更新失败不做回滚（重开会重新拉取），只吞掉未处理拒绝。
+  try {
+    await saveNodesToServer()
+  } catch { /* 已提示 */ }
   // edges 由 rules 动态生成，不需要单独保存
 }
 
@@ -439,8 +522,11 @@ const handleAddRule = async (payload: RuleForm) => {
     ElMessage.warning(t('app.fillAllRuleFields') || '请完整选择源/目标设备及 API')
     return
   }
+  if (!assertRulesHaveTriggers([payload])) {
+    return
+  }
 
-  const toNode = nodes.value.find(n => n.id === toId)
+  const toNode = resolveNodeRef(toId)
   if (!toNode) return
 
   // 为新规则生成 ID
@@ -495,6 +581,9 @@ const applyRecommendation = async (rec: RuleRecommendation) => {
     // 验证必要字段
     if (!newRule.sources.length || !newRule.toId || !newRule.toApi) {
       ElMessage.warning('Invalid recommendation format')
+      return
+    }
+    if (!assertRulesHaveTriggers([newRule])) {
       return
     }
 
@@ -552,7 +641,9 @@ const onDeviceListClick = (deviceId: string) => {
   dialogMeta.description = manifest?.Description || tpl?.manifest?.Description || ''
   dialogMeta.manifest = manifest
   dialogMeta.rules = edges.value.filter(e => e.from === node.id || e.to === node.id)
-  dialogMeta.specs = specifications.value.filter(spec => isSpecRelatedToNode(spec, node.id))
+  dialogMeta.specs = specifications.value.filter(spec =>
+    isSpecRelatedToNode(spec, node.id) || isSpecRelatedToNode(spec, node.label)
+  )
   dialogVisible.value = true
 }
 
@@ -601,6 +692,44 @@ const deleteDevice = () => {
   closeContextMenu()
 }
 
+// 设备重命名时，把引用旧 label 的规约条件/关联设备同步为新 label。
+// 返回是否有改动（用于决定是否需要保存 specs）。
+const renameSpecDeviceRefs = (oldLabel: string, newLabel: string): boolean => {
+  if (!oldLabel || oldLabel === newLabel) return false
+  let changed = false
+  const renameCond = (cond: any) => {
+    if (cond.deviceId === oldLabel) { cond.deviceId = newLabel; changed = true }
+    if (cond.deviceLabel === oldLabel) { cond.deviceLabel = newLabel; changed = true }
+  }
+  for (const spec of specifications.value) {
+    ;(spec.aConditions || []).forEach(renameCond)
+    ;(spec.ifConditions || []).forEach(renameCond)
+    ;(spec.thenConditions || []).forEach(renameCond)
+    if (spec.deviceId === oldLabel) { spec.deviceId = newLabel; changed = true }
+    if (spec.deviceLabel === oldLabel) { spec.deviceLabel = newLabel; changed = true }
+    ;(spec.devices || []).forEach(d => {
+      if (d.deviceId === oldLabel) { d.deviceId = newLabel; changed = true }
+      if (d.deviceLabel === oldLabel) { d.deviceLabel = newLabel; changed = true }
+    })
+  }
+  return changed
+}
+
+// 设备重命名时，把引用旧 label 的规则触发源(sources.fromId)与命令目标(toId)同步为新 label。
+// RuleBuilderDialog 里这两个字段绑定的就是 node.label（见 fromId/toId 的 <option :value="node.label">），
+// 所以重命名后不同步会让规则指向已不存在的旧 label，后续 verify/fix 找不到当前设备。
+const renameRuleDeviceRefs = (oldLabel: string, newLabel: string): boolean => {
+  if (!oldLabel || oldLabel === newLabel) return false
+  let changed = false
+  for (const rule of rules.value) {
+    ;(rule.sources || []).forEach((s: any) => {
+      if (s.fromId === oldLabel) { s.fromId = newLabel; changed = true }
+    })
+    if (rule.toId === oldLabel) { rule.toId = newLabel; changed = true }
+  }
+  return changed
+}
+
 const handleRenameDevice = async (nodeId: string, newLabel: string) => {
   const exists = nodes.value.some(n => n.label === newLabel && n.id !== nodeId)
   if (exists) {
@@ -610,9 +739,33 @@ const handleRenameDevice = async (nodeId: string, newLabel: string) => {
 
   const node = nodes.value.find(n => n.id === nodeId)
   if (node) {
+    // 快照旧值，保存失败时回滚，避免本地已改名但后端未改的分叉，也避免误报成功。
+    const previousLabel = node.label
+    // 同步更新引用该设备的规约条件与规则引用（都存的是旧 label）。
+    const specsSnapshot = JSON.parse(JSON.stringify(specifications.value))
+    const rulesSnapshot = JSON.parse(JSON.stringify(rules.value))
+    const specsChanged = renameSpecDeviceRefs(previousLabel, newLabel)
+    const rulesChanged = renameRuleDeviceRefs(previousLabel, newLabel)
+
     node.label = newLabel
-    await saveNodesToServer()
-    ElMessage.success(t('app.renameSuccess') || '重命名成功')
+    try {
+      // 原子保存节点+规则+规约（后端单事务）：避免「node 已改名但 rule/spec 引用未更新」的部分持久化。
+      const nodesToSave = JSON.parse(JSON.stringify(nodes.value))
+      const specsToSave = specsChanged ? JSON.parse(JSON.stringify(specifications.value)) : undefined
+      const rulesToSave = rulesChanged ? JSON.parse(JSON.stringify(rules.value)) : undefined
+      await boardApi.saveBoardBatch({ nodes: nodesToSave, rules: rulesToSave, specs: specsToSave })
+      ElMessage.success(t('app.renameSuccess') || '重命名成功')
+    } catch {
+      // 单事务保证未落库，回滚本地 node label / rules / specs 即完全一致。
+      node.label = previousLabel
+      if (specsChanged) {
+        specifications.value = specsSnapshot
+      }
+      if (rulesChanged) {
+        rules.value = rulesSnapshot
+      }
+      ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
+    }
   }
 }
 
@@ -625,6 +778,15 @@ const viewDeviceDetails = () => {
 
 
 const forceDeleteNode = async (nodeId: string) => {
+  // 删除会同时改动 nodes/rules/edges/内部变量连线/specs，且下面用 Promise.all 分三次保存，
+  // 可能部分成功导致后端三者不一致。先做整体快照，保存失败时回滚到删除前状态。
+  const nodesSnapshot = JSON.parse(JSON.stringify(nodes.value))
+  const rulesSnapshot = JSON.parse(JSON.stringify(rules.value))
+  const specsSnapshot = JSON.parse(JSON.stringify(specifications.value))
+  const edgesSnapshot = JSON.parse(JSON.stringify(edges.value))
+  const internalEdgesSnapshot = JSON.parse(JSON.stringify(internalVariableEdges.value))
+
+  const deletedNode = nodes.value.find(n => n.id === nodeId)
   // 先找出要删除的内部变量节点ID（在删除主节点之前）
   const variableNodeIds = nodes.value
     .filter(n => n.id.startsWith(`${nodeId}_`) && n.templateName?.startsWith('variable_'))
@@ -635,7 +797,9 @@ const forceDeleteNode = async (nodeId: string) => {
 
   // 删除与该设备相关的规则
   const rulesToDelete = rules.value.filter(rule =>
-    rule.toId === nodeId || rule.sources.some(source => source.fromId === nodeId)
+    (deletedNode && isNodeReference(rule.toId, deletedNode))
+    || rule.toId === nodeId
+    || rule.sources.some(source => (deletedNode && isNodeReference(source.fromId, deletedNode)) || source.fromId === nodeId)
   )
   const ruleIdsToDelete = rulesToDelete.map(rule => rule.id)
   rules.value = rules.value.filter(rule => !ruleIdsToDelete.includes(rule.id))
@@ -649,29 +813,35 @@ const forceDeleteNode = async (nodeId: string) => {
   )
 
   const { nextSpecs, removed } = removeSpecsForNode(specifications.value, nodeId)
-  specifications.value = nextSpecs
+  const labelRemoval = deletedNode?.label && deletedNode.label !== nodeId
+    ? removeSpecsForNode(nextSpecs, deletedNode.label)
+    : { nextSpecs, removed: [] as Specification[] }
+  specifications.value = labelRemoval.nextSpecs
+  const removedSpecs = [...removed, ...labelRemoval.removed]
 
-  // 尝试保存到服务器，但不让保存失败影响UI更新
+  // 原子保存 nodes+rules+specs（后端单事务）。要么三者全部落库，要么全部不落库，
+  // 不再有「节点删了但规则没删」的半删状态。失败时回滚到删除前快照即为精确恢复。
   try {
-    // 将 Proxy 对象转换为普通对象后再发送
+    const nodesToSave = JSON.parse(JSON.stringify(nodes.value))
     const rulesToSave = JSON.parse(JSON.stringify(rules.value))
-    await Promise.all([
-      saveNodesToServer(),
-      boardApi.saveRules(rulesToSave),
-      saveSpecsToServer()
-    ])
+    const specsToSave = JSON.parse(JSON.stringify(specifications.value))
+    await boardApi.saveBoardBatch({ nodes: nodesToSave, rules: rulesToSave, specs: specsToSave })
 
     if (ruleIdsToDelete.length > 0) {
       ElMessage.info(`已同时删除 ${ruleIdsToDelete.length} 个与该设备相关的规则`)
     }
-
-    if (removed.length > 0) {
+    if (removedSpecs.length > 0) {
       ElMessage.info('已同时删除与该设备相关的规约')
     }
   } catch (error) {
-    console.error('保存删除操作失败:', error)
-    // 即使保存失败，UI状态已经更新，用户可以看到设备已被删除
-    ElMessage.warning('设备已从界面删除，但保存到服务器时出现问题')
+    console.error('删除设备保存失败，回滚本地状态', error)
+    // 后端单事务保证未落库，回滚到删除前快照即完全一致，无需再拉后端。
+    nodes.value = nodesSnapshot
+    rules.value = rulesSnapshot
+    specifications.value = specsSnapshot
+    edges.value = edgesSnapshot
+    internalVariableEdges.value = internalEdgesSnapshot
+    ElMessage.error('删除设备保存失败，已恢复到删除前状态')
   }
 }
 
@@ -680,7 +850,9 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
   if (!node) return
 
   const hasEdges = edges.value.some(e => e.from === nodeId || e.to === nodeId)
-  const hasSpecs = specifications.value.some(spec => isSpecRelatedToNode(spec, nodeId))
+  const hasSpecs = specifications.value.some(spec =>
+    isSpecRelatedToNode(spec, nodeId) || isSpecRelatedToNode(spec, node.label)
+  )
 
   const doDelete = async () => {
     await forceDeleteNode(nodeId)
@@ -697,7 +869,9 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
   deleteConfirmDialogData.hasRelations = true
   deleteConfirmDialogData.relationCount = {
     rules: edges.value.filter(e => e.from === nodeId || e.to === nodeId).length,
-    specs: specifications.value.filter(spec => isSpecRelatedToNode(spec, nodeId)).length
+    specs: specifications.value.filter(spec =>
+      isSpecRelatedToNode(spec, nodeId) || isSpecRelatedToNode(spec, node.label)
+    ).length
   }
   deleteConfirmDialogVisible.value = true
 }
@@ -799,8 +973,13 @@ const deleteSpecification = async (specId: string) => {
 // Panel layout saving removed
 
 const saveNodesToServer = async () => {
-  try { await boardApi.saveNodes(nodes.value) }
-  catch (e) { ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败') }
+  try {
+    await boardApi.saveNodes(nodes.value)
+  } catch (e) {
+    ElMessage.error(t('app.saveNodesFailed') || '保存设备节点失败')
+    // 必须 rethrow：否则调用方以为保存成功（会误报成功/无法回滚），本地状态与后端分叉。
+    throw e
+  }
 }
 
 // 从 rules 动态生成 edges（不单独存储到服务器）
@@ -810,22 +989,22 @@ const generateEdgesFromRules = (): DeviceEdge[] => {
   for (const rule of rules.value) {
     if (!rule.sources || !rule.toId) continue
     
-    const toNode = nodes.value.find(n => n.id === rule.toId)
+    const toNode = resolveNodeRef(rule.toId)
     if (!toNode) continue
     
     for (const source of rule.sources) {
       const fromId = source.fromId
       if (!fromId) continue
       
-      const fromNode = nodes.value.find(n => n.id === fromId)
+      const fromNode = resolveNodeRef(fromId)
       if (!fromNode) continue
       
       const { fromPoint, toPoint } = getLinkPoints(fromNode, toNode)
       
       result.push({
         id: `edge_${rule.id}_${fromId}`,
-        from: fromId,
-        to: rule.toId,
+        from: fromNode.id,
+        to: toNode.id,
         fromLabel: fromNode.label,
         toLabel: toNode.label,
         fromPos: fromPoint,
@@ -857,6 +1036,8 @@ const saveSpecsToServer = async () => {
       console.error('[Board] Server error status:', e.response.status)
     }
     ElMessage.error(t('app.saveSpecsFailed') || '保存规约失败')
+    // 必须 rethrow：deleteSpecification 等调用方依赖抛错触发回滚（refreshSpecifications）。
+    throw e
   }
 }
 
@@ -864,18 +1045,21 @@ const ruleBuilderVisible = ref(false)
 
 const refreshDeviceTemplates = async () => {
   try {
-    // 先重新加载模板（从后端资源文件）
-    await boardApi.reloadDeviceTemplates()
-    // 然后获取模板列表
+    // 普通刷新只 GET 模板列表。默认模板在注册时已由后端 initDefaultTemplates 播种，
+    // 不能在这里调用 reloadDeviceTemplates()：它会删除该用户全部模板（含自定义模板）再重建默认，
+    // 会导致「创建/导入自定义模板后跳回 Board 立刻被删」「删除模板后刷新又重建默认」。
     const res = await boardApi.getDeviceTemplates()
     deviceTemplates.value = res || []
-    console.log('Loaded device templates from backend:', deviceTemplates.value)
-    const humidifierTpl = deviceTemplates.value.find(t => t.manifest?.Name === 'Humidifier')
-    console.log('Humidifier template:', humidifierTpl)
   } catch (e) {
     console.error('加载设备模板失败:', e)
     deviceTemplates.value = []
   }
+}
+
+// 显式「重置为默认模板」：会删除用户全部自定义模板并重建默认模板，仅在用户主动确认时调用。
+const resetDeviceTemplatesToDefault = async () => {
+  await boardApi.reloadDeviceTemplates()
+  await refreshDeviceTemplates()
 }
 
 
@@ -1109,6 +1293,10 @@ const canvasMapLines = computed(() => canvasMapData.value.lines.filter(line => l
 const handleCreateDevice = async (data: { template: DeviceTemplate, customName: string }) => {
   const { template, customName } = data
 
+  // 快照，保存失败时回滚本次新增节点/连线，避免本地与后端分叉。
+  const idsBefore = new Set(nodes.value.map(n => n.id))
+  const edgeIdsBefore = new Set(internalVariableEdges.value.map(edge => edge.id))
+
   // Create device with custom name
   const uniqueLabel = getUniqueLabel(customName, nodes.value)
   const node: DeviceNode = {
@@ -1162,7 +1350,15 @@ const handleCreateDevice = async (data: { template: DeviceTemplate, customName: 
     })
   }
 
-  await saveNodesToServer()
+  try {
+    await saveNodesToServer()
+    // 成功提示放在保存成功后（ControlCenter 的 emit 不会 await 本函数，不能在子组件里提前报成功）。
+    ElMessage.success(t('app.deviceAdded') || 'Device added')
+  } catch {
+    // 回滚本次新增的节点与内部变量连线（saveNodesToServer 已弹出失败提示）。
+    nodes.value = nodes.value.filter(n => idsBefore.has(n.id))
+    internalVariableEdges.value = internalVariableEdges.value.filter(edge => edgeIdsBefore.has(edge.id))
+  }
 }
 
 const openRuleBuilder = () => {
@@ -1199,7 +1395,12 @@ const handleAddSpec = async (data: {
 
   console.log('[Board] Creating new spec:', newSpec)
   specifications.value.push(newSpec)
-  await saveSpecsToServer()
+  try {
+    await saveSpecsToServer()
+  } catch {
+    // 回滚本次新增的规约（saveSpecsToServer 已弹出失败提示），避免本地已加但后端未保存。
+    specifications.value = specifications.value.filter(s => s.id !== newSpec.id)
+  }
 }
 
 const handleDeleteTemplate = async () => {
@@ -1291,6 +1492,7 @@ defineExpose({
   refreshRules,
   refreshSpecifications,
   refreshDeviceTemplates,
+  resetDeviceTemplatesToDefault,
 })
 
 // ==== Verification Logic ====
@@ -1492,16 +1694,27 @@ const closeSpecRecommendationPanel = () => {
 
 // 应用规约推荐 - 将推荐的规约添加到画布
 const applySpecRecommendation = async (recommendation: any) => {
+  // 后端 SpecificationDto.templateId 受 @Pattern("^[1-7]$") 约束；非法值会让整批
+  // saveSpecs 返回 400（全量替换，会牵连已有规约）。此处显式校验并跳过，避免发送注定失败的请求。
+  const templateId = recommendation.templateId
+  if (!/^[1-7]$/.test(String(templateId ?? ''))) {
+    ElMessage.warning({
+      message: `Skipped recommendation with invalid template id "${templateId ?? ''}"; expected 1-7`,
+      type: 'warning'
+    })
+    return
+  }
+
   // 构建规约数据
   const newSpec = {
     id: 'spec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-    templateId: recommendation.templateId || 'custom',
+    templateId,
     templateLabel: recommendation.templateLabel || 'Custom Specification',
     aConditions: recommendation.aConditions || [],
     ifConditions: recommendation.ifConditions || [],
     thenConditions: recommendation.thenConditions || []
   }
-  
+
   // 获取现有规约
   const currentSpecs = [...specifications.value]
   currentSpecs.push(newSpec)
@@ -1542,17 +1755,23 @@ const applyDeviceRecommendation = async (recommendation: any) => {
   const x = (centerX - canvasPan.value.x) / canvasZoom.value
   const y = (centerY - canvasPan.value.y) / canvasZoom.value
   
-  // 创建设备实例
-  await createDeviceInstanceAt(template, { x, y })
-  await saveNodesToServer()
-  
-  ElMessage.success(`Device "${templateName}" added successfully`)
+  // createDeviceInstanceAt 内部已保存并在失败时回滚+抛错，这里只需处理成功/失败提示。
+  try {
+    await createDeviceInstanceAt(template, { x, y })
+    ElMessage.success(`Device "${templateName}" added successfully`)
+  } catch {
+    // 失败提示已由 saveNodesToServer 弹出，节点已回滚，无需额外处理。
+  }
 }
 
 // ==== Simulation Logic ====
 const isSimulating = ref(false)
 const simulationResult = ref<any>(null)
 const simulationError = ref<string | null>(null)
+// Result of the last successful simulation, kept so its logs / raw NuSMV output stay reachable while
+// the timeline is open. The result dialog only auto-opens on error; on success we go straight to the
+// timeline (by design) and let the user open the logs on demand via openSimulationLogs().
+const lastSimulationResult = ref<any>(null)
 
 // Simulation form state (moved from ControlCenter)
 const simulationForm = reactive({
@@ -1581,6 +1800,8 @@ const asyncVerificationTask = ref<{
   progress: 0,
   status: 'Initializing...'
 })
+const cancellingVerificationTask = ref(false)
+const verificationCancelRequested = ref(false)
 
 // 历史验证 Traces
 const verificationTraces = ref<any[]>([])
@@ -1608,8 +1829,26 @@ const deleteVerificationTrace = async (traceId: number) => {
 }
 
 const selectAndPlayVerificationTrace = async (traceId: number) => {
+  // Same mutual-exclusion guards as selectAndPlayTrace: a historical trace opens the same animation
+  // surface, so it must not stack on top of a running simulation timeline or the recommendations panel.
+  const guard = canOpenTracePlayback({
+    simulationVisible: simulationAnimationState.value.visible,
+    recommendationPanelVisible: showRecommendationPanel.value
+  })
+  if (!guard.allowed) {
+    ElMessage.warning({ message: guard.reason, type: 'warning' })
+    return
+  }
   try {
     const trace = await boardApi.getVerificationTrace(traceId)
+    if (!trace?.states?.length) {
+      ElMessage.warning({ message: 'Trace has no states to play', type: 'warning' })
+      return
+    }
+    // Take the animation lock and close the result dialog, mirroring the current-result path so lock
+    // state and open panels stay consistent regardless of which entry point started the animation.
+    isAnimationLocked.value = true
+    closeResultDialog()
     savedTraces.value = [trace]
     traceAnimationState.value = {
       visible: true,
@@ -1618,17 +1857,17 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
       isPlaying: false
     }
     showVerificationTracesPanel.value = false
-    
-    const traceData = trace
-    if (traceData?.states?.length > 0) {
+
+    const currentTraceData = currentTrace.value
+    if (currentTraceData) {
       highlightedTrace.value = {
-        states: traceData.states,
-        currentStateIndex: 0,
-        devices: traceData.states[0]?.devices || []
+        ...currentTraceData,
+        selectedStateIndex: 0
       }
     }
   } catch (e: any) {
     console.error('Failed to load trace:', e)
+    isAnimationLocked.value = false
     ElMessage.error({ message: 'Failed to load trace', type: 'error' })
   }
 }
@@ -1646,6 +1885,8 @@ const asyncSimulationTask = ref<{
   progress: 0,
   status: ''
 })
+const cancellingSimulationTask = ref(false)
+const simulationCancelRequested = ref(false)
 
 // Floating panel visibility state
 const showSimulationPanel = ref(false)
@@ -1662,10 +1903,58 @@ const openFixDialog = (traceId: number, violatedSpecId: string) => {
   showFixDialog.value = true
 }
 
+const cancelAsyncVerification = async () => {
+  const taskId = asyncVerificationTask.value.taskId
+  if (!taskId || cancellingVerificationTask.value) return
+
+  verificationCancelRequested.value = true
+  cancellingVerificationTask.value = true
+  asyncVerificationTask.value.status = 'Cancelling...'
+  try {
+    const cancelled = await boardApi.cancelTask(taskId)
+    if (cancelled) {
+      ElMessage.info({ message: 'Verification cancellation requested', type: 'info' })
+    } else {
+      verificationCancelRequested.value = false
+      ElMessage.warning({ message: 'Verification task is no longer cancellable', type: 'warning' })
+    }
+  } catch (error: any) {
+    verificationCancelRequested.value = false
+    const msg = error?.response?.data?.message || error?.message || 'Failed to cancel verification task'
+    ElMessage.error({ message: msg, type: 'error' })
+  } finally {
+    cancellingVerificationTask.value = false
+  }
+}
+
+const cancelAsyncSimulation = async () => {
+  const taskId = asyncSimulationTask.value.taskId
+  if (!taskId || cancellingSimulationTask.value) return
+
+  simulationCancelRequested.value = true
+  cancellingSimulationTask.value = true
+  asyncSimulationTask.value.status = 'Cancelling...'
+  try {
+    const cancelled = await simulationApi.cancelTask(taskId)
+    if (cancelled) {
+      ElMessage.info({ message: 'Simulation cancellation requested', type: 'info' })
+    } else {
+      simulationCancelRequested.value = false
+      ElMessage.warning({ message: 'Simulation task is no longer cancellable', type: 'warning' })
+    }
+  } catch (error: any) {
+    simulationCancelRequested.value = false
+    const msg = error?.response?.data?.message || error?.message || 'Failed to cancel simulation task'
+    ElMessage.error({ message: msg, type: 'error' })
+  } finally {
+    cancellingSimulationTask.value = false
+  }
+}
+
 // Fix 应用后的回调
-const handleFixApplied = () => {
-  // 刷新验证结果或其他必要操作
-  ElMessage.success('修复已应用')
+const handleFixApplied = async () => {
+  // 修复已落库到后端规则集，重新拉取规则并重建连线，使画布与后端一致。
+  await refreshRules()
 }
 
 // 面板互斥切换函数
@@ -1744,6 +2033,17 @@ const currentTrace = computed(() => {
 // 所有状态数量
 const totalStates = computed(() => {
   return currentTrace.value?.states?.length || 0
+})
+
+// Verification context of the trace currently being viewed, derived from the trace's own snapshot
+// (backend TraceDto) rather than the live verificationForm — so a historical trace shows the
+// parameters it was actually run under. Falls back to the live form for legacy traces that predate
+// the stored snapshot (isAttack undefined).
+const activeTraceContext = computed(() => {
+  return deriveTraceContext(currentTrace.value, {
+    isAttack: verificationForm.isAttack,
+    intensity: verificationForm.intensity
+  })
 })
 
 // 选择并播放指定索引的反例路径动画
@@ -1988,8 +2288,13 @@ const handleVerify = async () => {
     ElMessage.warning({ message: 'No devices to verify', type: 'warning' })
     return
   }
+  if (!assertRulesHaveTriggers(rules.value)) {
+    return
+  }
 
   isVerifying.value = true
+  verificationCancelRequested.value = false
+  cancellingVerificationTask.value = false
   verificationError.value = null
   verificationResult.value = null
 
@@ -2067,14 +2372,14 @@ const handleVerify = async () => {
     const rulesData = rules.value.map(r => ({
       // Backend expects: conditions (not sources)
       conditions: (r.sources || []).map(s => ({
-        deviceName: s.fromId,
+        deviceName: resolveNodeLabel(s.fromId),
         attribute: s.fromApi || '',
         relation: s.relation || '=',
         value: s.value || 'true'
       })),
       // Backend expects: command with deviceName and action
       command: {
-        deviceName: r.toId || '',
+        deviceName: resolveNodeLabel(r.toId),
         action: r.toApi || '',
         contentDevice: null,
         content: null
@@ -2082,25 +2387,24 @@ const handleVerify = async () => {
       ruleString: r.name || ''
     }))
 
-    // Prepare specs - normalize device names and values
+    // Prepare specs - resolve device refs to current label (symmetric with rules above),
+    // then normalize. 规约条件存的是创建时的 label；设备重命名后 node.id 不变而 label 变，
+    // 若不 resolve 就会引用旧 label，验证时在 deviceSmvMap 里找不到当前设备。
+    const resolveCondRef = (ref: any) => ref ? normalizeDeviceName(resolveNodeLabel(ref)) : ref
+    const mapSpecCond = (cond: any) => ({
+      ...cond,
+      deviceId: resolveCondRef(cond.deviceId),
+      deviceLabel: resolveCondRef(cond.deviceLabel),
+      value: normalizeValue(cond.value || '')
+    })
     const specs = specifications.value.map(spec => ({
       ...spec,
-      aConditions: (spec.aConditions || []).map((cond: any) => ({
-        ...cond,
-        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
-        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
-        value: normalizeValue(cond.value || '')
-      })),
-      ifConditions: (spec.ifConditions || []).map((cond: any) => ({
-        ...cond,
-        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
-        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
-        value: normalizeValue(cond.value || '')
-      })),
+      aConditions: (spec.aConditions || []).map(mapSpecCond),
+      ifConditions: (spec.ifConditions || []).map(mapSpecCond),
       thenConditions: (spec.thenConditions || []).map((cond: any) => ({
         ...cond,
-        deviceId: cond.deviceId ? normalizeDeviceName(cond.deviceId) : cond.deviceId,
-        deviceLabel: cond.deviceLabel ? normalizeDeviceName(cond.deviceLabel) : cond.deviceLabel,
+        deviceId: resolveCondRef(cond.deviceId),
+        deviceLabel: resolveCondRef(cond.deviceLabel),
         value: normalizeValue(cond.value || '')
       }))
     }))
@@ -2149,19 +2453,22 @@ const handleVerify = async () => {
     // Sync verification (original logic)
     const result = await boardApi.verify(req)
     verificationResult.value = result
-
-    if (result.safe) {
-      ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
-    } else {
-      ElMessage.warning({ message: `Verification failed: Found ${result.traces?.length || 0} violations`, type: 'warning' })
-    }
+    notifyVerificationOutcome(result)
 
   } catch (error: any) {
-    console.error('Verification failed:', error)
-    verificationError.value = error.message || 'Verification failed'
-    ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
+    const message = error?.message || 'Verification failed'
+    if (verificationCancelRequested.value && message.toLowerCase().includes('cancel')) {
+      verificationError.value = null
+      ElMessage.info({ message: 'Verification cancelled', type: 'info' })
+    } else {
+      console.error('Verification failed:', error)
+      verificationError.value = message
+      ElMessage.error({ message: verificationError.value || 'Verification failed', type: 'error' })
+    }
   } finally {
     isVerifying.value = false
+    cancellingVerificationTask.value = false
+    verificationCancelRequested.value = false
   }
 }
 
@@ -2186,8 +2493,13 @@ const handleSimulate = async (simConfig: {
     ElMessage.warning({ message: 'No devices to simulate', type: 'warning' })
     return
   }
+  if (!assertRulesHaveTriggers(rules.value)) {
+    return
+  }
 
   isSimulating.value = true
+  simulationCancelRequested.value = false
+  cancellingSimulationTask.value = false
   simulationError.value = null
   simulationResult.value = null
 
@@ -2259,13 +2571,13 @@ const handleSimulate = async (simConfig: {
     // Prepare rules
     const rulesData = rules.value.map(r => ({
       conditions: (r.sources || []).map(s => ({
-        deviceName: s.fromId,
+        deviceName: resolveNodeLabel(s.fromId),
         attribute: s.fromApi || '',
         relation: s.relation || '=',
         value: s.value || 'true'
       })),
       command: {
-        deviceName: r.toId || '',
+        deviceName: resolveNodeLabel(r.toId),
         action: r.toApi || '',
         contentDevice: null,
         content: null
@@ -2313,11 +2625,15 @@ const handleSimulate = async (simConfig: {
       result = await simulationApi.simulate(req)
     }
     
+    // Keep the full result so its logs / raw NuSMV output remain reachable from the timeline via
+    // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
+    lastSimulationResult.value = result
+
     // 直接打开时间轴动画，不显示结果对话框
     if (result.states && result.states.length > 0) {
       // 保存模拟 states 数据
       savedSimulationStates.value = [...result.states]
-      
+
       // 关闭模拟配置面板
       showSimulationPanel.value = false
       
@@ -2346,12 +2662,30 @@ const handleSimulate = async (simConfig: {
     }
 
   } catch (error: any) {
-    console.error('Simulation failed:', error)
-    simulationError.value = error.message || 'Simulation failed'
-    ElMessage.error({ message: simulationError.value || 'Simulation failed', type: 'error' })
+    const message = error?.message || 'Simulation failed'
+    if (simulationCancelRequested.value && message.toLowerCase().includes('cancel')) {
+      simulationError.value = null
+      ElMessage.info({ message: 'Simulation cancelled', type: 'info' })
+    } else {
+      console.error('Simulation failed:', error)
+      simulationError.value = message
+      ElMessage.error({ message: simulationError.value || 'Simulation failed', type: 'error' })
+    }
   } finally {
     isSimulating.value = false
+    cancellingSimulationTask.value = false
+    simulationCancelRequested.value = false
   }
+}
+
+// Open the result dialog for the last successful simulation on demand, so its execution logs and raw
+// NuSMV output are reachable even though the success path goes straight to the timeline.
+const openSimulationLogs = () => {
+  if (!lastSimulationResult.value) {
+    ElMessage.info({ message: 'No simulation logs available yet', type: 'info' })
+    return
+  }
+  simulationResult.value = lastSimulationResult.value
 }
 
 // A status/progress fetch error is "permanent" (fail fast, don't retry to timeout) when
@@ -2390,18 +2724,29 @@ const pollAsyncVerification = async (taskId: number): Promise<void> => {
     // Terminal-state handling outside the try so its logic isn't swallowed by the catch.
     if (task.status === 'COMPLETED') {
       if (task.isSafe) {
-        verificationResult.value = { safe: true, traces: [], specResults: [], checkLogs: task.checkLogs || [], nusmvOutput: task.nusmvOutput || '' }
-        ElMessage.success({ message: 'Verification passed: System is safe!', type: 'success' })
-      } else {
-        const traces = await boardApi.getVerificationTraces()
         verificationResult.value = {
-          safe: false,
-          traces: traces.slice(0, task.violatedSpecCount || 1),
+          safe: true,
+          traces: [],
           specResults: [],
           checkLogs: task.checkLogs || [],
-          nusmvOutput: task.nusmvOutput || ''
+          nusmvOutput: task.nusmvOutput || '',
+          disabledRuleCount: task.disabledRuleCount,
+          skippedSpecCount: task.skippedSpecCount
         }
-        ElMessage.warning({ message: `Verification failed: Found ${task.violatedSpecCount || 0} violations`, type: 'warning' })
+        notifyVerificationOutcome(verificationResult.value)
+      } else {
+        // 按 task 维度取反例，避免拿到旧任务/并发任务的 trace（不再 slice 全量用户 trace）
+        const traces = await boardApi.getTaskTraces(taskId)
+        verificationResult.value = {
+          safe: false,
+          traces,
+          specResults: [],
+          checkLogs: task.checkLogs || [],
+          nusmvOutput: task.nusmvOutput || '',
+          disabledRuleCount: task.disabledRuleCount,
+          skippedSpecCount: task.skippedSpecCount
+        }
+        notifyVerificationOutcome(verificationResult.value)
       }
       showVerificationPanel.value = false
       return
@@ -2475,6 +2820,8 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
 
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
+const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
+const verificationCheckLogs = computed(() => verificationResult.value?.checkLogs || [])
 
 const closeResultDialog = () => {
   verificationResult.value = null
@@ -2835,7 +3182,18 @@ const closeResultDialog = () => {
         <div v-if="isVerifying && asyncVerificationTask.taskId" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
             <span class="text-green-600 font-medium">{{ asyncVerificationTask.status }}</span>
-            <span class="text-green-600 font-bold">{{ asyncVerificationTask.progress }}%</span>
+            <div class="flex items-center gap-2">
+              <span class="text-green-600 font-bold">{{ asyncVerificationTask.progress }}%</span>
+              <button
+                type="button"
+                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="cancellingVerificationTask"
+                title="Cancel verification task"
+                @click="cancelAsyncVerification"
+              >
+                <span class="material-symbols-outlined text-sm">{{ cancellingVerificationTask ? 'hourglass_empty' : 'cancel' }}</span>
+              </button>
+            </div>
           </div>
           <div class="w-full h-2 bg-green-200 rounded-full overflow-hidden">
             <div 
@@ -3337,7 +3695,18 @@ const closeResultDialog = () => {
         <div v-if="isSimulating && asyncSimulationTask.taskId" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
             <span class="text-indigo-700 font-medium">Progress</span>
-            <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
+            <div class="flex items-center gap-2">
+              <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
+              <button
+                type="button"
+                class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="cancellingSimulationTask"
+                title="Cancel simulation task"
+                @click="cancelAsyncSimulation"
+              >
+                <span class="material-symbols-outlined text-sm">{{ cancellingSimulationTask ? 'hourglass_empty' : 'cancel' }}</span>
+              </button>
+            </div>
           </div>
           <div class="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
             <div 
@@ -3727,9 +4096,35 @@ const closeResultDialog = () => {
               </div>
             </div>
           </div>
+
+          <div v-if="verificationGenerationWarningCounts.total > 0" class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800">
+            <div class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-amber-600">report</span>
+              <div>
+                <div class="text-sm font-bold">Generation warnings</div>
+                <p class="text-sm mt-1">
+                  {{ verificationGenerationWarningCounts.disabledRuleCount }} disabled rule(s),
+                  {{ verificationGenerationWarningCounts.skippedSpecCount }} skipped specification(s).
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="verificationCheckLogs.length > 0" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <h4 class="text-sm font-bold text-slate-700 mb-2">Check Logs</h4>
+            <div class="space-y-1 max-h-44 overflow-y-auto">
+              <div
+                v-for="(log, index) in verificationCheckLogs"
+                :key="index"
+                class="text-xs font-mono text-slate-700 bg-white border border-slate-100 rounded px-2 py-1 break-words"
+              >
+                {{ log }}
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div v-if="!verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
+        <div v-if="verificationResult && !verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">
           <!-- Historical Verification Traces -->
           <div class="mb-4">
             <button 
@@ -3757,7 +4152,8 @@ const closeResultDialog = () => {
                     <div class="flex gap-1">
                       <button
                         @click="selectAndPlayVerificationTrace(trace.id)"
-                        class="px-2 py-1 bg-green-500 hover:bg-green-600 text-black rounded text-xs"
+                        :disabled="simulationAnimationState.visible || showRecommendationPanel"
+                        class="px-2 py-1 bg-green-500 hover:bg-green-600 text-black rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         View
                       </button>
@@ -3861,13 +4257,13 @@ const closeResultDialog = () => {
             <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
-            <!-- Verification Info -->
-            <span v-if="verificationForm.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
+            <!-- Verification Info (from the viewed trace's own context, not the live form) -->
+            <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
               <span class="material-symbols-outlined text-[10px]">warning</span>
               Attack
             </span>
-            <span v-if="verificationForm.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
-              Intensity: {{ verificationForm.intensity }}
+            <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
+              Intensity: {{ activeTraceContext.intensity }}
             </span>
             <span class="px-2 py-0.5 bg-blue-100 text-blue-600 text-xs rounded-full">
               <span class="material-symbols-outlined text-[10px]">security</span>
@@ -3946,6 +4342,17 @@ const closeResultDialog = () => {
     @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"
   />
+
+  <!-- Logs affordance for a successful simulation: the success path opens the timeline (not the
+       result dialog), so this lets the user reach the execution logs / raw NuSMV output on demand. -->
+  <button
+    v-if="simulationAnimationState.visible && lastSimulationResult"
+    @click="openSimulationLogs"
+    class="fixed left-2/3 -translate-x-1/2 bottom-2 z-40 px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs shadow-lg flex items-center gap-1"
+  >
+    <span class="material-symbols-outlined text-sm">description</span>
+    View logs
+  </button>
 
   <!-- Fix Result Dialog 组件 -->
   <FixResultDialog

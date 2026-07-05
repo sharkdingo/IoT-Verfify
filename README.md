@@ -19,14 +19,14 @@ fix suggestions when a specification is violated.
 - **Automatic fix** — parameter adjustment, condition adjustment, and rule disabling,
   each candidate re-verified before it is offered.
 - **Attack simulation** and **interactive simulation** (random N-step traces).
-- **AI assistant** — Volcengine Ark LLM with SSE streaming and 30 built-in tools;
-  device / rule / specification recommendations.
+- **AI assistant** — any OpenAI-compatible LLM endpoint with SSE-streamed final replies
+  and 30 built-in tools; device / rule / specification recommendations.
 - **Bilingual UI** — full zh-CN / en internationalization.
 
 ## Tech stack
 
 - **Backend**: Java 17, Spring Boot 3.5.7, Spring Security + JWT, Spring Data JPA,
-  MySQL, Redis, NuSMV 2.6–2.7, Volcengine Ark SDK.
+  MySQL, Redis, NuSMV 2.6–2.7, OpenAI Java SDK (any OpenAI-compatible endpoint).
 - **Frontend**: Vue 3 + TypeScript, Vite, Tailwind CSS, Ant Design Vue, Element Plus,
   Vue Router, Vue I18n.
 
@@ -40,7 +40,7 @@ Prerequisites: JDK 17+, Node.js 18+, Maven 3.6+, MySQL 8.0+, NuSMV 2.6–2.7
 mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # 2. Configure required env vars (see docs/getting-started/configuration.md)
-export DB_PASSWORD="..." JWT_SECRET="..." VOLCENGINE_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
+export DB_PASSWORD="..." JWT_SECRET="..." OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
 
 # 3. Backend (http://localhost:8080, auto-creates tables)
 cd backend && mvn spring-boot:run

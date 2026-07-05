@@ -14,7 +14,7 @@ Scope boundaries:
 > English output (`-- specification ... is true/false`, `Trace Type`, `NuSMV >`
 > prompt). nuXmv and other variants are not supported.
 
-Verified against code on 2026-07-03. Source:
+Verified against code on 2026-07-04. Source:
 `component/nusmv/generator/`.
 
 ---
@@ -41,6 +41,14 @@ Supporting utilities in the same package: `SmvBoundsUtils` (numeric bounds),
 `SmvRelationUtils` (relation normalization), `PropertyDimension` (trust/privacy
 dimension modeling).
 
+`SmvGenerator.GenerateResult` also carries generation warnings. Each generation creates a
+request-scoped `SmvGenerationContext`, passed down the builder chain instead of using
+global/static state. Its package-private warning collector records every rule that had to
+fail closed and every specification that was skipped or degraded, then exposes them as
+verification `checkLogs` plus
+`disabledRuleCount` / `skippedSpecCount`. Treat a `safe=true` result with non-zero
+counts as "the emitted model was safe, but part of the requested model did not generate."
+
 ---
 
 ## Template resolution (important)
@@ -52,9 +60,16 @@ dimension modeling).
   it deletes the user's existing templates, then re-imports defaults.
 - If a request's `templateName` does not exist in the current user's templates, SMV
   generation fails with `SmvGenerationException`.
-- Device references in rules/specs resolve by `varName` first; a `templateName`
-  fallback is allowed only when it matches a **unique** instance — multiple matches
-  raise `AMBIGUOUS_DEVICE_REFERENCE`.
+- Device references in rules/specs are resolved through `DeviceReferenceResolver`
+  (`generator/data/`), which owns the fallback order so the generator, fixer, and
+  drift checks never disagree. For each reference it tries, in order: the raw value,
+  then its digit-leading-normalized form (`DeviceNameNormalizer` prefixes a leading
+  digit with `d_`, mirroring the frontend), first as an exact `varName` hit in the
+  device map and then via a `templateName` fallback that is allowed only when it
+  matches a **unique** instance — multiple matches raise `AMBIGUOUS_DEVICE_REFERENCE`.
+  Callers pass a primary reference (e.g. `deviceId`/current label) plus an optional
+  secondary (e.g. legacy label), and the resolver tries the primary's candidates
+  before the secondary's.
 
 ---
 
@@ -379,9 +394,9 @@ be parsed (e.g. the device does not exist, `attribute` is empty, with `relation!
 attribute matches no mode/internal variable/API signal, the relation is unsupported, the
 relation is non-null but the value is empty, the `IN/NOT_IN` value list is empty, or an API
 signal's relation/value is invalid), `appendRuleConditions` sets the whole rule's guard to
-`FALSE`, so the rule never fires. This is a fail-closed policy — better that a rule not
-fire than that an invalid condition be silently ignored and turn the rule into an
-unconditional trigger. A warn-level log records the failure reason.
+`FALSE`, so the rule never fires. Empty condition lists also fail closed to `FALSE`; they
+are never interpreted as `TRUE`. The warning collector records a `[rule-disabled]`
+check-log entry and increments `disabledRuleCount`.
 
 **`useNext` recursion avoidance (key to state modeling):** when building a rule guard for
 `next(target.mode)`, if the condition references the same target device, the generator

@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
@@ -111,8 +113,12 @@ public class SmvSpecificationBuilder {
             case "7": // safety: AG !(body) → EF(body), where body includes trust/attack expressions
                 return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, intensity) + ")";
             default:
-                // Unknown template: treat as AG(A) → EF(!A)
-                return "CTLSPEC EF(!(" + aPart + "))";
+                // Symmetric with generateCtlSpec: fail closed & visible instead of silently
+                // treating an unknown template as AG(A). buildNegated() catches this and emits
+                // "CTLSPEC TRUE -- negation failed", so an invalid template can never be
+                // silently negated into a passing property.
+                throw new InvalidConditionException("unsupported templateId '" + templateId
+                        + "'; allowed values are 1, 2, 3, 4, 5, 6, 7");
         }
     }
 
@@ -125,6 +131,12 @@ public class SmvSpecificationBuilder {
 
     public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
+        return build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
+    }
+
+    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
+                       Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy,
+                       SmvGenerationContext context) {
         StringBuilder content = new StringBuilder();
 
         if (specs == null || specs.isEmpty()) {
@@ -138,11 +150,15 @@ public class SmvSpecificationBuilder {
         for (SpecificationDto spec : specs) {
             if (spec == null) continue;
             if ((spec.getAConditions() == null || spec.getAConditions().isEmpty()) &&
-                (spec.getIfConditions() == null || spec.getIfConditions().isEmpty())) continue;
+                (spec.getIfConditions() == null || spec.getIfConditions().isEmpty())) {
+                recordSkippedSpec(context, spec, "Specification has no A/IF conditions and was not emitted");
+                continue;
+            }
 
             // Defense-in-depth: privacy specs should have been caught upstream by SmvGenerator.validateNoPrivacySpecs
             if (!enablePrivacy && hasAnyPrivacyCondition(spec)) {
                 log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream, skipping", spec.getId());
+                recordSkippedSpec(context, spec, "Privacy specification skipped because enablePrivacy=false");
                 content.append("\n\tCTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false");
                 generatedSpecs++;
                 continue;
@@ -155,6 +171,7 @@ public class SmvSpecificationBuilder {
             } catch (InvalidConditionException e) {
                 // Invalid condition makes this spec invalid; skip and log warning.
                 log.warn("Skipping spec '{}': {}", spec.getId(), e.getMessage());
+                recordSkippedSpec(context, spec, e.getMessage());
                 // Emit a guaranteed-false placeholder to keep spec count aligned with effectiveSpecs.
                 String safeMsg = e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown";
                 content.append("\n\tCTLSPEC FALSE -- invalid spec: ").append(safeMsg);
@@ -164,6 +181,12 @@ public class SmvSpecificationBuilder {
 
         log.debug("Generated {} specifications", generatedSpecs);
         return content.toString();
+    }
+
+    private void recordSkippedSpec(SmvGenerationContext context, SpecificationDto spec, String reason) {
+        if (context != null) {
+            context.skippedSpec(spec, reason);
+        }
     }
 
     private boolean hasAnyPrivacyCondition(SpecificationDto spec) {
@@ -227,18 +250,19 @@ public class SmvSpecificationBuilder {
             case "7": // safety: untrusted -> !A
                 return buildSafetySpec(spec, deviceSmvMap, isAttack, intensity);
             default:
-                return "CTLSPEC AG(" + aPart + ")";
+                throw new InvalidConditionException("unsupported templateId '" + templateId
+                        + "'; allowed values are 1, 2, 3, 4, 5, 6, 7");
         }
     }
 
     private String genConditionSpec(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
-        if (cond == null || cond.getDeviceId() == null) {
-            throw new InvalidConditionException("condition deviceId is null");
+        if (cond == null || !hasDeviceRef(cond)) {
+            throw new InvalidConditionException("condition deviceId/deviceLabel is null");
         }
 
-        DeviceSmvData smv = findDeviceSmvDataForSpec(cond.getDeviceId(), deviceSmvMap);
+        DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
         if (smv == null) {
-            throw new InvalidConditionException("device '" + cond.getDeviceId() + "' not found in deviceSmvMap");
+            throw new InvalidConditionException("device '" + describeDeviceRef(cond) + "' not found in deviceSmvMap");
         }
         String varName = smv.getVarName();
         String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
@@ -292,18 +316,30 @@ public class SmvSpecificationBuilder {
         return String.join(CONDITION_SEPARATOR, parts);
     }
 
-    private DeviceSmvData findDeviceSmvDataForSpec(String deviceId, Map<String, DeviceSmvData> deviceSmvMap) {
-        if (deviceId == null || deviceSmvMap == null) {
+    private DeviceSmvData findDeviceSmvDataForSpec(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (cond == null || deviceSmvMap == null) {
             return null;
         }
         try {
-            return DeviceSmvDataFactory.findDeviceSmvDataStrict(deviceId, deviceSmvMap);
+            return DeviceReferenceResolver.resolve(cond.getDeviceId(), cond.getDeviceLabel(), deviceSmvMap);
         } catch (SmvGenerationException e) {
             if (SmvGenerationException.ErrorCategories.AMBIGUOUS_DEVICE_REFERENCE.equals(e.getErrorCategory())) {
                 throw e;
             }
             throw new InvalidConditionException(e.getMessage());
         }
+    }
+
+    private String describeDeviceRef(SpecConditionDto cond) {
+        if (cond == null) return "";
+        if (cond.getDeviceId() != null && !cond.getDeviceId().isBlank()) return cond.getDeviceId();
+        return cond.getDeviceLabel() != null ? cond.getDeviceLabel() : "";
+    }
+
+    private boolean hasDeviceRef(SpecConditionDto cond) {
+        return cond != null
+                && ((cond.getDeviceId() != null && !cond.getDeviceId().isBlank())
+                || (cond.getDeviceLabel() != null && !cond.getDeviceLabel().isBlank()));
     }
 
     private String buildStateCondition(String varName, DeviceSmvData smv, SpecConditionDto cond) {
@@ -554,9 +590,9 @@ public class SmvSpecificationBuilder {
     }
 
     private String buildTrustForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
-        if (cond == null || cond.getDeviceId() == null) return null;
-        DeviceSmvData smv = findDeviceSmvDataForSpec(cond.getDeviceId(), deviceSmvMap);
-        String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(cond.getDeviceId());
+        if (!hasDeviceRef(cond)) return null;
+        DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
+        String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(describeDeviceRef(cond));
         String targetType = cond.getTargetType() != null ? cond.getTargetType().toLowerCase() : null;
 
         if ("variable".equals(targetType)) {
@@ -719,9 +755,9 @@ public class SmvSpecificationBuilder {
     }
 
     private String buildAttackFalseForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
-        if (cond == null || cond.getDeviceId() == null) return null;
-        DeviceSmvData smv = findDeviceSmvDataForSpec(cond.getDeviceId(), deviceSmvMap);
-        String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(cond.getDeviceId());
+        if (!hasDeviceRef(cond)) return null;
+        DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
+        String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(describeDeviceRef(cond));
         return varName + ".is_attack=FALSE";
     }
 

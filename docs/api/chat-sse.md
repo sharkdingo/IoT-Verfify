@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-03. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-04. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -27,9 +27,17 @@ String, createdAt }`.
 
 ## `POST /api/chat/completions` — streaming (SSE)
 
-Sends a user message and streams the assistant's reply. **Not** wrapped in `Result<T>`
-— the response is `text/event-stream` produced by a Spring `SseEmitter` (5-minute
-timeout).
+Sends a user message and streams the assistant's visible reply. **Not** wrapped in
+`Result<T>` — the response is `text/event-stream` produced by a Spring `SseEmitter`
+(10-minute default timeout, configured by `CHAT_SSE_TIMEOUT_MS`).
+
+Conversational messages without a board/tool intent stream directly. Messages that
+mention board operations such as devices, rules, specifications, verification,
+simulation, templates, traces, or recommendations first run one or more non-visible
+tool-planning rounds. Tool calls and tool results are persisted as internal chat
+messages, but they are not emitted as user visible text. After planning completes, the
+final assistant reply is generated through the streaming LLM path so tool-backed answers
+also arrive as incremental text chunks.
 
 **Request body**: `ChatRequestDto`
 
@@ -39,7 +47,9 @@ timeout).
 | `content` | `String` | Required; ≤10000 characters |
 
 If the chat thread pool is saturated the request is rejected with `503`
-(`ServiceUnavailableException`) before streaming starts.
+(`ServiceUnavailableException`) before streaming starts. Errors that happen after the
+emitter is created, including an inaccessible session or LLM provider failure, are
+reported as an SSE content frame prefixed with `[ERROR] ` and then the stream completes.
 
 ### Stream frames
 
@@ -58,7 +68,8 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 
 - Text chunks arrive as `StreamResponseDto` objects with a `content` field.
 - Front-end commands (canvas refresh, toast, navigation) arrive as separate frames
-  carrying `command`.
+  carrying `command`. Refresh commands are sent after successful mutating tools and
+  before the final streamed assistant text.
 - Errors are emitted as a `content` frame prefixed with `[ERROR] ` and then the stream
   completes.
 - The client also tolerates a literal `[DONE]` sentinel (ignored) and non-JSON text

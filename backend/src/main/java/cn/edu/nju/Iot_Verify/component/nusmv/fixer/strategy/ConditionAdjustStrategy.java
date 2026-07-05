@@ -159,6 +159,16 @@ public class ConditionAdjustStrategy implements FixStrategy {
                 // Apply changes to a fresh copy of allRules
                 List<RuleDto> modifiedRules = applyChanges(allRules, ir.conditionsToRemove, ir.conditionsToAdd);
 
+                // Reject solutions that strip a rule down to zero trigger conditions. NuSMV treats an
+                // empty-condition rule as fail-closed (never fires), so such a solution can verify — but
+                // RuleDto forbids empty conditions and the apply layer rejects it, so returning it would
+                // hand the user a "verified" suggestion that can never be applied. Exclude and keep searching.
+                if (emptiesAnyRule(modifiedRules, ir.conditionsToRemove.keySet())) {
+                    log.info("ConditionAdjust attempt {}: solution empties a rule's conditions; excluding", attempt + 1);
+                    addExclusion(exclusionInvars, extractedValues);
+                    continue;
+                }
+
                 // Forward verify
                 if (FixStrategyUtils.forwardVerify(smvGenerator, nusmvExecutor, ctx, modifiedRules)) {
                     // Filter out action="keep" entries — they add no value for the user
@@ -335,6 +345,21 @@ public class ConditionAdjustStrategy implements FixStrategy {
         }
 
         return modifiedRules;
+    }
+
+    /**
+     * True if applying the changes leaves any affected rule with zero trigger conditions. Only rules
+     * that had conditions removed can be emptied (adds never reduce the count), so we check those.
+     */
+    private static boolean emptiesAnyRule(List<RuleDto> modifiedRules, Set<Integer> touchedRuleIndices) {
+        for (int ruleIdx : touchedRuleIndices) {
+            if (ruleIdx < 0 || ruleIdx >= modifiedRules.size()) continue;
+            List<RuleDto.Condition> conds = modifiedRules.get(ruleIdx).getConditions();
+            if (conds == null || conds.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // -------- Description builder --------

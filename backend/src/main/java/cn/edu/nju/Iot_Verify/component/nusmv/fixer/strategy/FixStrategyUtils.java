@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckRes
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.FixContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
@@ -163,11 +164,14 @@ public final class FixStrategyUtils {
             if (violatedSpec.getThenConditions() != null) allSpecConds.addAll(violatedSpec.getThenConditions());
 
             for (SpecConditionDto sc : allSpecConds) {
-                if (sc.getDeviceId() == null || sc.getDeviceId().isBlank()) continue;
+                if ((sc.getDeviceId() == null || sc.getDeviceId().isBlank())
+                        && (sc.getDeviceLabel() == null || sc.getDeviceLabel().isBlank())) continue;
                 // [C5] non-strict: inclusive matching for scope expansion
-                DeviceSmvData smv = DeviceSmvDataFactory.findDeviceSmvData(
-                        sc.getDeviceId(), deviceSmvMap);
-                if (smv != null) specVarNames.add(smv.getVarName());
+                String varName = resolveVarNameInclusive(sc.getDeviceId(), deviceSmvMap);
+                if (varName == null) {
+                    varName = resolveVarNameInclusive(sc.getDeviceLabel(), deviceSmvMap);
+                }
+                if (varName != null) specVarNames.add(varName);
             }
         }
 
@@ -222,7 +226,7 @@ public final class FixStrategyUtils {
     static String resolveVarNameSafe(
             String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
         try {
-            DeviceSmvData smv = DeviceSmvDataFactory.findDeviceSmvDataStrict(deviceName, deviceSmvMap);
+            DeviceSmvData smv = DeviceReferenceResolver.resolve(deviceName, null, deviceSmvMap);
             return smv != null ? smv.getVarName() : null;
         } catch (SmvGenerationException e) {
             log.warn("resolveVarNameSafe: ambiguous device '{}', skipping: {}", deviceName, e.getMessage());
@@ -271,17 +275,20 @@ public final class FixStrategyUtils {
 
             if (!"state".equals(targetType) && !"variable".equals(targetType)) continue;
 
+            String deviceRef = DeviceReferenceResolver.resolvableReference(
+                    sc.getDeviceId(), sc.getDeviceLabel(), deviceSmvMap);
+
             RuleDto.Condition candidate;
             if ("state".equals(targetType)) {
                 candidate = RuleDto.Condition.builder()
-                        .deviceName(sc.getDeviceId())
+                        .deviceName(deviceRef)
                         .attribute("state")
                         .relation(sc.getRelation())
                         .value(sc.getValue())
                         .build();
             } else {
                 candidate = RuleDto.Condition.builder()
-                        .deviceName(sc.getDeviceId())
+                        .deviceName(deviceRef)
                         .attribute(sc.getKey())
                         .relation(sc.getRelation())
                         .value(sc.getValue())
@@ -290,7 +297,7 @@ public final class FixStrategyUtils {
 
             if (!validateCandidateCondition(candidate, deviceSmvMap)) {
                 log.debug("extractCandidates: candidate from spec ({}/{}) failed validation, skipping",
-                        sc.getDeviceId(), sc.getKey());
+                        deviceRef, sc.getKey());
                 continue;
             }
 
@@ -315,8 +322,7 @@ public final class FixStrategyUtils {
         // 1. Device resolvable and unambiguous
         DeviceSmvData smv;
         try {
-            smv = DeviceSmvDataFactory.findDeviceSmvDataStrict(
-                    candidate.getDeviceName(), deviceSmvMap);
+            smv = DeviceReferenceResolver.resolve(candidate.getDeviceName(), null, deviceSmvMap);
         } catch (SmvGenerationException e) {
             return false;
         }
@@ -451,7 +457,7 @@ public final class FixStrategyUtils {
             if (smv == null) {
                 // Fallback: try resolving from device name
                 try {
-                    smv = DeviceSmvDataFactory.findDeviceSmvDataStrict(c.getDeviceName(), deviceSmvMap);
+                    smv = DeviceReferenceResolver.resolve(c.getDeviceName(), null, deviceSmvMap);
                 } catch (SmvGenerationException ignored) { }
             }
             if (smv != null && smv.getModes() != null) {

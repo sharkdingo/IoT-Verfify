@@ -1,7 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,9 +31,9 @@ public class AiToolManager {
     }
 
     /**
-     * 获取所有工具的定义列表 (提供给 ArkAiClient 使用)
+     * 获取所有工具的定义列表 (提供给 LlmProvider 使用)
      */
-    public List<ChatTool> getAllToolDefinitions() {
+    public List<LlmToolSpec> getAllToolDefinitions() {
         return allTools.stream()
                 .map(AiTool::getDefinition)
                 .collect(Collectors.toList());

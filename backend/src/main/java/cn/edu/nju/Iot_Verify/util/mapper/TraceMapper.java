@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.trace.*;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -32,6 +33,12 @@ public class TraceMapper {
         dto.setRequestJson(tracePo.getRequestJson());
         dto.setCreatedAt(tracePo.getCreatedAt());
 
+        // Derive the verification context flags (attack/intensity/privacy) from the stored request
+        // snapshot so the frontend can label a historical trace with the parameters it was run under,
+        // instead of reading the current (possibly-changed) verification form. requestJson is @JsonIgnore
+        // so these derived fields are the only way the client sees them.
+        applyRequestContext(dto, tracePo.getRequestJson());
+
         if (tracePo.getStatesJson() != null && !tracePo.getStatesJson().isEmpty()) {
             List<TraceStateDto> states = JsonUtils.fromJsonOrDefault(
                     tracePo.getStatesJson(),
@@ -44,6 +51,29 @@ public class TraceMapper {
         }
 
         return dto;
+    }
+
+    /**
+     * Parse the verification-context flags from the request snapshot JSON and set them on the DTO.
+     * Best-effort: a missing/legacy/unparseable snapshot leaves the derived fields null (the frontend
+     * then simply omits the labels), so this must never throw.
+     */
+    private void applyRequestContext(TraceDto dto, String requestJson) {
+        if (requestJson == null || requestJson.isBlank()) {
+            return;
+        }
+        VerificationRequestDto req;
+        try {
+            req = JsonUtils.fromJson(requestJson, VerificationRequestDto.class);
+        } catch (Exception e) {
+            return;
+        }
+        if (req == null) {
+            return;
+        }
+        dto.setAttack(req.isAttack());
+        dto.setIntensity(req.getIntensity());
+        dto.setEnablePrivacy(req.isEnablePrivacy());
     }
 
     /**

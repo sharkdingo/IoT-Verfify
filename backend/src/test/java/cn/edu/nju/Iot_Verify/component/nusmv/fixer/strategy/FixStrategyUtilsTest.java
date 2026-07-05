@@ -192,6 +192,22 @@ class FixStrategyUtilsTest {
     }
 
     @Test
+    void extractCandidateConditions_usesDeviceLabelWhenSpecDeviceIdIsPersistentNodeId() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("LivingRoomAC");
+
+        RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
+        SpecConditionDto cond = buildSpecCond("ac_1", "state", null, "=", "on");
+        cond.setDeviceLabel("LivingRoomAC");
+        SpecificationDto spec = buildSpec(cond);
+
+        List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
+                spec, rule, deviceMap, 5);
+
+        assertEquals(1, candidates.size());
+        assertEquals("LivingRoomAC", candidates.get(0).getDeviceName());
+    }
+
+    @Test
     void extractCandidateConditions_skipsApiTrustPrivacy() {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 

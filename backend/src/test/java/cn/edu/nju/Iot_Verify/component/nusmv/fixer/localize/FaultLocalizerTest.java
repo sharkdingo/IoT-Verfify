@@ -352,7 +352,11 @@ class FaultLocalizerTest {
     }
 
     @Test
-    void localize_unconditionalRule_triggersIfEffectMatches() {
+    void localize_emptyConditionRule_neverParticipates_failClosed() {
+        // A rule with no trigger conditions is emitted as FALSE by SMV generation (can never fire), so
+        // localization must treat it as never participating — even when its command's effect happens to
+        // match the observed state transition. This keeps fault localization consistent with the model
+        // NuSMV actually checks.
         DeviceSmvData lightSmv = buildDevice("light_1", "Light", List.of("LightMode"),
                 Map.of("LightMode", List.of("on", "off")),
                 buildManifest("Light", List.of(buildApi("turn_on", null, "on"))));
@@ -360,7 +364,7 @@ class FaultLocalizerTest {
         Map<String, DeviceSmvData> deviceMap = Map.of("light_1", lightSmv);
 
         RuleDto rule = RuleDto.builder()
-                .conditions(List.of()) // unconditional
+                .conditions(List.of()) // empty conditions → fail-closed
                 .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
                 .build();
 
@@ -370,7 +374,7 @@ class FaultLocalizerTest {
         );
 
         List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
-        assertEquals(1, faults.size());
+        assertTrue(faults.isEmpty());
     }
 
     // ===== IN / NOT_IN relation =====

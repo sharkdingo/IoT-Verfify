@@ -12,7 +12,7 @@ Redis 6.0+ optional (fail-open). Full setup:
 
 ```bash
 # Required env vars (defaults & full list: docs/getting-started/configuration.md)
-export DB_PASSWORD="..." JWT_SECRET="..." VOLCENGINE_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
+export DB_PASSWORD="..." JWT_SECRET="..." OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
 
 mvn spring-boot:run        # http://localhost:8080, auto-creates tables
 # or
@@ -36,7 +36,7 @@ component/
     parser/       SmvTraceParser — counterexample parsing
     fixer/        fault localization + parameter/condition/disable fix strategies
   aitool/         the 30 AI tools
-client/           ArkAiClient — AI client wrapper
+  ai/             LLM abstraction — LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, repositories
 security/         JWT + Spring Security
 configure/        config, thread pools, ProductionSafetyCheck

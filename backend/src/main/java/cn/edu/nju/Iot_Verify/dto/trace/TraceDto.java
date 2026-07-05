@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.dto.trace;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
@@ -60,7 +61,24 @@ public class TraceDto {
      */
     @JsonIgnore
     private String requestJson;
-    
+
+    /**
+     * 验证时的攻击模式开关，从 {@link #requestJson} 派生（由 TraceMapper 填充）。
+     * 暴露给前端，使历史 trace 能显示自身的验证上下文，而非当前表单。
+     */
+    @JsonProperty("isAttack")
+    private Boolean attack;
+
+    /**
+     * 验证时的攻击强度，从 {@link #requestJson} 派生。
+     */
+    private Integer intensity;
+
+    /**
+     * 验证时的隐私维度开关，从 {@link #requestJson} 派生。
+     */
+    private Boolean enablePrivacy;
+
     /**
      * 创建时间
      */

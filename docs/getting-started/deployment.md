@@ -1,6 +1,6 @@
 # Production Deployment
 
-> Verified against code on 2026-07-03. Source: root `README.md` (生产部署 / Nginx), `backend/pom.xml`, `frontend/package.json`, `ProductionSafetyCheck`.
+> Verified against code on 2026-07-05. Source: root `README.md` (生产部署 / Nginx), `backend/pom.xml`, `frontend/package.json`, `ProductionSafetyCheck`.
 
 This guide covers packaging and deploying IoT-Verify for production. For the full list of environment variables and their defaults, see [configuration.md](./configuration.md) — it is the single source of truth. This page only names the variables that matter for a production rollout.
 
@@ -20,7 +20,7 @@ When the backend starts under the `prod` or `production` profile, `ProductionSaf
 
 - `JWT_SECRET`
 - `DB_PASSWORD`
-- `VOLCENGINE_API_KEY`
+- `OPENAI_API_KEY`
 
 If any of these still hold their default value, startup aborts with an error. Set real values before deploying — see [configuration.md](./configuration.md) for how each variable is resolved.
 

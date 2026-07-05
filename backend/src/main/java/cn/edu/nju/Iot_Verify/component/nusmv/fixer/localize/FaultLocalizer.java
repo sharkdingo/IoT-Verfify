@@ -112,7 +112,12 @@ public class FaultLocalizer {
                                        TraceStateDto currentState, TraceStateDto nextState,
                                        Map<String, DeviceSmvData> deviceSmvMap) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
-            return true; // unconditional rule always fires
+            // Fail-closed, matching SMV generation: SmvMainModuleBuilder emits FALSE for a rule with no
+            // trigger conditions (a rule that can never fire), so localization must treat it the same way
+            // rather than as an always-firing rule — otherwise fix and NuSMV would disagree about whether
+            // an empty-condition rule participates in the trace. (New rules are also blocked from being
+            // empty by @NotEmpty on RuleDto.conditions; this keeps legacy/unvalidated data consistent.)
+            return false;
         }
 
         for (RuleDto.Condition cond : rule.getConditions()) {

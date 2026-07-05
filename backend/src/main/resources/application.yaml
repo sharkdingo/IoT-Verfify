@@ -23,12 +23,15 @@ server:
     include-message: never
     include-binding-errors: never
 
-volcengine:
-  ark:
-    api-key: ${VOLCENGINE_API_KEY:your_api_key_here}
-    model-id: ${VOLCENGINE_MODEL_ID:ep-20260316142708-t2vbn}
-    base-url: ${VOLCENGINE_BASE_URL:https://ark.cn-beijing.volces.com}
-    timeout-minutes: ${ARK_TIMEOUT_MINUTES:5}
+llm:
+  provider: ${LLM_PROVIDER:openai}
+  api-key: ${OPENAI_API_KEY:your_api_key_here}
+  model: ${OPENAI_MODEL:gpt-4o}
+  base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+  timeout-minutes: ${LLM_TIMEOUT_MINUTES:5}
+
+chat:
+  sse-timeout-ms: ${CHAT_SSE_TIMEOUT_MS:600000}
 
 jwt:
   secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}

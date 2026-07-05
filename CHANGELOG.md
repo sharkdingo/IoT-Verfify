@@ -15,6 +15,102 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-05
+
+#### Fixed
+- **Fix-apply now blocks spec/device-only drift.** Applying a verified fix previously replayed the
+  trace's stored context on the server, so editing spec conditions or device instance state
+  (variables, privacies, initial state, trust) after verifying — without touching rules or templates —
+  was not detected and a stale fix could be persisted onto the current rules. apply now compares a
+  canonical **semantic fingerprint** of the trace snapshot against the current board (device names
+  canonicalized, empty variable/privacy lists manifest-defaulted, values de-quoted, so an untouched
+  board still matches), and rejects with `400` on drift. The check runs **inside the same per-user
+  write lock + transaction** as the rule save (read → check → write is one atomic critical section), so
+  a concurrent spec/device/node edit cannot slip in between the check and the write. When the current
+  board fails to build a device model it fails closed, distinguishing cause: an invalid/changed board
+  rejects with `400`, while an unconfirmable infrastructure error (e.g. template repository unavailable)
+  rejects with `503` ("retry later") instead of misattributing it to a board change.
+- **Device reference resolution unified across spec generation, drift fingerprint, and fix candidates.**
+  A single `DeviceReferenceResolver` now owns the `deviceId → deviceLabel → normalized-label` fallback
+  order, so the NuSMV generator, semantic fingerprint, and fix-candidate builder no longer each guess
+  device names independently (they previously disagreed for AI/historical specs carrying a node-id
+  `deviceId` plus a label). condition-fix `add` now maps verification-time names (`d_1Lamp`) back to the
+  current board's persisted label (`1Lamp`) before saving, so the frontend can resolve the node.
+- **Template-drift check fails closed on apply.** A template-repository error during apply no longer
+  proceeds to recompute and persist; it is treated as unverifiable drift and rejected. `/fix` still
+  fails open (a repo error only drops the advisory warning).
+- **Digit-leading device labels no longer misfire the rule-drift check.** The frontend prefixes such
+  labels (`1Lamp` → `d_1Lamp`) in the verification snapshot while rules persist the raw label; the
+  apply-time rule fingerprint now canonicalizes both sides, so an untouched board is no longer rejected.
+- **Historical trace playback respects the same guards as current-result playback.** Viewing a saved
+  verification trace now checks the simulation-timeline / recommendations mutex, takes the animation
+  lock, and closes the result dialog; the `View` button is disabled while those panels are open.
+- **Trace attack/intensity labels reflect the viewed trace.** `TraceDto` now derives and exposes
+  `isAttack` / `intensity` / `enablePrivacy` from its stored request snapshot, and the trace control bar
+  reads them instead of the live verification form, so a historical trace is labelled with the
+  parameters it was actually run under.
+- **Successful-simulation logs are reachable.** A successful simulation opens the timeline directly; its
+  execution logs and raw NuSMV output are now retained and openable on demand via a "View logs" action
+  (previously the result dialog holding them was only reachable on error).
+- **AI board overview now reports the same rule connections as the canvas.** `board_overview` derives
+  edge summaries from rule conditions and commands instead of the optional persisted `/board/edges`
+  geometry table, matching the frontend's rule-derived canvas connections.
+- **Async verification and simulation can be cancelled from the Board UI.** The existing cancel REST
+  endpoints are now reachable from the async progress panels, and user-requested cancellation is shown
+  as an informational outcome rather than a generic failure.
+- **`fix_violation` is discoverable by the AI planner.** The tool was registered and documented, but the
+  system prompt and explicit tool-name router omitted it; both now list the tool.
+
+### 2026-07-04
+
+#### Changed
+- **Decoupled the LLM backend from Volcengine Ark; the AI assistant now targets any
+  OpenAI-compatible endpoint.** Introduced a vendor-neutral LLM layer under
+  `component/ai/`: a domain model (`LlmMessage`, `LlmToolCall`, `LlmToolSpec`,
+  `LlmChatRequest`/`LlmChatResponse`), a `LlmProvider` strategy interface, and an
+  `OpenAiLlmProvider` adapter that is the sole holder of an LLM SDK import. Facades
+  `LlmChatService` (tool loop + streaming), `PromptCompletionService` (one-shot
+  recommend/duplicate-check completions), and `LlmMessageCodec` (persistence wire-format
+  ⇄ domain conversion) sit between the business layer and the provider. `ChatServiceImpl`
+  and all AI tools now depend only on the domain model — no SDK type leaks into business
+  code. Tool declarations return `LlmToolSpec` instead of the SDK's `ChatTool`.
+
+#### Fixed
+- **NuSMV generation warnings are now part of the verification contract.** Rule
+  conditions that cannot be generated fail closed to `FALSE`, skipped/invalid specs are
+  recorded, and `VerificationResultDto` returns `checkLogs`,
+  `disabledRuleCount`, and `skippedSpecCount` so a "safe" result cannot hide that part of
+  the requested model was excluded. Warning collection is passed through a request-scoped
+  `SmvGenerationContext` instead of global mutable state, and completed async verification
+  tasks now persist/return the same two count fields.
+- **Rule creation no longer fabricates dummy triggers.** Frontend save, duplicate-check,
+  direct verify, and simulation paths validate that every rule has at least one concrete
+  trigger condition; the backend also requires non-empty `RuleDto.conditions`.
+- **Specification persistence now keeps the authored formula and device bindings.**
+  `SpecificationDto`/`SpecificationPo`/`SpecificationMapper` preserve `formula` and
+  `devices` metadata across board saves.
+- **Board edge storage is geometry-only again.** Frontend API mapping no longer expects
+  phantom edge fields such as `fromApi`, `toApi`, `itemType`, `relation`, or `value`.
+
+#### AI Tools
+- **AI rule/spec recommendations now use device labels as their primary references.**
+  `recommend_rules` emits `deviceName` values that match board labels, and
+  `recommend_specifications` requires `templateId` to be one of `"1"` through `"7"`;
+  recommendations with illegal template ids or unresolvable devices are filtered out.
+  Tool validators, prompt schemas, and backend DTO validation now also converge on
+  supported relation operators and non-empty condition values.
+
+#### Configuration (breaking)
+- **Config keys renamed `volcengine.ark.*` → `llm.*`.** Env vars: `VOLCENGINE_API_KEY` →
+  `OPENAI_API_KEY`, `VOLCENGINE_MODEL_ID` → `OPENAI_MODEL`, `VOLCENGINE_BASE_URL` →
+  `OPENAI_BASE_URL`, `ARK_TIMEOUT_MINUTES` → `LLM_TIMEOUT_MINUTES`; new `LLM_PROVIDER`
+  (default `openai`). Point `OPENAI_BASE_URL` at the official API or a relay ("中转站").
+  `ProductionSafetyCheck` now guards `llm.api-key` (`OPENAI_API_KEY`).
+
+#### Dependencies
+- Replaced `com.volcengine:volcengine-java-sdk-ark-runtime` with
+  `com.openai:openai-java` (4.41.0). Removed `ArkAiClient` and `ArkAiConfig`.
+
 ### 2026-07-03
 
 #### Security

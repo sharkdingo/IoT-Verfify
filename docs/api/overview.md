@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-03. Source: `dto/Result.java`,
+Verified against code on 2026-07-04. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `security/`.
 
 ---
@@ -92,6 +92,11 @@ returns a controlled `message` of the form `"[<errorCategory>] <generation error
 and also sets `data` to `{ "errorCategory": "<category>" }`, so the frontend can
 surface *why* model generation failed (e.g. an invalid template value) without exposing
 a stack trace. This is the one server-side error that carries a meaningful message.
+
+Generation warnings that do not abort model generation are not HTTP errors. Verification
+returns `200` with warning details in `VerificationResultDto.checkLogs`,
+`disabledRuleCount`, and `skippedSpecCount`; clients must display them even when
+`safe=true`.
 
 ---
 

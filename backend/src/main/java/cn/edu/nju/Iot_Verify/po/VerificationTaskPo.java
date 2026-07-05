@@ -54,6 +54,10 @@ public class VerificationTaskPo implements TaskView {
 
     private Integer violatedSpecCount;
 
+    private Integer disabledRuleCount;
+
+    private Integer skippedSpecCount;
+
     @Column(columnDefinition = "TEXT")
     @JsonIgnore
     private String checkLogsJson;

@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
@@ -30,6 +31,21 @@ public interface BoardStorageService {
     List<RuleDto> addRule(Long userId, RuleDto rule);
     /** Atomically remove a single rule by ID under user-level lock. Returns remaining rules, or null if not found. */
     List<RuleDto> removeRule(Long userId, long ruleId);
+
+    /**
+     * Atomic read-modify-write of a user's rules under the per-user write lock and one transaction.
+     * The mutator receives the current persisted rules and returns the new list to save; any exception
+     * it throws rolls back without saving. Use this when a decision (e.g. drift check) must be made on
+     * the same snapshot that is written, so a concurrent save cannot interleave between read and write.
+     */
+    List<RuleDto> updateRules(Long userId, java.util.function.UnaryOperator<List<RuleDto>> mutator);
+
+    /**
+     * Atomically save nodes + rules + specs in one transaction under the user write lock.
+     * A null collection in the batch is left unchanged. Used for device delete/rename where the three
+     * collections must change together to avoid a half-saved board.
+     */
+    BoardBatchDto saveBoardBatch(Long userId, BoardBatchDto batch);
 
     BoardLayoutDto getLayout(Long userId);
     BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout);

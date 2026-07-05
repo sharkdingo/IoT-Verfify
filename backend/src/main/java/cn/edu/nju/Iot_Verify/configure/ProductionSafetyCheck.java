@@ -24,7 +24,7 @@ public class ProductionSafetyCheck {
     private static final Set<String> PRODUCTION_PROFILES = Set.of("prod", "production");
     private static final String INSECURE_JWT_SECRET_PREFIX = "iot-verify-secret-key";
     private static final String INSECURE_DB_PASSWORD = "sharkdingo123";
-    private static final String PLACEHOLDER_ARK_API_KEY = "your_api_key_here";
+    private static final String PLACEHOLDER_LLM_API_KEY = "your_api_key_here";
 
     private final Environment environment;
 
@@ -34,8 +34,8 @@ public class ProductionSafetyCheck {
     @Value("${spring.datasource.password:}")
     private String dbPassword;
 
-    @Value("${volcengine.ark.api-key:}")
-    private String arkApiKey;
+    @Value("${llm.api-key:}")
+    private String llmApiKey;
 
     public ProductionSafetyCheck(Environment environment) {
         this.environment = environment;
@@ -57,8 +57,8 @@ public class ProductionSafetyCheck {
             violations.add("spring.datasource.password (DB_PASSWORD) is still the insecure default");
         }
 
-        if (arkApiKey == null || arkApiKey.isBlank() || PLACEHOLDER_ARK_API_KEY.equals(arkApiKey)) {
-            violations.add("volcengine.ark.api-key (VOLCENGINE_API_KEY) is still the placeholder default or empty");
+        if (llmApiKey == null || llmApiKey.isBlank() || PLACEHOLDER_LLM_API_KEY.equals(llmApiKey)) {
+            violations.add("llm.api-key (OPENAI_API_KEY) is still the placeholder default or empty");
         }
 
         if (!violations.isEmpty()) {
