@@ -80,9 +80,8 @@ export interface VerificationTask {
   checkLogs?: string[];
   disabledRuleCount?: number;
   skippedSpecCount?: number;
-  nusmvOutput?: string;    // 后端 TaskDto 不返回，但 Board.vue 仍在读取，保留为可选
+  nusmvOutput?: string;
   errorMessage?: string;
 }
-
 
 

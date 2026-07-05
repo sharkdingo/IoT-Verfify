@@ -77,7 +77,9 @@ Async tasks run on a dedicated thread pool; status transitions
 Simulation history is intentionally separate from verification traces. A plain
 `POST /api/simulate` response is transient, while `POST /api/simulate/traces` and
 completed async simulation tasks store `SimulationTrace` rows that the frontend can
-list, replay, and delete through the history panel.
+list, replay, and delete through the history panel. Completed async simulation task
+responses expose the `simulationTraceId`; the full raw NuSMV output lives on that
+trace, whereas completed async verification tasks expose `nusmvOutput` directly.
 
 Full endpoint list: [../api/rest-endpoints.md](../api/rest-endpoints.md). Field-level
 shapes: [../api/verification.md](../api/verification.md).

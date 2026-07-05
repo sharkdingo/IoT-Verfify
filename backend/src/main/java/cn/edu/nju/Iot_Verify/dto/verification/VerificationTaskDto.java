@@ -69,6 +69,8 @@ public class VerificationTaskDto {
      */
     private List<String> checkLogs;
 
+    private String nusmvOutput;
+
     /**
      * 错误消息
      */

@@ -33,6 +33,7 @@ public class VerificationTaskMapper {
                 .disabledRuleCount(po.getDisabledRuleCount())
                 .skippedSpecCount(po.getSkippedSpecCount())
                 .checkLogs(po.getCheckLogs() != null ? po.getCheckLogs() : JsonUtils.fromJsonToStringList(po.getCheckLogsJson()))
+                .nusmvOutput(po.getNusmvOutput())
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())
                 .build();

@@ -155,6 +155,10 @@ and `skippedSpecCount`, and generation warnings appear in `checkLogs` with
 when `safe === true`, because they mean the generated SMV model omitted or degraded part
 of the requested rules/specs.
 
+Completed async verification tasks also expose `nusmvOutput`, matching synchronous
+verification results. Completed async simulations expose their raw NuSMV output through
+the persisted `SimulationTraceDto` referenced by `simulationTraceId`.
+
 Verification requests (`verify` and `verifyAsync`) must include at least one specification.
 Simulation remains the no-spec workflow.
 

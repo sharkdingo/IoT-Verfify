@@ -171,6 +171,10 @@ const getGenerationWarningCounts = (result: any) => {
   }
 }
 
+const extractApiErrorMessage = (error: any, fallback: string): string => {
+  return error?.response?.data?.message || error?.message || fallback
+}
+
 const notifyVerificationOutcome = (result: any) => {
   const counts = getGenerationWarningCounts(result)
   if (counts.total > 0) {
@@ -2498,17 +2502,17 @@ const stopSimulationAnimation = () => {
   }
 }
 
-const handleVerify = async () => {
+const handleVerify = async (): Promise<boolean> => {
   if (nodes.value.length === 0) {
     ElMessage.warning({ message: t('app.noDevicesToVerify'), type: 'warning' })
-    return
+    return false
   }
   if (specifications.value.length === 0) {
     ElMessage.warning({ message: t('app.noSpecsToVerify'), type: 'warning' })
-    return
+    return false
   }
   if (!assertRulesHaveTriggers(rules.value)) {
-    return
+    return false
   }
 
   isVerifying.value = true
@@ -2542,16 +2546,17 @@ const handleVerify = async () => {
       asyncVerificationTask.value.status = t('app.verificationRunning')
 
       await pollAsyncVerification(taskId)
-      return
+      return true
     }
 
     // Sync verification (original logic)
     const result = await boardApi.verify(req)
     verificationResult.value = result
     notifyVerificationOutcome(result)
+    return true
 
   } catch (error: any) {
-    const message = error?.message || t('app.verificationFailed')
+    const message = extractApiErrorMessage(error, t('app.verificationFailed'))
     if (verificationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       verificationError.value = null
       ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
@@ -2560,6 +2565,7 @@ const handleVerify = async () => {
       verificationError.value = message
       ElMessage.error({ message: verificationError.value || t('app.verificationFailed'), type: 'error' })
     }
+    return false
   } finally {
     isVerifying.value = false
     cancellingVerificationTask.value = false
@@ -2567,14 +2573,16 @@ const handleVerify = async () => {
   }
 }
 
+const runVerification = async () => {
+  const completed = await handleVerify()
+  if (completed && !verificationForm.isAsync) {
+    showVerificationPanel.value = false
+  }
+}
+
 // Run simulation with proper panel handling
 const runSimulation = async () => {
-  // For async mode, don't close panel to show progress
-  // For sync mode, close panel after completion
   await handleSimulate({ ...simulationForm })
-  if (!simulationForm.isAsync) {
-    showSimulationPanel.value = false
-  }
 }
 
 const handleSimulate = async (simConfig: {
@@ -2701,7 +2709,7 @@ const handleSimulate = async (simConfig: {
     }
 
   } catch (error: any) {
-    const message = error?.message || t('app.simulationFailed')
+    const message = extractApiErrorMessage(error, t('app.simulationFailed'))
     if (simulationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       simulationError.value = null
       ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
@@ -3284,7 +3292,7 @@ const closeResultDialog = () => {
 
         <!-- Run Verification Button -->
         <button
-          @click="handleVerify(); if (!verificationForm.isAsync) showVerificationPanel = false"
+          @click="runVerification"
           :disabled="isVerifying"
           class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
@@ -4287,6 +4295,15 @@ const closeResultDialog = () => {
               </div>
             </div>
           </div>
+
+          <details v-if="verificationResult.nusmvOutput" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-slate-900">
+              {{ t('app.showRawNusmvOutput') }}
+            </summary>
+            <div class="mt-3 bg-slate-900 rounded-lg p-3 max-h-40 overflow-y-auto">
+              <pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{{ verificationResult.nusmvOutput || t('app.noOutput') }}</pre>
+            </div>
+          </details>
         </div>
 
         <div v-if="verificationResult && !verificationResult.safe && verificationResult.traces && verificationResult.traces.length > 0">

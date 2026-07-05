@@ -406,9 +406,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
-            List<String> generationWarnings = genResult.generationWarnings() != null
-                    ? new ArrayList<>(genResult.generationWarnings())
-                    : new ArrayList<>();
+            List<String> checkLogs = new ArrayList<>();
+            checkLogs.add("Generating NuSMV model...");
+            appendGenerationWarnings(checkLogs, genResult);
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
             }
@@ -418,10 +418,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
+            checkLogs.add("Model generated: " + smvFile.getAbsolutePath());
             saveRequestJson(smvFile, requestJson);
 
 
             updateTaskProgress(taskId, 50, "Executing NuSMV");
+            checkLogs.add("Executing NuSMV verification...");
             NusmvResult result = nusmvExecutor.execute(smvFile);
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
@@ -434,10 +436,11 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 finalResult = buildErrorResult("", List.of(msg));
                 return;
             }
+            checkLogs.add("NuSMV execution completed.");
 
             updateTaskProgress(taskId, 80, "Parsing results");
             finalResult = buildVerificationResult(
-                    result, devices, safeRules, specs, userId, taskId, generationWarnings, deviceSmvMap, requestJson,
+                    result, devices, safeRules, specs, userId, taskId, checkLogs, deviceSmvMap, requestJson,
                     genResult.disabledRuleCount(), genResult.skippedSpecCount());
 
             updateTaskProgress(taskId, 100, "Verification completed");

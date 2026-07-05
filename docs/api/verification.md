@@ -72,7 +72,8 @@ supply it).
 | `violatedSpecCount` | `Integer` | |
 | `disabledRuleCount` | `Integer` | Completed-task copy of generation-disabled rule count |
 | `skippedSpecCount` | `Integer` | Completed-task copy of skipped/degraded spec count |
-| `checkLogs` | `String[]` | |
+| `checkLogs` | `String[]` | Generation warnings and NuSMV execution/check logs once completed |
+| `nusmvOutput` | `String` | Raw NuSMV output once completed |
 | `errorMessage` | `String` | Present on `FAILED` |
 | `progress` | `Integer` | 0–100 |
 
@@ -230,6 +231,10 @@ requestedSteps, nusmvOutput, logs: String[] }`.
 
 `{ id, status, createdAt, startedAt, completedAt, processingTimeMs, requestedSteps,
 steps, simulationTraceId, checkLogs: String[], errorMessage, progress }`.
+
+Completed async simulations store the full states, execution logs, request JSON, and
+raw NuSMV output in the referenced `SimulationTraceDto`; the task DTO stays a polling
+summary.
 
 ### Persisted simulations
 
