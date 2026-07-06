@@ -101,7 +101,7 @@ Fetch `GET /api/verify/tasks/{id}` when the user opens a specific task.
 | `createdAt` / `startedAt` / `completedAt` | `LocalDateTime` | Lifecycle timestamps |
 | `processingTimeMs` | `Long` | |
 | `isSafe` | `Boolean` | Result once completed |
-| `violatedSpecCount` | `Integer` | Number of failed structured `specResults` once completed; falls back to trace count for legacy/no-result tasks |
+| `violatedSpecCount` | `Integer` | Number of failed structured `specResults` once completed; falls back to trace count when no per-spec results are available |
 | `disabledRuleCount` | `Integer` | Completed-task copy of generation-disabled rule count |
 | `skippedSpecCount` | `Integer` | Completed-task copy of skipped/degraded spec count |
 | `specResults` | `SpecResultDto[]` | Per-emitted-spec result objects once completed |

@@ -389,9 +389,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return taskId;
     }
 
-    @Override
+    // Service-internal: task creation is only reachable through submitVerification and
+    // the package-private async path below; it is no longer part of the public interface.
     @Transactional
-    public Long createTask(Long userId) {
+    Long createTask(Long userId) {
         VerificationTaskPo task = VerificationTaskPo.builder()
                 .userId(userId)
                 .status(VerificationTaskPo.TaskStatus.PENDING)
@@ -402,15 +403,17 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return Objects.requireNonNull(saved.getId());
     }
 
-    @Override
+    // Service-internal failure compensation, reachable only from the submit/async paths below.
     @Transactional
-    public void failTaskById(Long taskId, String errorMessage) {
+    void failTaskById(Long taskId, String errorMessage) {
         taskRepository.findById(Objects.requireNonNull(taskId, "taskId must not be null"))
                 .ifPresent(task -> failTask(task, errorMessage));
     }
 
-    @Override
-    public void verifyAsync(Long userId, Long taskId, VerificationRequestDto request) {
+    // Package-private async entry: assumes the caller already created the task and passes a
+    // non-null taskId. Production code goes through submitVerification; retained at this
+    // visibility so same-package tests can drive the "execute with a fixed taskId" path.
+    void verifyAsync(Long userId, Long taskId, VerificationRequestDto request) {
         Long requiredTaskId = requireTaskId(taskId);
         VerificationInput input;
         try {

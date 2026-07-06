@@ -28,6 +28,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -106,7 +107,10 @@ class SimulationAsyncToolsTest {
 
         assertEquals("SERVICE_UNAVAILABLE", json.path("errorCode").asText());
         assertEquals(503, json.path("status").asInt());
-        verify(simulationService, never()).failTaskById(anyLong(), any());
+        // submitSimulation owns task creation and failure compensation internally now,
+        // so the AI tool only invokes the high-level submit entry point.
+        verify(simulationService).submitSimulation(eq(1L), any());
+        verifyNoMoreInteractions(simulationService);
     }
 
     @Test

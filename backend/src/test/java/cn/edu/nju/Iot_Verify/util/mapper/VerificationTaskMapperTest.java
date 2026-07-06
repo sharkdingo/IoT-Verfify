@@ -34,24 +34,4 @@ class VerificationTaskMapperTest {
         assertEquals(java.util.List.of("generated", "checked"), dto.getCheckLogs());
         assertEquals("raw output", dto.getNusmvOutput());
     }
-
-    @Test
-    void mapsLegacyBooleanSpecResults() {
-        VerificationTaskPo po = VerificationTaskPo.builder()
-                .id(8L)
-                .userId(1L)
-                .status(VerificationTaskPo.TaskStatus.COMPLETED)
-                .createdAt(LocalDateTime.now())
-                .isSafe(false)
-                .specResultsJson("[true,false]")
-                .build();
-
-        VerificationTaskDto dto = mapper.toDto(po);
-
-        assertEquals(2, dto.getSpecResults().size());
-        assertEquals("legacy-1", dto.getSpecResults().get(0).getSpecId());
-        assertEquals(true, dto.getSpecResults().get(0).isPassed());
-        assertEquals("legacy-2", dto.getSpecResults().get(1).getSpecId());
-        assertEquals(false, dto.getSpecResults().get(1).isPassed());
-    }
 }

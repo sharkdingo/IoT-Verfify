@@ -25,16 +25,6 @@ public interface SimulationService {
      */
     Long submitSimulation(Long userId, SimulationRequestDto request);
 
-    Long createTask(Long userId, int requestedSteps);
-
-    void failTaskById(Long taskId, String errorMessage);
-
-    /**
-     * 低层异步模拟入口（兼容旧调用）：调用方必须先创建任务并传入非空 taskId。
-     * 新调用应优先使用 submitSimulation，让服务统一完成校验、建任务和入队。
-     */
-    void simulateAsync(Long userId, Long taskId, SimulationRequestDto request);
-
     SimulationTaskDto getTask(Long userId, Long taskId);
 
     /**

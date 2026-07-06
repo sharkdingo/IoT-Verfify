@@ -204,9 +204,10 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         return copy;
     }
 
-    @Override
+    // Service-internal: task creation is only reachable through submitSimulation and
+    // the package-private async path below; it is no longer part of the public interface.
     @Transactional
-    public Long createTask(Long userId, int requestedSteps) {
+    Long createTask(Long userId, int requestedSteps) {
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .userId(userId)
                 .status(SimulationTaskPo.TaskStatus.PENDING)
@@ -218,15 +219,17 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         return saved.getId();
     }
 
-    @Override
+    // Service-internal failure compensation, reachable only from the submit/async paths below.
     @Transactional
-    public void failTaskById(Long taskId, String errorMessage) {
+    void failTaskById(Long taskId, String errorMessage) {
         simulationTaskRepository.findById(Objects.requireNonNull(taskId, "taskId must not be null"))
                 .ifPresent(task -> failTask(task, errorMessage, List.of(errorMessage)));
     }
 
-    @Override
-    public void simulateAsync(Long userId, Long taskId, SimulationRequestDto request) {
+    // Package-private async entry: assumes the caller already created the task and passes a
+    // non-null taskId. Production code goes through submitSimulation; retained at this
+    // visibility so same-package tests can drive the "execute with a fixed taskId" path.
+    void simulateAsync(Long userId, Long taskId, SimulationRequestDto request) {
         Long requiredTaskId = requireTaskId(taskId);
         SimulationInput input;
         try {

@@ -21,9 +21,9 @@ history into a technical spec. The spec content itself now lives under
 - **Verification spec results are now identity-bearing objects.** Sync verification,
   completed async verification tasks, and `verify_model` AI tool output now return
   `specResults` as `{ specId, passed, expression }` entries for the specifications
-  actually emitted to NuSMV. Async task persistence keeps the existing
-  `specResultsJson` column while storing the new object-array JSON, and the mapper can
-  still read legacy boolean arrays.
+  actually emitted to NuSMV. Async task persistence stores this object-array JSON in the
+  existing `specResultsJson` column; `specResults` is strictly the structured shape (the
+  pre-release boolean-array format is no longer read, so the column must not contain it).
 - Verification now treats "no specifications emitted to NuSMV" as an unreliable failure
   (`safe=false`, empty `specResults`) instead of a vacuous pass, and completed async task
   `violatedSpecCount` now counts failed structured spec results rather than only saved
@@ -54,6 +54,13 @@ history into a technical spec. The spec content itself now lives under
   (`GET /api/verify/tasks`, `GET /api/simulate/tasks`). The Board UI uses them for a
   task inbox and global mini task indicator, so background tasks remain visible and
   cancellable after closing the submit panel or refreshing the page.
+
+#### Removed
+- The `VerificationService` / `SimulationService` interfaces no longer expose the
+  low-level async task plumbing (`verifyAsync`/`simulateAsync`, `createTask`,
+  `failTaskById`). REST and AI callers go through `submitVerification` /
+  `submitSimulation`, which own validation, task creation, and failure compensation
+  internally; the remaining pieces are package-private implementation details.
 
 ### 2026-07-05
 

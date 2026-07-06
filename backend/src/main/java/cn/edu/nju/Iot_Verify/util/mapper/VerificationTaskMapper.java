@@ -7,7 +7,6 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -86,54 +85,6 @@ public class VerificationTaskMapper {
     }
 
     private List<SpecResultDto> readSpecResults(String json) {
-        // Legacy rows are stored as [true,false]. Detect them before structured parsing
-        // because Jackson can otherwise coerce scalar array elements into empty DTO objects.
-        // Structured SpecResultDto arrays always start with an object ("[{...}]"), not an
-        // unquoted true/false literal.
-        if (looksLikeLegacyBooleanArray(json)) {
-            return readLegacySpecResults(json);
-        }
-
-        List<SpecResultDto> structured = JsonUtils.fromJsonList(json, SpecResultDto.class);
-        if (!structured.isEmpty()) {
-            return structured;
-        }
-
-        return readLegacySpecResults(json);
-    }
-
-    private List<SpecResultDto> readLegacySpecResults(String json) {
-        List<Boolean> legacy = JsonUtils.fromJsonList(json, Boolean.class);
-        if (legacy.isEmpty()) {
-            return List.of();
-        }
-
-        List<SpecResultDto> converted = new ArrayList<>(legacy.size());
-        for (int i = 0; i < legacy.size(); i++) {
-            converted.add(SpecResultDto.builder()
-                    .specId("legacy-" + (i + 1))
-                    .passed(Boolean.TRUE.equals(legacy.get(i)))
-                    .expression("")
-                    .build());
-        }
-        return converted;
-    }
-
-    private boolean looksLikeLegacyBooleanArray(String json) {
-        if (json == null || json.isBlank()) {
-            return false;
-        }
-        String trimmed = json.trim();
-        if (!trimmed.startsWith("[")) {
-            return false;
-        }
-        for (int i = 1; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            if (Character.isWhitespace(c)) {
-                continue;
-            }
-            return c == 't' || c == 'f' || c == 'T' || c == 'F';
-        }
-        return false;
+        return JsonUtils.fromJsonList(json, SpecResultDto.class);
     }
 }

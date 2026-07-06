@@ -230,14 +230,6 @@ const buildVerificationResultFromTask = (task: VerificationTask, traces: Trace[]
 })
 
 const normalizeSpecResult = (value: unknown, index: number): SpecResult => {
-  if (typeof value === 'boolean') {
-    return {
-      specId: `legacy-${index + 1}`,
-      passed: value,
-      expression: ''
-    }
-  }
-
   const candidate = value as Partial<SpecResult> | undefined
   return {
     specId: candidate?.specId || `spec-${index + 1}`,

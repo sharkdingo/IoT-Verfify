@@ -22,12 +22,6 @@ public interface VerificationService {
     VerificationResultDto verify(Long userId, VerificationRequestDto request);
 
     /**
-     * 低层异步验证入口（兼容旧调用）：调用方必须先创建任务并传入非空 taskId。
-     * 新调用应优先使用 submitVerification，让服务统一完成校验、建任务和入队。
-     */
-    void verifyAsync(Long userId, Long taskId, VerificationRequestDto request);
-
-    /**
      * 校验请求、创建任务并提交异步验证。请求非法时不会创建任务；队列拒绝时会
      * 将已创建任务标记为失败并抛出 ServiceUnavailableException。
      *
@@ -116,19 +110,4 @@ public interface VerificationService {
      */
     int getTaskProgress(Long userId, Long taskId);
 
-    /**
-     * 创建验证任务（异步验证前调用）
-     *
-     * @param userId 用户ID
-     * @return 任务ID
-     */
-    Long createTask(Long userId);
-
-    /**
-     * 按任务ID标记失败（无需userId校验，仅供内部/Controller拒绝时使用）
-     *
-     * @param taskId 任务ID
-     * @param errorMessage 错误信息
-     */
-    void failTaskById(Long taskId, String errorMessage);
 }
