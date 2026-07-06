@@ -2,6 +2,7 @@
 import { reactive, computed, watch, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import type { DeviceNode } from '../types/node'
 import type { RuleForm } from '../types/rule'
 import boardApi from '../api/board'
@@ -308,6 +309,9 @@ const handleClose = () => {
   emit('update:modelValue', false)
 }
 
+const isDialogOpen = computed(() => props.modelValue)
+const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, handleClose)
+
 // Helper functions for UI
 const getDeviceIcon = (node?: DeviceNode | null) => {
   if (!node) return 'sensors'
@@ -395,32 +399,42 @@ const formatApiLabel = (api: string) => {
   <div
     v-show="modelValue"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-    @click.self="handleClose"
+    @keydown="handleModalKeydown"
   >
-    <div class="w-full max-w-2xl bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-2xl">
+    <div
+      :ref="setDialogRef"
+      class="w-full max-w-2xl bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="rule-builder-title"
+      tabindex="-1"
+    >
       <!-- Header -->
       <div class="px-8 py-6 border-b border-slate-100 dark:border-slate-700">
         <div class="flex items-center justify-between mb-4">
-          <h1 class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
-            <span class="material-icons-round text-blue-500">auto_fix_high</span>
+          <h1 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
+            <span class="material-icons-round text-blue-500" aria-hidden="true">auto_fix_high</span>
             {{ t('app.createNewRule') }}
           </h1>
           <button
+            type="button"
             @click="handleClose"
             class="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 transition-colors"
+            :aria-label="t('app.close')"
           >
-            <span class="material-icons-round">close</span>
+            <span class="material-icons-round" aria-hidden="true">close</span>
           </button>
         </div>
 
         <!-- Rule Name Input -->
         <div class="space-y-2">
-          <label class="text-sm font-semibold text-slate-600 dark:text-slate-400">{{ t('app.ruleName') }}</label>
+          <label for="rule-builder-name" class="text-sm font-semibold text-slate-600 dark:text-slate-400">{{ t('app.ruleName') }}</label>
           <input
+            id="rule-builder-name"
             v-model="ruleData.name"
             type="text"
             :placeholder="t('app.ruleNamePlaceholder')"
-            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
+            class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 placeholder:text-slate-600 dark:placeholder:text-slate-400"
           />
         </div>
       </div>
@@ -442,12 +456,13 @@ const formatApiLabel = (api: string) => {
           <div class="grid grid-cols-5 gap-3">
             <!-- 设备选择 -->
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
+              <label for="rule-source-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ currentSource.fromId ? getDeviceIcon(resolveDeviceNode(currentSource.fromId)) : 'sensors' }}
                 </span>
                 <select
+                  id="rule-source-device"
                   v-model="currentSource.fromId"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
@@ -462,12 +477,13 @@ const formatApiLabel = (api: string) => {
 
             <!-- 类型选择 (API / Variable) -->
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.type') }}</label>
+              <label for="rule-source-type" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.type') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ currentSource.itemType === 'variable' ? 'tune' : (currentSource.itemType === 'api' ? 'bolt' : 'category') }}
                 </span>
                 <select
+                  id="rule-source-type"
                   v-model="currentSource.itemType"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.fromId"
@@ -482,12 +498,13 @@ const formatApiLabel = (api: string) => {
 
             <!-- API选择 - 仅选择 API 类型时显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'api'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.api') }}</label>
+              <label for="rule-source-api" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.api') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   bolt
                 </span>
                 <select
+                  id="rule-source-api"
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
@@ -502,12 +519,13 @@ const formatApiLabel = (api: string) => {
 
             <!-- Variable选择 - 仅选择 Variable 类型时显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.variable') }}</label>
+              <label for="rule-source-variable" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.variable') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   tune
                 </span>
                 <select
+                  id="rule-source-variable"
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                 >
@@ -522,12 +540,13 @@ const formatApiLabel = (api: string) => {
 
             <!-- 条件选择 - 仅变量显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.condition') }}</label>
+              <label for="rule-source-condition" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.condition') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   compare_arrows
                 </span>
                 <select
+                  id="rule-source-condition"
                   v-model="currentSource.relation"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
                   :disabled="!currentSource.fromApi"
@@ -542,12 +561,13 @@ const formatApiLabel = (api: string) => {
 
             <!-- 值输入 - 仅变量显示 -->
             <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.value') }}</label>
+              <label for="rule-source-value" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.value') }}</label>
               <input
+                id="rule-source-value"
                 v-model="currentSource.value"
                 type="text"
                 :placeholder="t('app.enterValuePlaceholder')"
-                class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-400"
+                class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-600 dark:placeholder:text-slate-400"
                 :disabled="!currentSource.relation"
                 @keydown.enter="tryAutoAddSource"
                 @blur="tryAutoAddSource"
@@ -556,6 +576,7 @@ const formatApiLabel = (api: string) => {
           </div>
 
           <button
+            type="button"
             @click="addSource"
             class="flex items-center gap-2 text-blue-500 font-medium text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-all group"
             :disabled="!canAddSource"
@@ -593,10 +614,12 @@ const formatApiLabel = (api: string) => {
                 </span>
               </template>
               <button
+                type="button"
                 @click="removeSource(index)"
                 class="ml-auto text-red-500 hover:text-red-700 text-sm transition-colors"
+                :aria-label="t('app.remove')"
               >
-                <span class="material-icons-round text-sm">close</span>
+                <span class="material-icons-round text-sm" aria-hidden="true">close</span>
               </button>
             </div>
           </div>
@@ -616,12 +639,13 @@ const formatApiLabel = (api: string) => {
 
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
+              <label for="rule-target-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   {{ ruleData.toId ? getDeviceIcon(resolveDeviceNode(ruleData.toId)) : 'sensors' }}
                 </span>
                 <select
+                  id="rule-target-device"
                   v-model="ruleData.toId"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
                 >
@@ -635,12 +659,13 @@ const formatApiLabel = (api: string) => {
             </div>
 
             <div class="space-y-2">
-              <label class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.action') }}</label>
+              <label for="rule-target-action" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.action') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   bolt
                 </span>
                 <select
+                  id="rule-target-action"
                   v-model="ruleData.toApi"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
                   :disabled="!ruleData.toId"
@@ -712,12 +737,14 @@ const formatApiLabel = (api: string) => {
       <!-- Footer -->
       <div class="px-8 py-6 bg-slate-50/50 dark:bg-slate-900/20 border-t border-slate-100 dark:border-slate-700 flex justify-end gap-3">
         <button
+          type="button"
           @click="handleClose"
           class="px-6 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
         >
           {{ t('app.cancel') }}
         </button>
         <button
+          type="button"
           @click="handleCheckDuplicate"
           :disabled="checkingDuplicate"
           class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -726,6 +753,7 @@ const formatApiLabel = (api: string) => {
           <span>{{ checkingDuplicate ? t('app.checking') : t('app.checkDuplicate') }}</span>
         </button>
         <button
+          type="button"
           @click="handleSave"
           :disabled="checkingDuplicate"
           class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"

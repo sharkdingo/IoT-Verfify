@@ -1,12 +1,12 @@
 # Board Storage & Recommendation API
 
 Field-level contract for `/api/board` — the persisted canvas (nodes, edges, rules,
-specs, layout, active tabs), device templates, and AI-backed recommendation endpoints.
+specs, layout), device templates, and AI-backed recommendation endpoints.
 The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-05. Source:
+Verified against code on 2026-07-06. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -42,8 +42,6 @@ Verified against code on 2026-07-05. Source:
 | POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Atomic** save of `nodes` + `rules` + `specs` in one transaction; a `null` collection is left unchanged. Used for device delete/rename so the three collections can't end up half-saved |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
 | POST | `/api/board/layout` | `BoardLayoutDto` → `BoardLayoutDto` | |
-| GET | `/api/board/active` | → `BoardActiveDto` | Active tabs |
-| POST | `/api/board/active` | `BoardActiveDto` → `BoardActiveDto` | |
 
 ### `DeviceNodeDto`
 
@@ -87,14 +85,17 @@ same rule with `@NotEmpty` on `RuleDto.conditions`.
 ### `BoardLayoutDto`
 
 `{ input: PanelPosition, status: PanelPosition, canvasPan: {x,y}, canvasZoom: Double,
-dockState: { input: DockState, status: DockState } }`, where `PanelPosition` is
-`{x, y}` and `DockState` is `{ isDocked: Boolean, side: "left"|"right"|"top"|"bottom"|null,
-lastPos: PanelPosition }`.
+dockState: { input: DockState, status: DockState }, panels: { control: PanelLayout,
+inspector: PanelLayout } }`, where `PanelPosition` is `{x, y}` and `DockState` is
+`{ isDocked: Boolean, side: "left"|"right"|"top"|"bottom"|null, lastPos:
+PanelPosition }`.
 
-### `BoardActiveDto`
-
-`{ input: String[], status: String[] }` — both required (`@NotNull`); the lists of
-active tab ids.
+`PanelLayout` is `{ collapsed: Boolean, width: Double, activeSection: String }`.
+`panels.control.activeSection` is one of `devices`, `templates`, `rules`, `specs`;
+`panels.inspector.activeSection` is one of `devices`, `rules`, `specs`. The board
+stores panel collapsed state, width, active section, and canvas pan/zoom in this one
+layout document. Panel widths are normalized to `240..520`, and `canvasZoom` is
+normalized to `0.4..2.0`. There is no separate active-tabs endpoint.
 
 ---
 

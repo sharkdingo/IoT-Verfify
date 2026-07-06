@@ -6,7 +6,6 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
-import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -118,16 +117,6 @@ public class BoardStorageController {
     @PostMapping("/layout")
     public Result<BoardLayoutDto> saveLayout(@CurrentUser Long userId, @NotNull @Valid @RequestBody BoardLayoutDto layout) {
         return Result.success(boardService.saveLayout(userId, layout));
-    }
-
-    @GetMapping("/active")
-    public Result<BoardActiveDto> getActive(@CurrentUser Long userId) {
-        return Result.success(boardService.getActive(userId));
-    }
-
-    @PostMapping("/active")
-    public Result<BoardActiveDto> saveActive(@CurrentUser Long userId, @NotNull @Valid @RequestBody BoardActiveDto active) {
-        return Result.success(boardService.saveActive(userId, active));
     }
 
     @GetMapping("/templates")

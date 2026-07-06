@@ -13,7 +13,7 @@ import {
 
 import { getLinkPoints } from '../utils/rule'
 
-import { getDefaultDeviceIcon, getDeviceIconPath, getVariableIconPath } from '../utils/device'
+import { getDeviceIconPath, getVariableIconPath } from '../utils/device'
 
 const { t } = useI18n()
 
@@ -199,9 +199,19 @@ const getParticleFillColor = (edge: DeviceEdge): string => {
   return colors[colorIndex] || colors[0]
 }
 
-// Handle image loading errors by showing default icon
+const fallbackDeviceSvg = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="14" y="12" width="44" height="48" rx="10" fill="#E2E8F0" stroke="#64748B" stroke-width="3"/>
+  <circle cx="36" cy="32" r="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="3"/>
+  <path d="M26 50h20" stroke="#64748B" stroke-width="4" stroke-linecap="round"/>
+</svg>`
+
+const svgDataUri = (svg: string): string =>
+  `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
+
+// Handle image loading errors by showing a stable inline SVG fallback.
 const handleImageError = (event: Event, node: DeviceNode) => {
   const img = event.target as HTMLImageElement
+  img.onerror = null
   // 如果是变量节点，使用变量默认图标
   if (node.templateName.startsWith('variable_')) {
     const variableName = node.templateName.replace('variable_', '')
@@ -211,8 +221,7 @@ const handleImageError = (event: Event, node: DeviceNode) => {
       return
     }
   }
-  const defaultIcon = getDefaultDeviceIcon(node.templateName)
-  img.src = `data:image/svg+xml;base64,${btoa(defaultIcon)}`
+  img.src = svgDataUri(fallbackDeviceSvg)
 }
 
 // 获取设备在轨迹中的最新状态（从之前的轨迹状态中查找）
@@ -384,8 +393,8 @@ const getCurrentNodeIcon = (node: DeviceNode): string => {
     }
   }
 
-  // 如果所有尝试都失败，返回默认图标
-  return `data:image/svg+xml;base64,${btoa(getDefaultDeviceIcon(node.templateName))}`
+  // 如果所有尝试都失败，返回内联 SVG 占位图
+  return svgDataUri(fallbackDeviceSvg)
 }
 
 const props = defineProps<{
@@ -416,6 +425,19 @@ const props = defineProps<{
     selectedStateIndex?: number
   } | null
 }>()
+
+const GRID_SIZE_PX = 32
+
+const canvasGridStyle = computed(() => {
+  const gridSize = Math.max(8, GRID_SIZE_PX * props.zoom)
+  const offsetX = ((props.pan.x % gridSize) + gridSize) % gridSize
+  const offsetY = ((props.pan.y % gridSize) + gridSize) % gridSize
+  return {
+    '--canvas-grid-size': `${gridSize}px`,
+    '--canvas-grid-offset-x': `${offsetX}px`,
+    '--canvas-grid-offset-y': `${offsetY}px`
+  }
+})
 
 // 获取当前选中状态的设备信息
 const currentTraceDevices = computed(() => {
@@ -618,6 +640,12 @@ const emit = defineEmits<{
   (e: 'canvas-wheel', evt: WheelEvent): void
   /** 节点右键（设备弹窗） */
   (e: 'node-context', node: DeviceNode, evt: MouseEvent): void
+  /** 键盘或辅助技术打开节点详情 */
+  (e: 'node-open', node: DeviceNode): void
+  /** 键盘打开节点上下文菜单 */
+  (e: 'node-keyboard-context', node: DeviceNode, position: { x: number; y: number }): void
+  /** 键盘删除节点 */
+  (e: 'node-delete', nodeId: string): void
   /** 节点拖拽或缩放结束，通知 Board.vue 持久化 nodes/edges */
   (e: 'node-moved-or-resized', nodeId: string): void
 }>()
@@ -739,6 +767,55 @@ const onNodeContextInternal = (node: DeviceNode, e: MouseEvent) => {
   emit('node-context', node, e)
 }
 
+const getNodeAriaLabel = (node: DeviceNode) => {
+  return `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeState(node)}`
+}
+
+const moveNodeByKeyboard = (node: DeviceNode, dx: number, dy: number) => {
+  node.position.x += dx
+  node.position.y += dy
+  updateEdgesForNode(node.id, props.nodes, props.edges)
+  emit('node-moved-or-resized', node.id)
+}
+
+const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    emit('node-open', node)
+    return
+  }
+
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault()
+    if (isVariableNode(node)) return
+    emit('node-delete', node.id)
+    return
+  }
+
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault()
+    const element = event.currentTarget as HTMLElement | null
+    const rect = element?.getBoundingClientRect()
+    emit('node-keyboard-context', node, {
+      x: rect ? rect.left + rect.width / 2 : 0,
+      y: rect ? rect.top + rect.height / 2 : 0
+    })
+    return
+  }
+
+  const step = event.shiftKey ? 1 : 10
+  const movement: Record<string, { dx: number; dy: number }> = {
+    ArrowUp: { dx: 0, dy: -step },
+    ArrowDown: { dx: 0, dy: step },
+    ArrowLeft: { dx: -step, dy: 0 },
+    ArrowRight: { dx: step, dy: 0 }
+  }
+  const delta = movement[event.key]
+  if (!delta || event.repeat) return
+  event.preventDefault()
+  moveNodeByKeyboard(node, delta.dx, delta.dy)
+}
+
 /* ====== 生命周期清理 ====== */
 
 // Run test on component mount
@@ -757,6 +834,8 @@ onBeforeUnmount(() => {
 <template>
   <div
       class="canvas"
+      data-testid="canvas-board"
+      :style="canvasGridStyle"
       @pointerdown="(e: PointerEvent) => emit('canvas-pointerdown', e)"
       @dragover.prevent="(e: DragEvent) => emit('canvas-dragover', e)"
       @drop.prevent="(e: DragEvent) => emit('canvas-drop', e)"
@@ -947,6 +1026,9 @@ onBeforeUnmount(() => {
           :key="node.id + (highlightedTrace?.selectedStateIndex ?? '')"
           :data-node-id="node.id"
           class="device-node"
+          tabindex="0"
+          role="button"
+          :aria-label="getNodeAriaLabel(node)"
           :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'node-flip': (getPreviousState(node) && getPreviousState(node) !== getNodeState(node)) || shouldAnimateFlip(node) }, { 'device-attacked': isDeviceAttacked(node.id, node.label) }]"
           :style="{
           left: node.position.x + 'px',
@@ -959,6 +1041,7 @@ onBeforeUnmount(() => {
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
           @contextmenu.prevent="onNodeContextInternal(node, $event)"
+          @keydown="onNodeKeydown($event, node)"
       >
         <!-- 变量节点：只显示图标（圆形） -->
         <div v-if="isVariableNode(node)" class="variable-node-wrapper">
@@ -1097,15 +1180,18 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 3px 8px;
+  min-height: 18px;
+  padding: 3px 7px;
   border-radius: 12px;
   font-size: 10px;
   font-weight: 600;
   z-index: 5;
   width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   line-height: 1;
+  overflow: hidden;
 }
 
 .device-state-dot {
@@ -1117,7 +1203,8 @@ onBeforeUnmount(() => {
 }
 
 .device-state-value {
-  max-width: 60px;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1290,6 +1377,14 @@ onBeforeUnmount(() => {
 
 /* 3D 翻转动画 - 设备内容区域 */
 .device-node-content {
+  display: grid;
+  grid-template-rows: minmax(1.75rem, 1fr) auto auto;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: clamp(0.15rem, 3%, 0.35rem);
   transition: transform 0.3s ease-in-out;
 }
 

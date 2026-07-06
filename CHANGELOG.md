@@ -18,6 +18,9 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-06
 
 #### Changed
+- **Board panel state now lives only in `board_layout`.** `BoardLayoutDto.panels`
+  carries control/inspector collapsed state, width, and active section alongside canvas
+  pan/zoom. The old `board_active` DTO/entity/repository/API was removed.
 - **Verification spec results are now identity-bearing objects.** Sync verification,
   completed async verification tasks, and `verify_model` AI tool output now return
   `specResults` as `{ specId, passed, expression }` entries for the specifications
@@ -54,6 +57,30 @@ history into a technical spec. The spec content itself now lives under
   (`GET /api/verify/tasks`, `GET /api/simulate/tasks`). The Board UI uses them for a
   task inbox and global mini task indicator, so background tasks remain visible and
   cancellable after closing the submit panel or refreshing the page.
+- **Board UI chrome was normalized around responsive layout and theme tokens.** The
+  side panels, floating panels, task/history surfaces, canvas map, and trace/simulation
+  timelines now use shared board surface/card/form tokens; timelines are bottom-centered
+  between side panels, node labels/states have bounded responsive layout, and stable
+  Playwright selectors cover the primary user-facing regions.
+- **Canvas tool overlays were tightened for real canvas work.** The canvas map is now
+  compact/translucent, docks to the visible canvas top-left, keeps its mini-map dots
+  and edges inside the viewport, and its fit/center buttons are covered by the real
+  browser check. Trace/simulation timelines are lighter, the right action rail no
+  longer overlaps the inspector, and the grid is painted as an infinite viewport
+  background driven by pan/zoom.
+- **The board action rail is now grouped and accessible.** Run actions and AI
+  suggestion actions are visually separated, desktop buttons show short text labels,
+  icons are distinct, and every tool button exposes an explicit accessible name and
+  pressed state for keyboard and screen-reader users.
+- **The system inspector now uses entity tabs with local create affordances.** Devices,
+  rules, and specifications are browsed one category at a time, each list has a nearby
+  add action that opens the matching control-center form, and the inspector active tab
+  is persisted through `board_layout.panels.inspector.activeSection`.
+- **Board usability checks now cover tool panels, language/theme variants, and trace
+  edge cases.** Floating tool panels expose stable selectors, recommendation panels use
+  localized labels/actions, side panels clamp or wrap long text, missing device images
+  fall back to inline SVG, and the simulation timeline is checked with short, standard,
+  and long traces from the real backend.
 
 #### Removed
 - The `VerificationService` / `SimulationService` interfaces no longer expose the
@@ -271,15 +298,12 @@ history into a technical spec. The spec content itself now lives under
 - `SimulationState` gained `rules?` and `trustPrivacies?` (backend `TraceStateDto`).
 - `DeviceNode` gained `currentStateTrust?`, `variables?`, `privacies?` (backend
   `DeviceNodeDto`), removing the need for `(node as any)` casts.
-- `PanelActive` gained the required `input` field to match backend `BoardActiveDto`
-  (`{ input, status }`, both `@NotNull`).
+- Board panel active state is no longer modeled by a separate frontend type; layout
+  state belongs to `BoardLayoutDto`.
 
 #### Removed (dead / duplicate frontend types)
-- `types/panel.ts` no longer exports `DockSide`, `DockState`, `PanelPosition` — leftovers
-  from the removed panel/dock system with zero references. The layout DTO types
-  (`PanelPosition`, `DockState`, `DockStateWrapper`) live in `types/canvas.ts`, used by
-  `BoardLayoutDto`. This also removes the duplicate `DockState`/`PanelPosition`
-  definitions that previously existed in both files.
+- `types/panel.ts` was removed. Layout DTO types live in `types/canvas.ts`, and panel
+  collapsed/active-section state is part of `BoardLayoutDto.panels`.
 - `types/spec.ts` no longer exports `relationOperators`, `RelationOperator`,
   `targetTypes`, `TargetType` — unused duplicates of the live versions in
   `assets/config/specTemplates.ts` (which is what components import). Prevents the two

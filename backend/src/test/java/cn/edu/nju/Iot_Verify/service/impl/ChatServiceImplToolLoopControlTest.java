@@ -151,6 +151,23 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void executeToolLoop_whenDeleteDeviceSucceeds_shouldRefreshDependentBoardLists() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("delete_device", "{\"identifier\":\"light_1\"}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("delete_device", "{\"identifier\":\"light_1\"}"))
+                .thenReturn("{\"message\":\"ok\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        List<String> targets = commandSet.stream()
+                .map(cmd -> String.valueOf(cmd.getPayload().get("target")))
+                .toList();
+        assertEquals(List.of("device_list", "rule_list", "spec_list"), targets);
+    }
+
+    @Test
     void executeToolLoop_whenToolReturnsNonJson_shouldNotCollectRefreshCommand() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))

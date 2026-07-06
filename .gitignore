@@ -30,6 +30,7 @@ Desktop.ini
 .codex-review/
 tmp-run/
 playwright-real-review/
+artifacts/
 
 # ======================= Secrets / env ======================
 # Never commit real env files; the *.example templates ARE committed.

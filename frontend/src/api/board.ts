@@ -7,7 +7,6 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { Specification } from '../types/spec'
 import type { BoardLayoutDto } from '../types/canvas'
-import type { PanelActive } from '../types/panel'
 import type { RuleForm } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
 import type { VerificationRequest, VerificationResult, VerificationTask, VerificationTaskSummary, Trace } from '@/types/verify'
@@ -257,14 +256,6 @@ export default {
     },
     saveLayout: async (dto: BoardLayoutDto): Promise<BoardLayoutDto> => {
         return unpack<BoardLayoutDto>(await api.post('/board/layout', dto));
-    },
-
-    // ==== 折叠面板（展开/收起的内容项） ====
-    getActive: async (): Promise<PanelActive> => {
-        return unpack<PanelActive>(await api.get('/board/active'));
-    },
-    saveActive: async (active: PanelActive): Promise<PanelActive> => {
-        return unpack<PanelActive>(await api.post('/board/active', active));
     },
 
     // ==== 设备模板 ====

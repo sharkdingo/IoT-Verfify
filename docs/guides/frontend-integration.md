@@ -21,7 +21,7 @@ frontend/src/
 │   └── simulation.ts    # default-export object: simulation calls
 └── types/
     ├── auth.ts   canvas.ts   chat.ts   device.ts   edge.ts   fix.ts
-    ├── node.ts   panel.ts    rule.ts   simulation.ts   spec.ts   verify.ts
+    ├── node.ts   rule.ts   simulation.ts   spec.ts   verify.ts
 ```
 
 > There is **no** `api/verify.ts` and **no** `types/trace.ts`. Verification calls live
@@ -100,9 +100,12 @@ if (res.code === 200) {
 Its methods return already-unwrapped values. Non-exhaustive:
 
 - Board CRUD: `getNodes`/`saveNodes`, `getSpecs`/`saveSpecs`, `getRules`/`saveRules`,
-  `getLayout`/`saveLayout`, `getActive`/`saveActive`. `getEdges`/`saveEdges` remain
+  `getLayout`/`saveLayout`. `getEdges`/`saveEdges` remain
   available for optional persisted canvas-geometry edges, but the current Board view
   derives visible rule connections from `rules`.
+  `BoardLayoutDto` owns both canvas pan/zoom and panel UI state
+  (`panels.control` / `panels.inspector`: collapsed, width, active section); there is no
+  separate active-tabs API.
 - Templates: `getDeviceTemplates`, `addDeviceTemplate`, `deleteDeviceTemplate`, `reloadDeviceTemplates`.
 - Recommendation: `recommendRelatedDevices`, `recommendSpecifications`.
 - Verification: `verify(req)`, `verifyAsync(req): Promise<number>`, `getTasks`,
@@ -124,6 +127,53 @@ references as device labels (legacy node ids are still resolved for old board da
 `saveRules` deliberately returns `Promise<void>` even though the backend responds with
 saved `RuleDto[]`; callers that need persisted ids should call `getRules()` after the
 save so the backend shape is mapped back to `RuleForm`.
+
+Board layout and visual shell rules:
+
+- Persist user layout through `BoardLayoutDto.panels` plus `canvasPan`/`canvasZoom`.
+  Do not reintroduce a separate active-tabs endpoint.
+- Treat node positions as canvas world coordinates. Keep node geometry in pixels, but
+  make surrounding UI chrome responsive with CSS grid/flex, `clamp()`, `dvh/dvw`, and
+  board-level CSS variables.
+- Paint the grid on the viewport-sized canvas shell and offset it from `canvasPan` /
+  `canvasZoom`; do not paint it on a finite transformed inner layer, otherwise users
+  will see grid edges while panning an infinite canvas.
+- Board surfaces, cards, forms, timelines, mini task indicators, and history panels use
+  semantic CSS tokens from `base.css` / `board.css`. Prefer `board-surface-panel`,
+  `board-card-surface`, `board-muted-surface`, and `board-segmented` over one-off
+  `dark:` utility chains.
+- Keep the entity model discoverable: `ControlCenter` owns the detailed create/edit
+  forms, while `SystemInspector` owns the current-board lists. The inspector uses
+  device/rule/specification tabs rather than one long stacked list, and each tab keeps
+  a local add action that opens the matching control-center form. Persist both active
+  sections in `BoardLayoutDto.panels`.
+- Timeline controls are bottom-centered between the side panels. When a trace or
+  simulation animation is visible, viewport calculations reserve bottom space so
+  fit-to-content and center-selection do not place nodes under the timeline.
+- The canvas map is a canvas navigation control, not panel content. It docks to the
+  visible canvas area's top-left corner, just to the right of the control panel, so it
+  stays clear of side panels and bottom trace/simulation timelines. Keep it compact
+  and translucent enough that it does not compete with nodes or edges. Use neutral map
+  colors rather than red status dots; red is reserved for warnings, violations, and
+  destructive actions.
+- The simulation/verification/history/recommendation actions live in a right-side tool
+  rail placed just outside the inspector, never overlapping the inspector itself.
+  Desktop widths show icon+text buttons grouped as run tools and AI suggestion tools;
+  narrower viewports collapse the labels but keep `aria-label`, `role="toolbar"`, and
+  grouped `role="group"` semantics. Desktop floating panels open to the left of this
+  rail so close buttons and form controls are never covered by toolbar hit areas. Do
+  not use unexplained red corner badges for active state; prefer the button's selected
+  or disabled state and the global task/timeline indicators.
+- Stable `data-testid` attributes exist for the board root, side panels, control tabs,
+  canvas, canvas map, history panel, mini task indicator, simulation/verification
+  panels, recommendation panels, and trace/simulation timelines. Real-browser tests
+  should use these instead of localized text.
+- Recommendation panels must use i18n keys for labels, counts, empty states, and action
+  buttons. They are opened in real-browser tests under both English and Chinese locales.
+- Device images should degrade to an inline SVG fallback when a template asset is
+  missing or fails to load, so long-running trace animation remains understandable.
+- Timeline state chips stay compact for short traces and become horizontally scrollable
+  for long traces; do not shrink long timelines until state buttons become unreadable.
 
 Async pattern:
 

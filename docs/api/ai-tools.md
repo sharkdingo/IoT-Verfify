@@ -20,8 +20,8 @@ The backend validates again at execution time and returns `{ "error", "errorCode
 
 | Tool | Required / important arguments | Notes |
 | --- | --- | --- |
-| `add_device` | `templateName`, `label`, optional `x`, `y`, `state`, `w`, `h` | Mutates the board and triggers a `REFRESH_DATA` command for `device_list`. |
-| `delete_device` | One of `identifier`, `label`, or `id` | `identifier` is preferred; `label` and `id` are backward-compatible alternatives. Mutates the board and refreshes `device_list`. |
+| `add_device` | `templateName`, `label`, optional `x`, `y`, `state`, `w`, `h` | Mutates the board and triggers a `REFRESH_DATA` command for `device_list`. If the template defines `InternalVariables`, the tool also persists the same visual variable child nodes used by manual canvas creation. |
+| `delete_device` | One of `identifier`, `label`, or `id` | `identifier` is preferred; `label` and `id` are backward-compatible alternatives. Deletes the device through the board batch path and removes rules/specifications that reference it; refreshes `device_list`, `rule_list`, and `spec_list`. |
 | `check_duplicate_rule` | `newRule` | `newRule` is the candidate automation rule object to compare with existing rules. |
 | `manage_rule` | `action`; for `add`, also `conditions` and `command`; for `delete`, a rule identifier | Mutates rules and refreshes `rule_list`. |
 | `recommend_related_devices` | `devices`, `templates` | Both must be arrays. The tool recommends templates; it does not mutate the board. |
@@ -46,8 +46,8 @@ spec mutations refresh `spec_list`, and template mutations refresh `template_lis
 
 | Tool | Summary |
 | --- | --- |
-| `add_device` | Add a new device to the canvas from a template. |
-| `delete_device` | Delete a device node, resolved by label or node id. |
+| `add_device` | Add a new device to the canvas from a template, including visual child nodes for template internal variables. |
+| `delete_device` | Delete a device node, resolved by label or node id, and remove rules/specifications that reference it. |
 | `search_devices` | Search devices on the canvas, filtering by template type or name. |
 
 ## Rules

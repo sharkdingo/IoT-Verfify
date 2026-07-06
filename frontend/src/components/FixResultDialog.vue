@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import boardApi from '@/api/board'
 import type {
   FaultRule,
@@ -300,29 +301,45 @@ watch(() => props.visible, (val) => {
 const closeDialog = () => {
   emit('update:visible', false)
 }
+
+const isDialogOpen = computed(() => props.visible)
+const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, closeDialog)
 </script>
 
 <template>
   <!-- Fix Result Dialog - Following Verification Result Style -->
-  <div v-if="visible" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" @click="closeDialog">
-    <div class="bg-white rounded-2xl w-[800px] max-w-[95vw] shadow-2xl max-h-[85vh] flex flex-col border border-slate-200" @click.stop>
+  <div
+    v-if="visible"
+    class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+    @click="closeDialog"
+    @keydown="handleModalKeydown"
+  >
+    <div
+      :ref="setDialogRef"
+      class="bg-white rounded-2xl w-[800px] max-w-[95vw] shadow-2xl max-h-[85vh] flex flex-col border border-slate-200"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fix-result-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       
       <!-- Header -->
       <div class="relative overflow-hidden rounded-t-2xl border-b" :class="verifiedCount > 0 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'">
         <div class="relative flex items-center justify-between p-5">
           <div class="flex items-center gap-4">
             <div class="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm" :class="verifiedCount > 0 ? 'bg-amber-100' : 'bg-red-100'">
-              <span class="material-symbols-outlined text-2xl" :class="verifiedCount > 0 ? 'text-amber-600' : 'text-red-600'">
+              <span class="material-symbols-outlined text-2xl" :class="verifiedCount > 0 ? 'text-amber-600' : 'text-red-600'" aria-hidden="true">
                 {{ verifiedCount > 0 ? 'build' : 'error' }}
               </span>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-slate-800">{{ t('app.fixSuggestions') }}</h3>
+              <h3 id="fix-result-dialog-title" class="text-xl font-bold text-slate-800">{{ t('app.fixSuggestions') }}</h3>
               <p class="text-sm text-slate-600">{{ verifiedCount > 0 ? t('app.verifiedSolutionsCount', { count: verifiedCount }) : t('app.noVerifiedSolutionsYet') }}</p>
             </div>
           </div>
-          <button @click="closeDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
-            <span class="material-symbols-outlined text-xl">close</span>
+          <button type="button" @click="closeDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all" :aria-label="t('app.close')">
+            <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -372,13 +389,15 @@ const closeDialog = () => {
                 <button
                   v-for="option in strategyOptions"
                   :key="option.value"
+                  type="button"
                   @click="switchStrategy(option.value)"
+                  :aria-pressed="selectedStrategy === option.value"
                   class="flex-1 px-4 py-3 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2"
                   :class="selectedStrategy === option.value
                     ? 'bg-blue-500 text-white shadow-md' 
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
                 >
-                  <span class="material-symbols-outlined text-lg">
+                  <span class="material-symbols-outlined text-lg" aria-hidden="true">
                     {{ option.icon }}
                   </span>
                   {{ option.label }}
@@ -448,10 +467,11 @@ const closeDialog = () => {
                       <button
                         type="button"
                         :title="t('app.removePreference')"
+                        :aria-label="t('app.removePreference')"
                         @click="removePreferenceRow(row.id)"
                         class="w-9 h-9 rounded-md bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 flex items-center justify-center transition-colors"
                       >
-                        <span class="material-symbols-outlined text-lg">delete</span>
+                        <span class="material-symbols-outlined text-lg" aria-hidden="true">delete</span>
                       </button>
                     </div>
                   </div>
@@ -727,10 +747,11 @@ const closeDialog = () => {
       <div class="border-t border-slate-200 p-4 bg-slate-50 rounded-b-2xl">
         <div class="flex justify-end">
           <button 
+            type="button"
             @click="closeDialog"
             class="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors flex items-center gap-2"
           >
-            <span class="material-symbols-outlined text-sm">close</span>
+            <span class="material-symbols-outlined text-sm" aria-hidden="true">close</span>
             {{ t('app.close') }}
           </button>
         </div>

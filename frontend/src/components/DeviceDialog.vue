@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {ref, watch, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 import type {DeviceManifest} from '../types/device'
 import type {DeviceEdge} from '../types/edge'
@@ -36,6 +37,9 @@ const close = () => {
 }
 
 const onDelete = () => emit('delete')
+
+const isDialogOpen = computed(() => innerVisible.value)
+const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, close)
 
 // 从条件生成LTL公式
 const generateFormulaFromConditions = (spec: Specification): string => {
@@ -412,9 +416,20 @@ const deviceSpecs = computed(() => {
   <!-- 自定义模态框 -->
   <teleport to="body">
     <transition name="modal-fade" appear>
-      <div v-if="innerVisible" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div
+        v-if="innerVisible"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        @keydown="handleModalKeydown"
+      >
         <transition name="modal-scale" appear>
-          <div class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div
+            :ref="setDialogRef"
+            class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="device-dialog-title"
+            tabindex="-1"
+          >
 
             <!-- Header -->
             <div class="px-8 py-6 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50/50 flex justify-between items-center sticky top-0 z-10 shadow-sm">
@@ -423,7 +438,7 @@ const deviceSpecs = computed(() => {
                   <span class="material-icons-round text-3xl text-blue-600">{{ getDeviceIcon(deviceName) }}</span>
                 </div>
                 <div>
-                  <h1 class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h1>
+                  <h1 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h1>
                   <div class="flex items-center gap-2 mt-1">
                     <p class="text-sm text-slate-500 font-medium">{{ label }}</p>
                     <span class="text-slate-300">•</span>
@@ -431,8 +446,8 @@ const deviceSpecs = computed(() => {
                   </div>
                 </div>
               </div>
-              <button @click="close" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
-                <span class="material-icons-round text-xl">close</span>
+              <button type="button" @click="close" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all" :aria-label="t('app.close')">
+                <span class="material-icons-round text-xl" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -678,11 +693,11 @@ const deviceSpecs = computed(() => {
 
             <!-- Footer -->
             <div class="px-8 py-5 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white flex justify-end items-center gap-3">
-                <button @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
+                <button type="button" @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
                   {{ t('app.close') }}
                 </button>
-              <button @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-rose-900 bg-rose-100 hover:bg-rose-200 rounded-lg transition-all flex items-center gap-2 border border-rose-200">
-                <span class="material-icons-round text-lg text-rose-600">delete_outline</span>
+              <button type="button" @click="onDelete" class="px-5 py-2.5 text-sm font-semibold text-rose-900 bg-rose-100 hover:bg-rose-200 rounded-lg transition-all flex items-center gap-2 border border-rose-200">
+                <span class="material-icons-round text-lg text-rose-600" aria-hidden="true">delete_outline</span>
                 {{ t('app.deleteDevice') }}
               </button>
             </div>

@@ -10,6 +10,7 @@ export interface BoardLayoutDto {
     canvasPan?: CanvasPan
     canvasZoom?: number
     dockState?: DockStateWrapper
+    panels?: BoardPanels
 }
 
 export interface PanelPosition {
@@ -26,4 +27,15 @@ export interface DockState {
     isDocked?: boolean
     side?: string // "left", "right", "top", "bottom" or null
     lastPos?: PanelPosition
+}
+
+export interface BoardPanels {
+    control?: BoardPanelLayout
+    inspector?: BoardPanelLayout
+}
+
+export interface BoardPanelLayout {
+    collapsed?: boolean
+    width?: number
+    activeSection?: string
 }

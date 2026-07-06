@@ -3,10 +3,12 @@ package cn.edu.nju.Iot_Verify.exception;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
 
@@ -62,6 +64,19 @@ class GlobalExceptionHandlerSmvTest {
         assertNotNull(body);
         assertEquals(400, body.getCode());
         assertEquals("Malformed request body", body.getMessage());
+    }
+
+    @Test
+    void handleNoResourceFound_shouldReturn404() {
+        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "api/board/active");
+
+        ResponseEntity<Result<Void>> response = handler.handleNoResourceFoundException(ex);
+
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        Result<Void> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(404, body.getCode());
+        assertTrue(body.getMessage().contains("api/board/active"));
     }
 
     @SuppressWarnings("unused")

@@ -3,7 +3,6 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
-import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -29,7 +28,6 @@ import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.RuleMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
-import cn.edu.nju.Iot_Verify.util.mapper.BoardActiveMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,7 +51,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final SpecificationRepository specRepo;
     private final RuleRepository ruleRepo;
     private final BoardLayoutRepository layoutRepo;
-    private final BoardActiveRepository activeRepo;
     private final DeviceTemplateRepository deviceTemplateRepo;
     private final DeviceTemplateService deviceTemplateService;
     private final TransactionTemplate transactionTemplate;
@@ -63,7 +60,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceNodeMapper deviceNodeMapper;
     private final DeviceEdgeMapper deviceEdgeMapper;
     private final BoardLayoutMapper boardLayoutMapper;
-    private final BoardActiveMapper boardActiveMapper;
     private final DeviceTemplateMapper deviceTemplateMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
 
@@ -337,6 +333,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                     .inputLastPosX(24.0).inputLastPosY(24.0)
                     .statusIsDocked(false).statusDockSide(null)
                     .statusLastPosX(1040.0).statusLastPosY(80.0)
+                    .controlPanelCollapsed(false).controlPanelWidth(320.0)
+                    .controlPanelActiveSection("devices")
+                    .inspectorPanelCollapsed(false).inspectorPanelWidth(320.0)
+                    .inspectorPanelActiveSection("devices")
                     .build();
             return layoutRepo.save(Objects.requireNonNull(created, "layout to save must not be null"));
         });
@@ -354,25 +354,6 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         layoutRepo.save(Objects.requireNonNull(po, "layout to save must not be null"));
 
         return getLayout(userId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public BoardActiveDto getActive(Long userId) {
-        BoardActivePo po = activeRepo.findByUserId(userId).orElse(null);
-        return boardActiveMapper.toDto(po);
-    }
-
-    @Transactional
-    @Override
-    public BoardActiveDto saveActive(Long userId, BoardActiveDto active) {
-        BoardActivePo existing = activeRepo.findByUserId(userId).orElse(null);
-        Long id = existing != null ? existing.getId() : null;
-
-        BoardActivePo po = boardActiveMapper.toEntity(active, id, userId);
-        activeRepo.save(Objects.requireNonNull(po, "active tabs to save must not be null"));
-
-        return getActive(userId);
     }
 
     @Override

@@ -1,8 +1,8 @@
 import { createApp } from 'vue'
 import './style.css'
 import './styles/base.css'
-import './styles/board.css'
 import './styles/tailwind.css'
+import './styles/board.css'
 import './assets/auth-styles.css'
 import App from './App.vue'
 import {router} from './router';

@@ -42,8 +42,6 @@ Verified against code on 2026-07-06.
 | POST | `/api/board/batch` | Atomic save of nodes+rules+specs (one transaction) | `docs/api/board.md` |
 | GET | `/api/board/layout` | Get board layout | `docs/api/board.md` |
 | POST | `/api/board/layout` | Save board layout | `docs/api/board.md` |
-| GET | `/api/board/active` | Get active board state | `docs/api/board.md` |
-| POST | `/api/board/active` | Save active board state | `docs/api/board.md` |
 | GET | `/api/board/templates` | List device templates | `docs/api/board.md` |
 | POST | `/api/board/templates` | Create custom template | `docs/api/board.md` |
 | DELETE | `/api/board/templates/{id}` | Delete template | `docs/api/board.md` |

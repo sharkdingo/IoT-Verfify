@@ -110,9 +110,9 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 
 ## Data model
 
-14 tables, auto-created by Hibernate (`ddl-auto: update`): `user`, `device_node`,
-`device_edge`, `rules`, `specification`, `board_layout`, `board_active`,
-`device_templates`, `verification_task`, `simulation_task`, `trace`,
+13 tables, auto-created by Hibernate (`ddl-auto: update`): `user`, `device_node`,
+`device_edge`, `rules`, `specification`, `board_layout`, `device_templates`,
+`verification_task`, `simulation_task`, `trace`,
 `simulation_trace`, `chat_session`, `chat_message`. Notable: `device_node` has a
 composite PK `(id, user_id)` for user isolation; `device_templates` has a unique
 constraint on `(user_id, name)`; `specification` carries `formula` (TEXT) and

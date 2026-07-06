@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.board.BoardActiveDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -49,9 +48,6 @@ public interface BoardStorageService {
 
     BoardLayoutDto getLayout(Long userId);
     BoardLayoutDto saveLayout(Long userId, BoardLayoutDto layout);
-
-    BoardActiveDto getActive(Long userId);
-    BoardActiveDto saveActive(Long userId, BoardActiveDto active);
 
     List<DeviceTemplateDto> getDeviceTemplates(Long userId);
     DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);

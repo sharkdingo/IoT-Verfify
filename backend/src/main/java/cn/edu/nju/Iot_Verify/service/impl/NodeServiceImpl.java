@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -36,6 +37,10 @@ public class NodeServiceImpl implements NodeService {
     private static final double DEFAULT_POSITION_Y = 250.0;
     private static final int DEFAULT_WIDTH = 110;
     private static final int DEFAULT_HEIGHT = 90;
+    private static final int VARIABLE_NODE_WIDTH = 60;
+    private static final int VARIABLE_NODE_HEIGHT = 60;
+    private static final double VARIABLE_NODE_OFFSET_X = 160.0;
+    private static final double VARIABLE_NODE_SPACING_Y = 70.0;
     private static final int RANDOM_ID_RANGE = 1000;
     private static final int MAX_RETRY_COUNT = 10;
     private static final int UUID_SUFFIX_LENGTH = 6;
@@ -152,6 +157,12 @@ public class NodeServiceImpl implements NodeService {
 
         nodeRepo.save(Objects.requireNonNull(po, "node to save must not be null"));
 
+        List<DeviceNodePo> variableNodes = buildVariableNodesFromTemplateManifest(
+                userId, finalTemplate, generatedId, posX, posY);
+        if (!variableNodes.isEmpty()) {
+            nodeRepo.saveAll(variableNodes);
+        }
+
         resultMsg.insert(0, String.format("Created device successfully: %s. ", generatedId));
         return resultMsg.toString();
     }
@@ -235,6 +246,55 @@ public class NodeServiceImpl implements NodeService {
         } catch (Exception e) {
             log.error("Failed to parse template manifest for {}", templateName, e);
             return HARD_FALLBACK_STATE;
+        }
+    }
+
+    private List<DeviceNodePo> buildVariableNodesFromTemplateManifest(Long userId,
+                                                                      String templateName,
+                                                                      String deviceId,
+                                                                      double deviceX,
+                                                                      double deviceY) {
+        Optional<DeviceTemplatePo> templateOpt = deviceTemplateService.findTemplateByName(userId, templateName);
+        if (templateOpt == null || templateOpt.isEmpty()) {
+            return List.of();
+        }
+
+        String json = templateOpt.get().getManifestJson();
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+
+        try {
+            JsonNode variables = objectMapper.readTree(json).path("InternalVariables");
+            if (!variables.isArray() || variables.isEmpty()) {
+                return List.of();
+            }
+
+            List<DeviceNodePo> result = new ArrayList<>();
+            int index = 0;
+            for (JsonNode variable : variables) {
+                String name = variable.path("Name").asText("").trim();
+                if (name.isEmpty()) {
+                    continue;
+                }
+
+                result.add(DeviceNodePo.builder()
+                        .id(deviceId + "_" + name)
+                        .userId(userId)
+                        .templateName("variable_" + name)
+                        .label(name)
+                        .posX(deviceX + VARIABLE_NODE_OFFSET_X)
+                        .posY(deviceY + index * VARIABLE_NODE_SPACING_Y)
+                        .state("variable")
+                        .width(VARIABLE_NODE_WIDTH)
+                        .height(VARIABLE_NODE_HEIGHT)
+                        .build());
+                index++;
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("Failed to parse InternalVariables for template {}, skipping variable nodes", templateName, e);
+            return List.of();
         }
     }
 }

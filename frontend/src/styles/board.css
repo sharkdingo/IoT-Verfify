@@ -165,24 +165,468 @@
     color: var(--iot-color-text);
     font-size: var(--iot-font-base);
     --board-inspector-width: 20rem;
+    --board-control-width: 20rem;
+    --board-nav-height: 4rem;
     --board-floating-gap: clamp(0.75rem, 2vw, 1rem);
+    --board-action-rail-width: 3.1rem;
     --board-floating-panel-right: var(--board-floating-gap);
     --board-floating-action-right: var(--board-floating-gap);
+    --board-panel-bg: linear-gradient(180deg, var(--surface-panel), var(--surface-panel-muted));
+    --board-panel-bg-solid: var(--surface-panel);
+    --board-card-bg: var(--surface-elevated);
+    --board-card-muted-bg: var(--surface-muted);
+    --board-control-bg: var(--surface-control);
+    --board-border: var(--border);
+    --board-text: var(--text);
+    --board-text-muted: var(--text-muted);
 }
 
 @media (min-width: 1024px) {
     .iot-board {
-        --board-floating-panel-right: calc(var(--board-inspector-width) + var(--board-floating-gap));
-        --board-floating-action-right: calc(var(--board-inspector-width) - 0.75rem);
+        --board-floating-panel-right: calc(var(--board-inspector-width) + var(--board-action-rail-width) + (var(--board-floating-gap) * 2));
+        --board-floating-action-right: calc(var(--board-inspector-width) + var(--board-floating-gap));
+    }
+}
+
+@media (min-width: 1280px) {
+    .iot-board {
+        --board-action-rail-width: 8.25rem;
+    }
+}
+
+@media (min-width: 1024px) and (max-width: 1179px) {
+    .iot-board .board-floating-panel {
+        width: min(24rem, calc(100vw - var(--board-control-width) - var(--board-inspector-width) - var(--board-action-rail-width) - (var(--board-floating-gap) * 3))) !important;
+    }
+}
+
+.iot-board .canvas-container {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.iot-board .modern-panel,
+.iot-board .glass-panel,
+.iot-board .board-side-panel,
+.iot-board .board-surface-panel,
+.iot-board .board-mini-tasks,
+.iot-board .board-timeline {
+    background: var(--board-panel-bg);
+    border-color: var(--board-border);
+    color: var(--board-text);
+    box-shadow: var(--shadow-elevated);
+}
+
+.iot-board .modern-panel,
+.iot-board .glass-panel,
+.iot-board .board-side-panel {
+    max-width: min(32.5rem, 44vw);
+}
+
+@media (max-width: 767px) {
+    .iot-board .modern-panel,
+    .iot-board .glass-panel,
+    .iot-board .board-side-panel {
+        max-width: min(88vw, 22rem);
     }
 }
 
 .iot-board .board-floating-panel {
     right: var(--board-floating-panel-right);
+    max-height: calc(100dvh - var(--board-nav-height) - 1.5rem);
+    overflow-y: auto;
+    color: var(--board-text);
 }
 
 .iot-board .board-floating-actions {
     right: var(--board-floating-action-right);
+    top: calc(var(--board-nav-height) + 0.75rem);
+    width: var(--board-action-rail-width);
+    gap: 0.4rem;
+    padding: 0.4rem;
+    border: 1px solid var(--board-border);
+    border-radius: 0.9rem;
+    background: color-mix(in srgb, var(--surface-overlay) 82%, transparent);
+    box-shadow: var(--shadow-elevated);
+    backdrop-filter: blur(14px);
+}
+
+.iot-board .board-tool-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.iot-board .board-tool-group-label {
+    display: none;
+    padding: 0.1rem 0.35rem 0;
+    color: var(--board-text);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.1;
+    text-transform: uppercase;
+}
+
+.iot-board .board-tool-wrapper {
+    position: relative;
+}
+
+.iot-board .board-tool-separator {
+    width: 100%;
+    height: 1px;
+    margin: 0.1rem 0;
+    background: color-mix(in srgb, var(--board-border) 70%, transparent);
+}
+
+.iot-board .board-tool-pulse {
+    position: absolute;
+    inset: 0.15rem;
+    border-radius: 0.65rem;
+    opacity: 0.55;
+    animation: board-tool-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes board-tool-ping {
+    75%,
+    100% {
+        opacity: 0;
+        transform: scale(1.35);
+    }
+}
+
+.iot-board .board-tool-button {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    width: 100%;
+    min-height: 2.5rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    border-radius: 0.65rem;
+    padding: 0 0.55rem;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.iot-board .board-tool-button:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--iot-color-accent) 70%, white);
+    outline-offset: 2px;
+}
+
+.iot-board .board-tool-button .material-symbols-outlined {
+    flex: 0 0 auto;
+    font-size: 1.125rem !important;
+}
+
+.iot-board .board-tool-label {
+    display: none;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.1;
+}
+
+.iot-board .board-tool-tooltip {
+    position: absolute;
+    right: calc(100% + 0.75rem);
+    top: 50%;
+    z-index: 20;
+    max-width: min(18rem, 52vw);
+    padding: 0.45rem 0.65rem;
+    border-radius: 0.5rem;
+    background: #1e293b;
+    box-shadow: var(--shadow-elevated);
+    color: #fff;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%);
+    transition: opacity 0.16s ease;
+    white-space: nowrap;
+}
+
+.iot-board .board-tool-wrapper:hover .board-tool-tooltip,
+.iot-board .board-tool-wrapper:focus-within .board-tool-tooltip {
+    opacity: 1;
+}
+
+@media (max-width: 1279px) {
+    .iot-board .board-floating-actions {
+        border-radius: 999px;
+        width: 3.1rem;
+    }
+
+    .iot-board .board-tool-button {
+        width: 2.5rem;
+        height: 2.5rem;
+        min-height: 2.5rem;
+        padding: 0;
+    }
+}
+
+@media (min-width: 1280px) {
+    .iot-board .board-tool-group-label,
+    .iot-board .board-tool-label {
+        display: block;
+    }
+
+    .iot-board .board-tool-button {
+        justify-content: flex-start;
+    }
+}
+
+.iot-board .board-surface-panel,
+.iot-board .board-floating-panel,
+.iot-board .board-mini-tasks,
+.iot-board .board-timeline,
+.iot-board .canvas-map {
+    background: var(--surface-overlay);
+    border-color: var(--board-border);
+    color: var(--board-text);
+    border-radius: 0.5rem;
+}
+
+.iot-board .board-floating-panel > .p-3 {
+    background: var(--board-panel-bg-solid);
+}
+
+.iot-board .board-panel-header,
+.iot-board .board-panel-tabs,
+.iot-board .board-panel-body,
+.iot-board .board-form-surface,
+.iot-board .board-card-surface,
+.iot-board .board-muted-surface {
+    color: var(--board-text);
+    border-color: var(--board-border);
+}
+
+.iot-board .board-panel-header,
+.iot-board .board-card-surface,
+.iot-board .board-form-surface {
+    background: var(--board-card-bg);
+}
+
+.iot-board .board-panel-tabs,
+.iot-board .board-panel-body,
+.iot-board .board-muted-surface {
+    background: var(--board-card-muted-bg);
+}
+
+.iot-board .board-control-surface,
+.iot-board .board-segmented {
+    background: var(--board-control-bg);
+    border-color: var(--board-border);
+}
+
+.iot-board .board-panel-title,
+.iot-board .board-text {
+    color: var(--board-text);
+}
+
+.iot-board .board-panel-subtitle,
+.iot-board .board-muted,
+.iot-board .board-floating-panel .text-slate-400,
+.iot-board .board-floating-panel .text-slate-500,
+.iot-board .board-floating-panel .text-slate-600,
+.iot-board .board-mini-tasks .text-slate-400,
+.iot-board .board-mini-tasks .text-slate-500,
+.iot-board .board-mini-tasks .text-slate-600,
+.iot-board .canvas-map .text-slate-400,
+.iot-board .canvas-map .text-slate-500,
+.iot-board .canvas-map .text-slate-600,
+.iot-board .board-timeline .text-slate-400,
+.iot-board .board-timeline .text-slate-500,
+.iot-board .board-timeline .text-slate-600,
+.iot-board .modern-panel .text-slate-400,
+.iot-board .modern-panel .text-slate-500,
+.iot-board .modern-panel .text-slate-600,
+.iot-board .glass-panel .text-slate-400,
+.iot-board .glass-panel .text-slate-500,
+.iot-board .glass-panel .text-slate-600,
+.iot-board .board-side-panel .text-slate-400,
+.iot-board .board-side-panel .text-slate-500,
+.iot-board .board-side-panel .text-slate-600 {
+    color: var(--board-text-muted);
+}
+
+.iot-board .board-floating-panel .bg-white,
+.iot-board .board-floating-panel .bg-slate-50,
+.iot-board .board-floating-panel .bg-slate-50\/50,
+.iot-board .board-floating-panel .bg-white\/50,
+.iot-board .board-mini-tasks .bg-white,
+.iot-board .board-mini-tasks .bg-slate-50,
+.iot-board .canvas-map .bg-white,
+.iot-board .canvas-map .bg-slate-50,
+.iot-board .board-timeline .bg-white,
+.iot-board .board-timeline .bg-slate-50,
+.iot-board .modern-panel .bg-white,
+.iot-board .modern-panel .bg-slate-50,
+.iot-board .modern-panel .bg-slate-50\/50,
+.iot-board .glass-panel .bg-white,
+.iot-board .glass-panel .bg-slate-50,
+.iot-board .glass-panel .bg-slate-50\/50,
+.iot-board .board-side-panel .bg-white,
+.iot-board .board-side-panel .bg-slate-50,
+.iot-board .board-side-panel .bg-slate-50\/50,
+.iot-board .board-side-panel .bg-white\/50 {
+    background-color: var(--board-card-bg);
+}
+
+.iot-board .board-floating-panel .bg-red-50,
+.iot-board .modern-panel .bg-red-50,
+.iot-board .glass-panel .bg-red-50,
+.iot-board .board-side-panel .bg-red-50,
+.iot-board .board-timeline .bg-red-50 {
+    background-color: color-mix(in srgb, #ef4444 13%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-blue-50,
+.iot-board .modern-panel .bg-blue-50,
+.iot-board .glass-panel .bg-blue-50,
+.iot-board .board-side-panel .bg-blue-50,
+.iot-board .board-timeline .bg-blue-50 {
+    background-color: color-mix(in srgb, #3b82f6 13%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-purple-50,
+.iot-board .modern-panel .bg-purple-50,
+.iot-board .glass-panel .bg-purple-50,
+.iot-board .board-side-panel .bg-purple-50 {
+    background-color: color-mix(in srgb, #8b5cf6 13%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-orange-50,
+.iot-board .board-floating-panel .bg-amber-50,
+.iot-board .modern-panel .bg-orange-50,
+.iot-board .glass-panel .bg-orange-50,
+.iot-board .board-side-panel .bg-orange-50,
+.iot-board .board-side-panel .bg-amber-50 {
+    background-color: color-mix(in srgb, #f59e0b 14%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-green-50,
+.iot-board .modern-panel .bg-green-50,
+.iot-board .glass-panel .bg-green-50,
+.iot-board .board-side-panel .bg-green-50 {
+    background-color: color-mix(in srgb, #22c55e 12%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-cyan-50,
+.iot-board .board-mini-tasks .bg-cyan-50,
+.iot-board .canvas-map .bg-cyan-50,
+.iot-board .modern-panel .bg-cyan-50,
+.iot-board .glass-panel .bg-cyan-50,
+.iot-board .board-side-panel .bg-cyan-50 {
+    background-color: color-mix(in srgb, #06b6d4 12%, var(--surface-panel));
+}
+
+.iot-board .board-floating-panel .bg-slate-100,
+.iot-board .board-mini-tasks .bg-slate-100,
+.iot-board .canvas-map .bg-slate-100,
+.iot-board .canvas-map .bg-slate-200,
+.iot-board .board-timeline .bg-slate-100,
+.iot-board .modern-panel .bg-slate-100,
+.iot-board .glass-panel .bg-slate-100,
+.iot-board .board-side-panel .bg-slate-100,
+.iot-board .board-side-panel .bg-slate-200 {
+    background-color: var(--board-control-bg);
+}
+
+.iot-board .board-floating-panel .border-slate-100,
+.iot-board .board-floating-panel .border-slate-200,
+.iot-board .board-floating-panel .border-slate-200\/60,
+.iot-board .board-mini-tasks .border-slate-100,
+.iot-board .board-mini-tasks .border-slate-200,
+.iot-board .canvas-map .border-slate-100,
+.iot-board .canvas-map .border-slate-200,
+.iot-board .board-timeline .border-slate-100,
+.iot-board .board-timeline .border-slate-200,
+.iot-board .modern-panel .border-slate-100,
+.iot-board .modern-panel .border-slate-200,
+.iot-board .modern-panel .border-slate-200\/60,
+.iot-board .modern-panel .border-white\/20,
+.iot-board .glass-panel .border-slate-100,
+.iot-board .glass-panel .border-slate-200,
+.iot-board .glass-panel .border-slate-200\/60,
+.iot-board .glass-panel .border-white\/20,
+.iot-board .board-side-panel .border-slate-100,
+.iot-board .board-side-panel .border-slate-200,
+.iot-board .board-side-panel .border-slate-200\/60,
+.iot-board .board-side-panel .border-white\/20 {
+    border-color: var(--board-border);
+}
+
+.iot-board .board-floating-panel .text-slate-700,
+.iot-board .board-floating-panel .text-slate-800,
+.iot-board .board-floating-panel .text-black,
+.iot-board .board-mini-tasks .text-slate-700,
+.iot-board .board-mini-tasks .text-slate-800,
+.iot-board .canvas-map .text-slate-700,
+.iot-board .canvas-map .text-slate-800,
+.iot-board .board-timeline .text-slate-700,
+.iot-board .board-timeline .text-slate-800,
+.iot-board .board-timeline .text-black,
+.iot-board .modern-panel .text-slate-700,
+.iot-board .modern-panel .text-slate-800,
+.iot-board .modern-panel .text-black,
+.iot-board .glass-panel .text-slate-700,
+.iot-board .glass-panel .text-slate-800,
+.iot-board .glass-panel .text-black,
+.iot-board .board-side-panel .text-slate-700,
+.iot-board .board-side-panel .text-slate-800,
+.iot-board .board-side-panel .text-black {
+    color: var(--board-text);
+}
+
+.iot-board .board-floating-panel input,
+.iot-board .board-floating-panel select,
+.iot-board .board-floating-panel textarea,
+.iot-board .modern-panel input,
+.iot-board .modern-panel select,
+.iot-board .modern-panel textarea,
+.iot-board .glass-panel input,
+.iot-board .glass-panel select,
+.iot-board .glass-panel textarea,
+.iot-board .board-side-panel input,
+.iot-board .board-side-panel select,
+.iot-board .board-side-panel textarea {
+    background-color: var(--field-bg);
+    border-color: var(--field-border);
+    color: var(--board-text);
+}
+
+.iot-board .board-floating-panel input::placeholder,
+.iot-board .board-floating-panel textarea::placeholder,
+.iot-board .modern-panel input::placeholder,
+.iot-board .modern-panel textarea::placeholder,
+.iot-board .glass-panel input::placeholder,
+.iot-board .glass-panel textarea::placeholder,
+.iot-board .board-side-panel input::placeholder,
+.iot-board .board-side-panel textarea::placeholder {
+    color: var(--board-text-muted);
+    opacity: 0.9;
+}
+
+.iot-board .board-floating-panel > .relative:first-child h3,
+.iot-board .board-floating-panel > .relative:first-child p,
+.iot-board .board-floating-panel > .relative:first-child span:not(.material-symbols-outlined) {
+    color: #ffffff;
+}
+
+.iot-board .board-floating-panel > .relative:first-child button {
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.iot-board .board-floating-panel > .relative:first-child button:hover {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.16);
 }
 
 @media (max-width: 1023px) {
@@ -198,201 +642,156 @@
 }
 
 @media (max-width: 640px) {
+    .iot-board {
+        --board-nav-height: 3.5rem;
+    }
+
     .iot-board .modern-panel,
     .iot-board .glass-panel {
         top: 3.5rem !important;
     }
 
     .iot-board .board-floating-actions {
-        top: 5rem;
+        top: 4.5rem;
         right: 0.75rem;
-        gap: 0.6rem;
+        gap: 0.45rem;
     }
 }
 
-.iot-board .board-floating-panel > .relative:first-child h3,
-.iot-board .board-floating-panel > .relative:first-child p,
-.iot-board .board-floating-panel > .relative:first-child span:not(.material-symbols-outlined) {
-    color: #ffffff !important;
-}
-
-.iot-board .board-floating-panel > .relative:first-child button {
-    color: rgba(255, 255, 255, 0.76) !important;
-}
-
-.iot-board .board-floating-panel > .relative:first-child button:hover {
-    color: #ffffff !important;
-    background-color: rgba(255, 255, 255, 0.14) !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel {
-    background-color: #0f172a !important;
-    border-color: rgba(71, 85, 105, 0.82) !important;
-    color: #e2e8f0;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 {
-    background-color: #0f172a !important;
-    background-image: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.92)) !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 > .bg-white,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 > .flex.bg-white,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 > .grid.bg-white,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .space-y-3 > .bg-white {
-    background-color: rgba(30, 41, 59, 0.78) !important;
-    border-color: rgba(71, 85, 105, 0.72) !important;
-    box-shadow: 0 10px 24px rgba(2, 6, 23, 0.2) !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .bg-slate-100 {
-    background-color: rgba(51, 65, 85, 0.72) !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .text-slate-800,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .text-slate-700 {
-    color: #e2e8f0 !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .text-slate-600,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .text-slate-500 {
-    color: #cbd5e1 !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 .text-slate-400 {
-    color: #94a3b8 !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 select,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 input[type='number'] {
-    background-color: #0f172a !important;
-    border-color: rgba(71, 85, 105, 0.85) !important;
-    color: #e2e8f0 !important;
-}
-
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 select:focus,
-:root[data-theme='dark'] .iot-board .board-floating-panel > .p-3 input[type='number']:focus {
-    border-color: rgba(96, 165, 250, 0.9) !important;
-    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel,
-:root[data-theme='dark'] .iot-board .glass-panel {
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.92)) !important;
-    border-color: rgba(71, 85, 105, 0.72) !important;
-    color: #e2e8f0;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .bg-white,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-white,
-:root[data-theme='dark'] .iot-board .modern-panel .bg-slate-50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-slate-50,
-:root[data-theme='dark'] .iot-board .modern-panel .bg-slate-100,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-slate-100,
-:root[data-theme='dark'] .iot-board .modern-panel .bg-slate-50\/50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-slate-50\/50 {
-    background-color: rgba(30, 41, 59, 0.78) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .bg-blue-50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-blue-50,
-:root[data-theme='dark'] .iot-board .modern-panel .bg-blue-50\/30,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-blue-50\/30 {
-    background-color: rgba(37, 99, 235, 0.16) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .bg-purple-50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-purple-50 {
-    background-color: rgba(147, 51, 234, 0.16) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .bg-orange-50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-orange-50 {
-    background-color: rgba(234, 88, 12, 0.16) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .bg-red-50,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-red-50,
-:root[data-theme='dark'] .iot-board .modern-panel .bg-red-50\/30,
-:root[data-theme='dark'] .iot-board .glass-panel .bg-red-50\/30 {
-    background-color: rgba(220, 38, 38, 0.14) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .border-slate-200,
-:root[data-theme='dark'] .iot-board .glass-panel .border-slate-200,
-:root[data-theme='dark'] .iot-board .modern-panel .border-slate-200\/60,
-:root[data-theme='dark'] .iot-board .glass-panel .border-slate-200\/60,
-:root[data-theme='dark'] .iot-board .modern-panel .border-slate-100,
-:root[data-theme='dark'] .iot-board .glass-panel .border-slate-100,
-:root[data-theme='dark'] .iot-board .modern-panel .border-white\/20,
-:root[data-theme='dark'] .iot-board .glass-panel .border-white\/20 {
-    border-color: rgba(71, 85, 105, 0.72) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-800,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-800,
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-700,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-700,
-:root[data-theme='dark'] .iot-board .modern-panel .text-black,
-:root[data-theme='dark'] .iot-board .glass-panel .text-black {
-    color: #e2e8f0 !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-600,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-600,
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-500,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-500 {
-    color: #cbd5e1 !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-400,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-400,
-:root[data-theme='dark'] .iot-board .modern-panel .text-slate-300,
-:root[data-theme='dark'] .iot-board .glass-panel .text-slate-300 {
-    color: #94a3b8 !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel input,
-:root[data-theme='dark'] .iot-board .glass-panel input,
-:root[data-theme='dark'] .iot-board .modern-panel select,
-:root[data-theme='dark'] .iot-board .glass-panel select {
-    background-color: #0f172a !important;
-    border-color: rgba(71, 85, 105, 0.85) !important;
-    color: #e2e8f0 !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel input::placeholder,
-:root[data-theme='dark'] .iot-board .glass-panel input::placeholder {
-    color: #64748b !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .custom-scrollbar::-webkit-scrollbar-track,
-:root[data-theme='dark'] .iot-board .glass-panel .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(15, 23, 42, 0.4) !important;
-}
-
-:root[data-theme='dark'] .iot-board .modern-panel .custom-scrollbar::-webkit-scrollbar-thumb,
-:root[data-theme='dark'] .iot-board .glass-panel .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.7) !important;
-}
-
 .iot-board .canvas-map {
-    background-color: rgba(255, 255, 255, 0.96);
+    top: calc(var(--board-nav-height) + var(--board-floating-gap));
+    left: calc(var(--board-control-width) + var(--board-floating-gap));
+    bottom: auto;
+    max-width: calc(100vw - var(--board-control-width) - (var(--board-floating-gap) * 2));
+    transition: left 0.2s ease, top 0.2s ease, transform 0.2s ease;
+    background: color-mix(in srgb, var(--surface-overlay) 82%, transparent);
+    backdrop-filter: blur(12px);
+}
+
+@media (min-width: 1024px) {
+    .iot-board .canvas-map {
+        left: calc(var(--board-control-width) + var(--board-floating-gap));
+    }
 }
 
 .iot-board .canvas-map__viewport {
-    background-color: #f8fafc;
+    background-color: var(--surface-muted);
+    border-color: var(--board-border);
 }
 
-:root[data-theme='dark'] .iot-board .canvas-map {
-    background-color: rgba(15, 23, 42, 0.92) !important;
-    border-color: rgba(71, 85, 105, 0.78) !important;
-    box-shadow: 0 18px 36px rgba(2, 6, 23, 0.36) !important;
+.iot-board .canvas-map__tool {
+    display: inline-flex;
+    width: 1.375rem;
+    height: 1.375rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    color: var(--text-muted);
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-:root[data-theme='dark'] .iot-board .canvas-map__viewport {
-    background-color: rgba(15, 23, 42, 0.72) !important;
-    border-color: rgba(71, 85, 105, 0.78) !important;
+.iot-board .canvas-map__tool:hover {
+    background-color: var(--surface-muted);
+    color: var(--text);
+}
+
+.iot-board .board-mini-tasks {
+    right: var(--board-floating-gap);
+    bottom: var(--board-floating-gap);
+}
+
+.iot-board .board-context-menu {
+    background: var(--surface-overlay);
+    border-color: var(--board-border);
+    color: var(--board-text);
+    backdrop-filter: blur(14px);
+}
+
+.board-timeline-host {
+    position: fixed;
+    left: calc(var(--board-control-width, 20rem) + var(--board-floating-gap, 1rem));
+    right: calc(var(--board-inspector-width, 22rem) + var(--board-floating-gap, 1rem));
+    bottom: clamp(1rem, 3dvh, 2rem);
+    z-index: 40;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.board-timeline-host > * {
+    pointer-events: auto;
+}
+
+.board-timeline {
+    width: min(39rem, 100%);
+    max-height: min(66dvh, 24rem);
+    overflow-y: auto;
+    background: color-mix(in srgb, var(--surface-overlay) 86%, transparent);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    box-shadow: var(--shadow-elevated);
+    backdrop-filter: blur(14px);
+}
+
+.board-timeline .text-slate-400,
+.board-timeline .text-slate-500,
+.board-timeline .text-slate-600 {
+    color: var(--text-muted) !important;
+}
+
+.board-timeline .text-slate-700,
+.board-timeline .text-slate-800,
+.board-timeline .text-black {
+    color: var(--text) !important;
+}
+
+.board-timeline .bg-white,
+.board-timeline .bg-slate-50,
+.board-timeline .bg-slate-100,
+.board-timeline .bg-slate-200 {
+    background-color: var(--surface-muted) !important;
+}
+
+.board-timeline .border-slate-100,
+.board-timeline .border-slate-200,
+.board-timeline .border-slate-300 {
+    border-color: var(--border) !important;
+}
+
+.board-timeline-log-button {
+    position: fixed;
+    left: calc(var(--board-control-width, 20rem) + var(--board-floating-gap, 1rem));
+    right: calc(var(--board-inspector-width, 22rem) + var(--board-floating-gap, 1rem));
+    bottom: 0.35rem;
+    z-index: 41;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.board-timeline-log-button > button {
+    pointer-events: auto;
+}
+
+@media (max-width: 1023px) {
+    .board-timeline-host,
+    .board-timeline-log-button {
+        left: var(--board-floating-gap, 1rem);
+        right: var(--board-floating-gap, 1rem);
+    }
+
+    .board-timeline {
+        width: 100%;
+        max-height: min(58dvh, 24rem);
+    }
+
+    .iot-board .board-mini-tasks {
+        left: var(--board-floating-gap);
+        right: var(--board-floating-gap);
+        width: auto;
+    }
 }
 
 /* 背景画布：负责撑满和裁剪，不再承担网格绘制 */
@@ -401,8 +800,13 @@
     inset: 0;
     overflow: hidden; /* 避免浏览器自带滚动条 */
     background-color: var(--iot-color-bg-canvas);
+    background-image:
+            linear-gradient(90deg, var(--iot-color-grid) 1px, transparent 1px),
+            linear-gradient(180deg, var(--iot-color-grid) 1px, transparent 1px);
+    background-size: var(--canvas-grid-size, var(--iot-grid-size)) var(--canvas-grid-size, var(--iot-grid-size));
+    background-position: var(--canvas-grid-offset-x, 0) var(--canvas-grid-offset-y, 0);
     /* 为固定导航栏留出空间 */
-    padding-top: 60px;
+    padding-top: var(--board-nav-height);
 }
 
 /* 画布内部：真正被平移 / 缩放的层，负责网格 + 节点 */
@@ -412,12 +816,7 @@
     height: calc(100vh * 4); /* 扩大到4倍屏幕高度，确保完全覆盖 */
     min-width: 400vw;
     min-height: 400vh;
-
-    /* 网格背景：跟随 translate / scale 一起变化 */
-    background-image:
-            linear-gradient(90deg, var(--iot-color-grid) 1px, transparent 1px),
-            linear-gradient(180deg, var(--iot-color-grid) 1px, transparent 1px);
-    background-size: var(--iot-grid-size) var(--iot-grid-size);
+    background: transparent;
 }
 
 /* 连线层（SVG） */
@@ -447,24 +846,30 @@
 
 .iot-board .device-node {
     position: absolute;
-    /* Allow Tailwind background classes to work */
     background: transparent;
-    border-radius: var(--iot-radius-node);
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    justify-content: center;
+    border-radius: 0.625rem;
+    display: grid;
+    grid-template-rows: 1fr;
     cursor: grab;
     box-shadow: var(--iot-node-shadow);
     border: 1px solid;
     color: var(--iot-color-text);
     user-select: none;
-    padding: 4px;
+    padding: clamp(0.25rem, 4%, 0.5rem);
     box-sizing: border-box;
+    overflow: visible;
+    min-width: 5.5rem;
+    min-height: 4.75rem;
 }
 
 .iot-board .device-node:active {
     cursor: grabbing;
+}
+
+.iot-board .device-node:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--iot-color-accent) 78%, white);
+    outline-offset: 4px;
+    box-shadow: var(--iot-node-shadow), 0 0 0 6px color-mix(in srgb, var(--iot-color-accent) 18%, transparent);
 }
 
 /* 变量节点（内部变量）- 圆形设计 */
@@ -695,15 +1100,16 @@
 
 /* 设备节点主体容器：包含上部分和状态 */
 .iot-board .device-node-content {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    justify-content: space-between;
+    display: grid;
+    grid-template-rows: minmax(1.75rem, 1fr) auto auto;
+    align-items: center;
     width: 100%;
     height: 100%;
-    gap: 4px;
-    padding: 4px;
+    gap: clamp(0.15rem, 3%, 0.35rem);
+    padding: clamp(0.2rem, 3%, 0.45rem);
     box-sizing: border-box;
+    min-width: 0;
+    min-height: 0;
 }
 
 /* 上部分：左边图标，右边名字 */
@@ -712,10 +1118,10 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
     width: 100%;
-    flex: 1;
+    height: 100%;
     min-height: 0;
+    overflow: hidden;
 }
 
 /* 节点图标图片：不响应鼠标事件，避免拖拽图片 */
@@ -723,37 +1129,41 @@
     pointer-events: none;
     flex-shrink: 0;
     object-fit: contain;
+    max-width: min(4.25rem, 62%);
+    max-height: min(3.5rem, 100%);
     filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.15));
 }
 
 /* 节点名字容器：带背景和圆角 */
 .iot-board .device-label-wrapper {
-    flex: 1;
+    width: 100%;
     min-width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: visible;
+    overflow: hidden;
 }
 
 /* 节点文字：基础排版，具体字号由 JS 控制 */
 .iot-board .device-label {
     font-weight: 600;
     text-align: center;
-    padding: 2px 4px;
+    padding: 0.125rem 0.25rem;
     white-space: normal;
-    word-break: break-word;
-    word-wrap: break-word;
-    overflow: visible;
-    text-overflow: clip;
-    color: #1e293b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    color: var(--text);
     font-size: 10px;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.85) 100%);
-    border-radius: 4px;
+    background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
+    border-radius: 0.35rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-    border: 1px solid rgba(226, 232, 240, 0.8);
+    border: 1px solid var(--border);
     line-height: 1.2;
     max-width: 100%;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
 }
 
 /* ========== 节点缩放手柄 ========== */

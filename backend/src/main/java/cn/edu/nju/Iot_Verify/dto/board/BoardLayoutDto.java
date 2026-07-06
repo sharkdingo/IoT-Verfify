@@ -10,6 +10,7 @@ public class BoardLayoutDto {
     private CanvasPan canvasPan;
     private Double canvasZoom;
     private DockStateWrapper dockState;
+    private Panels panels;
 
     @Data
     public static class PanelPosition {
@@ -34,5 +35,18 @@ public class BoardLayoutDto {
         private Boolean isDocked;
         private String side; // "left", "right", "top", "bottom" or null
         private PanelPosition lastPos;
+    }
+
+    @Data
+    public static class Panels {
+        private PanelLayout control;
+        private PanelLayout inspector;
+    }
+
+    @Data
+    public static class PanelLayout {
+        private Boolean collapsed;
+        private Double width;
+        private String activeSection;
     }
 }

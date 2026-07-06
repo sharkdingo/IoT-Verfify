@@ -64,4 +64,22 @@ public class BoardLayoutPo {
 
     @Column(name = "status_last_pos_y")
     private Double statusLastPosY;
+
+    @Column(name = "control_panel_collapsed")
+    private Boolean controlPanelCollapsed;
+
+    @Column(name = "control_panel_width")
+    private Double controlPanelWidth;
+
+    @Column(name = "control_panel_active_section")
+    private String controlPanelActiveSection;
+
+    @Column(name = "inspector_panel_collapsed")
+    private Boolean inspectorPanelCollapsed;
+
+    @Column(name = "inspector_panel_width")
+    private Double inspectorPanelWidth;
+
+    @Column(name = "inspector_panel_active_section")
+    private String inspectorPanelActiveSection;
 }

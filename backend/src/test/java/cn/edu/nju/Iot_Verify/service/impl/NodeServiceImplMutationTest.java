@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.lang.NonNull;
@@ -116,6 +117,41 @@ class NodeServiceImplMutationTest {
 
         verify(nodeRepo).save(expectedSavedNode("light_1", 1L));
         assertEquals("on", savedNode().getState());
+    }
+
+    @Test
+    void addNode_whenTemplateHasInternalVariables_shouldPersistVariableNodes() {
+        String lightJson = """
+                {"Name":"Light","Modes":["SwitchState"],"InitState":"on",
+                 "InternalVariables":[{"Name":"power"},{"Name":"temperature"}],
+                 "WorkingStates":[{"Name":"on"},{"Name":"off"}]}
+                """;
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(2L).userId(1L).name("Light").manifestJson(lightJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Light")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Light")).thenReturn(Optional.of(templatePo));
+        when(nodeRepo.existsByUserIdAndId(eq(1L), any())).thenReturn(false);
+
+        nodeService.addNode(1L, "Light", "kitchen_light", 10.0, 20.0, null, null, null);
+
+        assertEquals("kitchen_light", savedNode().getId());
+        assertEquals("on", savedNode().getState());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Iterable<DeviceNodePo>> captor = ArgumentCaptor.forClass(Iterable.class);
+        verify(nodeRepo).saveAll(captor.capture());
+        List<DeviceNodePo> variableNodes = new java.util.ArrayList<>();
+        captor.getValue().forEach(variableNodes::add);
+
+        assertEquals(List.of("kitchen_light_power", "kitchen_light_temperature"),
+                variableNodes.stream().map(DeviceNodePo::getId).toList());
+        assertEquals(List.of("variable_power", "variable_temperature"),
+                variableNodes.stream().map(DeviceNodePo::getTemplateName).toList());
+        assertEquals(List.of(170.0, 170.0),
+                variableNodes.stream().map(DeviceNodePo::getPosX).toList());
+        assertEquals(List.of(20.0, 90.0),
+                variableNodes.stream().map(DeviceNodePo::getPosY).toList());
     }
 
     @Test

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { computed, ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import boardApi from '@/api/board'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
@@ -65,6 +66,35 @@ const showApiDialog = ref(false)
 const editingVariableIndex = ref(-1)
 const editingWorkingStateIndex = ref(-1)
 const editingApiIndex = ref(-1)
+
+const closeVariableDialog = () => {
+  showVariableDialog.value = false
+}
+
+const closeWorkingStateDialog = () => {
+  showWorkingStateDialog.value = false
+}
+
+const closeApiDialog = () => {
+  showApiDialog.value = false
+}
+
+const variableDialogOpen = computed(() => showVariableDialog.value)
+const workingStateDialogOpen = computed(() => showWorkingStateDialog.value)
+const apiDialogOpen = computed(() => showApiDialog.value)
+
+const {
+  setDialogRef: setVariableDialogRef,
+  handleModalKeydown: handleVariableDialogKeydown
+} = useModalAccessibility(variableDialogOpen, closeVariableDialog)
+const {
+  setDialogRef: setWorkingStateDialogRef,
+  handleModalKeydown: handleWorkingStateDialogKeydown
+} = useModalAccessibility(workingStateDialogOpen, closeWorkingStateDialog)
+const {
+  setDialogRef: setApiDialogRef,
+  handleModalKeydown: handleApiDialogKeydown
+} = useModalAccessibility(apiDialogOpen, closeApiDialog)
 
 // Dialog data
 const editingVariableData = reactive({
@@ -559,8 +589,9 @@ const saveApi = (apiData: any) => {
     <div class="space-y-3">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.templateName') }}</label>
+          <label for="custom-template-name" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.templateName') }}</label>
           <input
+            id="custom-template-name"
             v-model="customTemplateForm.name"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 outline-none text-sm"
             :placeholder="t('app.smartThermostatPlaceholder')"
@@ -568,8 +599,9 @@ const saveApi = (apiData: any) => {
           />
         </div>
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.description') }} <span class="text-slate-400 font-normal">({{ t('app.optional') }})</span></label>
+          <label for="custom-template-description" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.description') }} <span class="text-slate-400 font-normal">({{ t('app.optional') }})</span></label>
           <input
+            id="custom-template-description"
             v-model="customTemplateForm.description"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 outline-none text-sm"
             :placeholder="t('app.briefDescription')"
@@ -683,8 +715,9 @@ const saveApi = (apiData: any) => {
       <!-- Initial State (Moved here) -->
       <div class="bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
         <div class="group">
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.initState') }}</label>
+          <label for="custom-template-init-state" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{{ t('app.initState') }}</label>
           <select
+            id="custom-template-init-state"
             v-model="customTemplateForm.initState"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 dark:focus:border-orange-500 transition-all outline-none text-sm"
           >
@@ -777,30 +810,44 @@ const saveApi = (apiData: any) => {
   </div>
 
   <!-- Variable Dialog -->
-  <div v-if="showVariableDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showVariableDialog = false">
-    <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100" @click.stop>
+  <div
+    v-if="showVariableDialog"
+    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    @keydown="handleVariableDialogKeydown"
+  >
+    <div
+      :ref="setVariableDialogRef"
+      class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="variable-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <div class="flex justify-between items-center mb-4">
-        <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
+        <h3 id="variable-dialog-title" class="text-sm font-semibold text-orange-500 dark:text-orange-400">
           {{ editingVariableIndex >= 0 ? t('app.editVariable') : t('app.addVariable') }}
         </h3>
-        <button @click="showVariableDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
-          <span class="material-symbols-outlined">close</span>
+        <button type="button" @click="closeVariableDialog" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300" :aria-label="t('app.close')">
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
         </button>
       </div>
 
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
+            <label for="variable-name-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
+              id="variable-name-input"
               v-model="editingVariableData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.variableNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
+            <label for="variable-description-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
+              id="variable-description-input"
               v-model="editingVariableData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.descPlaceholder')"
@@ -810,8 +857,9 @@ const saveApi = (apiData: any) => {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
+            <label for="variable-trust-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
             <select
+              id="variable-trust-select"
               v-model="editingVariableData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -820,8 +868,9 @@ const saveApi = (apiData: any) => {
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
+            <label for="variable-privacy-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
             <select
+              id="variable-privacy-select"
               v-model="editingVariableData.privacy"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -833,8 +882,9 @@ const saveApi = (apiData: any) => {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.lowerBound') }}</label>
+            <label for="variable-lower-bound-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.lowerBound') }}</label>
             <input
+              id="variable-lower-bound-input"
               v-model.number="editingVariableData.lowerBound"
               type="number"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
@@ -842,8 +892,9 @@ const saveApi = (apiData: any) => {
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.upperBound') }}</label>
+            <label for="variable-upper-bound-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.upperBound') }}</label>
             <input
+              id="variable-upper-bound-input"
               v-model.number="editingVariableData.upperBound"
               type="number"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
@@ -874,12 +925,14 @@ const saveApi = (apiData: any) => {
 
       <div class="flex justify-end space-x-2 mt-4">
         <button
-          @click="showVariableDialog = false"
+          type="button"
+          @click="closeVariableDialog"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
           {{ t('app.cancel') }}
         </button>
         <button
+          type="button"
           @click="confirmSaveVariable"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >
@@ -890,30 +943,44 @@ const saveApi = (apiData: any) => {
   </div>
 
   <!-- Working State Dialog -->
-  <div v-if="showWorkingStateDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showWorkingStateDialog = false">
-    <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100" @click.stop>
+  <div
+    v-if="showWorkingStateDialog"
+    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    @keydown="handleWorkingStateDialogKeydown"
+  >
+    <div
+      :ref="setWorkingStateDialogRef"
+      class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl dark:text-slate-100"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="working-state-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <div class="flex justify-between items-center mb-4">
-        <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
+        <h3 id="working-state-dialog-title" class="text-sm font-semibold text-orange-500 dark:text-orange-400">
           {{ editingWorkingStateIndex >= 0 ? t('app.editWorkingState') : t('app.addWorkingState') }}
         </h3>
-        <button @click="showWorkingStateDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
-          <span class="material-symbols-outlined">close</span>
+        <button type="button" @click="closeWorkingStateDialog" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300" :aria-label="t('app.close')">
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
         </button>
       </div>
 
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
+            <label for="working-state-name-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
+              id="working-state-name-input"
               v-model="editingWorkingStateData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.stateNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
+            <label for="working-state-description-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
+              id="working-state-description-input"
               v-model="editingWorkingStateData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.descPlaceholder')"
@@ -923,8 +990,9 @@ const saveApi = (apiData: any) => {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
+            <label for="working-state-trust-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.trust') }}</label>
             <select
+              id="working-state-trust-select"
               v-model="editingWorkingStateData.trust"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -933,8 +1001,9 @@ const saveApi = (apiData: any) => {
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
+            <label for="working-state-privacy-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.privacy') }}</label>
             <select
+              id="working-state-privacy-select"
               v-model="editingWorkingStateData.privacy"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -945,8 +1014,9 @@ const saveApi = (apiData: any) => {
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.invariant') }}</label>
+          <label for="working-state-invariant-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.invariant') }}</label>
           <input
+            id="working-state-invariant-input"
             v-model="editingWorkingStateData.invariant"
             class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             placeholder="true"
@@ -956,12 +1026,14 @@ const saveApi = (apiData: any) => {
 
       <div class="flex justify-end space-x-2 mt-4">
         <button
-          @click="showWorkingStateDialog = false"
+          type="button"
+          @click="closeWorkingStateDialog"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
           {{ t('app.cancel') }}
         </button>
         <button
+          type="button"
           @click="confirmSaveWorkingState"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >
@@ -972,30 +1044,44 @@ const saveApi = (apiData: any) => {
   </div>
 
   <!-- API Dialog -->
-  <div v-if="showApiDialog" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showApiDialog = false">
-    <div class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-md shadow-2xl dark:text-slate-100" @click.stop>
+  <div
+    v-if="showApiDialog"
+    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    @keydown="handleApiDialogKeydown"
+  >
+    <div
+      :ref="setApiDialogRef"
+      class="bg-white dark:bg-slate-800 rounded-xl p-4 w-full max-w-md shadow-2xl dark:text-slate-100"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="api-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <div class="flex justify-between items-center mb-4">
-        <h3 class="text-sm font-semibold text-orange-500 dark:text-orange-400">
+        <h3 id="api-dialog-title" class="text-sm font-semibold text-orange-500 dark:text-orange-400">
           {{ editingApiIndex >= 0 ? t('app.editApi') : t('app.addApi') }}
         </h3>
-        <button @click="showApiDialog = false" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300">
-          <span class="material-symbols-outlined">close</span>
+        <button type="button" @click="closeApiDialog" class="text-slate-400 hover:text-orange-500 transition-colors dark:hover:text-slate-300" :aria-label="t('app.close')">
+          <span class="material-symbols-outlined" aria-hidden="true">close</span>
         </button>
       </div>
 
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
+            <label for="api-name-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.name') }}</label>
             <input
+              id="api-name-input"
               v-model="editingApiData.name"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.apiNamePlaceholder')"
             />
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
+            <label for="api-description-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.description') }}</label>
             <input
+              id="api-description-input"
               v-model="editingApiData.description"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
               :placeholder="t('app.descPlaceholder')"
@@ -1005,8 +1091,9 @@ const saveApi = (apiData: any) => {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.startState') }}</label>
+            <label for="api-start-state-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.startState') }}</label>
             <select
+              id="api-start-state-select"
               v-model="editingApiData.startState"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -1017,8 +1104,9 @@ const saveApi = (apiData: any) => {
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.endState') }}</label>
+            <label for="api-end-state-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">{{ t('app.endState') }}</label>
             <select
+              id="api-end-state-select"
               v-model="editingApiData.endState"
               class="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all dark:text-white text-sm"
             >
@@ -1046,6 +1134,7 @@ const saveApi = (apiData: any) => {
           <div class="flex items-center justify-between mb-1.5">
             <label class="text-xs font-medium text-slate-700 dark:text-slate-300">{{ t('app.assignments') }}</label>
             <button
+              type="button"
               @click="editingApiData.assignments.push({attribute: '', value: ''})"
               class="text-[10px] text-orange-500 hover:text-orange-600 dark:text-orange-400 dark:hover:text-orange-300"
             >
@@ -1054,7 +1143,9 @@ const saveApi = (apiData: any) => {
           </div>
           <div class="space-y-1.5 max-h-24 overflow-y-auto">
             <div v-for="(assignment, index) in editingApiData.assignments" :key="index" class="flex items-center gap-2">
+              <label class="sr-only" :for="`api-assignment-attribute-${index}`">{{ t('app.variable') }}</label>
               <select
+                :id="`api-assignment-attribute-${index}`"
                 v-model="assignment.attribute"
                 class="flex-1 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
               >
@@ -1063,16 +1154,20 @@ const saveApi = (apiData: any) => {
                   {{ v.name }}
                 </option>
               </select>
+              <label class="sr-only" :for="`api-assignment-value-${index}`">{{ t('app.value') }}</label>
               <input
+                :id="`api-assignment-value-${index}`"
                 v-model="assignment.value"
                 class="w-16 px-2 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded text-xs dark:text-white"
                 :placeholder="t('app.value')"
               />
               <button
+                type="button"
                 @click="editingApiData.assignments.splice(index, 1)"
                 class="p-1 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-400"
+                :aria-label="t('app.remove')"
               >
-                <span class="material-symbols-outlined text-xs">close</span>
+                <span class="material-symbols-outlined text-xs" aria-hidden="true">close</span>
               </button>
             </div>
           </div>
@@ -1081,12 +1176,14 @@ const saveApi = (apiData: any) => {
 
       <div class="flex justify-end space-x-2 mt-4">
         <button
-          @click="showApiDialog = false"
+          type="button"
+          @click="closeApiDialog"
           class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600"
         >
           {{ t('app.cancel') }}
         </button>
         <button
+          type="button"
           @click="confirmSaveApi"
           class="px-3 py-1.5 text-xs font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 transition-colors dark:bg-orange-600 dark:hover:bg-orange-700"
         >

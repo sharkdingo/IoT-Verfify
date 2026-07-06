@@ -32,6 +32,22 @@
     --iot-card-width-min: 12rem;
     --iot-card-width-max: 24rem;
 
+    /* Shared semantic surfaces used by newer board components. */
+    --surface: #ffffff;
+    --surface-muted: #f8fafc;
+    --surface-elevated: #ffffff;
+    --surface-panel: #ffffff;
+    --surface-panel-muted: #f8fafc;
+    --surface-overlay: rgba(255, 255, 255, 0.94);
+    --surface-control: #f1f5f9;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --field-bg: #ffffff;
+    --field-border: #cbd5e1;
+    --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
+
     /* 画布网格尺寸 */
     --iot-grid-size: 2rem;
     --iot-canvas-size: 300%;
@@ -103,6 +119,20 @@
     --iot-color-text-muted: #767c87;
     --iot-color-title: #f9fafb;
     --iot-color-subtitle: #c7d2fe;
+    --surface: #0f172a;
+    --surface-muted: #1e293b;
+    --surface-elevated: #111827;
+    --surface-panel: #0f172a;
+    --surface-panel-muted: #111827;
+    --surface-overlay: rgba(15, 23, 42, 0.94);
+    --surface-control: #1e293b;
+    --text: #e5e7eb;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --border-strong: #475569;
+    --field-bg: #0f172a;
+    --field-border: #475569;
+    --shadow-elevated: 0 20px 48px rgba(2, 6, 23, 0.42);
 
     /* 设备列表 */
     --iot-color-device-item-bg: rgba(15, 23, 42, 0.96);
@@ -184,6 +214,20 @@
     --iot-color-text-muted: #2d3035;
     --iot-color-title: #111827;
     --iot-color-subtitle: #2563eb;
+    --surface: #ffffff;
+    --surface-muted: #f8fafc;
+    --surface-elevated: #ffffff;
+    --surface-panel: #ffffff;
+    --surface-panel-muted: #f8fafc;
+    --surface-overlay: rgba(255, 255, 255, 0.94);
+    --surface-control: #f1f5f9;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --field-bg: #ffffff;
+    --field-border: #cbd5e1;
+    --shadow-elevated: 0 18px 42px rgba(15, 23, 42, 0.16);
 
     /* 设备列表 */
     --iot-color-device-item-bg: #f9fafb;

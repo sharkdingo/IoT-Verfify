@@ -8,7 +8,6 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
-import cn.edu.nju.Iot_Verify.repository.BoardActiveRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceEdgeRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
@@ -16,7 +15,6 @@ import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
-import cn.edu.nju.Iot_Verify.util.mapper.BoardActiveMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceEdgeMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceNodeMapper;
@@ -63,8 +61,6 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     @Mock
     private BoardLayoutRepository layoutRepo;
     @Mock
-    private BoardActiveRepository activeRepo;
-    @Mock
     private DeviceTemplateRepository deviceTemplateRepo;
     @Mock
     private DeviceTemplateService deviceTemplateService;
@@ -80,8 +76,6 @@ class BoardStorageServiceImplTemplatePrecheckTest {
     private DeviceEdgeMapper deviceEdgeMapper;
     @Mock
     private BoardLayoutMapper boardLayoutMapper;
-    @Mock
-    private BoardActiveMapper boardActiveMapper;
     @Mock
     private DeviceTemplateMapper deviceTemplateMapper;
     @Mock
@@ -101,7 +95,6 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 specRepo,
                 ruleRepo,
                 layoutRepo,
-                activeRepo,
                 deviceTemplateRepo,
                 deviceTemplateService,
                 transactionTemplate,
@@ -111,7 +104,6 @@ class BoardStorageServiceImplTemplatePrecheckTest {
                 deviceNodeMapper,
                 deviceEdgeMapper,
                 boardLayoutMapper,
-                boardActiveMapper,
                 deviceTemplateMapper,
                 deviceTemplateSchemaValidator
         );

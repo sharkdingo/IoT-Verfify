@@ -28,6 +28,9 @@ interface Props {
   edges?: any[]
   canvasPan?: { x: number; y: number }
   canvasZoom?: number
+  collapsed?: boolean
+  width?: number
+  activeSection?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -35,8 +38,37 @@ const props = withDefaults(defineProps<Props>(), {
   nodes: () => [],
   edges: () => [],
   canvasPan: () => ({ x: 0, y: 0 }),
-  canvasZoom: 1
+  canvasZoom: 1,
+  width: 320,
+  activeSection: 'devices'
 })
+
+type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
+
+const emit = defineEmits<{
+  'create-device': [data: { template: any, customName: string }]
+  'open-rule-builder': []
+  'add-spec': [data: {
+    templateId: string,
+    templateType: string,
+    devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>,
+    formula: string,
+    aConditions: SpecCondition[],
+    ifConditions: SpecCondition[],
+    thenConditions: SpecCondition[]
+  }]
+  'refresh-templates': []
+  'delete-template': [templateId: string]
+  'verify': []
+  'simulate': [data: {
+    steps: number
+    isAttack: boolean
+    intensity: number
+    enablePrivacy: boolean
+  }]
+  'update:collapsed': [value: boolean]
+  'update:active-section': [value: ControlCenterSection]
+}>()
 
 // 过滤掉变量节点（templateName 以 variable_ 开头），只保留真实设备
 const deviceNodes = computed(() => {
@@ -763,39 +795,37 @@ const handleCreateDevice = async () => {
 }
 
 // Panel state
-const isCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const localCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const localActiveSection = ref<ControlCenterSection>('devices')
 
-// Top-level navigation to reduce UI density
-type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
-const activeSection = ref<ControlCenterSection>('devices')
+const isControlCenterSection = (value: string | undefined): value is ControlCenterSection =>
+  value === 'devices' || value === 'templates' || value === 'rules' || value === 'specs'
+
+const isCollapsed = computed({
+  get: () => props.collapsed ?? localCollapsed.value,
+  set: (value: boolean) => {
+    localCollapsed.value = value
+    emit('update:collapsed', value)
+  }
+})
+
+const activeSection = computed<ControlCenterSection>({
+  get: () => isControlCenterSection(props.activeSection) ? props.activeSection : localActiveSection.value,
+  set: (value: ControlCenterSection) => {
+    localActiveSection.value = value
+    emit('update:active-section', value)
+  }
+})
+
+const panelWidth = computed(() => {
+  const width = Number.isFinite(props.width) ? props.width : 320
+  return `${Math.min(520, Math.max(240, width))}px`
+})
 
 // Toggle panel collapse
 const togglePanel = () => {
   isCollapsed.value = !isCollapsed.value
 }
-
-const emit = defineEmits<{
-  'create-device': [data: { template: any, customName: string }]
-  'open-rule-builder': []
-  'add-spec': [data: { 
-    templateId: string, 
-    templateType: string,
-    devices: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}>, 
-    formula: string,
-    aConditions: SpecCondition[],
-    ifConditions: SpecCondition[],
-    thenConditions: SpecCondition[]
-  }]
-  'refresh-templates': []
-  'delete-template': [templateId: string]
-  'verify': []
-  'simulate': [data: {
-    steps: number
-    isAttack: boolean
-    intensity: number
-    enablePrivacy: boolean
-  }]
-}>()
 
 // Component mounted
 
@@ -897,23 +927,21 @@ const exportTemplate = (template: any) => {
 
 <template>
   <aside
-    class="absolute left-0 top-0 bottom-0 modern-panel z-40 flex flex-col border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
-    :class="isCollapsed ? 'w-16' : 'w-80'"
+    data-testid="control-center"
+    class="absolute left-0 top-0 bottom-0 modern-panel board-side-panel z-40 flex flex-col border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
+    :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
+    :style="{ width: isCollapsed ? '4rem' : panelWidth }"
   >
     <!-- 顶部标题区域 -->
-    <div class="relative overflow-hidden p-4 bg-white border-b border-slate-200">
-      <!-- 装饰性背景 -->
-      <div class="absolute top-0 right-0 w-32 h-32 bg-slate-100 rounded-full -translate-y-1/2 translate-x-1/2 blur-2xl"></div>
-      <div class="absolute bottom-0 left-0 w-24 h-24 bg-slate-100 rounded-full translate-y-1/2 -translate-x-1/2 blur-2xl"></div>
-      
+    <div class="board-panel-header relative overflow-hidden p-4 border-b">
       <div v-if="!isCollapsed" class="relative flex items-center justify-between">
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
             <span class="material-symbols-outlined text-slate-600 text-xl">dashboard</span>
           </div>
           <div>
-            <h2 class="text-sm font-bold text-slate-800 tracking-wide">{{ t('app.controlCenter') }}</h2>
-            <p class="text-xs text-slate-500">{{ t('app.deviceManagement') }}</p>
+            <h2 class="board-panel-title text-sm font-bold tracking-wide">{{ t('app.controlCenter') }}</h2>
+            <p class="board-panel-subtitle text-xs">{{ t('app.deviceManagement') }}</p>
           </div>
         </div>
         <button
@@ -934,65 +962,69 @@ const exportTemplate = (template: any) => {
     </div>
 
     <!-- Section tabs (only when expanded) -->
-    <div v-if="!isCollapsed" class="px-4 py-3 bg-white border-b border-slate-200">
-      <div class="grid grid-cols-4 gap-2 p-1 bg-slate-50 rounded-xl border border-slate-200 shadow-sm">
+    <div v-if="!isCollapsed" class="board-panel-tabs px-4 py-3 border-b">
+      <div class="board-segmented grid grid-cols-4 gap-2 p-1 rounded-xl border shadow-sm">
         <button
           @click="activeSection = 'devices'"
+          data-testid="control-tab-devices"
           :class="[
-            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'devices'
               ? 'bg-purple-500 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
           <span class="material-symbols-outlined text-sm">devices</span>
-          <span class="text-[10px]">{{ t('app.devices') }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.devices') }}</span>
         </button>
         <button
           @click="activeSection = 'templates'"
+          data-testid="control-tab-templates"
           :class="[
-            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'templates'
               ? 'bg-orange-500 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
           <span class="material-symbols-outlined text-sm">inventory_2</span>
-          <span class="text-[10px]">{{ t('app.templates') }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.templates') }}</span>
         </button>
         <button
           @click="activeSection = 'rules'"
+          data-testid="control-tab-rules"
           :class="[
-            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'rules'
               ? 'bg-blue-500 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
           <span class="material-symbols-outlined text-sm">rule</span>
-          <span class="text-[10px]">{{ t('app.rules') }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.rules') }}</span>
         </button>
         <button
           @click="activeSection = 'specs'"
+          data-testid="control-tab-specs"
           :class="[
-            'py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
+            'min-w-0 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
             activeSection === 'specs'
               ? 'bg-red-500 text-white shadow-md'
               : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
           ]"
         >
           <span class="material-symbols-outlined text-sm">verified</span>
-          <span class="text-[10px]">{{ t('app.specifications') }}</span>
+          <span class="w-full truncate px-0.5 text-center text-[10px]">{{ t('app.specifications') }}</span>
         </button>
       </div>
     </div>
 
     <div
-      class="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 transition-all duration-300 max-h-[calc(100vh-140px)]"
+      class="board-panel-body flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 max-h-[calc(100vh-140px)]"
       :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-2'"
     >
       <!-- Devices -->
-      <details v-if="activeSection === 'devices'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <details v-if="activeSection === 'devices'" data-testid="control-section-devices" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-purple-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-purple-500 rounded-xl flex items-center justify-center">
@@ -1053,7 +1085,7 @@ const exportTemplate = (template: any) => {
       </details>
 
       <!-- Templates -->
-      <details v-if="activeSection === 'templates'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <details v-if="activeSection === 'templates'" data-testid="control-section-templates" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-orange-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center">
@@ -1186,7 +1218,7 @@ const exportTemplate = (template: any) => {
       </details>
 
       <!-- Rules -->
-      <details v-if="activeSection === 'rules'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <details v-if="activeSection === 'rules'" data-testid="control-section-rules" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center">
@@ -1223,7 +1255,7 @@ const exportTemplate = (template: any) => {
       </details>
 
       <!-- Specs -->
-      <details v-if="activeSection === 'specs'" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
+      <details v-if="activeSection === 'specs'" data-testid="control-section-specs" class="group mb-3 rounded-xl bg-white shadow-sm border border-slate-200 overflow-hidden" open>
         <summary class="flex items-center justify-between p-4 cursor-pointer hover:bg-red-50 transition-all list-none select-none">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-red-500 rounded-xl flex items-center justify-center">

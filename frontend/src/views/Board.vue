@@ -2,7 +2,7 @@
 /* =================================================================================
  * 1. Imports & Setup
  * ================================================================================= */
-import {ref, reactive, computed, onMounted, onBeforeUnmount} from 'vue'
+import {ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch} from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
@@ -14,7 +14,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 // Types
 import type {DeviceDialogMeta, DeviceTemplate} from '../types/device'
-import type { CanvasPan } from '../types/canvas'
+import type { BoardLayoutDto, CanvasPan } from '../types/canvas'
 import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
@@ -54,9 +54,7 @@ import FixResultDialog from '../components/FixResultDialog.vue'
 import TraceHistoryPanel from '../components/TraceHistoryPanel.vue'
 import LanguageToggle from '@/components/common/LanguageToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
-
-// Styles
-import '../styles/board.css'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -99,6 +97,9 @@ const NODE_SPACING_Y = 120
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2
 const ZOOM_STEP = 0.1
+const LAYOUT_SAVE_DEBOUNCE_MS = 700
+const DEFAULT_CONTROL_PANEL_WIDTH = 320
+const DEFAULT_INSPECTOR_PANEL_WIDTH = 320
 
 const BASE_NODE_WIDTH = 160
 const BASE_FONT_SIZE = 16
@@ -140,10 +141,52 @@ const canvasPan = ref<CanvasPan>({ x: 0, y: 0 })
 let isPanning = false
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
+let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null
 
-// Panel system removed
+type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
+type InspectorSection = 'devices' | 'rules' | 'specs'
 
-// Panel system removed
+const isNarrowViewport = () =>
+  typeof window !== 'undefined' && window.innerWidth < 768
+
+const isControlCenterSection = (value?: string): value is ControlCenterSection =>
+  value === 'devices' || value === 'templates' || value === 'rules' || value === 'specs'
+
+const isInspectorSection = (value?: string): value is InspectorSection =>
+  value === 'devices' || value === 'rules' || value === 'specs'
+
+const clampPanelWidth = (value: unknown, fallback: number): number => {
+  const width = typeof value === 'number' ? value : fallback
+  if (!Number.isFinite(width)) return fallback
+  return Math.min(520, Math.max(240, Math.round(width)))
+}
+
+const boardPanels = reactive({
+  control: {
+    collapsed: isNarrowViewport(),
+    width: DEFAULT_CONTROL_PANEL_WIDTH,
+    activeSection: 'devices' as ControlCenterSection
+  },
+  inspector: {
+    collapsed: isNarrowViewport(),
+    width: DEFAULT_INSPECTOR_PANEL_WIDTH,
+    activeSection: 'devices' as InspectorSection
+  }
+})
+
+const layoutHydrated = ref(false)
+let layoutSaveErrorShown = false
+
+const boardShellStyle = computed(() => ({
+  '--board-control-width': `${boardPanels.control.collapsed ? 64 : boardPanels.control.width}px`,
+  '--board-inspector-width': `${boardPanels.inspector.collapsed ? 48 : boardPanels.inspector.width}px`
+}))
+
+const applyViewportPanelConstraints = () => {
+  if (!isNarrowViewport()) return
+  boardPanels.control.collapsed = true
+  boardPanels.inspector.collapsed = true
+}
 
 // --- Core Data State ---
 const deviceTemplates = ref<DeviceTemplate[]>([])
@@ -318,16 +361,15 @@ const deleteConfirmDialogData = reactive({
 
 
 const getNodeLabelStyle = (node: DeviceNode) => {
-  const ratio = node.width / BASE_NODE_WIDTH
-  const scale = Math.min(Math.max(ratio, 0.75), 1.5)
-  const fontSize = BASE_FONT_SIZE * scale
+  const ratio = Math.min(node.width / BASE_NODE_WIDTH, node.height / 100)
+  const scale = Math.min(Math.max(ratio, 0.68), 1.05)
+  const fontSize = Math.min(13, Math.max(10, BASE_FONT_SIZE * scale * 0.72))
   return {
     fontSize: fontSize + 'px',
-    maxWidth: node.width - 16 + 'px'
+    lineHeight: '1.18',
+    maxWidth: Math.max(48, node.width - 18) + 'px'
   }
 }
-
-// Panel system removed
 
 /* =================================================================================
  * 5. Canvas Interaction (Zoom & Pan)
@@ -487,16 +529,14 @@ const regenerateInternalVariableEdges = () => {
 
   // 为每个变量节点创建连线
   variableNodes.forEach(varNode => {
-    // 从变量节点ID中提取主设备ID（格式：deviceId_variableName）
-    const parts = varNode.id.split('_')
-    if (parts.length < 2) return
-
-    const deviceId = parts[0]
-    const variableName = parts.slice(1).join('_')  // 处理变量名中可能包含下划线的情况
-
-    // 找到对应的设备节点
-    const deviceNode = nodes.value.find(n => n.id === deviceId)
+    // 变量节点 ID 格式是 `${deviceId}_${variableName}`；deviceId 自身也可能包含下划线。
+    const deviceNode = nodes.value
+      .filter(n => !n.templateName?.startsWith('variable_'))
+      .sort((a, b) => b.id.length - a.id.length)
+      .find(n => varNode.id.startsWith(`${n.id}_`))
     if (!deviceNode) return
+
+    const variableName = varNode.id.slice(deviceNode.id.length + 1)
 
     // 查找设备模板以确认这是内部变量
     const template = deviceTemplates.value.find(t => t.manifest.Name === deviceNode.templateName)
@@ -504,10 +544,10 @@ const regenerateInternalVariableEdges = () => {
     if (!internalVar) return
 
     // 创建连线
-    const edgeId = `edge_${deviceId}_to_${varNode.id}`
+    const edgeId = `edge_${deviceNode.id}_to_${varNode.id}`
     const edge: DeviceEdge = {
       id: edgeId,
-      from: deviceId,
+      from: deviceNode.id,
       to: varNode.id,
       fromLabel: deviceNode.label,
       toLabel: variableName,
@@ -764,6 +804,22 @@ const onNodeContext = (node: DeviceNode, event: MouseEvent) => {
   }
 }
 
+const onNodeKeyboardContext = (node: DeviceNode, position: { x: number; y: number }) => {
+  if (node.templateName?.startsWith('variable_')) {
+    return
+  }
+  contextMenu.value = {
+    visible: true,
+    x: position.x,
+    y: position.y,
+    node
+  }
+}
+
+const openNodeFromCanvas = (node: DeviceNode) => {
+  onDeviceListClick(node.id)
+}
+
 const closeContextMenu = () => {
   contextMenu.value.visible = false
 }
@@ -947,19 +1003,9 @@ const deleteCurrentNodeWithConfirm = (nodeId: string) => {
     isSpecRelatedToNode(spec, nodeId) || isSpecRelatedToNode(spec, node.label)
   )
 
-  const doDelete = async () => {
-    await forceDeleteNode(nodeId)
-    dialogVisible.value = false
-  }
-
-  if (!hasEdges && !hasSpecs) {
-    void doDelete()
-    return
-  }
-
   // 显示自定义确认对话框
   deleteConfirmDialogData.node = node
-  deleteConfirmDialogData.hasRelations = true
+  deleteConfirmDialogData.hasRelations = hasEdges || hasSpecs
   deleteConfirmDialogData.relationCount = {
     rules: edges.value.filter(e => e.from === nodeId || e.to === nodeId).length,
     specs: specifications.value.filter(spec =>
@@ -1012,6 +1058,12 @@ const cancelDelete = () => {
   deleteConfirmDialogData.node = null
 }
 
+const isDeleteConfirmDialogOpen = computed(() => deleteConfirmDialogVisible.value)
+const {
+  setDialogRef: setDeleteConfirmDialogRef,
+  handleModalKeydown: handleDeleteConfirmDialogKeydown
+} = useModalAccessibility(isDeleteConfirmDialogOpen, cancelDelete)
+
 const deleteNodeFromStatus = (nodeId: string) => deleteCurrentNodeWithConfirm(nodeId)
 
 /**
@@ -1063,7 +1115,95 @@ const deleteSpecification = async (specId: string) => {
  * 9. API Interactions (Save)
  * ================================================================================= */
 
-// Panel layout saving removed
+const buildBoardLayoutPayload = (): BoardLayoutDto => ({
+  canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
+  canvasZoom: canvasZoom.value,
+  panels: {
+    control: {
+      collapsed: boardPanels.control.collapsed,
+      width: boardPanels.control.width,
+      activeSection: boardPanels.control.activeSection
+    },
+    inspector: {
+      collapsed: boardPanels.inspector.collapsed,
+      width: boardPanels.inspector.width,
+      activeSection: boardPanels.inspector.activeSection
+    }
+  }
+})
+
+const applyBoardLayout = (layout?: BoardLayoutDto | null) => {
+  if (!layout) return
+
+  if (layout.canvasPan) {
+    canvasPan.value = {
+      x: Number.isFinite(layout.canvasPan.x) ? layout.canvasPan.x : 0,
+      y: Number.isFinite(layout.canvasPan.y) ? layout.canvasPan.y : 0
+    }
+  }
+  if (typeof layout.canvasZoom === 'number') {
+    canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
+  }
+
+  const control = layout.panels?.control
+  if (control) {
+    boardPanels.control.collapsed = Boolean(control.collapsed)
+    boardPanels.control.width = clampPanelWidth(control.width, DEFAULT_CONTROL_PANEL_WIDTH)
+    boardPanels.control.activeSection = isControlCenterSection(control.activeSection)
+      ? control.activeSection
+      : 'devices'
+  }
+
+  const inspector = layout.panels?.inspector
+  if (inspector) {
+    boardPanels.inspector.collapsed = Boolean(inspector.collapsed)
+    boardPanels.inspector.width = clampPanelWidth(inspector.width, DEFAULT_INSPECTOR_PANEL_WIDTH)
+    boardPanels.inspector.activeSection = isInspectorSection(inspector.activeSection)
+      ? inspector.activeSection
+      : 'devices'
+  }
+
+  applyViewportPanelConstraints()
+}
+
+const saveBoardLayout = async () => {
+  try {
+    await boardApi.saveLayout(buildBoardLayoutPayload())
+    layoutSaveErrorShown = false
+  } catch (e) {
+    console.error('保存画布布局失败', e)
+    if (!layoutSaveErrorShown) {
+      layoutSaveErrorShown = true
+      ElMessage.error(t('app.saveLayoutFailed'))
+    }
+  }
+}
+
+const scheduleBoardLayoutSave = () => {
+  if (!layoutHydrated.value) return
+  if (layoutSaveTimer) {
+    clearTimeout(layoutSaveTimer)
+  }
+  layoutSaveTimer = setTimeout(() => {
+    layoutSaveTimer = null
+    void saveBoardLayout()
+  }, LAYOUT_SAVE_DEBOUNCE_MS)
+}
+
+watch(
+  () => [
+    canvasPan.value.x,
+    canvasPan.value.y,
+    canvasZoom.value,
+    boardPanels.control.collapsed,
+    boardPanels.control.width,
+    boardPanels.control.activeSection,
+    boardPanels.inspector.collapsed,
+    boardPanels.inspector.width,
+    boardPanels.inspector.activeSection
+  ],
+  scheduleBoardLayoutSave
+)
 
 const saveNodesToServer = async () => {
   try {
@@ -1073,6 +1213,17 @@ const saveNodesToServer = async () => {
     // 必须 rethrow：否则调用方以为保存成功（会误报成功/无法回滚），本地状态与后端分叉。
     throw e
   }
+}
+
+const openControlSection = (section: InspectorSection) => {
+  const controlSection: ControlCenterSection = section === 'rules'
+    ? 'rules'
+    : section === 'specs'
+      ? 'specs'
+      : 'devices'
+
+  boardPanels.control.collapsed = false
+  boardPanels.control.activeSection = controlSection
 }
 
 // 从 rules 动态生成 edges（不单独存储到服务器）
@@ -1230,24 +1381,16 @@ onMounted(async () => {
   // Load Layout (only canvas)
   try {
     const layout = await boardApi.getLayout()
-
-    // Canvas
-    if (layout?.canvasPan) canvasPan.value = layout.canvasPan
-    if (typeof layout?.canvasZoom === 'number') {
-      canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
-    }
+    applyBoardLayout(layout)
   } catch {
     // Layout loading failed
+  } finally {
+    layoutHydrated.value = true
   }
-
-  // Panel system removed
 
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
-// Panel watch removed
-
-// Canvas zoom saving removed
 
 // Color utilities (matching CanvasBoard colors)
 const getCanvasMapColorIndex = (nodeId: string): number => {
@@ -1278,9 +1421,9 @@ const getCanvasMapColor = (nodeId: string): string => {
   // Return actual color values instead of Tailwind classes
   const colorIndex = getCanvasMapColorIndex(nodeId)
   const colorValues = [
-    '#6366f1', '#059669', '#C026D3', '#dc2626',
-    '#ef4444', '#14b8a6', '#ec4899', '#eab308'
-  ] // primary, online, secondary(purple), offline, red, teal, pink, yellow
+    '#2563eb', '#0891b2', '#0f766e', '#7c3aed',
+    '#475569', '#0284c7', '#4f46e5', '#0d9488'
+  ] // non-alert map colors; red is reserved for actual warnings elsewhere
   return colorValues[colorIndex] || colorValues[0]
 }
 
@@ -1324,19 +1467,24 @@ const canvasMapData = computed(() => {
   const canvasWidth = maxX - minX
   const canvasHeight = maxY - minY
 
-  // Map dimensions (the mini map container)
-  const mapWidth = 256 // width of the mini map container (w-full in h-32 div)
-  const mapHeight = 128 // height of the mini map container (h-32)
+  // Map dimensions match the compact w-56 / p-3 / h-24 canvas map viewport.
+  const mapWidth = 200
+  const mapHeight = 96
+  const mapInset = 8
 
   // Convert node positions to mini map coordinates
   const dots = nodes.value.map((node) => {
-    const nodeX = canvasWidth > 0 ? ((node.position.x - minX) / canvasWidth) * mapWidth : mapWidth / 2
-    const nodeY = canvasHeight > 0 ? ((node.position.y - minY) / canvasHeight) * mapHeight : mapHeight / 2
+    const nodeX = canvasWidth > 0
+      ? mapInset + ((node.position.x - minX) / canvasWidth) * (mapWidth - mapInset * 2)
+      : mapWidth / 2
+    const nodeY = canvasHeight > 0
+      ? mapInset + ((node.position.y - minY) / canvasHeight) * (mapHeight - mapInset * 2)
+      : mapHeight / 2
 
     return {
       id: node.id,
-      x: Math.max(0, Math.min(mapWidth - 8, nodeX)), // Keep within bounds
-      y: Math.max(0, Math.min(mapHeight - 8, nodeY)),
+      x: Math.max(mapInset / 2, Math.min(mapWidth - mapInset - 4, nodeX)),
+      y: Math.max(mapInset / 2, Math.min(mapHeight - mapInset - 4, nodeY)),
       size: getCanvasMapSize(),
       color: getCanvasMapColor(node.id)
     }
@@ -1384,6 +1532,96 @@ const canvasMapData = computed(() => {
 
 const canvasMapDots = computed(() => canvasMapData.value.dots)
 const canvasMapLines = computed(() => canvasMapData.value.lines.filter(line => line !== null && line !== undefined))
+
+const getNodeBounds = (targetNodes: DeviceNode[] = nodes.value) => {
+  if (targetNodes.length === 0) return null
+  return targetNodes.reduce((bounds, node) => {
+    const x = node.position.x
+    const y = node.position.y
+    const width = node.width || 110
+    const height = node.height || 90
+    return {
+      minX: Math.min(bounds.minX, x),
+      minY: Math.min(bounds.minY, y),
+      maxX: Math.max(bounds.maxX, x + width),
+      maxY: Math.max(bounds.maxY, y + height)
+    }
+  }, {
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity
+  })
+}
+
+const getVisibleCanvasFrame = () => {
+  const canvasEl = document.querySelector('.canvas-container')
+  if (!canvasEl) return null
+  const rect = canvasEl.getBoundingClientRect()
+  const leftInset = boardPanels.control.collapsed ? 64 : boardPanels.control.width
+  const rightInset = boardPanels.inspector.collapsed ? 48 : boardPanels.inspector.width
+  const topInset = 64
+  const timelineVisible = simulationAnimationState.value.visible || traceAnimationState.value.visible
+  const bottomInset = timelineVisible
+    ? Math.min(260, Math.max(160, window.innerHeight * 0.28))
+    : 24
+  const availableWidth = Math.max(240, rect.width - leftInset - rightInset)
+  const availableHeight = Math.max(180, rect.height - topInset - bottomInset)
+  return {
+    left: leftInset,
+    top: topInset,
+    width: availableWidth,
+    height: availableHeight
+  }
+}
+
+const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
+  const bounds = getNodeBounds(targetNodes)
+  const frame = getVisibleCanvasFrame()
+  if (!bounds || !frame) {
+    ElMessage.info({ message: t('app.noDevicesOnCanvas'), type: 'info' })
+    return
+  }
+
+  const padding = 72
+  const contentWidth = Math.max(1, bounds.maxX - bounds.minX)
+  const contentHeight = Math.max(1, bounds.maxY - bounds.minY)
+  const zoom = Math.min(
+    MAX_ZOOM,
+    Math.max(
+      MIN_ZOOM,
+      Math.min(
+        (frame.width - padding * 2) / contentWidth,
+        (frame.height - padding * 2) / contentHeight
+      )
+    )
+  )
+  const centerX = (bounds.minX + bounds.maxX) / 2
+  const centerY = (bounds.minY + bounds.maxY) / 2
+  canvasZoom.value = Number.isFinite(zoom) ? zoom : 1
+  canvasPan.value = {
+    x: frame.left + frame.width / 2 - centerX * canvasZoom.value,
+    y: frame.top + frame.height / 2 - centerY * canvasZoom.value
+  }
+}
+
+const fitToContent = () => {
+  fitNodesToCanvas(nodes.value)
+}
+
+const centerSelection = () => {
+  const stateIndex = highlightedTrace.value?.selectedStateIndex
+  const traceState = typeof stateIndex === 'number'
+    ? highlightedTrace.value?.states?.[stateIndex]
+    : null
+  const highlightedNodes = traceState?.devices
+    ? nodes.value.filter(node => traceState.devices.some((device: any) =>
+        device.deviceId === node.id || device.deviceLabel === node.label
+      ))
+    : []
+
+  fitNodesToCanvas(highlightedNodes.length > 0 ? highlightedNodes : nodes.value)
+}
 
 const handleCreateDevice = async (data: { template: DeviceTemplate, customName: string }) => {
   const { template, customName } = data
@@ -1457,6 +1695,7 @@ const handleCreateDevice = async (data: { template: DeviceTemplate, customName: 
 }
 
 const openRuleBuilder = () => {
+  openControlSection('rules')
   ruleBuilderVisible.value = true
 }
 
@@ -1582,6 +1821,13 @@ onBeforeUnmount(() => {
     clearInterval(taskInboxRefreshTimer)
     taskInboxRefreshTimer = null
   }
+  if (layoutSaveTimer) {
+    clearTimeout(layoutSaveTimer)
+    layoutSaveTimer = null
+    if (layoutHydrated.value) {
+      void saveBoardLayout()
+    }
+  }
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
@@ -1610,17 +1856,30 @@ const ruleRecommendationFilters = reactive({
   category: 'all'
 })
 const ruleRecommendationCategories = [
-  { label: 'All', value: 'all' },
-  { label: 'Security', value: 'security' },
-  { label: 'Energy Saving', value: 'energy_saving' },
-  { label: 'Comfort', value: 'comfort' },
-  { label: 'Automation', value: 'automation' }
+  { labelKey: 'app.recommendationCategoryAll', value: 'all' },
+  { labelKey: 'app.recommendationCategorySecurity', value: 'security' },
+  { labelKey: 'app.recommendationCategoryEnergySaving', value: 'energy_saving' },
+  { labelKey: 'app.recommendationCategoryComfort', value: 'comfort' },
+  { labelKey: 'app.recommendationCategoryAutomation', value: 'automation' }
 ]
 
 const normalizeRecommendationCount = (value: unknown): number => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 5
   return Math.min(10, Math.max(1, Math.trunc(parsed)))
+}
+
+const formatRecommendationPriority = (priority: unknown): string => {
+  switch (String(priority || 'medium').toLowerCase()) {
+    case 'high':
+      return t('app.priorityHigh')
+    case 'low':
+      return t('app.priorityLow')
+    case 'medium':
+      return t('app.priorityMedium')
+    default:
+      return String(priority || t('app.priorityMedium'))
+  }
 }
 
 const fetchRuleRecommendations = async () => {
@@ -1703,11 +1962,11 @@ const specRecommendationFilters = reactive({
   category: 'all'
 })
 const specRecommendationCategories = [
-  { label: 'All', value: 'all' },
-  { label: 'Safety', value: 'safety' },
-  { label: 'Response', value: 'response' },
-  { label: 'Consistency', value: 'consistency' },
-  { label: 'Privacy', value: 'privacy' }
+  { labelKey: 'app.recommendationCategoryAll', value: 'all' },
+  { labelKey: 'app.recommendationCategorySafety', value: 'safety' },
+  { labelKey: 'app.recommendationCategoryResponse', value: 'response' },
+  { labelKey: 'app.recommendationCategoryConsistency', value: 'consistency' },
+  { labelKey: 'app.recommendationCategoryPrivacy', value: 'privacy' }
 ]
 
 const fetchDeviceRecommendations = async () => {
@@ -1867,7 +2126,7 @@ const applySpecRecommendation = async (recommendation: any) => {
   const newSpec = {
     id: 'spec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     templateId,
-    templateLabel: recommendation.templateLabel || 'Custom Specification',
+    templateLabel: recommendation.templateLabel || t('app.customSpecification'),
     aConditions: recommendation.aConditions || [],
     ifConditions: recommendation.ifConditions || [],
     thenConditions: recommendation.thenConditions || []
@@ -2784,7 +3043,8 @@ const closeTraceAnimation = () => {
 // 选择违规规约
 // 跳转到指定状态
 const goToState = (index: number) => {
-  traceAnimationState.value.selectedStateIndex = index
+  const lastIndex = Math.max(totalStates.value - 1, 0)
+  traceAnimationState.value.selectedStateIndex = Math.min(Math.max(index, 0), lastIndex)
   const trace = currentTrace.value
   if (trace) {
     highlightedTrace.value = {
@@ -2792,6 +3052,29 @@ const goToState = (index: number) => {
       selectedStateIndex: traceAnimationState.value.selectedStateIndex
     }
   }
+}
+
+const handleTraceStateKeydown = (event: KeyboardEvent, index: number) => {
+  const keyToIndex: Record<string, number> = {
+    ArrowLeft: index - 1,
+    ArrowDown: index - 1,
+    ArrowRight: index + 1,
+    ArrowUp: index + 1,
+    Home: 0,
+    End: totalStates.value - 1
+  }
+  if (!(event.key in keyToIndex)) return
+  event.preventDefault()
+  const lastIndex = Math.max(totalStates.value - 1, 0)
+  const nextIndex = Math.min(Math.max(keyToIndex[event.key], 0), lastIndex)
+  goToState(nextIndex)
+  void nextTick(() => {
+    document.querySelector<HTMLButtonElement>(`[data-testid="trace-timeline-state-${nextIndex}"]`)?.focus()
+  })
+}
+
+const getTraceStateAriaLabel = (index: number) => {
+  return `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
 }
 
 // 播放/停止动画
@@ -3398,7 +3681,12 @@ const closeResultDialog = () => {
 
 <template>
   <!-- [Fix] @wheel.ctrl.prevent 阻止浏览器原生缩放 -->
-  <div class="iot-board" @wheel.ctrl.prevent="onBoardWheel">
+  <div
+    class="iot-board"
+    data-testid="board-root"
+    :style="boardShellStyle"
+    @wheel.ctrl.prevent="onBoardWheel"
+  >
     <!-- Navigation Bar - 与首页风格一致 -->
     <nav class="board-nav-bar">
       <div class="nav-content">
@@ -3434,11 +3722,16 @@ const closeResultDialog = () => {
       :edges="edges"
       :canvas-pan="canvasPan"
       :canvas-zoom="canvasZoom"
+      :collapsed="boardPanels.control.collapsed"
+      :width="boardPanels.control.width"
+      :active-section="boardPanels.control.activeSection"
       @create-device="handleCreateDevice"
       @open-rule-builder="openRuleBuilder"
       @add-spec="handleAddSpec"
       @refresh-templates="refreshDeviceTemplates"
       @delete-template="handleDeleteTemplate"
+      @update:collapsed="boardPanels.control.collapsed = $event"
+      @update:active-section="boardPanels.control.activeSection = $event"
     />
 
     <!-- Right Sidebar - System Inspector -->
@@ -3447,11 +3740,17 @@ const closeResultDialog = () => {
       :rules="rules"
       :edges="edges"
       :specifications="specifications"
+      :collapsed="boardPanels.inspector.collapsed"
+      :width="boardPanels.inspector.width"
+      :active-section="boardPanels.inspector.activeSection"
       @delete-device="deleteNodeFromStatus"
       @delete-rule="deleteRule"
       @delete-spec="deleteSpecification"
       @device-click="onDeviceListClick"
       @open-rule-builder="openRuleBuilder"
+      @open-control-section="openControlSection"
+      @update:collapsed="boardPanels.inspector.collapsed = $event"
+      @update:active-section="boardPanels.inspector.activeSection = $event"
     />
 
     <!-- Canvas Area -->
@@ -3471,175 +3770,198 @@ const closeResultDialog = () => {
           @canvas-enter="onCanvasEnter"
           @canvas-leave="onCanvasLeave"
           @node-context="onNodeContext"
+          @node-keyboard-context="onNodeKeyboardContext"
+          @node-open="openNodeFromCanvas"
+          @node-delete="deleteNodeFromStatus"
           @node-moved-or-resized="handleNodeMovedOrResized"
       />
 
     </div>
 
-    <!-- Floating Action Buttons - Left of System Inspector -->
-    <div class="board-floating-actions fixed top-20 z-40 flex flex-col gap-3">
-      <!-- Simulation Button (Circle) -->
-      <div class="relative group">
-        <!-- Pulse animation when active -->
-        <div 
-          v-if="simulationAnimationState.visible"
-          class="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-75"
-        ></div>
-        <button
-          @click="togglePanel('simulation')"
-          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
-          :class="[
-            'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
-              ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100' 
-              : 'bg-blue-500 hover:bg-blue-600'
-          ]"
-          :title="t('app.simulationTitle')"
-        >
-          <span v-if="isSimulating" class="material-symbols-outlined text-xl animate-spin">sync</span>
-          <span v-else class="material-symbols-outlined text-xl">play_circle</span>
-          <!-- Active indicator badge -->
-          <span v-if="simulationAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
-          <!-- Tooltip -->
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.simulationTitle')) }}
-            <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
-          </span>
-        </button>
+    <!-- Floating Action Rail - Left of System Inspector -->
+    <div
+      class="board-floating-actions fixed top-20 z-40 flex flex-col"
+      role="toolbar"
+      :aria-label="t('app.boardTools')"
+    >
+      <div class="board-tool-group" data-testid="run-tool-group" role="group" :aria-label="t('app.runTools')">
+        <span class="board-tool-group-label">{{ t('app.runTools') }}</span>
+
+        <div class="board-tool-wrapper group">
+          <div
+            v-if="simulationAnimationState.visible"
+            class="board-tool-pulse bg-blue-400"
+          ></div>
+          <button
+            type="button"
+            @click="togglePanel('simulation')"
+            data-testid="open-simulation-panel"
+            :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
+            :aria-label="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
+            :aria-pressed="showSimulationPanel || simulationAnimationState.visible"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
+                ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100'
+                : 'bg-blue-500 hover:bg-blue-600'
+            ]"
+            :title="isSimulating ? t('app.simulationRunning') : t('app.openSimulationSettings')"
+          >
+            <span v-if="isSimulating" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">play_circle</span>
+            <span class="board-tool-label">{{ t('app.simulationTitle') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.openSimulationSettings')) }}
+              <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="board-tool-wrapper group">
+          <div
+            v-if="traceAnimationState.visible"
+            class="board-tool-pulse bg-green-400"
+          ></div>
+          <button
+            type="button"
+            @click="togglePanel('verification')"
+            data-testid="open-verification-panel"
+            :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
+            :aria-label="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
+            :aria-pressed="showVerificationPanel || traceAnimationState.visible"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
+                ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100'
+                : 'bg-green-500 hover:bg-green-600'
+            ]"
+            :title="isVerifying ? t('app.verifying') : t('app.openVerificationSettings')"
+          >
+            <span v-if="isVerifying" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">fact_check</span>
+            <span class="board-tool-label">{{ t('app.verification') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ isVerifying ? t('app.verifying') : t('app.openVerificationSettings') }}
+              <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">({{ t('app.active') }})</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="board-tool-wrapper group">
+          <button
+            type="button"
+            @click="toggleHistoryPanel()"
+            data-testid="open-history-panel"
+            :aria-label="t('app.openRunHistory')"
+            :aria-pressed="showHistoryPanel"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              showHistoryPanel ? 'bg-cyan-700' : 'bg-cyan-600 hover:bg-cyan-700'
+            ]"
+            :title="t('app.openRunHistory')"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">history</span>
+            <span class="board-tool-label">{{ t('app.runHistory') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">{{ t('app.openRunHistory') }}</span>
+          </button>
+        </div>
       </div>
 
-      <!-- Verify Button (Circle) -->
-      <div class="relative group">
-        <!-- Pulse animation when active -->
-        <div 
-          v-if="traceAnimationState.visible"
-          class="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-75"
-        ></div>
-        <button
-          @click="togglePanel('verification')"
-          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
-          :class="[
-            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
-              ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
-              : 'bg-green-500 hover:bg-green-600'
-          ]"
-          :title="t('app.verificationSettings')"
-        >
-          <span v-if="isVerifying" class="material-symbols-outlined text-xl animate-spin">sync</span>
-          <span v-else class="material-symbols-outlined text-xl">verified_user</span>
-          <!-- Active indicator badge -->
-          <span v-if="traceAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
-          <!-- Tooltip -->
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isVerifying ? t('app.verifying') : t('app.verificationSettings') }}
-            <span v-if="traceAnimationState.visible" class="ml-1 text-green-300">({{ t('app.active') }})</span>
-          </span>
-        </button>
-      </div>
+      <div class="board-tool-separator" aria-hidden="true"></div>
 
-      <!-- History Button (Circle) -->
-      <div class="relative group">
-        <button
-          @click="toggleHistoryPanel()"
-          :class="[
-            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            showHistoryPanel ? 'bg-cyan-700 text-white' : 'bg-cyan-600 hover:bg-cyan-700 text-white'
-          ]"
-          :title="t('app.runHistory')"
-        >
-          <span class="material-symbols-outlined text-xl">history</span>
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ t('app.runHistory') }}
-          </span>
-        </button>
-      </div>
+      <div class="board-tool-group" data-testid="ai-tool-group" role="group" :aria-label="t('app.aiTools')">
+        <span class="board-tool-group-label">{{ t('app.aiTools') }}</span>
 
-      <!-- Recommend Rules Button (Circle) -->
-      <div class="relative group">
-        <!-- Pulse animation when loading -->
-        <div 
-          v-if="isRecommendingRules"
-          class="absolute inset-0 rounded-full bg-amber-400 animate-ping opacity-75"
-        ></div>
-        <button
-          @click="fetchRuleRecommendations"
-          :disabled="!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel)"
-          :class="[
-            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel))
-              ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100' 
-              : isRecommendingRules
-                ? 'bg-red-500 hover:bg-red-600'
-                : 'bg-amber-500 hover:bg-amber-600'
-          ]"
-          :title="isRecommendingRules ? t('app.stop') : t('app.ruleRecommendations')"
-        >
-          <span v-if="isRecommendingRules" class="material-symbols-outlined text-xl">stop</span>
-          <span v-else class="material-symbols-outlined text-xl">auto_awesome</span>
-          <!-- Tooltip -->
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingRules ? t('app.stop') : t('app.ruleRecommendations') }}
-          </span>
-        </button>
-      </div>
+        <div class="board-tool-wrapper group">
+          <div
+            v-if="isRecommendingRules"
+            class="board-tool-pulse bg-amber-400"
+          ></div>
+          <button
+            type="button"
+            @click="fetchRuleRecommendations"
+            data-testid="open-rule-recommendations"
+            :disabled="!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel)"
+            :aria-label="isRecommendingRules ? t('app.stopRuleRecommendations') : t('app.openRuleRecommendations')"
+            :aria-pressed="showRecommendationPanel || isRecommendingRules"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              (!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel))
+                ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100'
+                : isRecommendingRules
+                  ? 'bg-red-500 hover:bg-red-600'
+                  : 'bg-amber-500 hover:bg-amber-600'
+            ]"
+            :title="isRecommendingRules ? t('app.stopRuleRecommendations') : t('app.openRuleRecommendations')"
+          >
+            <span v-if="isRecommendingRules" class="material-symbols-outlined" aria-hidden="true">stop</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">rule_settings</span>
+            <span class="board-tool-label">{{ t('app.rulesTool') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ isRecommendingRules ? t('app.stopRuleRecommendations') : t('app.openRuleRecommendations') }}
+            </span>
+          </button>
+        </div>
 
-      <!-- Recommend Devices Button (Circle) -->
-      <div class="relative group">
-        <!-- Pulse animation when loading -->
-        <div 
-          v-if="isRecommendingDevices"
-          class="absolute inset-0 rounded-full bg-purple-400 animate-ping opacity-75"
-        ></div>
-        <button
-          @click="fetchDeviceRecommendations"
-          :disabled="!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
-          :class="[
-            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
-              ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100' 
-              : isRecommendingDevices
-                ? 'bg-red-500 hover:bg-red-600'
-                : 'bg-purple-500 hover:bg-purple-600'
-          ]"
-          :title="isRecommendingDevices ? t('app.stop') : t('app.deviceRecommendations')"
-        >
-          <span v-if="isRecommendingDevices" class="material-symbols-outlined text-xl">stop</span>
-          <span v-else class="material-symbols-outlined text-xl">devices</span>
-          <!-- Tooltip -->
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingDevices ? t('app.stop') : t('app.deviceRecommendations') }}
-          </span>
-        </button>
-      </div>
+        <div class="board-tool-wrapper group">
+          <div
+            v-if="isRecommendingDevices"
+            class="board-tool-pulse bg-purple-400"
+          ></div>
+          <button
+            type="button"
+            @click="fetchDeviceRecommendations"
+            data-testid="open-device-recommendations"
+            :disabled="!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
+            :aria-label="isRecommendingDevices ? t('app.stopDeviceRecommendations') : t('app.openDeviceRecommendations')"
+            :aria-pressed="showDeviceRecommendationPanel || isRecommendingDevices"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              (!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
+                ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100'
+                : isRecommendingDevices
+                  ? 'bg-red-500 hover:bg-red-600'
+                  : 'bg-purple-500 hover:bg-purple-600'
+            ]"
+            :title="isRecommendingDevices ? t('app.stopDeviceRecommendations') : t('app.openDeviceRecommendations')"
+          >
+            <span v-if="isRecommendingDevices" class="material-symbols-outlined" aria-hidden="true">stop</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">devices_other</span>
+            <span class="board-tool-label">{{ t('app.devicesTool') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ isRecommendingDevices ? t('app.stopDeviceRecommendations') : t('app.openDeviceRecommendations') }}
+            </span>
+          </button>
+        </div>
 
-      <!-- Recommend Specifications Button (Circle) -->
-      <div class="relative group">
-        <!-- Pulse animation when loading -->
-        <div 
-          v-if="isRecommendingSpecs"
-          class="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-75"
-        ></div>
-        <button
-          @click="fetchSpecRecommendations"
-          :disabled="!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
-          :class="[
-            'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
-              ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100' 
-              : isRecommendingSpecs
-                ? 'bg-red-500 hover:bg-red-600'
+        <div class="board-tool-wrapper group">
+          <div
+            v-if="isRecommendingSpecs"
+            class="board-tool-pulse bg-red-400"
+          ></div>
+          <button
+            type="button"
+            @click="fetchSpecRecommendations"
+            data-testid="open-spec-recommendations"
+            :disabled="!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
+            :aria-label="isRecommendingSpecs ? t('app.stopSpecificationRecommendations') : t('app.openSpecificationRecommendations')"
+            :aria-pressed="showSpecRecommendationPanel || isRecommendingSpecs"
+            :class="[
+              'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
+              (!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
+                ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100'
                 : 'bg-red-500 hover:bg-red-600'
-          ]"
-          :title="isRecommendingSpecs ? t('app.stop') : t('app.specificationRecommendations')"
-        >
-          <span v-if="isRecommendingSpecs" class="material-symbols-outlined text-xl">stop</span>
-          <span v-else class="material-symbols-outlined text-xl">verified</span>
-          <!-- Tooltip -->
-          <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ isRecommendingSpecs ? t('app.stop') : t('app.specificationRecommendations') }}
-          </span>
-        </button>
+            ]"
+            :title="isRecommendingSpecs ? t('app.stopSpecificationRecommendations') : t('app.openSpecificationRecommendations')"
+          >
+            <span v-if="isRecommendingSpecs" class="material-symbols-outlined" aria-hidden="true">stop</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
+            <span class="board-tool-label">{{ t('app.specificationsTool') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ isRecommendingSpecs ? t('app.stopSpecificationRecommendations') : t('app.openSpecificationRecommendations') }}
+            </span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -3674,18 +3996,19 @@ const closeResultDialog = () => {
 
     <div
       v-if="miniTaskItems.length > 0"
-      class="fixed right-5 bottom-5 z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-cyan-200 bg-white shadow-2xl dark:border-cyan-900 dark:bg-slate-900"
+      data-testid="mini-task-indicator"
+      class="board-mini-tasks fixed z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border shadow-2xl"
     >
-      <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-800">
+      <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2">
         <div class="flex items-center gap-2">
           <span class="material-symbols-outlined text-cyan-600 text-lg">pending_actions</span>
-          <span class="text-xs font-bold text-slate-700 dark:text-slate-100">
+          <span class="text-xs font-bold text-slate-700">
             {{ t('app.backgroundTasks') }}
           </span>
         </div>
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
           @click="openTaskInbox"
         >
           <span class="material-symbols-outlined text-sm">inbox</span>
@@ -3696,27 +4019,27 @@ const closeResultDialog = () => {
         <div
           v-for="task in miniTaskItems.slice(0, 3)"
           :key="task.key"
-          class="rounded-lg bg-slate-50 p-2 dark:bg-slate-800"
+          class="board-card-surface rounded-lg border p-2"
         >
           <div class="flex items-center justify-between gap-2">
             <div class="min-w-0">
-              <div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-100">
+              <div class="truncate text-xs font-semibold text-slate-700">
                 {{ task.label }} #{{ task.id }}
               </div>
-              <div class="truncate text-[11px] text-slate-500 dark:text-slate-400">
+              <div class="truncate text-[11px] text-slate-500">
                 {{ task.status }}
               </div>
             </div>
             <button
               type="button"
-              class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-300 dark:hover:bg-red-950/40 dark:hover:text-red-200"
+              class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600"
               :title="task.kind === 'verification' ? t('app.cancelVerificationTask') : t('app.cancelSimulationTask')"
               @click="cancelMiniTask(task.kind, task.id)"
             >
               <span class="material-symbols-outlined text-sm">cancel</span>
             </button>
           </div>
-          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
             <div
               class="h-full rounded-full bg-cyan-600 transition-all"
               :style="{ width: `${task.progress}%` }"
@@ -3726,7 +4049,7 @@ const closeResultDialog = () => {
         <button
           v-if="miniTaskItems.length > 3"
           type="button"
-          class="w-full rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+          class="w-full rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
           @click="openTaskInbox"
         >
           {{ t('app.viewMoreTasks', { count: miniTaskItems.length - 3 }) }}
@@ -3737,7 +4060,8 @@ const closeResultDialog = () => {
     <!-- Verification Panel -->
     <div 
       v-if="showVerificationPanel"
-      class="board-floating-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
+      data-testid="verification-panel"
+      class="board-floating-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
     >
       <!-- Verification Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3755,6 +4079,7 @@ const closeResultDialog = () => {
           </div>
           <button 
             @click="showVerificationPanel = false"
+            data-testid="close-verification-panel"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
             <span class="material-symbols-outlined">close</span>
@@ -3922,7 +4247,8 @@ const closeResultDialog = () => {
     <!-- Rule Recommendation Panel -->
     <div 
       v-if="showRecommendationPanel"
-      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
+      data-testid="rule-recommendation-panel"
+      class="board-floating-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -3940,6 +4266,7 @@ const closeResultDialog = () => {
           </div>
           <button 
             @click="closeRecommendationPanel"
+            data-testid="close-rule-recommendations"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
             <span class="material-symbols-outlined">close</span>
@@ -3951,7 +4278,7 @@ const closeResultDialog = () => {
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-amber-50/30 max-h-[500px] overflow-y-auto">
         <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-amber-100 bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
-            Category
+            {{ t('app.category') }}
             <select
               v-model="ruleRecommendationFilters.category"
               :disabled="isRecommendingRules"
@@ -3962,12 +4289,12 @@ const closeResultDialog = () => {
                 :key="option.value"
                 :value="option.value"
               >
-                {{ option.label }}
+                {{ t(option.labelKey) }}
               </option>
             </select>
           </label>
           <label class="text-xs font-medium text-slate-600">
-            Count
+            {{ t('app.count') }}
             <input
               v-model.number="ruleRecommendationFilters.maxRecommendations"
               :disabled="isRecommendingRules"
@@ -4002,13 +4329,13 @@ const closeResultDialog = () => {
         <div v-else class="space-y-3">
           <!-- Header with count -->
           <div class="flex items-center justify-between px-1">
-            <span class="text-xs font-medium text-slate-500">{{ ruleRecommendations.length }} recommendations found</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('app.recommendationsFound', { count: ruleRecommendations.length }) }}</span>
             <button 
               @click="fetchRuleRecommendations"
               class="text-xs text-amber-600 hover:text-amber-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
-              Refresh
+              {{ t('app.refresh') }}
             </button>
           </div>
 
@@ -4020,14 +4347,14 @@ const closeResultDialog = () => {
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
-                <div class="flex items-center gap-2">
+                <div class="flex min-w-0 items-center gap-2">
                   <!-- Rule Icon -->
-                  <div class="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                  <div class="w-10 h-10 shrink-0 bg-amber-100 rounded-lg flex items-center justify-center">
                     <span class="material-symbols-outlined text-amber-600">smart_toy</span>
                   </div>
-                  <div>
+                  <div class="min-w-0">
                     <h4 class="text-sm font-bold text-slate-800">{{ t('app.automationRule') }}</h4>
-                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
+                    <p class="text-xs text-slate-500 break-words">{{ rec.description || t('app.noDescription') }}</p>
                   </div>
                 </div>
                 <!-- Confidence Badge -->
@@ -4039,7 +4366,9 @@ const closeResultDialog = () => {
 
             <!-- Reason -->
             <div class="px-3 pb-2">
-              <p class="text-xs text-slate-600">{{ rec.category ? `Category: ${rec.category}` : 'AI-generated automation rule' }}</p>
+              <p class="text-xs text-slate-600 break-words">
+                {{ rec.category ? t('app.categoryWithValue', { value: rec.category }) : t('app.aiGeneratedAutomationRule') }}
+              </p>
             </div>
 
             <!-- Action Button -->
@@ -4049,7 +4378,7 @@ const closeResultDialog = () => {
                 class="w-full py-2 px-4 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 <span class="material-symbols-outlined text-sm">add</span>
-                Apply This Rule
+                {{ t('app.applyThisRule') }}
               </button>
             </div>
           </div>
@@ -4060,7 +4389,8 @@ const closeResultDialog = () => {
     <!-- Device Recommendation Panel -->
     <div 
       v-if="showDeviceRecommendationPanel"
-      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
+      data-testid="device-recommendation-panel"
+      class="board-floating-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -4078,6 +4408,7 @@ const closeResultDialog = () => {
           </div>
           <button 
             @click="closeDeviceRecommendationPanel"
+            data-testid="close-device-recommendations"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
             <span class="material-symbols-outlined">close</span>
@@ -4110,13 +4441,13 @@ const closeResultDialog = () => {
         <div v-else class="space-y-3">
           <!-- Header with count -->
           <div class="flex items-center justify-between px-1">
-            <span class="text-xs font-medium text-slate-500">{{ deviceRecommendations.length }} devices recommended</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('app.devicesRecommended', { count: deviceRecommendations.length }) }}</span>
             <button 
               @click="fetchDeviceRecommendations"
               class="text-xs text-purple-600 hover:text-purple-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
-              Refresh
+              {{ t('app.refresh') }}
             </button>
           </div>
 
@@ -4128,14 +4459,14 @@ const closeResultDialog = () => {
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
-                <div class="flex items-center gap-2">
+                <div class="flex min-w-0 items-center gap-2">
                   <!-- Device Icon -->
-                  <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                  <div class="w-10 h-10 shrink-0 bg-purple-100 rounded-lg flex items-center justify-center">
                     <span class="material-symbols-outlined text-purple-600">device_hub</span>
                   </div>
-                  <div>
-                    <h4 class="text-sm font-bold text-slate-800">{{ rec.templateName }}</h4>
-                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
+                  <div class="min-w-0">
+                    <h4 class="text-sm font-bold text-slate-800 truncate" :title="rec.templateName">{{ rec.templateName }}</h4>
+                    <p class="text-xs text-slate-500 break-words">{{ rec.description || t('app.noDescription') }}</p>
                   </div>
                 </div>
                 <!-- Confidence Badge -->
@@ -4147,7 +4478,7 @@ const closeResultDialog = () => {
 
             <!-- Reason -->
             <div class="px-3 pb-2">
-              <p class="text-xs text-slate-600">{{ rec.reason || 'Recommended based on your current devices' }}</p>
+              <p class="text-xs text-slate-600 break-words">{{ rec.reason || t('app.recommendedBasedOnCurrentDevices') }}</p>
             </div>
 
             <!-- Action Button -->
@@ -4157,7 +4488,7 @@ const closeResultDialog = () => {
                 class="w-full py-2 px-4 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 <span class="material-symbols-outlined text-sm">add</span>
-                Add This Device
+                {{ t('app.addThisDevice') }}
               </button>
             </div>
           </div>
@@ -4168,7 +4499,8 @@ const closeResultDialog = () => {
     <!-- Specification Recommendation Panel -->
     <div 
       v-if="showSpecRecommendationPanel"
-      class="board-floating-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
+      data-testid="spec-recommendation-panel"
+      class="board-floating-panel board-surface-panel fixed top-20 z-30 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
     >
       <!-- Recommendation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -4186,6 +4518,7 @@ const closeResultDialog = () => {
           </div>
           <button 
             @click="closeSpecRecommendationPanel"
+            data-testid="close-spec-recommendations"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
             <span class="material-symbols-outlined">close</span>
@@ -4197,7 +4530,7 @@ const closeResultDialog = () => {
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-red-50/30 max-h-[500px] overflow-y-auto">
         <div class="grid grid-cols-[1fr_88px] gap-2 rounded-lg border border-red-100 bg-white p-2">
           <label class="text-xs font-medium text-slate-600">
-            Category
+            {{ t('app.category') }}
             <select
               v-model="specRecommendationFilters.category"
               :disabled="isRecommendingSpecs"
@@ -4208,12 +4541,12 @@ const closeResultDialog = () => {
                 :key="option.value"
                 :value="option.value"
               >
-                {{ option.label }}
+                {{ t(option.labelKey) }}
               </option>
             </select>
           </label>
           <label class="text-xs font-medium text-slate-600">
-            Count
+            {{ t('app.count') }}
             <input
               v-model.number="specRecommendationFilters.maxRecommendations"
               :disabled="isRecommendingSpecs"
@@ -4248,13 +4581,13 @@ const closeResultDialog = () => {
         <div v-else class="space-y-3">
           <!-- Header with count -->
           <div class="flex items-center justify-between px-1">
-            <span class="text-xs font-medium text-slate-500">{{ specRecommendations.length }} specifications recommended</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('app.specificationsRecommended', { count: specRecommendations.length }) }}</span>
             <button 
               @click="fetchSpecRecommendations"
               class="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1"
             >
               <span class="material-symbols-outlined text-sm">refresh</span>
-              Refresh
+              {{ t('app.refresh') }}
             </button>
           </div>
 
@@ -4266,14 +4599,16 @@ const closeResultDialog = () => {
             <!-- Card Header -->
             <div class="p-3 pb-2">
               <div class="flex items-start justify-between gap-2">
-                <div class="flex items-center gap-2">
+                <div class="flex min-w-0 items-center gap-2">
                   <!-- Specification Icon -->
-                  <div class="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+                  <div class="w-10 h-10 shrink-0 bg-red-100 rounded-lg flex items-center justify-center">
                     <span class="material-symbols-outlined text-red-600">verified</span>
                   </div>
-                  <div>
-                    <h4 class="text-sm font-bold text-slate-800">{{ rec.templateLabel || 'Custom Specification' }}</h4>
-                    <p class="text-xs text-slate-500">{{ rec.description || 'No description' }}</p>
+                  <div class="min-w-0">
+                    <h4 class="text-sm font-bold text-slate-800 truncate" :title="rec.templateLabel || t('app.customSpecification')">
+                      {{ rec.templateLabel || t('app.customSpecification') }}
+                    </h4>
+                    <p class="text-xs text-slate-500 break-words">{{ rec.description || t('app.noDescription') }}</p>
                   </div>
                 </div>
                 <!-- Confidence Badge -->
@@ -4286,11 +4621,11 @@ const closeResultDialog = () => {
             <!-- Priority -->
             <div class="px-3 pb-2">
               <p class="text-xs text-slate-600">
-                Priority: <span :class="{
+                {{ t('app.priority') }}: <span :class="{
                   'text-red-600': rec.priority === 'high',
                   'text-amber-600': rec.priority === 'medium',
                   'text-green-600': rec.priority === 'low'
-                }">{{ rec.priority || 'medium' }}</span>
+                }">{{ formatRecommendationPriority(rec.priority) }}</span>
               </p>
             </div>
 
@@ -4301,7 +4636,7 @@ const closeResultDialog = () => {
                 class="w-full py-2 px-4 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 <span class="material-symbols-outlined text-sm">add</span>
-                Add This Specification
+                {{ t('app.addThisSpecification') }}
               </button>
             </div>
           </div>
@@ -4312,7 +4647,8 @@ const closeResultDialog = () => {
     <!-- Simulation Panel (Appears when clicking simulation button) -->
     <div 
       v-if="showSimulationPanel"
-      class="board-floating-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden"
+      data-testid="simulation-panel"
+      class="board-floating-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
     >
       <!-- Simulation Header with gradient -->
       <div class="relative overflow-hidden">
@@ -4330,6 +4666,7 @@ const closeResultDialog = () => {
           </div>
           <button 
             @click="showSimulationPanel = false"
+            data-testid="close-simulation-panel"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
             <span class="material-symbols-outlined">close</span>
@@ -4532,6 +4869,7 @@ const closeResultDialog = () => {
         <!-- Simulate Button -->
         <button
           @click="runSimulation"
+          data-testid="run-simulation"
           :disabled="isSimulating || traceAnimationState.visible || simulationAnimationState.visible"
           class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
@@ -4568,7 +4906,7 @@ const closeResultDialog = () => {
     <!-- Context Menu for Node Right Click -->
     <div
       v-if="contextMenu.visible"
-      class="fixed z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-2 min-w-48"
+      class="board-context-menu fixed z-50 border rounded-lg shadow-lg py-2 min-w-48"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @click.stop
     >
@@ -4615,13 +4953,36 @@ const closeResultDialog = () => {
     />
 
     <!-- Canvas Map - Fixed at bottom left -->
-    <div class="canvas-map fixed bottom-4 left-4 w-64 p-4 bg-white border border-slate-200 rounded-lg shadow-lg z-40">
+    <div
+      data-testid="canvas-map"
+      class="canvas-map fixed w-56 p-3 border rounded-lg shadow-lg z-40"
+    >
       <div class="flex items-center justify-between mb-2">
         <span class="text-[10px] uppercase font-bold text-slate-400">{{ t('app.canvasMap') }}</span>
-        <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            class="canvas-map__tool"
+            data-testid="canvas-map-fit"
+            :title="t('app.fitToContent')"
+            @click="fitToContent"
+          >
+            <span class="material-symbols-outlined text-sm">fit_screen</span>
+          </button>
+          <button
+            type="button"
+            class="canvas-map__tool"
+            data-testid="canvas-map-center"
+            :title="t('app.centerSelection')"
+            @click="centerSelection"
+          >
+            <span class="material-symbols-outlined text-sm">center_focus_strong</span>
+          </button>
+          <span class="text-[10px] text-primary font-bold">{{ Math.round(canvasZoom * 100) }}%</span>
+        </div>
       </div>
 
-      <div class="canvas-map__viewport w-full h-32 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shadow-inner">
+      <div class="canvas-map__viewport w-full h-24 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shadow-inner">
         <!-- SVG for lines (background layer) -->
         <svg class="absolute inset-0 w-full h-full pointer-events-none">
           <!-- Test line to verify SVG works -->
@@ -4692,15 +5053,28 @@ const closeResultDialog = () => {
     </div>
 
     <!-- Custom Delete Confirmation Dialog -->
-    <div v-if="deleteConfirmDialogVisible" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="cancelDelete">
-      <div class="bg-white rounded-xl p-6 w-96 max-w-[90vw] shadow-2xl" @click.stop>
+    <div
+      v-if="deleteConfirmDialogVisible"
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      @click="cancelDelete"
+      @keydown="handleDeleteConfirmDialogKeydown"
+    >
+      <div
+        :ref="setDeleteConfirmDialogRef"
+        class="bg-white rounded-xl p-6 w-96 max-w-[90vw] shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-device-dialog-title"
+        tabindex="-1"
+        @click.stop
+      >
         <div class="mb-6">
           <div class="flex items-center mb-4">
             <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
-              <span class="material-symbols-outlined text-red-600">warning</span>
+              <span class="material-symbols-outlined text-red-600" aria-hidden="true">warning</span>
             </div>
             <div class="ml-3">
-              <h3 class="text-lg font-semibold text-slate-800">{{ t('app.deleteDeviceTitle') }}</h3>
+              <h3 id="delete-device-dialog-title" class="text-lg font-semibold text-slate-800">{{ t('app.deleteDeviceTitle') }}</h3>
               <p class="text-sm text-slate-600">{{ t('app.actionCannotBeUndone') }}</p>
             </div>
           </div>
@@ -4709,7 +5083,7 @@ const closeResultDialog = () => {
 
           <div v-if="deleteConfirmDialogData.hasRelations" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
             <div class="flex items-start">
-              <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5">info</span>
+              <span class="material-symbols-outlined text-yellow-600 mr-2 mt-0.5" aria-hidden="true">info</span>
               <div>
                 <p class="text-sm font-medium text-yellow-800 mb-1">{{ t('app.deviceHasRelations') }}</p>
                 <div class="text-xs text-yellow-700 space-y-1">
@@ -4729,12 +5103,14 @@ const closeResultDialog = () => {
 
         <div class="flex justify-end space-x-3">
           <button
+            type="button"
             @click="cancelDelete"
             class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors"
           >
             {{ t('app.cancel') }}
           </button>
           <button
+            type="button"
             @click="confirmDelete"
             class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700 transition-colors"
           >
@@ -5051,9 +5427,13 @@ const closeResultDialog = () => {
   <!-- Trace Animation Control Bar (Bottom) -->
   <div 
     v-if="traceAnimationState.visible && currentTrace"
-    class="fixed left-2/3 -translate-x-1/2 bottom-8 z-40"
+    class="board-timeline-host board-timeline-host--trace"
+    data-testid="trace-timeline-host"
+    :style="boardShellStyle"
+    role="region"
+    :aria-label="t('app.traceVisualization.stateSequence')"
   >
-    <div class="bg-white rounded-xl shadow-2xl border border-slate-200 p-5 w-[600px] max-w-[90vw] max-h-[70vh] overflow-y-auto">
+    <div class="board-timeline board-timeline--trace" data-testid="trace-timeline">
       
       <!-- Violation Info - Only show at violation point -->
       <div 
@@ -5066,8 +5446,8 @@ const closeResultDialog = () => {
             <div class="text-xs font-semibold text-red-600 uppercase">
               {{ t('app.traceVisualization.violatedSpecification') }}
             </div>
-            <button @click="closeTraceAnimation" class="text-slate-400 hover:text-slate-600">
-              <span class="material-symbols-outlined">close</span>
+            <button type="button" @click="closeTraceAnimation" class="text-slate-400 hover:text-slate-600" :aria-label="t('app.close')">
+              <span class="material-symbols-outlined" aria-hidden="true">close</span>
             </button>
           </div>
           <div class="text-xs font-mono text-slate-800">{{ formattedSpec }}</div>
@@ -5079,7 +5459,7 @@ const closeResultDialog = () => {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2 flex-wrap">
             <span class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.stateSequence') }}</span>
-            <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full">
+            <span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full" aria-live="polite">
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
             <!-- Verification Info (from the viewed trace's own context, not the live form) -->
@@ -5097,21 +5477,25 @@ const closeResultDialog = () => {
           </div>
           <div class="flex items-center gap-2">
             <button
+              type="button"
               @click="toggleTraceAnimation"
               class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+              :aria-label="traceAnimationState.isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play')"
               :class="traceAnimationState.isPlaying 
                 ? 'bg-red-500 text-white' 
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
             >
-              <span class="material-symbols-outlined text-sm">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
+              <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'stop' : 'play_arrow' }}</span>
               {{ traceAnimationState.isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play') }}
             </button>
             <button
+              type="button"
               @click="closeTraceAnimation"
               class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
               :title="t('app.close')"
+              :aria-label="t('app.close')"
             >
-              <span class="material-symbols-outlined text-slate-500">close</span>
+              <span class="material-symbols-outlined text-slate-500" aria-hidden="true">close</span>
             </button>
           </div>
         </div>
@@ -5139,8 +5523,14 @@ const closeResultDialog = () => {
               <button
                 v-for="(_, index) in currentTrace.states || []"
                 :key="index"
+                type="button"
                 @click="goToState(Number(index))"
-                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0"
+                @keydown="handleTraceStateKeydown($event, Number(index))"
+                :tabindex="Number(index) === traceAnimationState.selectedStateIndex ? 0 : -1"
+                :aria-label="getTraceStateAriaLabel(Number(index))"
+                :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"
+                :data-testid="`trace-timeline-state-${Number(index)}`"
+                class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
                 :class="Number(index) === traceAnimationState.selectedStateIndex 
                   ? 'bg-red-500 border-red-500 scale-125 shadow-lg' 
                   : Number(index) < traceAnimationState.selectedStateIndex 
@@ -5164,23 +5554,29 @@ const closeResultDialog = () => {
   <SimulationTimeline
     :visible="simulationAnimationState.visible"
     :states="savedSimulationStates"
+    :style="boardShellStyle"
     @update:visible="handleSimulationTimelineClose"
     @highlight-state="handleHighlightTrace"
   />
 
   <!-- Logs affordance for a successful simulation: the success path opens the timeline (not the
        result dialog), so this lets the user reach the execution logs / raw NuSMV output on demand. -->
-  <button
+  <div
     v-if="simulationAnimationState.visible && lastSimulationResult"
-    type="button"
-    @click="openSimulationLogs"
-    :title="t('app.showSimulationLogs')"
-    :aria-label="t('app.showSimulationLogs')"
-    class="fixed left-2/3 -translate-x-1/2 bottom-2 z-40 px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs shadow-lg flex items-center gap-1"
+    class="board-timeline-log-button"
+    :style="boardShellStyle"
   >
-    <span class="material-symbols-outlined text-sm">description</span>
-    {{ t('app.showSimulationLogs') }}
-  </button>
+    <button
+      type="button"
+      @click="openSimulationLogs"
+      :title="t('app.showSimulationLogs')"
+      :aria-label="t('app.showSimulationLogs')"
+      class="px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs shadow-lg flex items-center gap-1"
+    >
+      <span class="material-symbols-outlined text-sm">description</span>
+      {{ t('app.showSimulationLogs') }}
+    </button>
+  </div>
 
   <!-- Fix Result Dialog 组件 -->
   <FixResultDialog

@@ -15,17 +15,28 @@ interface Props {
   rules?: RuleForm[]
   specifications?: Specification[]
   edges?: DeviceEdge[]
+  collapsed?: boolean
+  width?: number
+  activeSection?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   devices: () => [],
   rules: () => [],
   specifications: () => [],
-  edges: () => []
+  edges: () => [],
+  width: 320,
+  activeSection: 'devices'
 })
 
 // Panel state
-const isCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const localCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+type InspectorSection = 'devices' | 'rules' | 'specs'
+
+const localActiveSection = ref<InspectorSection>('devices')
+
+const isInspectorSection = (value?: string): value is InspectorSection =>
+  value === 'devices' || value === 'rules' || value === 'specs'
 
 // Emits
 const emit = defineEmits<{
@@ -33,9 +44,33 @@ const emit = defineEmits<{
   'delete-rule': [ruleId: string]
   'delete-spec': [specId: string]
   'open-rule-builder': []
+  'open-control-section': [section: 'devices' | 'rules' | 'specs']
   'device-click': [deviceId: string]
   'toggle-rule': [ruleId: string, enabled: boolean]
+  'update:collapsed': [value: boolean]
+  'update:active-section': [value: InspectorSection]
 }>()
+
+const isCollapsed = computed({
+  get: () => props.collapsed ?? localCollapsed.value,
+  set: (value: boolean) => {
+    localCollapsed.value = value
+    emit('update:collapsed', value)
+  }
+})
+
+const panelWidth = computed(() => {
+  const width = Number.isFinite(props.width) ? props.width : 320
+  return `${Math.min(520, Math.max(240, width))}px`
+})
+
+const activeSection = computed<InspectorSection>({
+  get: () => isInspectorSection(props.activeSection) ? props.activeSection : localActiveSection.value,
+  set: (value: InspectorSection) => {
+    localActiveSection.value = value
+    emit('update:active-section', value)
+  }
+})
 
 // Convert real device nodes to display format (过滤掉变量节点)
 const displayDevices = computed(() => {
@@ -210,6 +245,27 @@ const displaySpecs = computed(() => {
   })
 })
 
+const inspectorTabs = computed(() => [
+  {
+    id: 'devices' as const,
+    label: t('app.devicesTool'),
+    icon: 'devices',
+    count: displayDevices.value.length
+  },
+  {
+    id: 'rules' as const,
+    label: t('app.rulesTool'),
+    icon: 'rule',
+    count: displayRules.value.length
+  },
+  {
+    id: 'specs' as const,
+    label: t('app.specificationsTool'),
+    icon: 'fact_check',
+    count: displaySpecs.value.length
+  }
+])
+
 // Methods
 const handleDeleteDevice = (deviceId: string) => {
   emit('delete-device', deviceId)
@@ -220,7 +276,16 @@ const handleDeleteRule = (ruleId: string) => {
 }
 
 const handleAddRule = () => {
+  emit('open-control-section', 'rules')
   emit('open-rule-builder')
+}
+
+const handleAddDevice = () => {
+  emit('open-control-section', 'devices')
+}
+
+const handleAddSpec = () => {
+  emit('open-control-section', 'specs')
 }
 
 const handleDeviceClick = (deviceId: string) => {
@@ -238,18 +303,20 @@ const togglePanel = () => {
 
 <template>
   <aside
-    class="absolute right-0 top-0 bottom-0 glass-panel z-40 flex flex-col border-l border-slate-200 transition-all duration-300 ease-in-out"
-    :class="isCollapsed ? 'w-12' : 'w-80'"
+    data-testid="system-inspector"
+    class="absolute right-0 top-0 bottom-0 glass-panel board-side-panel z-40 flex flex-col border-l transition-all duration-300 ease-in-out"
+    :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"
+    :style="{ width: isCollapsed ? '3rem' : panelWidth }"
   >
-    <div class="relative overflow-hidden p-4 bg-white border-b border-slate-200">
+    <div class="board-panel-header relative overflow-hidden p-4 border-b">
       <div v-if="!isCollapsed" class="flex items-center justify-between w-full">
         <div class="flex items-center gap-3">
           <div class="p-2 bg-blue-50 rounded-lg border border-blue-100/50 shadow-sm">
             <span class="material-symbols-outlined text-blue-600">fact_check</span>
           </div>
           <div>
-            <h2 class="text-sm font-bold text-slate-800 leading-none">{{ t('app.systemInspector') }}</h2>
-            <p class="text-[10px] text-slate-500 font-medium mt-0.5">{{ t('app.deviceManagement') }}</p>
+            <h2 class="board-panel-title text-sm font-bold leading-none">{{ t('app.systemInspector') }}</h2>
+            <p class="board-panel-subtitle text-[10px] font-medium mt-0.5">{{ t('app.currentBoardContent') }}</p>
           </div>
         </div>
         <button
@@ -270,16 +337,58 @@ const togglePanel = () => {
     </div>
 
     <div
-      class="flex-1 overflow-y-auto custom-scrollbar bg-white transition-all duration-300"
-      :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-5 space-y-6'"
+      class="board-panel-body flex-1 overflow-y-auto custom-scrollbar transition-all duration-300"
+      :class="isCollapsed ? 'opacity-0 pointer-events-none p-0' : 'p-4 space-y-4'"
     >
+      <div
+        class="board-segmented grid grid-cols-3 gap-1 rounded-xl border p-1"
+        role="tablist"
+        :aria-label="t('app.currentBoardContent')"
+      >
+        <button
+          v-for="tab in inspectorTabs"
+          :key="tab.id"
+          type="button"
+          role="tab"
+          :data-testid="`inspector-tab-${tab.id}`"
+          :aria-selected="activeSection === tab.id"
+          :aria-pressed="activeSection === tab.id"
+          @click="activeSection = tab.id"
+          :class="[
+            'min-w-0 rounded-lg px-2 py-2 text-[11px] font-bold transition-all flex items-center justify-start gap-1.5',
+            activeSection === tab.id
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-500 hover:bg-white hover:text-slate-800'
+          ]"
+        >
+          <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
+          <span class="min-w-0 flex-1 truncate text-left">{{ tab.label }}</span>
+          <span
+            class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+            :class="activeSection === tab.id ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-500'"
+          >
+            {{ tab.count }}
+          </span>
+        </button>
+      </div>
+
       <!-- Device List Section -->
-      <div>
+      <div v-if="activeSection === 'devices'" data-testid="inspector-section-devices">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-slate-400">devices</span>
             <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.deviceList') }}</h3>
           </div>
+          <button
+            type="button"
+            data-testid="inspector-add-device"
+            @click="handleAddDevice"
+            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            :title="t('app.openDeviceCreator')"
+            :aria-label="t('app.openDeviceCreator')"
+          >
+            <span class="material-symbols-outlined text-sm">add</span>
+          </button>
         </div>
 
         <div class="space-y-2.5">
@@ -292,16 +401,16 @@ const togglePanel = () => {
             <!-- Hover gradient background -->
             <div class="absolute inset-0 bg-gradient-to-r from-blue-50/0 to-indigo-50/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
-            <div class="relative flex items-center justify-between">
-              <div class="flex items-center gap-3">
+            <div class="relative flex min-w-0 items-center justify-between gap-2">
+              <div class="flex min-w-0 items-center gap-3">
                 <div class="relative">
                   <div class="w-2.5 h-2.5 rounded-full shadow-sm" :class="device.status === 'online' ? 'bg-green-500' : 'bg-red-500'"></div>
                   <div class="absolute inset-0 w-2.5 h-2.5 rounded-full animate-ping opacity-75" :class="device.status === 'online' ? 'bg-green-400' : 'bg-red-400'"></div>
                 </div>
-                <span class="text-sm font-semibold text-slate-700 group-hover:text-blue-600 transition-colors">
+                <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:text-blue-600 transition-colors" :title="device.name">
                   {{ device.name }}
                 </span>
-                <span v-if="device.type" class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                <span v-if="device.type" class="max-w-[7rem] shrink-0 truncate px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200" :title="device.type">
                   {{ device.type }}
                 </span>
               </div>
@@ -314,19 +423,36 @@ const togglePanel = () => {
               </button>
             </div>
           </div>
+
+          <div v-if="displayDevices.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
+            <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">devices</span>
+            <p class="text-xs mb-3">{{ t('app.noDevicesOnCanvas') }}</p>
+            <button
+              type="button"
+              @click="handleAddDevice"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+              {{ t('app.openDeviceCreator') }}
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Active Global Rules Section -->
-      <div>
+      <div v-if="activeSection === 'rules'" data-testid="inspector-section-rules">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-slate-400">rule</span>
             <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.globalRules') }}</h3>
           </div>
           <button
+            type="button"
+            data-testid="inspector-add-rule"
             @click="handleAddRule"
             class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            :title="t('app.createRule')"
+            :aria-label="t('app.createRule')"
           >
             <span class="material-symbols-outlined text-sm">add</span>
           </button>
@@ -342,11 +468,11 @@ const togglePanel = () => {
             <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-l-lg"></div>
             
             <div class="flex items-start justify-between mb-2">
-              <div class="flex items-center gap-2">
+              <div class="flex min-w-0 items-center gap-2">
                 <span class="material-symbols-outlined text-sm text-blue-600">
                   auto_awesome
                 </span>
-                <h4 class="text-sm font-bold text-blue-800">
+                <h4 class="min-w-0 truncate text-sm font-bold text-blue-800" :title="rule.name">
                   {{ rule.name }}
                 </h4>
               </div>
@@ -361,7 +487,7 @@ const togglePanel = () => {
               </button>
             </div>
 
-            <p class="text-[11px] text-blue-600 leading-tight font-medium ml-6">
+            <p class="ml-6 break-words text-[11px] font-medium leading-tight text-blue-600">
               {{ rule.description }}
             </p>
           </div>
@@ -369,18 +495,36 @@ const togglePanel = () => {
           <!-- Empty state when no rules -->
           <div v-if="displayRules.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
             <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">rule</span>
-            <p class="text-xs">{{ t('app.noRulesActive') }}</p>
+            <p class="text-xs mb-3">{{ t('app.noRulesActive') }}</p>
+            <button
+              type="button"
+              @click="handleAddRule"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+              {{ t('app.createRule') }}
+            </button>
           </div>
         </div>
       </div>
 
       <!-- Specifications Section -->
-      <div>
+      <div v-if="activeSection === 'specs'" data-testid="inspector-section-specs">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
-            <span class="material-symbols-outlined text-slate-400">verified</span>
+            <span class="material-symbols-outlined text-slate-400">fact_check</span>
             <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest">{{ t('app.specifications') }}</h3>
           </div>
+          <button
+            type="button"
+            data-testid="inspector-add-spec"
+            @click="handleAddSpec"
+            class="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-all"
+            :title="t('app.openSpecificationCreator')"
+            :aria-label="t('app.openSpecificationCreator')"
+          >
+            <span class="material-symbols-outlined text-sm">add</span>
+          </button>
         </div>
 
         <div class="space-y-3">
@@ -393,9 +537,9 @@ const togglePanel = () => {
             <div class="absolute inset-0 bg-red-50/30 pointer-events-none"></div>
 
             <div class="relative flex items-start justify-between mb-2">
-              <div class="flex items-center gap-2">
+              <div class="flex min-w-0 items-center gap-2">
                 <span class="material-symbols-outlined text-sm text-red-500">warning</span>
-                <h4 class="text-sm font-bold text-slate-800">
+                <h4 class="min-w-0 truncate text-sm font-bold text-slate-800" :title="spec.name">
                   {{ spec.name }}
                 </h4>
               </div>
@@ -408,15 +552,23 @@ const togglePanel = () => {
               </button>
             </div>
 
-            <p class="text-[11px] text-slate-600 leading-tight font-mono ml-7 bg-slate-50 p-1.5 rounded border border-slate-100 inline-block">
+            <p class="ml-7 block max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded border border-slate-100 bg-slate-50 p-1.5 font-mono text-[11px] leading-tight text-slate-600">
               {{ spec.formula }}
             </p>
           </div>
 
           <!-- Empty state when no specifications -->
           <div v-if="displaySpecs.length === 0" class="text-center py-6 text-slate-400 border border-dashed border-slate-200 rounded-lg">
-            <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">verified</span>
-            <p class="text-xs">{{ t('app.noSpecificationsVerified') }}</p>
+            <span class="material-symbols-outlined text-3xl mb-1 block opacity-50">fact_check</span>
+            <p class="text-xs mb-3">{{ t('app.noSpecificationsVerified') }}</p>
+            <button
+              type="button"
+              @click="handleAddSpec"
+              class="mx-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+            >
+              <span class="material-symbols-outlined text-sm">add</span>
+              {{ t('app.openSpecificationCreator') }}
+            </button>
           </div>
         </div>
       </div>

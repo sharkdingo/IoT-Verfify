@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 const { t } = useI18n()
 
@@ -26,31 +27,41 @@ const handleCancel = () => {
   emit('cancel')
   emit('update:visible', false)
 }
+
+const isDialogOpen = computed(() => props.visible)
+const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, handleCancel)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="logout-dialog">
-      <div v-if="visible" class="logout-overlay" @click.self="handleCancel">
-        <div class="logout-dialog">
+      <div v-if="visible" class="logout-overlay" @click.self="handleCancel" @keydown="handleModalKeydown">
+        <div
+          :ref="setDialogRef"
+          class="logout-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="logout-dialog-title"
+          tabindex="-1"
+        >
           <!-- Icon -->
           <div class="logout-icon-wrapper">
             <div class="logout-icon-bg"></div>
-            <span class="material-symbols-outlined logout-icon">logout</span>
+            <span class="material-symbols-outlined logout-icon" aria-hidden="true">logout</span>
           </div>
 
           <!-- Content -->
           <div class="logout-content">
-            <h2 class="logout-title">{{ t('app.logoutTitle') }}</h2>
+            <h2 id="logout-dialog-title" class="logout-title">{{ t('app.logoutTitle') }}</h2>
             <p class="logout-message">{{ t('app.logoutMessage') }}</p>
           </div>
 
           <!-- Actions -->
           <div class="logout-actions">
-            <button class="logout-btn logout-btn-cancel" @click="handleCancel" :disabled="loading">
+            <button type="button" class="logout-btn logout-btn-cancel" @click="handleCancel" :disabled="loading">
               {{ t('app.cancel') }}
             </button>
-            <button class="logout-btn logout-btn-confirm" @click="handleConfirm" :disabled="loading">
+            <button type="button" class="logout-btn logout-btn-confirm" @click="handleConfirm" :disabled="loading">
               <span v-if="loading" class="loading-spinner"></span>
               <span v-else>{{ t('app.logout') }}</span>
             </button>

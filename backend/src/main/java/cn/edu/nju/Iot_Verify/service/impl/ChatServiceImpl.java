@@ -385,9 +385,17 @@ public class ChatServiceImpl implements ChatService {
 
     private void collectRefreshCommand(String functionName, Set<StreamResponseDto.CommandDto> commandSet) {
         switch (functionName) {
-            case "add_device", "delete_device" ->
+            case "add_device" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "device_list")));
+            case "delete_device" -> {
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "device_list")));
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "rule_list")));
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "spec_list")));
+            }
             case "manage_rule" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "rule_list")));
