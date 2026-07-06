@@ -10,14 +10,12 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
-import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.task.TaskRejectedException;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,7 +24,6 @@ import java.util.List;
 /**
  * 验证控制器
  */
-@Slf4j
 @Validated
 @RestController
 @RequestMapping("/api/verify")
@@ -57,17 +54,19 @@ public class VerificationController {
             @CurrentUser Long userId,
             @Valid @RequestBody VerificationRequestDto request) {
 
-        Long taskId = verificationService.createTask(userId);
-
-        try {
-            verificationService.verifyAsync(userId, taskId, request);
-        } catch (TaskRejectedException e) {
-            log.warn("Verification task {} rejected: thread pool full", taskId);
-            verificationService.failTaskById(taskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later");
-        }
+        Long taskId = verificationService.submitVerification(userId, request);
 
         return Result.success(taskId);
+    }
+
+    /**
+     * 获取当前用户的异步验证任务列表
+     */
+    @GetMapping("/tasks")
+    public Result<List<VerificationTaskSummaryDto>> getTasks(
+            @CurrentUser Long userId,
+            @RequestParam(name = "excludeTaskIds", required = false) List<Long> excludeTaskIds) {
+        return Result.success(verificationService.getTasks(userId, excludeTaskIds));
     }
 
     /**

@@ -4,21 +4,18 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
+import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
-import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.task.TaskRejectedException;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@Slf4j
 @Validated
 @RestController
 @RequestMapping("/api/simulate")
@@ -39,17 +36,15 @@ public class SimulationController {
     public Result<Long> simulateAsync(
             @CurrentUser Long userId,
             @Valid @RequestBody SimulationRequestDto request) {
-        Long taskId = simulationService.createTask(userId, request.getSteps());
-
-        try {
-            simulationService.simulateAsync(userId, taskId, request);
-        } catch (TaskRejectedException e) {
-            log.warn("Simulation task {} rejected: thread pool full", taskId);
-            simulationService.failTaskById(taskId, "Server busy, please try again later");
-            throw new ServiceUnavailableException("Server busy, please try again later");
-        }
-
+        Long taskId = simulationService.submitSimulation(userId, request);
         return Result.success(taskId);
+    }
+
+    @GetMapping("/tasks")
+    public Result<List<SimulationTaskSummaryDto>> getTasks(
+            @CurrentUser Long userId,
+            @RequestParam(name = "excludeTaskIds", required = false) List<Long> excludeTaskIds) {
+        return Result.success(simulationService.getTasks(userId, excludeTaskIds));
     }
 
     @GetMapping("/tasks/{id}")

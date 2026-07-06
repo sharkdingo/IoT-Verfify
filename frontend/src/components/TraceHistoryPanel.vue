@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import type { Trace } from '@/types/verify'
-import type { SimulationTraceSummary } from '@/types/simulation'
+import { computed } from 'vue'
+import type { Trace, VerificationTaskSummary } from '@/types/verify'
+import type { SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
 import { useI18n } from 'vue-i18n'
 
-type HistoryTab = 'verification' | 'simulation'
+type HistoryTab = 'tasks' | 'verification' | 'simulation'
+type TaskKind = 'verification' | 'simulation'
+type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
 
-defineProps<{
+type TaskItem =
+  | (VerificationTaskSummary & { kind: 'verification' })
+  | (SimulationTaskSummary & { kind: 'simulation' })
+
+const props = defineProps<{
   activeTab: HistoryTab
+  verificationTasks: VerificationTaskSummary[]
+  simulationTasks: SimulationTaskSummary[]
   verificationTraces: Trace[]
   simulationTraces: SimulationTraceSummary[]
+  loadingTasks: boolean
   loadingVerification: boolean
   loadingSimulation: boolean
   actionLocked: boolean
@@ -17,8 +27,15 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'update:activeTab', value: HistoryTab): void
   (e: 'close'): void
+  (e: 'refresh-tasks'): void
   (e: 'refresh-verification'): void
   (e: 'refresh-simulation'): void
+  (e: 'watch-verification-task', id: number): void
+  (e: 'watch-simulation-task', id: number): void
+  (e: 'view-verification-task', id: number): void
+  (e: 'view-simulation-task', id: number): void
+  (e: 'cancel-verification-task', id: number): void
+  (e: 'cancel-simulation-task', id: number): void
   (e: 'view-verification', id: number): void
   (e: 'fix-verification', trace: Trace): void
   (e: 'delete-verification', id: number): void
@@ -28,21 +45,123 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
+const taskItems = computed<TaskItem[]>(() => [
+  ...props.verificationTasks.map(task => ({ ...task, kind: 'verification' as const })),
+  ...props.simulationTasks.map(task => ({ ...task, kind: 'simulation' as const }))
+].sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt)))
+
+const activeTaskCount = computed(() =>
+  taskItems.value.filter(task => isActiveStatus(task.status)).length
+)
+
 const formatDate = (value?: string) => {
   if (!value) return ''
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
+
+const timestamp = (value?: string) => {
+  if (!value) return 0
+  const parsed = new Date(value).getTime()
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+const isActiveStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
+const isCompletedStatus = (status?: string) => status === 'COMPLETED'
+const taskProgress = (task: TaskItem) => {
+  const fallback = isActiveStatus(task.status) ? 0 : 100
+  const numeric = typeof task.progress === 'number' ? task.progress : fallback
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(100, Math.max(0, Math.round(numeric)))
+}
+
+const formatStatus = (status?: string) => {
+  switch (status as TaskStatus | undefined) {
+    case 'PENDING':
+      return t('app.taskStatusPending')
+    case 'RUNNING':
+      return t('app.taskStatusRunning')
+    case 'COMPLETED':
+      return t('app.taskStatusCompleted')
+    case 'FAILED':
+      return t('app.taskStatusFailed')
+    case 'CANCELLED':
+      return t('app.taskStatusCancelled')
+    default:
+      return status || t('app.taskInitializing')
+  }
+}
+
+const taskKindLabel = (kind: TaskKind) =>
+  kind === 'verification' ? t('app.verification') : t('app.simulation')
+
+const statusClass = (status?: string) => {
+  switch (status) {
+    case 'COMPLETED':
+      return 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-200 dark:border-green-900'
+    case 'FAILED':
+      return 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-200 dark:border-red-900'
+    case 'CANCELLED':
+      return 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+    case 'PENDING':
+    case 'RUNNING':
+      return 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-200 dark:border-blue-900'
+    default:
+      return 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+  }
+}
+
+const emitWatchTask = (task: TaskItem) => {
+  if (task.kind === 'verification') {
+    emit('watch-verification-task', task.id)
+  } else {
+    emit('watch-simulation-task', task.id)
+  }
+}
+
+const emitViewTask = (task: TaskItem) => {
+  if (task.kind === 'verification') {
+    emit('view-verification-task', task.id)
+  } else {
+    emit('view-simulation-task', task.id)
+  }
+}
+
+const emitCancelTask = (task: TaskItem) => {
+  if (task.kind === 'verification') {
+    emit('cancel-verification-task', task.id)
+  } else {
+    emit('cancel-simulation-task', task.id)
+  }
+}
+
+const taskSecondaryText = (task: TaskItem) => {
+  if (task.kind === 'verification') {
+    if (task.status === 'COMPLETED') {
+      return task.isSafe
+        ? t('app.verificationPassed')
+        : t('app.verificationFailedWithViolations', { count: task.violatedSpecCount || 0 })
+    }
+    return task.errorMessage || ''
+  }
+
+  if (task.status === 'COMPLETED') {
+    return task.simulationTraceId
+      ? t('app.savedTraceNumber', { id: task.simulationTraceId })
+      : t('app.taskCompletedNoTraceFound')
+  }
+  return task.errorMessage || ''
+}
 </script>
 
 <template>
-  <div class="board-floating-panel fixed top-20 z-30 w-[420px] max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden">
+  <div class="board-floating-panel fixed top-20 z-30 w-[440px] max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200/60 dark:border-slate-700 overflow-hidden">
     <div class="relative overflow-hidden">
       <div class="absolute inset-0 bg-gradient-to-br from-slate-700 to-cyan-700"></div>
       <div class="relative flex items-center justify-between p-4">
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center shadow-lg">
-            <span class="material-symbols-outlined text-white text-xl">history</span>
+            <span class="material-symbols-outlined text-white text-xl">inventory_2</span>
           </div>
           <div>
             <h3 class="text-white font-bold text-base">{{ t('app.runHistory') }}</h3>
@@ -60,30 +179,143 @@ const formatDate = (value?: string) => {
     </div>
 
     <div class="p-3 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-700">
-      <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-200 dark:bg-slate-800 p-1">
+      <div class="grid grid-cols-3 gap-1 rounded-lg bg-slate-200 dark:bg-slate-800 p-1">
+        <button
+          type="button"
+          @click="emit('update:activeTab', 'tasks')"
+          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
+          :class="activeTab === 'tasks' ? 'bg-white dark:bg-slate-700 text-cyan-700 dark:text-cyan-200 shadow-sm' : 'text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white'"
+        >
+          <span class="material-symbols-outlined text-sm">inbox</span>
+          {{ t('app.taskInbox') }}
+        </button>
         <button
           type="button"
           @click="emit('update:activeTab', 'verification')"
-          class="px-3 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
+          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
           :class="activeTab === 'verification' ? 'bg-white dark:bg-slate-700 text-cyan-700 dark:text-cyan-200 shadow-sm' : 'text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white'"
         >
           <span class="material-symbols-outlined text-sm">verified_user</span>
-          {{ t('app.verification') }}
+          {{ t('app.savedVerificationTraces') }}
         </button>
         <button
           type="button"
           @click="emit('update:activeTab', 'simulation')"
-          class="px-3 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
+          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
           :class="activeTab === 'simulation' ? 'bg-white dark:bg-slate-700 text-cyan-700 dark:text-cyan-200 shadow-sm' : 'text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white'"
         >
           <span class="material-symbols-outlined text-sm">play_circle</span>
-          {{ t('app.simulation') }}
+          {{ t('app.savedSimulationRuns') }}
         </button>
       </div>
     </div>
 
     <div class="p-3 bg-white dark:bg-slate-900 max-h-[560px] overflow-y-auto">
-      <div v-if="activeTab === 'verification'" class="space-y-3">
+      <div
+        v-if="actionLocked"
+        class="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+      >
+        <span class="material-symbols-outlined text-sm">lock</span>
+        <span>{{ t('app.historyActionsLockedHint') }}</span>
+      </div>
+
+      <div v-if="activeTab === 'tasks'" class="space-y-3">
+        <div class="flex items-center justify-between px-1">
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {{ t('app.taskCount', { count: taskItems.length }) }}
+            <span v-if="activeTaskCount > 0" class="ml-1 text-blue-600 dark:text-blue-300">
+              {{ t('app.activeTaskCount', { count: activeTaskCount }) }}
+            </span>
+          </span>
+          <button
+            type="button"
+            @click="emit('refresh-tasks')"
+            class="text-xs text-cyan-700 dark:text-cyan-300 hover:text-cyan-800 dark:hover:text-cyan-200 font-medium flex items-center gap-1"
+            :disabled="loadingTasks"
+          >
+            <span class="material-symbols-outlined text-sm" :class="loadingTasks ? 'animate-spin' : ''">refresh</span>
+            {{ t('app.refresh') }}
+          </button>
+        </div>
+
+        <div v-if="loadingTasks" class="flex flex-col items-center justify-center py-10 text-slate-500 dark:text-slate-400">
+          <span class="material-symbols-outlined text-4xl animate-spin text-cyan-600">sync</span>
+          <p class="text-sm mt-3">{{ t('app.loadingTasks') }}</p>
+        </div>
+
+        <div v-else-if="taskItems.length === 0" class="flex flex-col items-center justify-center py-10">
+          <div class="w-14 h-14 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mb-3">
+            <span class="material-symbols-outlined text-slate-300 dark:text-slate-500 text-3xl">inbox</span>
+          </div>
+          <p class="text-slate-600 dark:text-slate-300 text-sm font-medium">{{ t('app.noTasks') }}</p>
+          <p class="text-slate-400 dark:text-slate-500 text-xs mt-1 text-center px-4">{{ t('app.noTasksHint') }}</p>
+        </div>
+
+        <div v-else class="space-y-2">
+          <div
+            v-for="task in taskItems"
+            :key="`${task.kind}-${task.id}`"
+            class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm p-3 hover:border-cyan-200 dark:hover:border-cyan-600 transition-colors"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-bold text-cyan-700 dark:text-cyan-300">
+                    {{ taskKindLabel(task.kind) }} #{{ task.id }}
+                  </span>
+                  <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
+                    {{ formatStatus(task.status) }}
+                  </span>
+                </div>
+                <div v-if="isActiveStatus(task.status)" class="mt-2">
+                  <div class="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                    <div
+                      class="h-full rounded-full bg-cyan-600 transition-all"
+                      :style="{ width: `${taskProgress(task)}%` }"
+                    ></div>
+                  </div>
+                  <div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                    {{ taskProgress(task) }}%
+                  </div>
+                </div>
+                <div v-if="taskSecondaryText(task)" class="text-xs text-slate-600 dark:text-slate-300 mt-1 truncate">
+                  {{ taskSecondaryText(task) }}
+                </div>
+                <div class="text-xs text-slate-400 dark:text-slate-500 mt-1">{{ formatDate(task.createdAt) }}</div>
+              </div>
+              <div class="flex flex-wrap justify-end gap-1 shrink-0">
+                <button
+                  v-if="isActiveStatus(task.status)"
+                  type="button"
+                  @click="emitWatchTask(task)"
+                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium"
+                >
+                  {{ t('app.watchTask') }}
+                </button>
+                <button
+                  v-if="isActiveStatus(task.status)"
+                  type="button"
+                  @click="emitCancelTask(task)"
+                  class="px-2 py-1 bg-slate-100 dark:bg-slate-700 hover:bg-red-50 dark:hover:bg-red-950/50 text-slate-700 dark:text-slate-200 hover:text-red-700 dark:hover:text-red-300 rounded text-xs font-medium"
+                >
+                  {{ t('app.cancel') }}
+                </button>
+                <button
+                  v-if="isCompletedStatus(task.status)"
+                  type="button"
+                  @click="emitViewTask(task)"
+                  :disabled="actionLocked"
+                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {{ task.kind === 'verification' ? t('app.openResult') : t('app.replay') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeTab === 'verification'" class="space-y-3">
         <div class="flex items-center justify-between px-1">
           <span class="text-xs font-medium text-slate-500 dark:text-slate-400">
             {{ t('app.traceCount', { count: verificationTraces.length }) }}

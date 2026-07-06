@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
@@ -89,5 +90,24 @@ class SimulationSyncToolTest {
         assertEquals(400, json.path("status").asInt());
         assertEquals("Invalid JSON arguments.", json.path("error").asText());
         verify(simulationService, never()).simulate(anyLong(), any());
+    }
+
+    @Test
+    void simulateModel_serviceValidationError_shouldReturnBusinessError() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("dev_1");
+        device.setTemplateName("Light");
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(simulationService.simulate(anyLong(), any()))
+                .thenThrow(new ValidationException("steps", "Steps must be between 1 and 100"));
+
+        SimulateModelTool tool = new SimulateModelTool(boardDataConverter, boardStorageService, simulationService, objectMapper);
+        String response = tool.execute("{}");
+        JsonNode json = objectMapper.readTree(response);
+
+        assertEquals("BUSINESS_ERROR", json.path("errorCode").asText());
+        assertEquals(422, json.path("status").asInt());
+        assertTrue(json.path("error").asText().contains("Steps must be between 1 and 100"));
     }
 }

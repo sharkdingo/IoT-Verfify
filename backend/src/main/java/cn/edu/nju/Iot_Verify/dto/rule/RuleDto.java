@@ -30,7 +30,7 @@ public class RuleDto {
     @Valid
     @NotNull(message = "Conditions cannot be null")
     @NotEmpty(message = "Conditions cannot be empty")
-    private List<Condition> conditions;
+    private List<@Valid @NotNull(message = "Condition item cannot be null") Condition> conditions;
 
     @Valid
     @NotNull(message = "Command cannot be null")

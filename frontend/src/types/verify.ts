@@ -9,10 +9,16 @@ export interface VerificationRequest {
   enablePrivacy: boolean;
 }
 
+export interface SpecResult {
+  specId: string;
+  passed: boolean;
+  expression: string;
+}
+
 export interface VerificationResult {
   safe: boolean;
   traces: Trace[];
-  specResults: boolean[];
+  specResults: SpecResult[];
   checkLogs: string[];
   nusmvOutput: string;
   disabledRuleCount?: number;
@@ -80,8 +86,23 @@ export interface VerificationTask {
   checkLogs?: string[];
   disabledRuleCount?: number;
   skippedSpecCount?: number;
+  specResults?: SpecResult[];
   nusmvOutput?: string;
   errorMessage?: string;
 }
 
-
+export type VerificationTaskSummary = Pick<
+  VerificationTask,
+  | 'id'
+  | 'status'
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'processingTimeMs'
+  | 'progress'
+  | 'isSafe'
+  | 'violatedSpecCount'
+  | 'disabledRuleCount'
+  | 'skippedSpecCount'
+  | 'errorMessage'
+>

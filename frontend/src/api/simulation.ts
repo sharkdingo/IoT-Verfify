@@ -1,6 +1,13 @@
 // src/api/simulation.ts - Simulation API
 import api from './http'
-import type { SimulationRequest, SimulationResult, SimulationTrace, SimulationTraceSummary, SimulationTask } from '@/types/simulation'
+import type {
+  SimulationRequest,
+  SimulationResult,
+  SimulationTrace,
+  SimulationTraceSummary,
+  SimulationTask,
+  SimulationTaskSummary
+} from '@/types/simulation'
 
 // 辅助函数：解包Result
 const unpack = <T>(response: any): T => {
@@ -13,7 +20,7 @@ export default {
     return unpack<SimulationResult>(await api.post('/simulate', req))
   },
 
-  // 执行异步模拟（不保存，返回任务ID）
+  // 执行异步模拟（后台任务完成后自动保存轨迹，返回任务ID）
   simulateAsync: async (req: SimulationRequest): Promise<number> => {
     return unpack<number>(await api.post('/simulate/async', req))
   },
@@ -21,6 +28,14 @@ export default {
   // 获取任务状态
   getTask: async (taskId: number): Promise<SimulationTask> => {
     return unpack<SimulationTask>(await api.get(`/simulate/tasks/${taskId}`))
+  },
+
+  // 获取当前用户的仿真任务收件箱
+  getTasks: async (excludeTaskIds: number[] = []): Promise<SimulationTaskSummary[]> => {
+    const params = excludeTaskIds.length > 0
+      ? { excludeTaskIds: excludeTaskIds.join(',') }
+      : undefined
+    return unpack<SimulationTaskSummary[]>(await api.get('/simulate/tasks', { params }))
   },
 
   // 获取任务进度

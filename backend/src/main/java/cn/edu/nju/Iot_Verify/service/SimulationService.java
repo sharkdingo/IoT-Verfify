@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
+import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 
@@ -18,13 +19,28 @@ public interface SimulationService {
      */
     SimulationResultDto simulate(Long userId, SimulationRequestDto request);
 
+    /**
+     * 校验请求、创建任务并提交异步模拟。请求非法时不会创建任务；队列拒绝时会
+     * 将已创建任务标记为失败并抛出 ServiceUnavailableException。
+     */
+    Long submitSimulation(Long userId, SimulationRequestDto request);
+
     Long createTask(Long userId, int requestedSteps);
 
     void failTaskById(Long taskId, String errorMessage);
 
+    /**
+     * 低层异步模拟入口（兼容旧调用）：调用方必须先创建任务并传入非空 taskId。
+     * 新调用应优先使用 submitSimulation，让服务统一完成校验、建任务和入队。
+     */
     void simulateAsync(Long userId, Long taskId, SimulationRequestDto request);
 
     SimulationTaskDto getTask(Long userId, Long taskId);
+
+    /**
+     * 获取用户的仿真任务收件箱（轻量列表，不含日志和原始输出）。
+     */
+    List<SimulationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds);
 
     int getTaskProgress(Long userId, Long taskId);
 

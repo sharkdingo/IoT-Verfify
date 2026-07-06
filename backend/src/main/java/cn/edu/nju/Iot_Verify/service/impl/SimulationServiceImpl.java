@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
@@ -27,7 +28,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +51,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final SimulationTaskRepository simulationTaskRepository;
     private final SimulationTraceMapper simulationTraceMapper;
     private final SimulationTaskMapper simulationTaskMapper;
+    private final ThreadPoolTaskExecutor simulationTaskExecutor;
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
 
     public SimulationServiceImpl(SmvGenerator smvGenerator,
@@ -61,6 +63,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  SimulationTraceMapper simulationTraceMapper,
                                  SimulationTaskMapper simulationTaskMapper,
                                  ObjectMapper objectMapper,
+                                 @Qualifier("simulationTaskExecutor") ThreadPoolTaskExecutor simulationTaskExecutor,
                                  @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
@@ -71,6 +74,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.simulationTaskRepository = simulationTaskRepository;
         this.simulationTraceMapper = simulationTraceMapper;
         this.simulationTaskMapper = simulationTaskMapper;
+        this.simulationTaskExecutor = simulationTaskExecutor;
         this.syncSimulationExecutor = syncSimulationExecutor;
     }
 
@@ -94,28 +98,20 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     public SimulationResultDto simulate(Long userId, SimulationRequestDto request) {
-        List<DeviceVerificationDto> devices = request.getDevices();
-        List<RuleDto> rules = request.getRules();
-        int steps = request.getSteps();
-        boolean isAttack = request.isAttack();
-        int intensity = request.getIntensity();
-        boolean enablePrivacy = request.isEnablePrivacy();
+        SimulationInput input = validateAndNormalize(request);
+        return simulateInput(userId, input);
+    }
 
-        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
-        if (devices == null || devices.isEmpty()) {
-            return SimulationResultDto.builder()
-                    .states(List.of()).steps(0).requestedSteps(steps)
-                    .logs(List.of("Error: devices list cannot be empty")).build();
-        }
-
+    private SimulationResultDto simulateInput(Long userId, SimulationInput input) {
         log.info("Starting simulation: userId={}, devices={}, steps={}, attack={}, intensity={}",
-                userId, devices.size(), steps, isAttack, intensity);
+                userId, input.devices().size(), input.steps(), input.attack(), input.intensity());
 
         long timeoutMs = nusmvConfig.getTimeoutMs() * 2;
         Future<SimulationResultDto> future;
         try {
             future = syncSimulationExecutor.submit(() ->
-                    doSimulate(userId, devices, safeRules, steps, isAttack, intensity, enablePrivacy));
+                    doSimulate(userId, input.devices(), input.rules(), input.steps(), input.attack(),
+                            input.intensity(), input.enablePrivacy()));
         } catch (RejectedExecutionException e) {
             log.warn("Simulation request rejected: executor is saturated ({})", syncSimulationExecutorSnapshot());
             throw new ServiceUnavailableException("Simulation service is busy, please retry later", e);
@@ -128,7 +124,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             purgeCancelledSyncTasks();
             log.warn("Simulation timed out after {}ms", timeoutMs);
             return SimulationResultDto.builder()
-                    .states(List.of()).steps(0).requestedSteps(steps)
+                    .states(List.of()).steps(0).requestedSteps(input.steps())
                     .logs(List.of("Simulation timed out")).build();
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
@@ -140,9 +136,72 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return SimulationResultDto.builder()
-                    .states(List.of()).steps(0).requestedSteps(steps)
+                    .states(List.of()).steps(0).requestedSteps(input.steps())
                     .logs(List.of("Simulation interrupted")).build();
         }
+    }
+
+    private SimulationInput validateAndNormalize(SimulationRequestDto request) {
+        if (request == null) {
+            throw new ValidationException("request", "Simulation request cannot be null");
+        }
+        SimulationRequestDto snapshot = snapshotRequest(request);
+        List<DeviceVerificationDto> devices = copyRequiredList(
+                snapshot.getDevices(), "devices", "Devices list cannot be empty");
+        List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
+        int steps = snapshot.getSteps();
+        if (steps < 1 || steps > 100) {
+            throw new ValidationException("steps", "Steps must be between 1 and 100");
+        }
+        int intensity = snapshot.getIntensity();
+        if (intensity < 0 || intensity > 50) {
+            throw new ValidationException("intensity", "Intensity must be between 0 and 50");
+        }
+
+        snapshot.setDevices(devices);
+        snapshot.setRules(rules);
+        snapshot.setSteps(steps);
+        snapshot.setIntensity(intensity);
+
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        NusmvRequestValidator.validateDevices(devices, errors);
+        NusmvRequestValidator.validateRules(rules, errors);
+        NusmvRequestValidator.throwIfErrors(errors);
+
+        return new SimulationInput(devices, rules, steps, snapshot.isAttack(), intensity,
+                snapshot.isEnablePrivacy(), snapshot);
+    }
+
+    private SimulationRequestDto snapshotRequest(SimulationRequestDto request) {
+        try {
+            return objectMapper.convertValue(request, SimulationRequestDto.class);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("request", "Simulation request cannot be snapshotted");
+        }
+    }
+
+    private <T> List<T> copyRequiredList(List<T> values, String field, String emptyMessage) {
+        if (values == null || values.isEmpty()) {
+            throw new ValidationException(field, emptyMessage);
+        }
+        return copyList(values, field);
+    }
+
+    private <T> List<T> copyOptionalList(List<T> values, String field) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return copyList(values, field);
+    }
+
+    private <T> List<T> copyList(List<T> values, String field) {
+        List<T> copy = new ArrayList<>(values);
+        for (int i = 0; i < copy.size(); i++) {
+            if (copy.get(i) == null) {
+                throw new ValidationException(field + "[" + i + "]", "must not be null");
+            }
+        }
+        return copy;
     }
 
     @Override
@@ -167,16 +226,52 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     @Override
-    @Async("simulationTaskExecutor")
     public void simulateAsync(Long userId, Long taskId, SimulationRequestDto request) {
-        List<DeviceVerificationDto> devices = request.getDevices();
-        List<RuleDto> rules = request.getRules();
-        int steps = request.getSteps();
-        boolean isAttack = request.isAttack();
-        int intensity = request.getIntensity();
-        boolean enablePrivacy = request.isEnablePrivacy();
+        Long requiredTaskId = requireTaskId(taskId);
+        SimulationInput input;
+        try {
+            input = validateAndNormalize(request);
+        } catch (ValidationException e) {
+            failTaskById(requiredTaskId, e.getMessage());
+            throw e;
+        }
+        try {
+            enqueueSimulationTask(userId, requiredTaskId, input);
+        } catch (TaskRejectedException e) {
+            failTaskById(requiredTaskId, "Server busy, please try again later");
+            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        }
+    }
 
-        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
+    @Override
+    public Long submitSimulation(Long userId, SimulationRequestDto request) {
+        SimulationInput input = validateAndNormalize(request);
+        Long taskId = createTask(userId, input.steps());
+        try {
+            enqueueSimulationTask(userId, taskId, input);
+        } catch (TaskRejectedException e) {
+            log.warn("Simulation task {} rejected: thread pool full", taskId);
+            failTaskById(taskId, "Server busy, please try again later");
+            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        }
+        return taskId;
+    }
+
+    private void enqueueSimulationTask(Long userId, Long taskId, SimulationInput input) {
+        Long requiredTaskId = requireTaskId(taskId);
+        SimulationInput requiredInput = Objects.requireNonNull(input, "simulation input must not be null");
+        simulationTaskExecutor.execute(() -> runSimulationTask(userId, requiredTaskId, requiredInput));
+    }
+
+    private Long requireTaskId(Long taskId) {
+        if (taskId == null) {
+            throw new ValidationException("taskId", "Task id cannot be null");
+        }
+        return taskId;
+    }
+
+    private void runSimulationTask(Long userId, Long taskId, SimulationInput input) {
+        String requestJson = buildRequestSnapshot(input.request());
 
         registerRunningTask(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
@@ -210,13 +305,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 return;
             }
 
-            if (devices == null || devices.isEmpty()) {
-                failTask(task, "Invalid input: devices list cannot be empty", List.of("Invalid input: devices list cannot be empty"));
-                return;
-            }
-
             updateTaskProgress(taskId, 20, "Executing simulation");
-            SimulationResultDto result = doSimulate(userId, devices, safeRules, steps, isAttack, intensity, enablePrivacy);
+            SimulationResultDto result = doSimulate(userId, input.devices(), input.rules(), input.steps(),
+                    input.attack(), input.intensity(), input.enablePrivacy());
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
@@ -231,7 +322,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             SimulationTracePo savedTrace = persistSimulationTrace(
                     userId,
                     result,
-                    buildRequestSnapshot(devices, safeRules, steps, isAttack, intensity, enablePrivacy));
+                    requestJson);
 
             updateTaskProgress(taskId, 100, "Simulation completed");
             completeTask(task, savedTrace.getId(), result.getSteps(), result.getLogs());
@@ -252,6 +343,14 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
     }
 
+    private record SimulationInput(List<DeviceVerificationDto> devices,
+                                   List<RuleDto> rules,
+                                   int steps,
+                                   boolean attack,
+                                   int intensity,
+                                   boolean enablePrivacy,
+                                   SimulationRequestDto request) {}
+
     @Override
     @Transactional(readOnly = true)
     public SimulationTaskDto getTask(Long userId, Long taskId) {
@@ -259,6 +358,27 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
         task.setCheckLogs(readCheckLogs(task));
         return simulationTaskMapper.toDto(task);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SimulationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds) {
+        List<Long> normalizedExcludedIds = normalizeExcludedTaskIds(excludedTaskIds);
+        List<SimulationTaskPo> tasks = normalizedExcludedIds.isEmpty()
+                ? simulationTaskRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                : simulationTaskRepository.findByUserIdAndIdNotInOrderByCreatedAtDesc(userId, normalizedExcludedIds);
+        return simulationTaskMapper.toSummaryDtoList(
+                tasks);
+    }
+
+    private static List<Long> normalizeExcludedTaskIds(List<Long> excludedTaskIds) {
+        if (excludedTaskIds == null || excludedTaskIds.isEmpty()) {
+            return List.of();
+        }
+        return excludedTaskIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
     }
 
     @Override
@@ -276,13 +396,14 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Override
     @Transactional
     public SimulationTraceDto simulateAndSave(Long userId, SimulationRequestDto request) {
-        SimulationResultDto result = simulate(userId, request);
+        SimulationInput input = validateAndNormalize(request);
+        SimulationResultDto result = simulateInput(userId, input);
 
         if (result.getStates() == null || result.getStates().isEmpty()) {
             throw new InternalServerException("Simulation produced no states, nothing to save");
         }
 
-        SimulationTracePo saved = persistSimulationTrace(userId, result, JsonUtils.toJson(request));
+        SimulationTracePo saved = persistSimulationTrace(userId, result, buildRequestSnapshot(input.request()));
         log.info("Saved simulation trace: id={}, userId={}, steps={}", saved.getId(), userId, saved.getSteps());
         return simulationTraceMapper.toDto(saved);
     }
@@ -487,6 +608,10 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         request.setAttack(isAttack);
         request.setIntensity(intensity);
         request.setEnablePrivacy(enablePrivacy);
+        return JsonUtils.toJson(request);
+    }
+
+    private String buildRequestSnapshot(SimulationRequestDto request) {
         return JsonUtils.toJson(request);
     }
 

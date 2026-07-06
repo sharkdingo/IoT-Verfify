@@ -39,6 +39,12 @@ public final class SmvGenerationContext {
         }
     }
 
+    public void emittedSpec(SpecificationDto spec, String expression) {
+        if (warnings != null) {
+            warnings.emittedSpec(spec, expression);
+        }
+    }
+
     public WarningSnapshot warningsSnapshot() {
         if (warnings == null) {
             return WarningSnapshot.empty();
@@ -46,15 +52,20 @@ public final class SmvGenerationContext {
         return new WarningSnapshot(
                 warnings.checkLogWarnings(),
                 warnings.disabledRuleCount(),
-                warnings.skippedSpecCount()
+                warnings.skippedSpecCount(),
+                warnings.emittedSpecs()
         );
     }
 
     public record WarningSnapshot(List<String> checkLogWarnings,
                                   int disabledRuleCount,
-                                  int skippedSpecCount) {
+                                  int skippedSpecCount,
+                                  List<EmittedSpec> emittedSpecs) {
         public static WarningSnapshot empty() {
-            return new WarningSnapshot(List.of(), 0, 0);
+            return new WarningSnapshot(List.of(), 0, 0, List.of());
         }
+    }
+
+    public record EmittedSpec(SpecificationDto spec, String specId, String expression) {
     }
 }

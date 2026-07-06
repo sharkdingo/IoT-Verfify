@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.List;
@@ -29,6 +31,6 @@ public class DeviceVerificationDto {
 
     // 运行时验证状态
     private String currentStateTrust;
-    private List<VariableStateDto> variables;
-    private List<PrivacyStateDto> privacies;
+    private List<@Valid @NotNull(message = "Variable item cannot be null") VariableStateDto> variables;
+    private List<@Valid @NotNull(message = "Privacy item cannot be null") PrivacyStateDto> privacies;
 }

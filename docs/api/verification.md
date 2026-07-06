@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-05. Source:
+Verified against code on 2026-07-06. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -39,9 +39,9 @@ and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
-| `safe` | `boolean` | `true` = all emitted specs satisfied |
+| `safe` | `boolean` | `true` = at least one emitted spec was checked and all emitted specs satisfied |
 | `traces` | `TraceDto[]` | Counterexample traces (present when `safe = false`) |
-| `specResults` | `Boolean[]` | Per-emitted-spec result; specs skipped before SMV emission are counted/logged separately |
+| `specResults` | `SpecResultDto[]` | Per-emitted-spec result objects; specs skipped before SMV emission are counted/logged separately |
 | `checkLogs` | `String[]` | Human-readable check log |
 | `nusmvOutput` | `String` | Raw NuSMV output |
 | `disabledRuleCount` | `Integer` | Count of rules whose generated guard failed closed to `FALSE` |
@@ -50,13 +50,45 @@ and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 Generation warnings are also appended to `checkLogs` with `[rule-disabled]` and
 `[spec-skipped]` markers. A response can be `safe=true` and still have non-zero counts;
 that means the emitted SMV model was safe, but some requested rules/specs did not enter
-the model as intended.
+the model as intended. If no specification is emitted to NuSMV, the backend returns
+`safe=false` with empty `specResults` and a check log explaining that nothing was
+verified.
+
+`specResults` contains only specifications actually emitted to NuSMV, in emitted order.
+Each item carries its own `specId`, so clients must not infer identity from array index
+alone. When NuSMV output parsing is incomplete, the backend fails closed: missing emitted
+specs still appear with `passed=false` and their generated expression when available.
 
 ### `POST /api/verify/async` — asynchronous
 
 Same request body, including the non-empty `specs` constraint. **Response `data`**:
 `Long` — the `taskId` (the **server** generates and returns it; the client does not
 supply it).
+
+Async submission snapshots the request and validates it before creating a task. REST
+calls first run full DTO Bean Validation (HTTP 400 for malformed request shapes);
+service and AI-tool callers run the NuSMV runtime validation needed for execution
+(`devices`/`specs` present, null list items rejected, device identity, specification id
+and template id, specification conditions, `intensity`, etc.). Validation failures are
+returned before task creation (`ValidationException`, HTTP/tool status 422), so no
+`taskId` is returned and clients must not start polling. If the task queue is saturated
+after task creation, the backend marks that task `FAILED` internally and returns
+`503 ServiceUnavailableException`; from the client perspective, a failed submit is
+still "no pollable task".
+
+### `GET /api/verify/tasks` — verification task inbox
+
+Optional query parameter: `excludeTaskIds=1,2,3`. Use it when the frontend is already
+polling specific task ids through `GET /api/verify/tasks/{id}` and wants the inbox
+summary refresh to skip those same tasks.
+
+**Response**: `VerificationTaskSummaryDto[]`, ordered by `createdAt` descending.
+
+This is a lightweight list for task inbox UIs. It includes lifecycle/status fields,
+`progress`, result summary fields (`isSafe`, `violatedSpecCount`,
+`disabledRuleCount`, `skippedSpecCount`), and `errorMessage`, but intentionally omits
+heavy completed-task details such as `specResults`, `checkLogs`, and `nusmvOutput`.
+Fetch `GET /api/verify/tasks/{id}` when the user opens a specific task.
 
 ### `GET /api/verify/tasks/{id}` — task status
 
@@ -69,15 +101,27 @@ supply it).
 | `createdAt` / `startedAt` / `completedAt` | `LocalDateTime` | Lifecycle timestamps |
 | `processingTimeMs` | `Long` | |
 | `isSafe` | `Boolean` | Result once completed |
-| `violatedSpecCount` | `Integer` | |
+| `violatedSpecCount` | `Integer` | Number of failed structured `specResults` once completed; falls back to trace count for legacy/no-result tasks |
 | `disabledRuleCount` | `Integer` | Completed-task copy of generation-disabled rule count |
 | `skippedSpecCount` | `Integer` | Completed-task copy of skipped/degraded spec count |
-| `checkLogs` | `String[]` | Generation warnings and NuSMV execution/check logs once completed |
+| `specResults` | `SpecResultDto[]` | Per-emitted-spec result objects once completed |
+| `checkLogs` | `String[]` | Generation warnings and NuSMV execution/check logs when available (`COMPLETED` or `FAILED`) |
 | `nusmvOutput` | `String` | Raw NuSMV output once completed |
 | `errorMessage` | `String` | Present on `FAILED` |
 | `progress` | `Integer` | 0–100 |
 
-`@JsonInclude(NON_NULL)` — null fields are omitted.
+`@JsonInclude(NON_NULL)` — null fields are omitted. Completed async verification
+tasks carry the same per-spec result and raw-output fields as synchronous verification:
+`specResults`, `checkLogs`, `nusmvOutput`, `disabledRuleCount`, and `skippedSpecCount`.
+Failed async tasks may still carry `checkLogs` for the steps reached before failure.
+
+### `SpecResultDto`
+
+| Field | Type | Notes |
+| :--- | :--- | :--- |
+| `specId` | `String` | Stable `SpecificationDto.id` for the emitted specification |
+| `passed` | `boolean` | `true` when NuSMV reported the emitted specification as satisfied |
+| `expression` | `String` | NuSMV CTL/LTL expression checked for this emitted specification |
 
 ### Other verification endpoints
 
@@ -223,9 +267,40 @@ variables: TraceVariableDto[], trustPrivacy[], privacies[] }`.
 **Response**: `SimulationResultDto` — `{ states: TraceStateDto[], steps,
 requestedSteps, nusmvOutput, logs: String[] }`.
 
+Synchronous simulation uses the same request snapshot and runtime validation as async
+simulation. Validation failures are returned as errors (REST 400 for DTO Bean Validation
+or 422 for service `ValidationException`), not as a success-shaped empty simulation
+result.
+
 ### `POST /api/simulate/async`
 
 **Response `data`**: `Long` — `taskId` (server-generated).
+
+Async simulation submission follows the same lifecycle contract as async verification:
+the backend snapshots and validates the request before task creation. REST calls first
+run full DTO Bean Validation; service and AI-tool callers run NuSMV runtime validation
+for required devices, null list items, device identity, `steps`, and `intensity`.
+Structurally invalid rules are rejected at the boundary: null rule elements, null
+commands, and blank `command.deviceName` / `command.action` all return validation
+errors instead of silently disappearing from the model. Rules that are structurally
+present but cannot be emitted semantically (for example, references that cannot be
+resolved during SMV generation) may still be disabled fail-closed with warnings in
+`checkLogs`. Validation failure returns no `taskId`, and queue saturation marks the
+created task `FAILED` before returning `503`. Clients should start polling only after
+this endpoint successfully returns a task id.
+
+### `GET /api/simulate/tasks` — simulation task inbox
+
+Optional query parameter: `excludeTaskIds=1,2,3`. Use it when the frontend is already
+polling specific task ids through `GET /api/simulate/tasks/{id}` and wants the inbox
+summary refresh to skip those same tasks.
+
+**Response**: `SimulationTaskSummaryDto[]`, ordered by `createdAt` descending.
+
+This lightweight list includes lifecycle/status fields, `progress`, requested/completed
+step counts, `simulationTraceId`, and `errorMessage`. It omits logs and raw NuSMV
+output; completed async simulations should be inspected through the referenced
+`SimulationTraceDto` when `simulationTraceId` is present.
 
 ### `GET /api/simulate/tasks/{id}` — `SimulationTaskDto`
 
@@ -246,6 +321,9 @@ summary.
 - `DELETE /api/simulate/traces/{id}` → `null`
 - `GET /api/simulate/tasks/{id}/progress` → `Integer`
 - `POST /api/simulate/tasks/{id}/cancel` → `Boolean`
+
+Persisted simulation `requestJson` is the validated execution snapshot used for the
+NuSMV run, not a later serialization of the caller's mutable request object.
 
 ---
 

@@ -60,6 +60,10 @@ public class VerificationTaskPo implements TaskView {
 
     @Column(columnDefinition = "TEXT")
     @JsonIgnore
+    private String specResultsJson;
+
+    @Column(columnDefinition = "TEXT")
+    @JsonIgnore
     private String checkLogsJson;
 
     @Transient

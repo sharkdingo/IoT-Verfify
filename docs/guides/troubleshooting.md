@@ -1,8 +1,9 @@
 # Troubleshooting
 
-> Verified against code on 2026-07-05. Source:
+> Verified against code on 2026-07-06. Source:
 > `backend/src/main/resources/application.yaml`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/`,
+> `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/VerificationServiceImpl.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/RedisTokenBlacklistService.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/configure/SecurityConfig.java`.
 
@@ -56,7 +57,8 @@ The browser blocks requests from the frontend origin.
 ```json
 {
   "status": "FAILED",
-  "errorMessage": "NuSMV execution failed: NuSMV exited with code 1: <output details>"
+  "errorMessage": "NuSMV execution failed: NuSMV exited with code 1: <output details>",
+  "checkLogs": ["Generating NuSMV model...", "NuSMV execution failed: <error details>"]
 }
 ```
 
@@ -65,7 +67,12 @@ Checklist:
 - Confirm `nusmv.path` (`NUSMV_PATH`) points to the correct NuSMV executable.
 - Confirm the version is NuSMV 2.6+ and **not nuXmv** (incompatible): `NuSMV -version`.
 - On Linux running a Windows NuSMV build, set `nusmv.command-prefix` (`NUSMV_PREFIX=wine`) so the executable is launched through Wine.
-- Review the specific error in `checkLogs` (sync) or `errorMessage` (async).
+- Review the specific error in `checkLogs` and, for async tasks, `errorMessage`.
+
+When verification completes and NuSMV per-spec results are available, `specResults`
+contains objects shaped as `{ "specId": "...", "passed": true, "expression": "..." }`;
+execution failures can still return an empty array because no trustworthy per-spec result
+was produced.
 
 See NuSMV keys in [../getting-started/configuration.md](../getting-started/configuration.md) and the model details in [../architecture/nusmv-model.md](../architecture/nusmv-model.md).
 
@@ -90,7 +97,8 @@ See NuSMV keys in [../getting-started/configuration.md](../getting-started/confi
 ```json
 {
   "status": "FAILED",
-  "errorMessage": "NuSMV execution failed: NuSMV execution timed out after ..."
+  "errorMessage": "NuSMV execution failed: NuSMV execution timed out after ...",
+  "checkLogs": ["Generating NuSMV model...", "NuSMV execution failed: NuSMV execution timed out after ..."]
 }
 ```
 

@@ -47,9 +47,10 @@ public class SmvGenerator {
                                  Map<String, DeviceSmvData> deviceSmvMap,
                                  List<String> generationWarnings,
                                  int disabledRuleCount,
-                                 int skippedSpecCount) {
+                                 int skippedSpecCount,
+                                 List<SmvGenerationContext.EmittedSpec> emittedSpecs) {
         public GenerateResult(File smvFile, Map<String, DeviceSmvData> deviceSmvMap) {
-            this(smvFile, deviceSmvMap, List.of(), 0, 0);
+            this(smvFile, deviceSmvMap, List.of(), 0, 0, List.of());
         }
 
         private static GenerateResult from(File smvFile,
@@ -57,7 +58,7 @@ public class SmvGenerator {
                                            SmvGenerationContext context) {
             SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
             return new GenerateResult(smvFile, deviceSmvMap, snapshot.checkLogWarnings(),
-                    snapshot.disabledRuleCount(), snapshot.skippedSpecCount());
+                    snapshot.disabledRuleCount(), snapshot.skippedSpecCount(), snapshot.emittedSpecs());
         }
     }
 

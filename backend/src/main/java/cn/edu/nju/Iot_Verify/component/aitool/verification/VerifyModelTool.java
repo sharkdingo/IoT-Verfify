@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -121,11 +122,13 @@ public class VerifyModelTool extends AbstractAiTool {
             summary.put("safe", result.isSafe());
             summary.put("disabledRuleCount", result.getDisabledRuleCount());
             summary.put("skippedSpecCount", result.getSkippedSpecCount());
-            summary.put("specsChecked", specs.size());
+            summary.put("requestedSpecCount", specs.size());
+            summary.put("emittedSpecCount", result.getSpecResults() != null ? result.getSpecResults().size() : 0);
+            summary.put("violationCount", countFailedSpecs(result));
             summary.put("specResults", result.getSpecResults());
 
             if (!result.isSafe() && result.getTraces() != null) {
-                summary.put("violationCount", result.getTraces().size());
+                summary.put("traceCount", result.getTraces().size());
                 List<Map<String, Object>> traceSummaries = new ArrayList<>();
                 for (TraceDto trace : result.getTraces()) {
                     Map<String, Object> ts = new LinkedHashMap<>();
@@ -158,5 +161,14 @@ public class VerifyModelTool extends AbstractAiTool {
             log.error("verify_model failed", e);
             return errorJson("Verification failed.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private int countFailedSpecs(VerificationResultDto result) {
+        if (result == null || result.getSpecResults() == null) {
+            return 0;
+        }
+        return (int) result.getSpecResults().stream()
+                .filter(specResult -> specResult != null && !specResult.isPassed())
+                .count();
     }
 }

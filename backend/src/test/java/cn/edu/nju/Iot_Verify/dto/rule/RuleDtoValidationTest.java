@@ -5,6 +5,7 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -38,6 +39,21 @@ class RuleDtoValidationTest {
         Set<ConstraintViolation<RuleDto>> violations = validator.validate(rule);
 
         assertFalse(hasViolationContaining(violations, "Condition value is required when relation is provided"));
+    }
+
+    @Test
+    void condition_nullElement_shouldReject() {
+        RuleDto rule = RuleDto.builder()
+                .conditions(Collections.singletonList(null))
+                .command(RuleDto.Command.builder()
+                        .deviceName("light")
+                        .action("on")
+                        .build())
+                .build();
+
+        Set<ConstraintViolation<RuleDto>> violations = validator.validate(rule);
+
+        assertTrue(hasViolationContaining(violations, "Condition item cannot be null"));
     }
 
     private RuleDto validRuleWithCondition(RuleDto.Condition condition) {

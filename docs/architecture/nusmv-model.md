@@ -48,6 +48,8 @@ fail closed and every specification that was skipped or degraded, then exposes t
 verification `checkLogs` plus
 `disabledRuleCount` / `skippedSpecCount`. Treat a `safe=true` result with non-zero
 counts as "the emitted model was safe, but part of the requested model did not generate."
+If no specification is emitted, verification fails closed with `safe=false` because there
+is no checked model property to certify.
 
 ---
 

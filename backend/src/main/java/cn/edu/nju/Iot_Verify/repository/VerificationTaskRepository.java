@@ -24,6 +24,11 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     List<VerificationTaskPo> findByUserIdOrderByCreatedAtDesc(Long userId);
 
     /**
+     * 根据用户ID查询所有任务（按创建时间降序），排除正在由前端专门轮询的任务。
+     */
+    List<VerificationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
+
+    /**
      * 根据ID和用户ID查询任务
      */
     Optional<VerificationTaskPo> findByIdAndUserId(Long id, Long userId);
@@ -52,7 +57,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
          + "t.progress = 100, t.isSafe = :isSafe, t.violatedSpecCount = :violatedSpecCount, "
          + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
-         + "t.checkLogsJson = :checkLogsJson, t.nusmvOutput = :nusmvOutput, "
+         + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, t.nusmvOutput = :nusmvOutput, "
          + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs "
          + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
     int completeTaskIfNotCancelled(@Param("taskId") Long taskId,
@@ -62,6 +67,7 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                                    @Param("violatedSpecCount") Integer violatedSpecCount,
                                    @Param("disabledRuleCount") Integer disabledRuleCount,
                                    @Param("skippedSpecCount") Integer skippedSpecCount,
+                                   @Param("specResultsJson") String specResultsJson,
                                    @Param("checkLogsJson") String checkLogsJson,
                                    @Param("nusmvOutput") String nusmvOutput,
                                    @Param("errorMessage") String errorMessage,

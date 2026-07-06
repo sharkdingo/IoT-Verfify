@@ -91,4 +91,18 @@ export interface SimulationTask {
   simulationTraceId?: number
 }
 
+export type SimulationTaskSummary = Pick<
+  SimulationTask,
+  | 'id'
+  | 'status'
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'processingTimeMs'
+  | 'progress'
+  | 'requestedSteps'
+  | 'steps'
+  | 'simulationTraceId'
+  | 'errorMessage'
+>
 

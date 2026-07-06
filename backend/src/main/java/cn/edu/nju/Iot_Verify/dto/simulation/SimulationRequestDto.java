@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -25,10 +26,10 @@ public class SimulationRequestDto {
 
     @Valid
     @NotEmpty(message = "Devices list cannot be empty")
-    private List<DeviceVerificationDto> devices;
+    private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
 
     @Valid
-    private List<RuleDto> rules = new ArrayList<>();
+    private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules = new ArrayList<>();
 
     /** 模拟步数，默认 10 步 */
     @Min(1) @Max(100)

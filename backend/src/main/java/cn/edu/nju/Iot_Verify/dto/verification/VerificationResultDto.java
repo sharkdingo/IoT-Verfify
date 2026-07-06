@@ -25,7 +25,7 @@ public class VerificationResultDto {
     /**
      * 每个规格的检查结果
      */
-    private List<Boolean> specResults;
+    private List<SpecResultDto> specResults;
 
     /**
      * 检查日志

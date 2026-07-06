@@ -5,6 +5,7 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -43,6 +44,36 @@ class SpecificationDtoValidationTest {
         Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
 
         assertTrue(hasViolationContaining(violations, "Side must be one of: a, if, then"));
+    }
+
+    @Test
+    void condition_nullElement_shouldReject() {
+        SpecificationDto spec = validSpec();
+        spec.setAConditions(Collections.singletonList(null));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertTrue(hasViolationContaining(violations, "A-condition item cannot be null"));
+    }
+
+    @Test
+    void deviceRef_nullElement_shouldReject() {
+        SpecificationDto spec = validSpec();
+        spec.setDevices(Collections.singletonList(null));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertTrue(hasViolationContaining(violations, "Specification device item cannot be null"));
+    }
+
+    @Test
+    void selectedApis_nullElement_shouldReject() {
+        SpecificationDto spec = validSpec();
+        spec.setDevices(List.of(new SpecificationDto.DeviceRefDto("light", null, Collections.singletonList(null))));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertTrue(hasViolationContaining(violations, "Selected API name cannot be null"));
     }
 
     @Test

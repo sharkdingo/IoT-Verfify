@@ -7,7 +7,7 @@ auto-fix.
 Request/response field contract → [../api/verification.md](../api/verification.md).
 SMV generation internals → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-05. Source: `controller/VerificationController.java`,
+Verified against code on 2026-07-06. Source: `controller/VerificationController.java`,
 `controller/SimulationController.java`, `service/impl/VerificationServiceImpl.java`,
 `service/impl/SimulationServiceImpl.java`, `component/nusmv/`.
 
@@ -36,8 +36,9 @@ VerificationServiceImpl.doVerify()
 VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput,
 disabledRuleCount, skippedSpecCount }
         │
-        ├─ all emitted specs pass → safe: true
-        └─ a violation    → counterexample trace(s) saved + optional auto-fix
+        ├─ at least one emitted spec and all emitted specs pass → safe: true
+        ├─ no emitted specs → safe: false + unreliable/no-verification check log
+        └─ a violation      → counterexample trace(s) saved + optional auto-fix
 ```
 
 - **[1] Generation** turns the request plus the user's device templates into a `.smv`
@@ -49,7 +50,10 @@ disabledRuleCount, skippedSpecCount }
 - **[2] Execution** invokes NuSMV as a subprocess through `NusmvExecutor`, which bounds
   concurrency with a semaphore (`NUSMV_MAX_CONCURRENT`) and enforces `NUSMV_TIMEOUT_MS`.
   Output parsing depends on NuSMV's standard English output format (2.6–2.7; not
-  nuXmv).
+  nuXmv). The generator records the emitted specification id/expression sequence, and
+  parsed NuSMV pass/fail values are joined back to that sequence as `SpecResultDto`
+  objects (`specId`, `passed`, `expression`). If generation emits no specification at
+  all, verification fails closed with `safe=false` because nothing was actually checked.
 - **[3] Parsing** converts the NuSMV counterexample text into `TraceStateDto` objects.
 
 When a violation is found, the trace is persisted automatically (no `saveTrace` flag),
@@ -73,13 +77,20 @@ Async tasks run on a dedicated thread pool; status transitions
 `CHANGELOG.md`, 2026-03-03). Progress is exposed 0–100 via
 `GET /api/verify/tasks/{id}/progress` and
 `GET /api/simulate/tasks/{id}/progress`.
+Task inbox UIs use the lightweight summary lists
+`GET /api/verify/tasks` and `GET /api/simulate/tasks`; task details and heavy outputs
+remain behind the per-task detail endpoints.
+The summary-list endpoints accept optional `excludeTaskIds` query values so a frontend
+that is already polling a specific task can refresh the rest of the inbox without
+re-merging that same task.
 
 Simulation history is intentionally separate from verification traces. A plain
 `POST /api/simulate` response is transient, while `POST /api/simulate/traces` and
 completed async simulation tasks store `SimulationTrace` rows that the frontend can
 list, replay, and delete through the history panel. Completed async simulation task
 responses expose the `simulationTraceId`; the full raw NuSMV output lives on that
-trace, whereas completed async verification tasks expose `nusmvOutput` directly.
+trace, whereas completed async verification tasks expose `specResults` and
+`nusmvOutput` directly.
 
 Full endpoint list: [../api/rest-endpoints.md](../api/rest-endpoints.md). Field-level
 shapes: [../api/verification.md](../api/verification.md).

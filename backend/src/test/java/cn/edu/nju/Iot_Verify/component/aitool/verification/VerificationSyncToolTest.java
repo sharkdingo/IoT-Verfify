@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -68,7 +69,11 @@ class VerificationSyncToolTest {
 
         VerificationResultDto result = VerificationResultDto.builder()
                 .safe(true)
-                .specResults(List.of(true))
+                .specResults(List.of(SpecResultDto.builder()
+                        .specId("s1")
+                        .passed(true)
+                        .expression("CTLSPEC AG(light.on)")
+                        .build()))
                 .traces(List.of())
                 .checkLogs(List.of("ok"))
                 .build();
@@ -82,6 +87,41 @@ class VerificationSyncToolTest {
         assertEquals("Verification completed.", json.path("message").asText());
         assertTrue(json.path("warning").asText().contains("serialization degraded"));
         verify(verificationService).verify(anyLong(), any());
+    }
+
+    @Test
+    void verifyModel_failedSpecWithoutTrace_reportsViolationAndTraceCountsSeparately() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("dev_1");
+        device.setTemplateName("Light");
+        when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
+
+        VerificationResultDto result = VerificationResultDto.builder()
+                .safe(false)
+                .specResults(List.of(SpecResultDto.builder()
+                        .specId("s1")
+                        .passed(false)
+                        .expression("CTLSPEC AG(light.on)")
+                        .build()))
+                .traces(List.of())
+                .checkLogs(List.of("violated without trace"))
+                .build();
+        when(verificationService.verify(anyLong(), any()))
+                .thenReturn(result);
+
+        VerifyModelTool tool = new VerifyModelTool(boardDataConverter, boardStorageService, verificationService, objectMapper);
+        String response = tool.execute("{}");
+        JsonNode json = objectMapper.readTree(response);
+
+        assertEquals(1, json.path("violationCount").asInt());
+        assertEquals(0, json.path("traceCount").asInt());
+        assertEquals("s1", json.path("specResults").get(0).path("specId").asText());
+        assertEquals(false, json.path("specResults").get(0).path("passed").asBoolean());
     }
 
     @Test

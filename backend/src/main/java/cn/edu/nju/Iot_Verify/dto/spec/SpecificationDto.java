@@ -41,15 +41,15 @@ public class SpecificationDto {
     @Valid
     @NotNull(message = "A-conditions cannot be null")
     @JsonProperty("aConditions")
-    private List<SpecConditionDto> aConditions = new ArrayList<>();
+    private List<@Valid @NotNull(message = "A-condition item cannot be null") SpecConditionDto> aConditions = new ArrayList<>();
 
     @Valid
     @NotNull(message = "If-conditions cannot be null")
-    private List<SpecConditionDto> ifConditions = new ArrayList<>();
+    private List<@Valid @NotNull(message = "If-condition item cannot be null") SpecConditionDto> ifConditions = new ArrayList<>();
 
     @Valid
     @NotNull(message = "Then-conditions cannot be null")
-    private List<SpecConditionDto> thenConditions = new ArrayList<>();
+    private List<@Valid @NotNull(message = "Then-condition item cannot be null") SpecConditionDto> thenConditions = new ArrayList<>();
 
     @Size(max = 4000, message = "Formula must be at most 4000 characters")
     private String formula;
@@ -57,7 +57,7 @@ public class SpecificationDto {
     @Valid
     @NotNull(message = "Devices cannot be null")
     @Size(max = 50, message = "At most 50 devices can be bound to a specification")
-    private List<DeviceRefDto> devices = new ArrayList<>();
+    private List<@Valid @NotNull(message = "Specification device item cannot be null") DeviceRefDto> devices = new ArrayList<>();
 
     @Data
     @NoArgsConstructor
@@ -71,7 +71,8 @@ public class SpecificationDto {
 
         @NotNull(message = "Selected APIs cannot be null")
         @Size(max = 100, message = "At most 100 APIs can be selected for a specification device")
-        private List<@Size(max = 100, message = "Selected API name must be at most 100 characters") String> selectedApis = new ArrayList<>();
+        private List<@NotNull(message = "Selected API name cannot be null")
+                @Size(max = 100, message = "Selected API name must be at most 100 characters") String> selectedApis = new ArrayList<>();
 
         @JsonIgnore
         @AssertTrue(message = "Specification device must include deviceId or deviceLabel")

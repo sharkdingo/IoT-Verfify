@@ -59,7 +59,9 @@ public class BoardStorageController {
     }
 
     @PostMapping("/nodes")
-    public Result<List<DeviceNodeDto>> saveNodes(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<DeviceNodeDto> nodes) {
+    public Result<List<DeviceNodeDto>> saveNodes(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes) {
         return Result.success(boardService.saveNodes(userId, nodes));
     }
 
@@ -69,7 +71,9 @@ public class BoardStorageController {
     }
 
     @PostMapping("/edges")
-    public Result<List<DeviceEdgeDto>> saveEdges(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<DeviceEdgeDto> edges) {
+    public Result<List<DeviceEdgeDto>> saveEdges(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody List<@Valid @NotNull(message = "Edge item cannot be null") DeviceEdgeDto> edges) {
         return Result.success(boardService.saveEdges(userId, edges));
     }
 
@@ -79,7 +83,9 @@ public class BoardStorageController {
     }
 
     @PostMapping("/specs")
-    public Result<List<SpecificationDto>> saveSpecs(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<SpecificationDto> specs) {
+    public Result<List<SpecificationDto>> saveSpecs(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs) {
         return Result.success(boardService.saveSpecs(userId, specs));
     }
 
@@ -89,7 +95,9 @@ public class BoardStorageController {
     }
 
     @PostMapping("/rules")
-    public Result<List<RuleDto>> saveRules(@CurrentUser Long userId, @NotNull @Valid @RequestBody List<RuleDto> rules) {
+    public Result<List<RuleDto>> saveRules(
+            @CurrentUser Long userId,
+            @NotNull @Valid @RequestBody List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules) {
         return Result.success(boardService.saveRules(userId, rules));
     }
 

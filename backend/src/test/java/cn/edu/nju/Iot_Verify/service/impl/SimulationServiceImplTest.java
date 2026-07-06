@@ -12,10 +12,10 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
-import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.File;
@@ -39,6 +40,8 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -66,7 +69,50 @@ class SimulationServiceImplTest {
     @Mock private SimulationTraceMapper simulationTraceMapper;
     @Mock private SimulationTaskMapper simulationTaskMapper;
 
+    private static class DirectThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            task.run();
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            task.run();
+        }
+    }
+
+    private static class RejectingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            throw new TaskRejectedException("rejected");
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            throw new TaskRejectedException("rejected");
+        }
+    }
+
+    private static class CapturingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        private Runnable capturedTask;
+
+        @Override
+        public void execute(Runnable task) {
+            capturedTask = task;
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            capturedTask = task;
+        }
+
+        Runnable capturedTask() {
+            return capturedTask;
+        }
+    }
+
     private SimulationServiceImpl service;
+    private ThreadPoolTaskExecutor simulationTaskExecutor;
     private ThreadPoolTaskExecutor syncSimulationExecutor;
     private Method doSimulate;
     private long nextSimulationTraceId;
@@ -86,6 +132,7 @@ class SimulationServiceImplTest {
             return org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation);
         }));
 
+        simulationTaskExecutor = new DirectThreadPoolTaskExecutor();
         syncSimulationExecutor = new ThreadPoolTaskExecutor();
         syncSimulationExecutor.setCorePoolSize(1);
         syncSimulationExecutor.setMaxPoolSize(1);
@@ -96,7 +143,8 @@ class SimulationServiceImplTest {
         service = new SimulationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository,
-                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(), syncSimulationExecutor);
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(),
+                simulationTaskExecutor, syncSimulationExecutor);
 
         doSimulate = SimulationServiceImpl.class.getDeclaredMethod(
                 "doSimulate", Long.class, List.class, List.class,
@@ -107,6 +155,14 @@ class SimulationServiceImplTest {
     @AfterEach
     void tearDown() {
         syncSimulationExecutor.shutdown();
+    }
+
+    private SimulationServiceImpl serviceWithSimulationExecutor(ThreadPoolTaskExecutor executor) {
+        return new SimulationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                simulationTraceRepository, simulationTaskRepository,
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(),
+                executor, syncSimulationExecutor);
     }
 
     private List<DeviceVerificationDto> singleDevice() {
@@ -291,23 +347,299 @@ class SimulationServiceImplTest {
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
-    // ==================== simulate (public) tests ====================
-
     @Test
-    void simulate_nullDevices_returnsError() {
-        SimulationResultDto result = service.simulate(1L, simRequest(null, List.of(), 10, false, 3, false));
+    void submitSimulation_emptyDevices_rejectsBeforeCreatingTask() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(List.of(), List.of(), 10, false, 3, false)));
 
-        assertTrue(result.getStates().isEmpty());
-        assertEquals(0, result.getSteps());
-        assertTrue(result.getLogs().stream().anyMatch(l -> l.contains("empty")));
+        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
     }
 
     @Test
-    void simulate_emptyDevices_returnsError() {
-        SimulationResultDto result = service.simulate(1L, simRequest(List.of(), List.of(), 10, false, 3, false));
+    void submitSimulation_invalidSteps_rejectsBeforeCreatingTask() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(), 101, false, 3, false)));
 
-        assertTrue(result.getStates().isEmpty());
-        assertEquals(0, result.getSteps());
+        assertTrue(ex.getMessage().contains("Steps must be between 1 and 100"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_invalidIntensity_rejectsBeforeCreatingTask() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(), 10, false, -1, false)));
+
+        assertTrue(ex.getMessage().contains("Intensity must be between 0 and 50"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_invalidNestedDevice_rejectsBeforeCreatingTask() throws Exception {
+        DeviceVerificationDto invalidDevice = new DeviceVerificationDto();
+        invalidDevice.setVarName("testDevice");
+        invalidDevice.setTemplateName(" ");
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(List.of(invalidDevice), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("Template name is required"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_invalidNestedRule_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = RuleDto.builder()
+                .conditions(Collections.singletonList(null))
+                .command(RuleDto.Command.builder()
+                        .deviceName("light")
+                        .action("on")
+                        .build())
+                .build();
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(invalidRule), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("Condition item cannot be null"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_ruleWithNullCommand_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("light")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(null)
+                .build();
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(invalidRule), 10, false, 3, false)));
+
+        assertEquals("Command cannot be null", ex.getErrors().get("rules[0].command"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_ruleWithBlankCommandFields_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("light")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName(" ")
+                        .action("")
+                        .build())
+                .build();
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(invalidRule), 10, false, 3, false)));
+
+        assertEquals("Command device name is required", ex.getErrors().get("rules[0].command.deviceName"));
+        assertEquals("Command action is required", ex.getErrors().get("rules[0].command.action"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_ruleWithEmptyConditions_isAllowedForGeneratorFailClosed() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        SimulationServiceImpl capturingService = serviceWithSimulationExecutor(capturingExecutor);
+        SimulationTaskPo savedTask = SimulationTaskPo.builder()
+                .id(17L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        RuleDto emptyConditionRule = RuleDto.builder()
+                .conditions(List.of())
+                .command(RuleDto.Command.builder()
+                        .deviceName("light")
+                        .action("on")
+                        .build())
+                .build();
+
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenReturn(savedTask);
+
+        Long taskId = capturingService.submitSimulation(
+                1L, simRequest(singleDevice(), List.of(emptyConditionRule), 10, false, 3, false));
+
+        assertEquals(17L, taskId);
+        assertNotNull(capturingExecutor.capturedTask());
+        verify(simulationTaskRepository).save(any(SimulationTaskPo.class));
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void simulateAsync_emptyDevices_rejectsBeforeQueueingTask() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.simulateAsync(
+                        1L, 12L, simRequest(List.of(), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        verify(simulationTaskRepository).findById(12L);
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void simulateAsync_nullTaskId_rejectsBeforeQueueingTask() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.simulateAsync(
+                        1L, null, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("taskId"));
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void simulateAsync_invalidIntensity_marksExistingTaskFailedBeforeQueueing() throws Exception {
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(16L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        when(simulationTaskRepository.findById(16L)).thenReturn(Optional.of(task));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.simulateAsync(
+                        1L, 16L, simRequest(singleDevice(), List.of(), 10, false, 51, false)));
+
+        assertTrue(ex.getMessage().contains("Intensity must be between 0 and 50"));
+        verify(simulationTaskRepository).failTaskIfNotCancelled(
+                eq(16L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("intensity: Intensity must be between 0 and 50"), anyString(), any(),
+                eq(SimulationTaskPo.TaskStatus.CANCELLED));
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+        verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitSimulation_queueRejected_marksCreatedTaskFailedAndThrowsServiceUnavailable() {
+        SimulationServiceImpl rejectingService = serviceWithSimulationExecutor(new RejectingThreadPoolTaskExecutor());
+        SimulationTaskPo savedTask = SimulationTaskPo.builder()
+                .id(13L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+
+        when(simulationTaskRepository.save(any(SimulationTaskPo.class))).thenReturn(savedTask);
+        when(simulationTaskRepository.findById(13L)).thenReturn(Optional.of(savedTask));
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> rejectingService.submitSimulation(
+                        1L, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("busy"));
+        verify(simulationTaskRepository).save(any(SimulationTaskPo.class));
+        verify(simulationTaskRepository).failTaskIfNotCancelled(
+                eq(13L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("Server busy, please try again later"), anyString(), any(),
+                eq(SimulationTaskPo.TaskStatus.CANCELLED));
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void simulateAsync_queueRejected_marksExistingTaskFailedAndThrowsServiceUnavailable() {
+        SimulationServiceImpl rejectingService = serviceWithSimulationExecutor(new RejectingThreadPoolTaskExecutor());
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(14L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+
+        when(simulationTaskRepository.findById(14L)).thenReturn(Optional.of(task));
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> rejectingService.simulateAsync(
+                        1L, 14L, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("busy"));
+        verify(simulationTaskRepository).failTaskIfNotCancelled(
+                eq(14L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("Server busy, please try again later"), anyString(), any(),
+                eq(SimulationTaskPo.TaskStatus.CANCELLED));
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void simulateAsync_usesSubmissionTimeRequestSnapshot() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        SimulationServiceImpl capturingService = serviceWithSimulationExecutor(capturingExecutor);
+        File fakeFile = createTempModelFile();
+        SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
+        List<DeviceVerificationDto> devices = new ArrayList<>(singleDevice());
+        RuleDto rule = makeRule();
+        List<RuleDto> rules = new ArrayList<>(List.of(rule));
+        SimulationRequestDto request = simRequest(devices, rules, 10, false, 3, false);
+
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(genResult);
+        when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
+                .thenReturn(SimulationOutput.success("trace", "raw"));
+        when(smvTraceParser.parseCounterexampleStates(any(), any()))
+                .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
+        when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        SimulationTaskPo task = SimulationTaskPo.builder()
+                .id(15L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
+                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
+        when(simulationTaskRepository.findById(15L)).thenReturn(Optional.of(task));
+
+        capturingService.simulateAsync(1L, 15L, request);
+        assertNotNull(capturingExecutor.capturedTask());
+
+        devices.get(0).setVarName("mutatedDevice");
+        rule.getConditions().get(0).setDeviceName("mutatedRuleDevice");
+        devices.clear();
+        rules.clear();
+        request.setSteps(20);
+        request.setDevices(List.of());
+
+        capturingExecutor.capturedTask().run();
+
+        verify(smvGenerator).generate(eq(1L),
+                argThat(sentDevices -> sentDevices.size() == 1
+                        && "testDevice".equals(sentDevices.get(0).getVarName())),
+                argThat(sentRules -> sentRules.size() == 1
+                        && "sensor".equals(sentRules.get(0).getConditions().get(0).getDeviceName())),
+                eq(List.of()), eq(false), eq(3), eq(false), any());
+        JsonNode requestJson = readRequestJson(fakeFile);
+        assertEquals(10, requestJson.path("steps").asInt());
+        assertEquals("testDevice", requestJson.path("devices").get(0).path("varName").asText());
+        assertEquals("sensor", requestJson.path("rules").get(0).path("conditions").get(0).path("deviceName").asText());
+        assertEquals(1, requestJson.path("devices").size());
+    }
+
+    // ==================== simulate (public) tests ====================
+
+    @Test
+    void simulate_nullDevices_throwsValidationException() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.simulate(1L, simRequest(null, List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+    }
+
+    @Test
+    void simulate_emptyDevices_throwsValidationException() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.simulate(1L, simRequest(List.of(), List.of(), 10, false, 3, false)));
+
+        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
     }
 
     @Test
@@ -362,8 +694,6 @@ class SimulationServiceImplTest {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File fakeFile = createTempModelFile();
         SmvGenerator.GenerateResult genResult = new SmvGenerator.GenerateResult(fakeFile, Map.of());
-        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
-                .thenReturn(genResult);
         when(nusmvExecutor.executeInteractiveSimulation(any(), anyInt()))
                 .thenReturn(SimulationOutput.success("trace", "raw"));
         List<TraceStateDto> states = List.of(new TraceStateDto(), new TraceStateDto());
@@ -374,9 +704,17 @@ class SimulationServiceImplTest {
                 .id(1L).steps(1).requestedSteps(5).build();
         when(simulationTraceMapper.toDto(any())).thenReturn(expectedDto);
 
-        SimulationRequestDto request = new SimulationRequestDto();
-        request.setDevices(singleDevice());
-        request.setSteps(5);
+        List<DeviceVerificationDto> devices = new ArrayList<>(singleDevice());
+        RuleDto rule = makeRule();
+        List<RuleDto> rules = new ArrayList<>(List.of(rule));
+        SimulationRequestDto request = simRequest(devices, rules, 5, false, 3, false);
+        when(smvGenerator.generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenAnswer(invocation -> {
+                    request.setSteps(99);
+                    devices.get(0).setVarName("mutatedDevice");
+                    rule.getConditions().get(0).setDeviceName("mutatedRuleDevice");
+                    return genResult;
+                });
 
         // Act
         SimulationTraceDto result = service.simulateAndSave(1L, request);
@@ -388,15 +726,20 @@ class SimulationServiceImplTest {
         assertEquals(1L, savedPo.getUserId());
         assertEquals(5, savedPo.getRequestedSteps());
         assertEquals(1, savedPo.getSteps());
+        JsonNode requestJson = new ObjectMapper().readTree(savedPo.getRequestJson());
+        assertEquals(5, requestJson.path("steps").asInt());
+        assertEquals("testDevice", requestJson.path("devices").get(0).path("varName").asText());
+        assertEquals("sensor", requestJson.path("rules").get(0).path("conditions").get(0).path("deviceName").asText());
     }
 
     @Test
-    void simulateAndSave_emptyStates_throwsException() {
+    void simulateAndSave_invalidRequest_throwsValidationException() {
         SimulationRequestDto request = new SimulationRequestDto();
-        request.setDevices(null); // will trigger empty-devices path → empty states
+        request.setDevices(null);
 
-        assertThrows(InternalServerException.class,
+        ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.simulateAndSave(1L, request));
+        assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
     }
 
     // ==================== CRUD tests ====================
@@ -477,7 +820,8 @@ class SimulationServiceImplTest {
         SimulationServiceImpl freshService = new SimulationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository,
-                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(), syncSimulationExecutor);
+                simulationTraceMapper, simulationTaskMapper, new ObjectMapper(),
+                simulationTaskExecutor, syncSimulationExecutor);
         Method cleanup = SimulationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
         cleanup.setAccessible(true);
         cleanup.invoke(freshService);
@@ -586,5 +930,20 @@ class SimulationServiceImplTest {
         r.setIntensity(intensity);
         r.setEnablePrivacy(enablePrivacy);
         return r;
+    }
+
+    private RuleDto makeRule() {
+        return RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("testDevice")
+                        .action("turnOn")
+                        .build())
+                .build();
     }
 }

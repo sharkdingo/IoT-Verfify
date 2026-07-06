@@ -10,7 +10,7 @@ inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 `Result<Map<String, Object>>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-05. Source: component/aitool/, component/ai/.
+Verified against code on 2026-07-06. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -106,6 +106,12 @@ the REST template-import path. Use PascalCase manifest keys; `APIs[].Trigger` mu
 | `get_simulation_trace` | Get a saved simulation trace by simulationId, including its state sequence. |
 | `delete_simulation_trace` | Delete a saved simulation trace by simulationId. |
 
+`simulate_model` and `simulate_model_async` both use service-layer request snapshots and
+NuSMV runtime validation. Validation errors return a structured `BUSINESS_ERROR` with
+status `422` instead of a success-shaped simulation result. Async task creation happens
+only after validation passes; queue saturation is returned as `SERVICE_UNAVAILABLE`
+(`503`), and a `taskId` is returned only when polling should begin.
+
 ## Verification & Fix
 
 | Tool | Summary |
@@ -118,6 +124,19 @@ the REST template-import path. Use PascalCase manifest keys; `APIs[].Trigger` mu
 | `get_trace` | Get a saved verification trace by traceId, including its state sequence. |
 | `delete_trace` | Delete a saved verification trace by traceId. |
 | `fix_violation` | Analyze a violation trace to localize fault rules and suggest fixes via parameter, condition, or disable strategies (needs a traceId). |
+
+`verify_model` and `verify_model_async` use the same service-layer request snapshot and
+NuSMV runtime validation as the REST verification services. `verify_model_async` creates
+a task only after validation passes; queue saturation is reported as a structured
+`SERVICE_UNAVAILABLE` error, and callers only receive a `taskId` when polling should
+begin. Validation errors are returned as `BUSINESS_ERROR` with status `422`.
+
+`verify_model` returns `requestedSpecCount`, `emittedSpecCount`, and structured
+`specResults` entries shaped as `{ specId, passed, expression }`. `emittedSpecCount`
+matches the length of `specResults`; requested specs skipped before NuSMV emission are
+reported through `skippedSpecCount` and check logs. `violationCount` counts failed
+structured spec results; `traceCount` counts saved counterexample traces, which can be
+lower when a failed spec has no parsed counterexample or the backend failed closed.
 
 `fix_violation` is advisory only: it returns localized fault rules and verified
 suggestions, but it does not apply them to the board. Applying a fix remains a

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import java.util.List;
 
 /**
@@ -21,9 +22,20 @@ public interface VerificationService {
     VerificationResultDto verify(Long userId, VerificationRequestDto request);
 
     /**
-     * 异步验证（通过任务ID回调）
+     * 低层异步验证入口（兼容旧调用）：调用方必须先创建任务并传入非空 taskId。
+     * 新调用应优先使用 submitVerification，让服务统一完成校验、建任务和入队。
      */
     void verifyAsync(Long userId, Long taskId, VerificationRequestDto request);
+
+    /**
+     * 校验请求、创建任务并提交异步验证。请求非法时不会创建任务；队列拒绝时会
+     * 将已创建任务标记为失败并抛出 ServiceUnavailableException。
+     *
+     * @param userId 用户ID
+     * @param request 验证请求
+     * @return 任务ID
+     */
+    Long submitVerification(Long userId, VerificationRequestDto request);
     
     /**
      * 获取任务状态
@@ -33,6 +45,15 @@ public interface VerificationService {
      * @return 任务状态DTO
      */
     VerificationTaskDto getTask(Long userId, Long taskId);
+
+    /**
+     * 获取用户的验证任务收件箱（轻量列表，不含 NuSMV 输出和逐条规约详情）。
+     *
+     * @param userId 用户ID
+     * @param excludedTaskIds 需要从列表中排除的任务ID（通常是前端正在专门轮询的任务）
+     * @return 按创建时间倒序排列的任务摘要
+     */
+    List<VerificationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds);
     
     /**
      * 获取用户的所有 Trace

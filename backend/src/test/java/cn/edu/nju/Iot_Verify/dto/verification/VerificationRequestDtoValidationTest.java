@@ -7,6 +7,7 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -35,6 +36,36 @@ class VerificationRequestDtoValidationTest {
         Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
 
         assertTrue(hasFieldViolation(violations, "specs", "Specs list cannot be empty"));
+    }
+
+    @Test
+    void devices_withNullElement_shouldReject() {
+        VerificationRequestDto request = validRequest();
+        request.setDevices(Collections.singletonList(null));
+
+        Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
+
+        assertTrue(hasViolationContaining(violations, "Device item cannot be null"));
+    }
+
+    @Test
+    void specs_withNullElement_shouldReject() {
+        VerificationRequestDto request = validRequest();
+        request.setSpecs(Collections.singletonList(null));
+
+        Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
+
+        assertTrue(hasViolationContaining(violations, "Specification item cannot be null"));
+    }
+
+    @Test
+    void rules_withNullElement_shouldReject() {
+        VerificationRequestDto request = validRequest();
+        request.setRules(Collections.singletonList(null));
+
+        Set<ConstraintViolation<VerificationRequestDto>> violations = validator.validate(request);
+
+        assertTrue(hasViolationContaining(violations, "Rule item cannot be null"));
     }
 
     @Test
@@ -72,5 +103,9 @@ class VerificationRequestDtoValidationTest {
     private boolean hasFieldViolation(Set<? extends ConstraintViolation<?>> violations, String field, String message) {
         return violations.stream().anyMatch(v ->
                 field.equals(v.getPropertyPath().toString()) && v.getMessage().contains(message));
+    }
+
+    private boolean hasViolationContaining(Set<? extends ConstraintViolation<?>> violations, String message) {
+        return violations.stream().anyMatch(v -> v.getMessage().contains(message));
     }
 }

@@ -10,6 +10,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -30,13 +31,13 @@ public class VerificationRequestDto {
      */
     @Valid
     @NotEmpty(message = "Devices list cannot be empty")
-    private List<DeviceVerificationDto> devices;
+    private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
 
     /**
      * 规则列表
      */
     @Valid
-    private List<RuleDto> rules = new ArrayList<>();
+    private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules = new ArrayList<>();
 
     /**
      * 
@@ -44,7 +45,7 @@ public class VerificationRequestDto {
      */
     @Valid
     @NotEmpty(message = "Specs list cannot be empty")
-    private List<SpecificationDto> specs;
+    private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
     
     /**
      * 是否启用攻击模式

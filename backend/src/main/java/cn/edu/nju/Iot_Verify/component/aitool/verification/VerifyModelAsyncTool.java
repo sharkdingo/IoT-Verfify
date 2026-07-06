@@ -16,7 +16,6 @@ import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
@@ -85,24 +84,15 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
                         "VALIDATION_ERROR", 400);
             }
 
-            Long taskId = verificationService.createTask(userId);
-            try {
-                VerificationRequestDto request = new VerificationRequestDto();
-                request.setDevices(devices);
-                request.setRules(rules);
-                request.setSpecs(specs);
-                request.setAttack(isAttack);
-                request.setIntensity(intensity);
-                request.setEnablePrivacy(enablePrivacy);
-                verificationService.verifyAsync(userId, taskId, request);
-            } catch (TaskRejectedException e) {
-                verificationService.failTaskById(taskId, "Server busy, please try again later");
-                return errorJson("Verification task queue is full. Please retry later.",
-                        "SERVICE_UNAVAILABLE", 503);
-            } catch (Exception e) {
-                verificationService.failTaskById(taskId, "Failed to dispatch: " + e.getMessage());
-                throw e;
-            }
+            VerificationRequestDto request = new VerificationRequestDto();
+            request.setDevices(devices);
+            request.setRules(rules);
+            request.setSpecs(specs);
+            request.setAttack(isAttack);
+            request.setIntensity(intensity);
+            request.setEnablePrivacy(enablePrivacy);
+
+            Long taskId = verificationService.submitVerification(userId, request);
 
             return successJson(Map.of(
                     "message", "Verification task started.",

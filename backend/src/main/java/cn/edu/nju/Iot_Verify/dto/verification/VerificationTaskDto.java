@@ -65,6 +65,11 @@ public class VerificationTaskDto {
     private Integer skippedSpecCount;
 
     /**
+     * 每个规格的检查结果（完成后返回）
+     */
+    private List<SpecResultDto> specResults;
+
+    /**
      * 检查日志
      */
     private List<String> checkLogs;

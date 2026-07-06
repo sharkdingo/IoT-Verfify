@@ -15,7 +15,6 @@ import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
@@ -81,24 +80,14 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
                         "VALIDATION_ERROR", 400);
             }
 
-            Long taskId = simulationService.createTask(userId, steps);
-            try {
-                SimulationRequestDto request = new SimulationRequestDto();
-                request.setDevices(devices);
-                request.setRules(rules);
-                request.setSteps(steps);
-                request.setAttack(isAttack);
-                request.setIntensity(intensity);
-                request.setEnablePrivacy(enablePrivacy);
-                simulationService.simulateAsync(userId, taskId, request);
-            } catch (TaskRejectedException e) {
-                simulationService.failTaskById(taskId, "Server busy, please try again later");
-                return errorJson("Simulation task queue is full. Please retry later.",
-                        "SERVICE_UNAVAILABLE", 503);
-            } catch (Exception e) {
-                simulationService.failTaskById(taskId, "Failed to dispatch: " + e.getMessage());
-                throw e;
-            }
+            SimulationRequestDto request = new SimulationRequestDto();
+            request.setDevices(devices);
+            request.setRules(rules);
+            request.setSteps(steps);
+            request.setAttack(isAttack);
+            request.setIntensity(intensity);
+            request.setEnablePrivacy(enablePrivacy);
+            Long taskId = simulationService.submitSimulation(userId, request);
 
             return successJson(Map.of(
                     "message", "Simulation task started.",

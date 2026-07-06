@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
@@ -15,13 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.core.task.TaskRejectedException;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -68,7 +69,7 @@ class VerificationAsyncToolsTest {
         assertTrue(result.contains("No devices found"));
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
-        verify(verificationService, never()).createTask(anyLong());
+        verify(verificationService, never()).submitVerification(anyLong(), any());
     }
 
     @Test
@@ -83,14 +84,14 @@ class VerificationAsyncToolsTest {
         when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
-        when(verificationService.createTask(1L)).thenReturn(100L);
+        when(verificationService.submitVerification(eq(1L), any())).thenReturn(100L);
 
         String result = verifyModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
 
         assertTrue(result.contains("taskId"));
         assertEquals("PENDING", json.path("taskStatus").asText());
-        verify(verificationService).verifyAsync(anyLong(), anyLong(), any());
+        verify(verificationService).submitVerification(eq(1L), any());
     }
 
     @Test
@@ -105,16 +106,15 @@ class VerificationAsyncToolsTest {
         when(boardDataConverter.getDevicesForVerification(1L)).thenReturn(List.of(device));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(spec));
-        when(verificationService.createTask(1L)).thenReturn(101L);
-        doThrow(new TaskRejectedException("busy")).when(verificationService)
-                .verifyAsync(anyLong(), anyLong(), any());
+        doThrow(new ServiceUnavailableException("Server busy, please try again later")).when(verificationService)
+                .submitVerification(eq(1L), any());
 
         String result = verifyModelAsyncTool.execute("{}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("SERVICE_UNAVAILABLE", json.path("errorCode").asText());
         assertEquals(503, json.path("status").asInt());
-        verify(verificationService).failTaskById(101L, "Server busy, please try again later");
+        verify(verificationService, never()).failTaskById(anyLong(), any());
     }
 
     @Test

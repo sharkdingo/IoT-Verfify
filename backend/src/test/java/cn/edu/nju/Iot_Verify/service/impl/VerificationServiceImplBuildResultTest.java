@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
@@ -11,10 +12,12 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
@@ -29,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 
 import java.util.Map;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -64,12 +68,56 @@ class VerificationServiceImplBuildResultTest {
     @Mock private SpecificationMapper specificationMapper;
     @Mock private VerificationTaskMapper verificationTaskMapper;
 
+    private static class DirectThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            task.run();
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            task.run();
+        }
+    }
+
+    private static class RejectingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        @Override
+        public void execute(Runnable task) {
+            throw new TaskRejectedException("rejected");
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            throw new TaskRejectedException("rejected");
+        }
+    }
+
+    private static class CapturingThreadPoolTaskExecutor extends ThreadPoolTaskExecutor {
+        private Runnable capturedTask;
+
+        @Override
+        public void execute(Runnable task) {
+            capturedTask = task;
+        }
+
+        @Override
+        public void execute(Runnable task, long startTimeout) {
+            capturedTask = task;
+        }
+
+        Runnable capturedTask() {
+            return capturedTask;
+        }
+    }
+
     private VerificationServiceImpl service;
+    private ThreadPoolTaskExecutor verificationTaskExecutor;
     private ThreadPoolTaskExecutor syncVerificationExecutor;
     private Method buildVerificationResult;
 
     @BeforeEach
     void setUp() throws Exception {
+        verificationTaskExecutor = new DirectThreadPoolTaskExecutor();
         syncVerificationExecutor = new ThreadPoolTaskExecutor();
         syncVerificationExecutor.setCorePoolSize(1);
         syncVerificationExecutor.setMaxPoolSize(1);
@@ -81,14 +129,22 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper,
                 specificationMapper, verificationTaskMapper, new ObjectMapper(),
-                syncVerificationExecutor, null);
+                verificationTaskExecutor, syncVerificationExecutor, null);
 
         buildVerificationResult = VerificationServiceImpl.class.getDeclaredMethod(
                 "buildVerificationResult",
                 NusmvResult.class, List.class, List.class, List.class,
                 Long.class, Long.class, List.class, Map.class, String.class,
-                int.class, int.class);
+                List.class, int.class, int.class);
         buildVerificationResult.setAccessible(true);
+    }
+
+    private VerificationServiceImpl serviceWithVerificationExecutor(ThreadPoolTaskExecutor executor) {
+        return new VerificationServiceImpl(
+                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                taskRepository, traceRepository, traceMapper,
+                specificationMapper, verificationTaskMapper, new ObjectMapper(),
+                executor, syncVerificationExecutor, null);
     }
 
     @AfterEach
@@ -101,7 +157,34 @@ class VerificationServiceImplBuildResultTest {
                                          List<SpecificationDto> specs,
                                          List<String> checkLogs) throws Exception {
         return (VerificationResultDto) buildVerificationResult.invoke(
-                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null, 0, 0);
+                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null,
+                emittedSpecsFor(specs), 0, 0);
+    }
+
+    private VerificationResultDto invoke(NusmvResult result,
+                                         List<DeviceVerificationDto> devices,
+                                         List<SpecificationDto> specs,
+                                         List<String> checkLogs,
+                                         List<SmvGenerationContext.EmittedSpec> emittedSpecs) throws Exception {
+        return (VerificationResultDto) buildVerificationResult.invoke(
+                service, result, devices, List.of(), specs, 1L, null, checkLogs, Map.of(), null,
+                emittedSpecs, 0, 0);
+    }
+
+    private List<SmvGenerationContext.EmittedSpec> emittedSpecsFor(List<SpecificationDto> specs) {
+        if (specs == null) {
+            return List.of();
+        }
+        return specs.stream()
+                .filter(Objects::nonNull)
+                .filter(s -> (s.getAConditions() != null && !s.getAConditions().isEmpty()) ||
+                             (s.getIfConditions() != null && !s.getIfConditions().isEmpty()))
+                .map(s -> new SmvGenerationContext.EmittedSpec(s, s.getId(), ""))
+                .toList();
+    }
+
+    private SmvGenerator.GenerateResult generateResult(File smvFile, List<SpecificationDto> emittedSpecs) {
+        return new SmvGenerator.GenerateResult(smvFile, Map.of(), List.of(), 0, 0, emittedSpecsFor(emittedSpecs));
     }
 
     private List<DeviceVerificationDto> singleDevice() {
@@ -140,10 +223,10 @@ class VerificationServiceImplBuildResultTest {
         return (Set<Long>) f.get(service);
     }
 
-    // --- effectiveSpecs = 0: all specs filtered out -> safe=true ---
+    // --- effectiveSpecs = 0: all specs filtered out -> unsafe/unreliable ---
 
     @Test
-    void effectiveSpecsEmpty_returnsSafeTrue() throws Exception {
+    void effectiveSpecsEmpty_returnsUnsafeBecauseNothingWasVerified() throws Exception {
         // Spec with no A/IF conditions -> filtered out
         SpecificationDto emptySpec = new SpecificationDto();
         emptySpec.setId("s1");
@@ -155,9 +238,10 @@ class VerificationServiceImplBuildResultTest {
 
         VerificationResultDto dto = invoke(result, List.of(), List.of(emptySpec), logs);
 
-        assertTrue(dto.isSafe());
+        assertFalse(dto.isSafe());
         assertTrue(dto.getSpecResults().isEmpty());
         assertTrue(logs.stream().anyMatch(l -> l.contains("No valid specifications")));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("no specifications were emitted")));
     }
 
     // --- specCheckResults empty but effectiveSpecs > 0 -> fail-closed ---
@@ -172,7 +256,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertFalse(dto.isSafe());
         assertEquals(1, dto.getSpecResults().size());
-        assertFalse(dto.getSpecResults().get(0));
+        assertSpecResult(dto.getSpecResults().get(0), "s1", false, "");
         assertTrue(logs.stream().anyMatch(l -> l.contains("fail-closed")));
         assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
     }
@@ -194,8 +278,8 @@ class VerificationServiceImplBuildResultTest {
 
         assertFalse(dto.isSafe());
         assertEquals(2, dto.getSpecResults().size());
-        assertTrue(dto.getSpecResults().get(0));   // first result preserved
-        assertFalse(dto.getSpecResults().get(1));  // missing -> false
+        assertSpecResult(dto.getSpecResults().get(0), "s1", true, "expr1");
+        assertSpecResult(dto.getSpecResults().get(1), "s2", false, "");
         assertTrue(logs.stream().anyMatch(l -> l.contains("mismatch")));
         assertTrue(logs.stream().anyMatch(l -> l.contains("missing")));
         assertTrue(logs.stream().anyMatch(l -> l.contains("incomplete/unreliable")));
@@ -237,7 +321,32 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(dto.isSafe());
         assertEquals(1, dto.getSpecResults().size());
-        assertTrue(dto.getSpecResults().get(0));
+        assertSpecResult(dto.getSpecResults().get(0), "s1", true, "expr1");
+    }
+
+    @Test
+    void exactMatch_usesRealEmittedSpecsForPlaceholderSpec() throws Exception {
+        SpecificationDto specA = makeEffectiveSpec("a");
+        SpecificationDto specB = makeEffectiveSpec("b");
+        SpecificationDto specC = makeEffectiveSpec("c");
+        List<SmvGenerationContext.EmittedSpec> emittedSpecs = List.of(
+                new SmvGenerationContext.EmittedSpec(specA, "a", "CTLSPEC AG(a_ok)"),
+                new SmvGenerationContext.EmittedSpec(specB, "b", "CTLSPEC FALSE"),
+                new SmvGenerationContext.EmittedSpec(specC, "c", "CTLSPEC AG(c_ok)"));
+
+        NusmvResult result = NusmvResult.success("output", List.of(
+                new SpecCheckResult("CTLSPEC AG(a_ok)", true, null),
+                new SpecCheckResult("", true, null),
+                new SpecCheckResult("CTLSPEC AG(c_ok)", false, null)));
+        List<String> logs = new ArrayList<>();
+
+        VerificationResultDto dto = invoke(result, List.of(), List.of(specA, specB, specC), logs, emittedSpecs);
+
+        assertFalse(dto.isSafe());
+        assertEquals(3, dto.getSpecResults().size());
+        assertSpecResult(dto.getSpecResults().get(0), "a", true, "CTLSPEC AG(a_ok)");
+        assertSpecResult(dto.getSpecResults().get(1), "b", true, "CTLSPEC FALSE");
+        assertSpecResult(dto.getSpecResults().get(2), "c", false, "CTLSPEC AG(c_ok)");
     }
 
     @Test
@@ -255,7 +364,7 @@ class VerificationServiceImplBuildResultTest {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File smv = createTempModelFile();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
-                .thenReturn(new SmvGenerator.GenerateResult(smv, Map.of()));
+                .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.busy("NuSMV execution is busy, please retry later"));
 
@@ -283,10 +392,279 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
+    void submitVerification_emptySpecs_rejectsBeforeCreatingTask() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+    }
+
+    @Test
+    void verifyAsync_emptySpecs_rejectsBeforeQueueingTask() {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.verifyAsync(
+                        1L, 7L, makeRequest(singleDevice(), List.of(), List.of(), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void verifyAsync_nullTaskId_rejectsBeforeQueueingTask() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.verifyAsync(
+                        1L, null, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("taskId"));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_invalidIntensity_rejectsBeforeCreatingTask() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 51, false)));
+
+        assertTrue(ex.getMessage().contains("Intensity must be between 0 and 50"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void verify_invalidIntensity_rejectsBeforeSubmittingSyncExecutor() throws Exception {
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.verify(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, -1, false)));
+
+        assertTrue(ex.getMessage().contains("Intensity must be between 0 and 50"));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void verifyAsync_invalidIntensity_marksExistingTaskFailedBeforeQueueing() throws Exception {
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(16L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+        when(taskRepository.findById(16L)).thenReturn(Optional.of(task));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.verifyAsync(
+                        1L, 16L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 51, false)));
+
+        assertTrue(ex.getMessage().contains("Intensity must be between 0 and 50"));
+        verify(taskRepository).failTaskIfNotCancelled(
+                eq(16L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("intensity: Intensity must be between 0 and 50"), anyString(), any(),
+                eq(VerificationTaskPo.TaskStatus.CANCELLED));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_invalidNestedDevice_rejectsBeforeCreatingTask() throws Exception {
+        DeviceVerificationDto invalidDevice = new DeviceVerificationDto();
+        invalidDevice.setVarName(" ");
+        invalidDevice.setTemplateName("light");
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(List.of(invalidDevice), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("Device varName is required"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_ruleWithNullCommand_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = makeRule();
+        invalidRule.setCommand(null);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(invalidRule), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals("Command cannot be null", ex.getErrors().get("rules[0].command"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_ruleWithBlankCommandFields_rejectsBeforeCreatingTask() throws Exception {
+        RuleDto invalidRule = makeRule();
+        invalidRule.setCommand(RuleDto.Command.builder()
+                .deviceName(" ")
+                .action("")
+                .build());
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(invalidRule), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertEquals("Command device name is required", ex.getErrors().get("rules[0].command.deviceName"));
+        assertEquals("Command action is required", ex.getErrors().get("rules[0].command.action"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_invalidNestedSpec_rejectsBeforeCreatingTask() throws Exception {
+        SpecificationDto invalidSpec = makeEffectiveSpec("s1");
+        invalidSpec.setTemplateId("8");
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(invalidSpec), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("Template ID must be one of"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_nullSpecCondition_rejectsBeforeCreatingTask() throws Exception {
+        SpecificationDto invalidSpec = makeEffectiveSpec("s1");
+        invalidSpec.setAConditions(Collections.singletonList(null));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+                () -> service.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(invalidSpec), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("A-condition item cannot be null"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_missingDisplayOnlyTemplateLabel_isAllowedByRuntimeValidation() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        VerificationServiceImpl capturingService = serviceWithVerificationExecutor(capturingExecutor);
+        VerificationTaskPo savedTask = VerificationTaskPo.builder()
+                .id(17L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+        SpecificationDto spec = makeEffectiveSpec("s1");
+        spec.setTemplateLabel(null);
+
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenReturn(savedTask);
+
+        Long taskId = capturingService.submitVerification(
+                1L, makeRequest(singleDevice(), List.of(), List.of(spec), false, 0, false));
+
+        assertEquals(17L, taskId);
+        assertNotNull(capturingExecutor.capturedTask());
+        verify(taskRepository).save(any(VerificationTaskPo.class));
+        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
+    }
+
+    @Test
+    void submitVerification_queueRejected_marksCreatedTaskFailedAndThrowsServiceUnavailable() {
+        VerificationServiceImpl rejectingService = serviceWithVerificationExecutor(new RejectingThreadPoolTaskExecutor());
+        VerificationTaskPo savedTask = VerificationTaskPo.builder()
+                .id(12L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+
+        when(taskRepository.save(any(VerificationTaskPo.class))).thenReturn(savedTask);
+        when(taskRepository.findById(12L)).thenReturn(Optional.of(savedTask));
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> rejectingService.submitVerification(
+                        1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("busy"));
+        verify(taskRepository).save(any(VerificationTaskPo.class));
+        verify(taskRepository).failTaskIfNotCancelled(
+                eq(12L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("Server busy, please try again later"), anyString(), any(),
+                eq(VerificationTaskPo.TaskStatus.CANCELLED));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void verifyAsync_queueRejected_marksExistingTaskFailedAndThrowsServiceUnavailable() {
+        VerificationServiceImpl rejectingService = serviceWithVerificationExecutor(new RejectingThreadPoolTaskExecutor());
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(13L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
+                .createdAt(LocalDateTime.now()).build();
+
+        when(taskRepository.findById(13L)).thenReturn(Optional.of(task));
+
+        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+                () -> rejectingService.verifyAsync(
+                        1L, 13L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false)));
+
+        assertTrue(ex.getMessage().contains("busy"));
+        verify(taskRepository).failTaskIfNotCancelled(
+                eq(13L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
+                eq("Server busy, please try again later"), anyString(), any(),
+                eq(VerificationTaskPo.TaskStatus.CANCELLED));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void verifyAsync_usesSubmissionTimeRequestSnapshot() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        VerificationServiceImpl capturingService = serviceWithVerificationExecutor(capturingExecutor);
+        File smv = createTempModelFile();
+        SpecificationDto spec = makeEffectiveSpec("s1");
+        List<DeviceVerificationDto> devices = new ArrayList<>(singleDevice());
+        RuleDto rule = makeRule();
+        List<RuleDto> rules = new ArrayList<>(List.of(rule));
+        List<SpecificationDto> specs = new ArrayList<>(List.of(spec));
+        VerificationRequestDto request = makeRequest(devices, rules, specs, false, 0, false);
+
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(generateResult(smv, List.of(spec)));
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
+        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(14L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
+                .createdAt(LocalDateTime.now()).build();
+        when(taskRepository.findById(14L)).thenReturn(Optional.of(task));
+
+        capturingService.verifyAsync(1L, 14L, request);
+        assertNotNull(capturingExecutor.capturedTask());
+
+        devices.get(0).setVarName("mutatedDevice");
+        rule.getConditions().get(0).setDeviceName("mutatedRuleDevice");
+        spec.setId("mutatedSpec");
+        spec.getAConditions().get(0).setValue("off");
+        devices.clear();
+        rules.clear();
+        specs.clear();
+        request.setSpecs(List.of(makeEffectiveSpec("mutated")));
+
+        capturingExecutor.capturedTask().run();
+
+        verify(smvGenerator).generate(eq(1L),
+                argThat(sentDevices -> sentDevices.size() == 1
+                        && "testDevice".equals(sentDevices.get(0).getVarName())),
+                argThat(sentRules -> sentRules.size() == 1
+                        && "sensor".equals(sentRules.get(0).getConditions().get(0).getDeviceName())),
+                argThat(sentSpecs -> sentSpecs.size() == 1
+                        && "s1".equals(sentSpecs.get(0).getId())
+                        && "on".equals(sentSpecs.get(0).getAConditions().get(0).getValue())),
+                eq(false), eq(0), eq(false), any());
+        JsonNode requestJson = readRequestJson(smv);
+        assertEquals("testDevice", requestJson.path("devices").get(0).path("varName").asText());
+        assertEquals("sensor", requestJson.path("rules").get(0).path("conditions").get(0).path("deviceName").asText());
+        assertEquals("s1", requestJson.path("specs").get(0).path("id").asText());
+        assertEquals("on", requestJson.path("specs").get(0).path("aConditions").get(0).path("value").asText());
+    }
+
+    @Test
     void verifyAsync_success_writesResultJson() throws Exception {
         File smv = createTempModelFile();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
-                .thenReturn(new SmvGenerator.GenerateResult(smv, Map.of()));
+                .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
 
@@ -305,6 +683,28 @@ class VerificationServiceImplBuildResultTest {
         assertFalse(request.path("attack").asBoolean());
         assertEquals(0, request.path("intensity").asInt());
         assertEquals(1, request.path("specs").size());
+    }
+
+    @Test
+    void verifyAsync_failedSpecWithoutTrace_countsViolatedSpecFromSpecResults() throws Exception {
+        File smv = createTempModelFile();
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any()))
+                .thenReturn(generateResult(smv, List.of(makeEffectiveSpec("s1"))));
+        when(nusmvExecutor.execute(any(File.class)))
+                .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", false, null))));
+
+        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        VerificationTaskPo task = VerificationTaskPo.builder()
+                .id(9L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
+                .createdAt(LocalDateTime.now()).build();
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
+
+        service.verifyAsync(
+                1L, 9L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 0, false));
+
+        verify(taskRepository).completeTaskIfNotCancelled(
+                eq(9L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(),
+                eq(false), eq(1), eq(0), eq(0), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -362,6 +762,8 @@ class VerificationServiceImplBuildResultTest {
     private SpecificationDto makeEffectiveSpec(String id) {
         SpecificationDto spec = new SpecificationDto();
         spec.setId(id);
+        spec.setTemplateId("1");
+        spec.setTemplateLabel("Always");
         SpecConditionDto cond = new SpecConditionDto();
         cond.setDeviceId("dev1");
         cond.setTargetType("state");
@@ -372,6 +774,21 @@ class VerificationServiceImplBuildResultTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
         return spec;
+    }
+
+    private RuleDto makeRule() {
+        return RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("testDevice")
+                        .action("turnOn")
+                        .build())
+                .build();
     }
 
     // ==================== terminal-state progress tests ====================
@@ -394,7 +811,7 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper,
                 specificationMapper, verificationTaskMapper, new ObjectMapper(),
-                syncVerificationExecutor, null);
+                verificationTaskExecutor, syncVerificationExecutor, null);
         Method cleanup = VerificationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
         cleanup.setAccessible(true);
         cleanup.invoke(freshService);
@@ -437,19 +854,22 @@ class VerificationServiceImplBuildResultTest {
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(taskRepository.completeTaskIfNotCancelled(
                 eq(70L), any(), any(), anyBoolean(), anyInt(),
-                anyInt(), anyInt(), any(), any(), any(), any(), any()))
+                anyInt(), anyInt(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(0);
 
         Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
                 "completeTask", VerificationTaskPo.class, boolean.class, int.class,
-                List.class, String.class, int.class, int.class);
+                List.class, List.class, String.class, int.class, int.class);
         completeTask.setAccessible(true);
-        completeTask.invoke(service, task, true, 0, List.of("done"), "", 1, 2);
+        completeTask.invoke(service, task, true, 0,
+                List.of(SpecResultDto.builder().specId("s1").passed(true).expression("expr").build()),
+                List.of("done"), "", 1, 2);
 
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(taskRepository).completeTaskIfNotCancelled(
                 eq(70L), any(), any(), anyBoolean(), anyInt(),
-                eq(1), eq(2), any(), any(), any(), any(), any());
+                eq(1), eq(2), eq("[{\"specId\":\"s1\",\"passed\":true,\"expression\":\"expr\"}]"),
+                any(), any(), any(), any(), any());
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasTaskSaveCalled());
     }
@@ -480,6 +900,12 @@ class VerificationServiceImplBuildResultTest {
     private boolean wasTaskSaveCalled() {
         return mockingDetails(taskRepository).getInvocations().stream()
                 .anyMatch(invocation -> invocation.getMethod().getName().equals("save"));
+    }
+
+    private void assertSpecResult(SpecResultDto result, String specId, boolean passed, String expression) {
+        assertEquals(specId, result.getSpecId());
+        assertEquals(passed, result.isPassed());
+        assertEquals(expression, result.getExpression());
     }
 
     private VerificationRequestDto makeRequest(List<DeviceVerificationDto> devices, List<RuleDto> rules,

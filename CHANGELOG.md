@@ -15,6 +15,46 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-06
+
+#### Changed
+- **Verification spec results are now identity-bearing objects.** Sync verification,
+  completed async verification tasks, and `verify_model` AI tool output now return
+  `specResults` as `{ specId, passed, expression }` entries for the specifications
+  actually emitted to NuSMV. Async task persistence keeps the existing
+  `specResultsJson` column while storing the new object-array JSON, and the mapper can
+  still read legacy boolean arrays.
+- Verification now treats "no specifications emitted to NuSMV" as an unreliable failure
+  (`safe=false`, empty `specResults`) instead of a vacuous pass, and completed async task
+  `violatedSpecCount` now counts failed structured spec results rather than only saved
+  traces.
+- Async verification submission is centralized through `submitVerification`: invalid
+  requests are rejected before task creation, queue saturation marks the created task
+  failed and returns `503`, and retained low-level `verifyAsync` calls now require a
+  non-null task id and use the same submit-before-poll semantics.
+- Async simulation now follows the same centralized submission pattern through
+  `submitSimulation`, so REST and AI callers no longer duplicate task creation,
+  dispatch, and failure-compensation logic.
+- Task inbox summary endpoints now accept optional `excludeTaskIds`, and the frontend
+  uses it while explicitly watching a task so the 5s inbox refresh does not re-fetch the
+  same task already covered by the 1s per-task polling loop.
+- Verification and simulation service-layer entry points now deep-snapshot requests and
+  run NuSMV runtime validation before execution or task creation. Direct service and
+  AI-tool callers can no longer mutate queued DTO objects after submission, bypass null
+  list-item checks, or skip runtime constraints such as attack intensity, simulation
+  steps, device identity, and executable specification conditions. REST endpoints still
+  keep their full DTO Bean Validation at the HTTP boundary.
+- Synchronous simulation now propagates validation errors instead of returning a
+  success-shaped empty result; `simulate_model` reports those failures as structured
+  `BUSINESS_ERROR` responses.
+- Saved simulation traces now persist the same validated execution snapshot used by the
+  NuSMV run, so direct service callers cannot mutate the original request object during
+  execution and skew `requestJson`.
+- Async verification and simulation now expose lightweight per-user task inbox endpoints
+  (`GET /api/verify/tasks`, `GET /api/simulate/tasks`). The Board UI uses them for a
+  task inbox and global mini task indicator, so background tasks remain visible and
+  cancellable after closing the submit panel or refreshing the page.
+
 ### 2026-07-05
 
 #### Fixed

@@ -21,6 +21,8 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
 
     List<SimulationTaskPo> findByUserIdOrderByCreatedAtDesc(Long userId);
 
+    List<SimulationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
+
     void deleteByUserId(Long userId);
 
     List<SimulationTaskPo> findByUserIdAndStatus(Long userId, SimulationTaskPo.TaskStatus status);

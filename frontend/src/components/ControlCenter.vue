@@ -763,7 +763,7 @@ const handleCreateDevice = async () => {
 }
 
 // Panel state
-const isCollapsed = ref(false)
+const isCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 
 // Top-level navigation to reduce UI density
 type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'

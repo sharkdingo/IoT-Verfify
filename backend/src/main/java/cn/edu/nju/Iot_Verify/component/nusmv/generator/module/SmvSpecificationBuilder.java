@@ -159,7 +159,9 @@ public class SmvSpecificationBuilder {
             if (!enablePrivacy && hasAnyPrivacyCondition(spec)) {
                 log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream, skipping", spec.getId());
                 recordSkippedSpec(context, spec, "Privacy specification skipped because enablePrivacy=false");
-                content.append("\n\tCTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false");
+                String placeholder = "CTLSPEC FALSE";
+                content.append("\n\t").append(placeholder).append(" -- privacy spec skipped: enablePrivacy=false");
+                recordEmittedSpec(context, spec, placeholder);
                 generatedSpecs++;
                 continue;
             }
@@ -167,6 +169,7 @@ public class SmvSpecificationBuilder {
             try {
                 String specString = generateSpecString(spec, isAttack, intensity, deviceSmvMap);
                 content.append("\n\t").append(specString);
+                recordEmittedSpec(context, spec, specString);
                 generatedSpecs++;
             } catch (InvalidConditionException e) {
                 // Invalid condition makes this spec invalid; skip and log warning.
@@ -174,7 +177,9 @@ public class SmvSpecificationBuilder {
                 recordSkippedSpec(context, spec, e.getMessage());
                 // Emit a guaranteed-false placeholder to keep spec count aligned with effectiveSpecs.
                 String safeMsg = e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown";
-                content.append("\n\tCTLSPEC FALSE -- invalid spec: ").append(safeMsg);
+                String placeholder = "CTLSPEC FALSE";
+                content.append("\n\t").append(placeholder).append(" -- invalid spec: ").append(safeMsg);
+                recordEmittedSpec(context, spec, placeholder);
                 generatedSpecs++;
             }
         }
@@ -186,6 +191,12 @@ public class SmvSpecificationBuilder {
     private void recordSkippedSpec(SmvGenerationContext context, SpecificationDto spec, String reason) {
         if (context != null) {
             context.skippedSpec(spec, reason);
+        }
+    }
+
+    private void recordEmittedSpec(SmvGenerationContext context, SpecificationDto spec, String expression) {
+        if (context != null) {
+            context.emittedSpec(spec, expression);
         }
     }
 

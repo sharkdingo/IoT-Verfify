@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -28,11 +29,11 @@ import java.util.List;
 public class BoardBatchDto {
 
     @Valid
-    private List<DeviceNodeDto> nodes;
+    private List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes;
 
     @Valid
-    private List<RuleDto> rules;
+    private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules;
 
     @Valid
-    private List<SpecificationDto> specs;
+    private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
 }

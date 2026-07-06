@@ -19,8 +19,8 @@ import type { DeviceNode } from '../types/node'
 import type { DeviceEdge } from '../types/edge'
 import type { RuleForm } from '../types/rule'
 import type { SpecCondition, Specification } from '../types/spec'
-import type { Trace } from '@/types/verify'
-import type { SimulationTraceSummary } from '@/types/simulation'
+import type { SpecResult, Trace, VerificationResult, VerificationTask, VerificationTaskSummary } from '@/types/verify'
+import type { SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
 // Panel types removed
 
 // Utils
@@ -102,6 +102,31 @@ const ZOOM_STEP = 0.1
 
 const BASE_NODE_WIDTH = 160
 const BASE_FONT_SIZE = 16
+const ASYNC_TASK_POLL_INTERVAL_MS = 1000
+const ASYNC_TASK_MAX_POLLS = 600
+const TASK_INBOX_REFRESH_INTERVAL_MS = 5000
+const pollingAborted = ref(false)
+
+class PollingAbortedError extends Error {
+  constructor() {
+    super('Polling aborted')
+    this.name = 'PollingAbortedError'
+  }
+}
+
+const throwIfPollingAborted = () => {
+  if (pollingAborted.value) {
+    throw new PollingAbortedError()
+  }
+}
+
+const isPollingAbortedError = (error: unknown): boolean =>
+  error instanceof PollingAbortedError
+
+const waitForNextPoll = async () => {
+  await new Promise(resolve => setTimeout(resolve, ASYNC_TASK_POLL_INTERVAL_MS))
+  throwIfPollingAborted()
+}
 
 /* =================================================================================
  * 3. State Definitions
@@ -175,12 +200,74 @@ const extractApiErrorMessage = (error: any, fallback: string): string => {
   return error?.response?.data?.message || error?.message || fallback
 }
 
+type AsyncTaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+
+const formatAsyncTaskStatus = (status?: AsyncTaskStatus | string): string => {
+  switch (status) {
+    case 'PENDING':
+      return t('app.taskStatusPending')
+    case 'RUNNING':
+      return t('app.taskStatusRunning')
+    case 'COMPLETED':
+      return t('app.taskStatusCompleted')
+    case 'FAILED':
+      return t('app.taskStatusFailed')
+    case 'CANCELLED':
+      return t('app.taskStatusCancelled')
+    default:
+      return status || t('app.taskInitializing')
+  }
+}
+
+const buildVerificationResultFromTask = (task: VerificationTask, traces: Trace[] = []): VerificationResult => ({
+  safe: !!task.isSafe,
+  traces,
+  specResults: normalizeSpecResults(task.specResults),
+  checkLogs: task.checkLogs || [],
+  nusmvOutput: task.nusmvOutput || '',
+  disabledRuleCount: task.disabledRuleCount,
+  skippedSpecCount: task.skippedSpecCount
+})
+
+const normalizeSpecResult = (value: unknown, index: number): SpecResult => {
+  if (typeof value === 'boolean') {
+    return {
+      specId: `legacy-${index + 1}`,
+      passed: value,
+      expression: ''
+    }
+  }
+
+  const candidate = value as Partial<SpecResult> | undefined
+  return {
+    specId: candidate?.specId || `spec-${index + 1}`,
+    passed: !!candidate?.passed,
+    expression: candidate?.expression || ''
+  }
+}
+
+const normalizeSpecResults = (results?: unknown[]): SpecResult[] =>
+  (results || []).map((result, index) => normalizeSpecResult(result, index))
+
+const countVerificationFailures = (result: any): number => {
+  const failedSpecs = normalizeSpecResults(result?.specResults).filter(specResult => !specResult.passed).length
+  const traceCount = result?.traces?.length || 0
+  return Math.max(failedSpecs, traceCount)
+}
+
+const getVerificationFailureMessage = (result: any): string => {
+  const failureCount = countVerificationFailures(result)
+  return failureCount > 0
+    ? t('app.verificationFailedWithViolations', { count: failureCount })
+    : t('app.verificationFailedNoSpecResults')
+}
+
 const notifyVerificationOutcome = (result: any) => {
   const counts = getGenerationWarningCounts(result)
   if (counts.total > 0) {
     const outcome = result?.safe
       ? t('app.verificationPassed')
-      : t('app.verificationFailedWithViolations', { count: result?.traces?.length || 0 })
+      : getVerificationFailureMessage(result)
     ElMessage.warning({
       message: t('app.generationWarningSummary', {
         outcome,
@@ -196,7 +283,7 @@ const notifyVerificationOutcome = (result: any) => {
   if (result?.safe) {
     ElMessage.success({ message: t('app.verificationPassedSystemSafe'), type: 'success' })
   } else {
-    ElMessage.warning({ message: t('app.verificationFailedWithViolations', { count: result?.traces?.length || 0 }), type: 'warning' })
+    ElMessage.warning({ message: getVerificationFailureMessage(result), type: 'warning' })
   }
 }
 
@@ -1121,6 +1208,12 @@ onMounted(async () => {
   await refreshDevices()
   await refreshRules()
   await refreshSpecifications()
+  await loadTaskInbox(false, { showLoading: false })
+  taskInboxRefreshTimer = setInterval(() => {
+    if (activeBackgroundTaskCount.value > 0 || showHistoryPanel.value) {
+      void loadTaskInbox(false, { showLoading: false })
+    }
+  }, TASK_INBOX_REFRESH_INTERVAL_MS)
 
   // 监听 AI 推荐的设备添加事件
   window.addEventListener('ai-suggestion-add-device', handleAISuggestionAddDevice as EventListener)
@@ -1490,6 +1583,13 @@ const getNextNodePosition = (): { x: number; y: number } => {
 }
 
 onBeforeUnmount(() => {
+  pollingAborted.value = true
+  stopTraceAnimation()
+  stopSimulationAnimation()
+  if (taskInboxRefreshTimer) {
+    clearInterval(taskInboxRefreshTimer)
+    taskInboxRefreshTimer = null
+  }
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
@@ -1540,7 +1640,7 @@ const fetchRuleRecommendations = async () => {
     ElMessage.info(t('app.ruleRecommendationCancelled'))
     return
   }
-  
+
   // 互斥检查：如果模拟动画或反例路径动画正在显示，则不允许打开推荐面板
   if (simulationAnimationState.value.visible) {
     ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
@@ -1628,7 +1728,7 @@ const fetchDeviceRecommendations = async () => {
     ElMessage.info(t('app.deviceRecommendationCancelled'))
     return
   }
-  
+
   // 互斥检查
   if (simulationAnimationState.value.visible) {
     ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
@@ -1699,7 +1799,7 @@ const fetchSpecRecommendations = async () => {
     ElMessage.info(t('app.specificationRecommendationCancelled'))
     return
   }
-  
+
   // 互斥检查
   if (simulationAnimationState.value.visible) {
     ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
@@ -1867,24 +1967,199 @@ const asyncVerificationTask = ref<{
   progress: 0,
   status: t('app.taskInitializing')
 })
+const asyncVerificationActive = ref(false)
 const cancellingVerificationTask = ref(false)
 const verificationCancelRequested = ref(false)
 
-type HistoryTab = 'verification' | 'simulation'
+type HistoryTab = 'tasks' | 'verification' | 'simulation'
 
 // History records are loaded through the same persisted-trace APIs used by AI tools.
+const verificationTasks = ref<VerificationTaskSummary[]>([])
+const simulationTasks = ref<SimulationTaskSummary[]>([])
 const verificationTraces = ref<Trace[]>([])
 const simulationTraces = ref<SimulationTraceSummary[]>([])
 const showHistoryPanel = ref(false)
-const activeHistoryTab = ref<HistoryTab>('verification')
+const activeHistoryTab = ref<HistoryTab>('tasks')
+const loadingTaskHistory = ref(false)
 const loadingVerificationHistory = ref(false)
 const loadingSimulationHistory = ref(false)
+let taskInboxRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 const historyActionLocked = computed(() =>
   traceAnimationState.value.visible ||
   simulationAnimationState.value.visible ||
   isAnimationLocked.value
 )
+
+const isActiveTaskStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
+
+const normalizeTaskProgress = (value?: number | null, fallback = 0): number => {
+  const numeric = typeof value === 'number' ? value : fallback
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(100, Math.max(0, Math.round(numeric)))
+}
+
+const taskSummaryTimestamp = (value?: string) => {
+  if (!value) return 0
+  const parsed = new Date(value).getTime()
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+const mergeTaskSummariesPreservingExcluded = <T extends { id?: number; createdAt?: string }>(
+  current: T[],
+  incoming: T[],
+  excludedIds: number[]
+): T[] => {
+  if (excludedIds.length === 0) return incoming
+  const excluded = new Set(excludedIds)
+  const preserved = current.filter(task => task.id !== undefined && excluded.has(task.id))
+  const merged = [
+    ...preserved,
+    ...incoming.filter(task => task.id === undefined || !excluded.has(task.id))
+  ]
+  return merged.sort((a, b) => taskSummaryTimestamp(b.createdAt) - taskSummaryTimestamp(a.createdAt))
+}
+
+const watchedVerificationTaskIds = computed(() => {
+  const taskId = asyncVerificationTask.value.taskId
+  return isVerifying.value && asyncVerificationActive.value && taskId ? [taskId] : []
+})
+
+const watchedSimulationTaskIds = computed(() => {
+  const taskId = asyncSimulationTask.value.taskId
+  return isSimulating.value && asyncSimulationActive.value && taskId ? [taskId] : []
+})
+
+const activeVerificationTasks = computed(() =>
+  verificationTasks.value.filter(task => isActiveTaskStatus(task.status))
+)
+
+const activeSimulationTasks = computed(() =>
+  simulationTasks.value.filter(task => isActiveTaskStatus(task.status))
+)
+
+const activeBackgroundTaskCount = computed(() =>
+  activeVerificationTasks.value.length + activeSimulationTasks.value.length
+)
+
+const miniTaskItems = computed(() => {
+  const items: Array<{
+    key: string
+    kind: 'verification' | 'simulation'
+    id: number
+    label: string
+    status: string
+    progress: number
+  }> = []
+
+  const currentVerificationId = asyncVerificationTask.value.taskId
+  if (isVerifying.value && asyncVerificationActive.value && currentVerificationId) {
+    items.push({
+      key: `verification-${currentVerificationId}`,
+      kind: 'verification',
+      id: currentVerificationId,
+      label: t('app.verification'),
+      status: asyncVerificationTask.value.status,
+      progress: normalizeTaskProgress(asyncVerificationTask.value.progress)
+    })
+  }
+  for (const task of activeVerificationTasks.value) {
+    if (task.id === currentVerificationId) continue
+    items.push({
+      key: `verification-${task.id}`,
+      kind: 'verification',
+      id: task.id,
+      label: t('app.verification'),
+      status: formatAsyncTaskStatus(task.status),
+      progress: normalizeTaskProgress(task.progress)
+    })
+  }
+
+  const currentSimulationId = asyncSimulationTask.value.taskId
+  if (isSimulating.value && asyncSimulationActive.value && currentSimulationId) {
+    items.push({
+      key: `simulation-${currentSimulationId}`,
+      kind: 'simulation',
+      id: currentSimulationId,
+      label: t('app.simulation'),
+      status: asyncSimulationTask.value.status,
+      progress: normalizeTaskProgress(asyncSimulationTask.value.progress)
+    })
+  }
+  for (const task of activeSimulationTasks.value) {
+    if (task.id === currentSimulationId) continue
+    items.push({
+      key: `simulation-${task.id}`,
+      kind: 'simulation',
+      id: task.id,
+      label: t('app.simulation'),
+      status: formatAsyncTaskStatus(task.status),
+      progress: normalizeTaskProgress(task.progress)
+    })
+  }
+
+  return items
+})
+
+const upsertVerificationTaskSummary = (task: Partial<VerificationTaskSummary> & { id?: number }) => {
+  if (!task.id) return
+  const existing = verificationTasks.value.findIndex(item => item.id === task.id)
+  const next = task as VerificationTaskSummary
+  verificationTasks.value = existing >= 0
+    ? verificationTasks.value.map(item => item.id === task.id ? { ...item, ...next } : item)
+    : [next, ...verificationTasks.value]
+}
+
+const upsertSimulationTaskSummary = (task: Partial<SimulationTaskSummary> & { id?: number }) => {
+  if (!task.id) return
+  const existing = simulationTasks.value.findIndex(item => item.id === task.id)
+  const next = task as SimulationTaskSummary
+  simulationTasks.value = existing >= 0
+    ? simulationTasks.value.map(item => item.id === task.id ? { ...item, ...next } : item)
+    : [next, ...simulationTasks.value]
+}
+
+const loadVerificationTasks = async () => {
+  const excludedIds = watchedVerificationTaskIds.value
+  const tasks = await boardApi.getTasks(excludedIds)
+  verificationTasks.value = mergeTaskSummariesPreservingExcluded(
+    verificationTasks.value,
+    tasks || [],
+    excludedIds
+  )
+}
+
+const loadSimulationTasks = async () => {
+  const excludedIds = watchedSimulationTaskIds.value
+  const tasks = await simulationApi.getTasks(excludedIds)
+  simulationTasks.value = mergeTaskSummariesPreservingExcluded(
+    simulationTasks.value,
+    tasks || [],
+    excludedIds
+  )
+}
+
+const loadTaskInbox = async (
+  showError = true,
+  options: { showLoading?: boolean } = {}
+) => {
+  const showLoading = options.showLoading ?? true
+  if (showLoading) {
+    loadingTaskHistory.value = true
+  }
+  try {
+    await Promise.all([loadVerificationTasks(), loadSimulationTasks()])
+  } catch (e: any) {
+    console.error('Failed to load async tasks:', e)
+    if (showError) {
+      ElMessage.error({ message: t('app.failedToLoadTasks'), type: 'error' })
+    }
+  } finally {
+    if (showLoading) {
+      loadingTaskHistory.value = false
+    }
+  }
+}
 
 const loadVerificationTraces = async () => {
   loadingVerificationHistory.value = true
@@ -1913,7 +2188,9 @@ const loadSimulationTraces = async () => {
 }
 
 const refreshHistoryTab = async (tab: HistoryTab = activeHistoryTab.value) => {
-  if (tab === 'verification') {
+  if (tab === 'tasks') {
+    await loadTaskInbox()
+  } else if (tab === 'verification') {
     await loadVerificationTraces()
   } else {
     await loadSimulationTraces()
@@ -1964,6 +2241,200 @@ const deleteVerificationTrace = async (traceId: number) => {
     if (e === 'cancel' || e === 'close') return
     console.error('Failed to delete trace:', e)
     ElMessage.error({ message: t('app.failedToDeleteTrace'), type: 'error' })
+  }
+}
+
+const openVerificationTaskResult = async (taskId: number) => {
+  try {
+    const task = await boardApi.getTask(taskId)
+    upsertVerificationTaskSummary(task)
+    const traces = task.isSafe ? [] : await boardApi.getTaskTraces(taskId)
+    verificationResult.value = buildVerificationResultFromTask(task, traces)
+    closeHistoryPanel()
+  } catch (e: any) {
+    console.error('Failed to load verification task:', e)
+    ElMessage.error({ message: t('app.failedToLoadTask'), type: 'error' })
+  }
+}
+
+const openSimulationTaskResult = async (taskId: number) => {
+  try {
+    const task = await simulationApi.getTask(taskId)
+    upsertSimulationTaskSummary(task)
+    if (!task.simulationTraceId) {
+      ElMessage.warning({ message: t('app.taskCompletedNoTraceFound'), type: 'warning' })
+      return
+    }
+    await selectAndPlaySimulationTrace(task.simulationTraceId)
+  } catch (e: any) {
+    console.error('Failed to load simulation task:', e)
+    ElMessage.error({ message: t('app.failedToLoadTask'), type: 'error' })
+  }
+}
+
+const watchVerificationTask = async (taskId: number) => {
+  if (isVerifying.value) {
+    if (asyncVerificationTask.value.taskId === taskId) {
+      showVerificationPanel.value = true
+    } else {
+      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+    }
+    closeHistoryPanel()
+    return
+  }
+  const taskSummary = verificationTasks.value.find(task => task.id === taskId)
+  isVerifying.value = true
+  asyncVerificationActive.value = true
+  verificationCancelRequested.value = false
+  cancellingVerificationTask.value = false
+  asyncVerificationTask.value = {
+    taskId,
+    progress: normalizeTaskProgress(taskSummary?.progress),
+    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+  }
+  closeHistoryPanel()
+  try {
+    await pollAsyncVerification(taskId, { presentResult: true })
+  } catch (error: any) {
+    if (!isPollingAbortedError(error)) {
+      const message = extractApiErrorMessage(error, t('app.verificationFailed'))
+      if (verificationCancelRequested.value && message.toLowerCase().includes('cancel')) {
+        verificationError.value = null
+        ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
+      } else {
+        verificationError.value = message
+        ElMessage.error({ message, type: 'error' })
+      }
+    }
+  } finally {
+    isVerifying.value = false
+    asyncVerificationActive.value = false
+    cancellingVerificationTask.value = false
+    verificationCancelRequested.value = false
+    await loadTaskInbox(false, { showLoading: false })
+  }
+}
+
+const watchSimulationTask = async (taskId: number) => {
+  if (isSimulating.value) {
+    if (asyncSimulationTask.value.taskId === taskId) {
+      showSimulationPanel.value = true
+    } else {
+      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+    }
+    closeHistoryPanel()
+    return
+  }
+  const taskSummary = simulationTasks.value.find(task => task.id === taskId)
+  isSimulating.value = true
+  asyncSimulationActive.value = true
+  simulationCancelRequested.value = false
+  cancellingSimulationTask.value = false
+  asyncSimulationTask.value = {
+    taskId,
+    progress: normalizeTaskProgress(taskSummary?.progress),
+    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+  }
+  closeHistoryPanel()
+  try {
+    const result = await pollAsyncSimulation(taskId)
+    lastSimulationResult.value = result
+    if (result.traceId) {
+      simulationTraces.value = [
+        {
+          id: result.traceId,
+          requestedSteps: result.requestedSteps,
+          steps: result.steps,
+          createdAt: result.createdAt || new Date().toISOString()
+        },
+        ...simulationTraces.value.filter(item => item.id !== result.traceId)
+      ]
+    }
+    if (result.states && result.states.length > 0) {
+      if (traceAnimationState.value.visible || simulationAnimationState.value.visible) {
+        ElMessage.success({
+          message: t('app.simulationTaskCompletedSaved', { count: result.states.length }),
+          type: 'success'
+        })
+        return
+      }
+      savedSimulationStates.value = [...result.states]
+      simulationAnimationState.value = {
+        visible: true,
+        selectedStateIndex: 0,
+        isPlaying: false
+      }
+      highlightedTrace.value = {
+        states: savedSimulationStates.value,
+        selectedStateIndex: 0
+      }
+      ElMessage.success({
+        message: t('app.simulationCompletedWithStates', { count: result.states.length }),
+        type: 'success'
+      })
+    }
+  } catch (error: any) {
+    if (!isPollingAbortedError(error)) {
+      const message = extractApiErrorMessage(error, t('app.simulationFailed'))
+      if (simulationCancelRequested.value && message.toLowerCase().includes('cancel')) {
+        simulationError.value = null
+        ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
+      } else {
+        simulationError.value = message
+        ElMessage.error({ message, type: 'error' })
+      }
+    }
+  } finally {
+    isSimulating.value = false
+    asyncSimulationActive.value = false
+    cancellingSimulationTask.value = false
+    simulationCancelRequested.value = false
+    await loadTaskInbox(false, { showLoading: false })
+  }
+}
+
+const cancelVerificationTaskFromInbox = async (taskId: number) => {
+  if (asyncVerificationTask.value.taskId === taskId) {
+    await cancelAsyncVerification()
+  } else {
+    const cancelled = await boardApi.cancelTask(taskId)
+    ElMessage.info({
+      message: cancelled ? t('app.verificationCancellationRequested') : t('app.verificationTaskNotCancellable'),
+      type: 'info'
+    })
+  }
+  await loadTaskInbox(false, { showLoading: false })
+}
+
+const cancelSimulationTaskFromInbox = async (taskId: number) => {
+  if (asyncSimulationTask.value.taskId === taskId) {
+    await cancelAsyncSimulation()
+  } else {
+    const cancelled = await simulationApi.cancelTask(taskId)
+    ElMessage.info({
+      message: cancelled ? t('app.simulationCancellationRequested') : t('app.simulationTaskNotCancellable'),
+      type: 'info'
+    })
+  }
+  await loadTaskInbox(false, { showLoading: false })
+}
+
+const openTaskInbox = async () => {
+  showSimulationPanel.value = false
+  showVerificationPanel.value = false
+  closeRecommendationPanel()
+  closeDeviceRecommendationPanel()
+  closeSpecRecommendationPanel()
+  activeHistoryTab.value = 'tasks'
+  showHistoryPanel.value = true
+  await loadTaskInbox(false)
+}
+
+const cancelMiniTask = async (kind: 'verification' | 'simulation', taskId: number) => {
+  if (kind === 'verification') {
+    await cancelVerificationTaskFromInbox(taskId)
+  } else {
+    await cancelSimulationTaskFromInbox(taskId)
   }
 }
 
@@ -2103,6 +2574,7 @@ const asyncSimulationTask = ref<{
   progress: 0,
   status: ''
 })
+const asyncSimulationActive = ref(false)
 const cancellingSimulationTask = ref(false)
 const simulationCancelRequested = ref(false)
 
@@ -2516,6 +2988,7 @@ const handleVerify = async (): Promise<boolean> => {
   }
 
   isVerifying.value = true
+  asyncVerificationActive.value = false
   verificationCancelRequested.value = false
   cancellingVerificationTask.value = false
   verificationError.value = null
@@ -2539,11 +3012,18 @@ const handleVerify = async (): Promise<boolean> => {
       // (which sets isVerifying=false) only runs after polling truly ends — otherwise
       // the progress UI vanishes immediately and the button re-enables mid-run,
       // letting the user launch duplicate tasks.
+      asyncVerificationActive.value = true
       asyncVerificationTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
 
       const taskId = await boardApi.verifyAsync(req)
       asyncVerificationTask.value.taskId = taskId
       asyncVerificationTask.value.status = t('app.verificationRunning')
+      upsertVerificationTaskSummary({
+        id: taskId,
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        progress: 0
+      })
 
       await pollAsyncVerification(taskId)
       return true
@@ -2551,11 +3031,17 @@ const handleVerify = async (): Promise<boolean> => {
 
     // Sync verification (original logic)
     const result = await boardApi.verify(req)
-    verificationResult.value = result
-    notifyVerificationOutcome(result)
+    verificationResult.value = {
+      ...result,
+      specResults: normalizeSpecResults((result as any).specResults)
+    }
+    notifyVerificationOutcome(verificationResult.value)
     return true
 
   } catch (error: any) {
+    if (isPollingAbortedError(error)) {
+      return false
+    }
     const message = extractApiErrorMessage(error, t('app.verificationFailed'))
     if (verificationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       verificationError.value = null
@@ -2568,6 +3054,7 @@ const handleVerify = async (): Promise<boolean> => {
     return false
   } finally {
     isVerifying.value = false
+    asyncVerificationActive.value = false
     cancellingVerificationTask.value = false
     verificationCancelRequested.value = false
   }
@@ -2592,16 +3079,17 @@ const handleSimulate = async (simConfig: {
   enablePrivacy: boolean
   isAsync: boolean
   saveToHistory?: boolean
-}) => {
+}): Promise<boolean> => {
   if (nodes.value.length === 0) {
     ElMessage.warning({ message: t('app.noDevicesToSimulate'), type: 'warning' })
-    return
+    return false
   }
   if (!assertRulesHaveTriggers(rules.value)) {
-    return
+    return false
   }
 
   isSimulating.value = true
+  asyncSimulationActive.value = false
   simulationCancelRequested.value = false
   cancellingSimulationTask.value = false
   simulationError.value = null
@@ -2609,6 +3097,7 @@ const handleSimulate = async (simConfig: {
 
   // 重置异步任务状态
   if (simConfig.isAsync) {
+    asyncSimulationActive.value = true
     asyncSimulationTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
   }
 
@@ -2631,6 +3120,14 @@ const handleSimulate = async (simConfig: {
       const taskId = await simulationApi.simulateAsync(req)
       asyncSimulationTask.value.taskId = taskId
       asyncSimulationTask.value.status = t('app.simulationTaskCreatedWaiting')
+      upsertSimulationTaskSummary({
+        id: taskId,
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        progress: 0,
+        requestedSteps: req.steps,
+        steps: 0
+      })
 
       // 轮询任务进度
       result = await pollAsyncSimulation(taskId)
@@ -2647,15 +3144,6 @@ const handleSimulate = async (simConfig: {
           logs: trace.logs || [],
           nusmvOutput: trace.nusmvOutput || ''
         }
-        simulationTraces.value = [
-          {
-            id: trace.id,
-            requestedSteps: trace.requestedSteps,
-            steps: trace.steps,
-            createdAt: trace.createdAt
-          },
-          ...simulationTraces.value.filter(item => item.id !== trace.id)
-        ]
       } else {
         result = await simulationApi.simulate(req)
       }
@@ -2678,6 +3166,14 @@ const handleSimulate = async (simConfig: {
 
     // 直接打开时间轴动画，不显示结果对话框
     if (result.states && result.states.length > 0) {
+      if (simConfig.isAsync) {
+        ElMessage.success({
+          message: t('app.simulationTaskCompletedSaved', { count: result.states.length }),
+          type: 'success'
+        })
+        return true
+      }
+
       // 保存模拟 states 数据
       savedSimulationStates.value = [...result.states]
 
@@ -2701,14 +3197,19 @@ const handleSimulate = async (simConfig: {
         message: t('app.simulationCompletedWithStates', { count: result.states.length }),
         type: 'success'
       })
+      return true
     } else {
       ElMessage.warning({
         message: t('app.simulationCompletedNoStates'),
         type: 'warning'
       })
+      return false
     }
 
   } catch (error: any) {
+    if (isPollingAbortedError(error)) {
+      return false
+    }
     const message = extractApiErrorMessage(error, t('app.simulationFailed'))
     if (simulationCancelRequested.value && message.toLowerCase().includes('cancel')) {
       simulationError.value = null
@@ -2718,8 +3219,10 @@ const handleSimulate = async (simConfig: {
       simulationError.value = message
       ElMessage.error({ message: simulationError.value || t('app.simulationFailed'), type: 'error' })
     }
+    return false
   } finally {
     isSimulating.value = false
+    asyncSimulationActive.value = false
     cancellingSimulationTask.value = false
     simulationCancelRequested.value = false
   }
@@ -2746,63 +3249,59 @@ const isPermanentPollError = (error: any): boolean => {
 // 轮询异步验证任务：await 到终态/超时/永久错误为止，供 handleVerify await。
 // 用 while + await sleep（而非 setInterval + async 回调）：串行执行，天然无重入——
 // 若某次状态查询超过 1s 也不会并发发起下一轮、不会重复 toast 或旧响应覆盖新进度。
-const pollAsyncVerification = async (taskId: number): Promise<void> => {
-  const pollIntervalMs = 1000
-  const maxPolls = 600  // 600 * 1000ms = 10 min ceiling
+const pollAsyncVerification = async (
+  taskId: number,
+  options: { presentResult?: boolean } = {}
+): Promise<void> => {
   let pollCount = 0
 
-  while (pollCount < maxPolls) {
-    let task: any
+  while (pollCount < ASYNC_TASK_MAX_POLLS) {
+    throwIfPollingAborted()
+    let task: VerificationTask
     try {
       const progress = await boardApi.getTaskProgress(taskId)
-      asyncVerificationTask.value.progress = progress
+      throwIfPollingAborted()
+      asyncVerificationTask.value.progress = normalizeTaskProgress(progress)
       task = await boardApi.getTask(taskId)
-      asyncVerificationTask.value.status = `Status: ${task.status}`
+      throwIfPollingAborted()
+      asyncVerificationTask.value.status = formatAsyncTaskStatus(task.status)
+      upsertVerificationTaskSummary(task)
     } catch (e: any) {
+      if (isPollingAbortedError(e)) {
+        throw e
+      }
       // Permanent errors (401/403/404/…) fail fast; transient errors retry.
       if (isPermanentPollError(e)) {
         throw new Error(e?.message || 'Failed to get verification status')
       }
-      await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+      await waitForNextPoll()
       pollCount++
       continue
     }
 
     // Terminal-state handling outside the try so its logic isn't swallowed by the catch.
     if (task.status === 'COMPLETED') {
-      if (task.isSafe) {
-        verificationResult.value = {
-          safe: true,
-          traces: [],
-          specResults: [],
-          checkLogs: task.checkLogs || [],
-          nusmvOutput: task.nusmvOutput || '',
-          disabledRuleCount: task.disabledRuleCount,
-          skippedSpecCount: task.skippedSpecCount
-        }
+      const traces = task.isSafe ? [] : await boardApi.getTaskTraces(taskId)
+      throwIfPollingAborted()
+      const result = buildVerificationResultFromTask(task, traces)
+      upsertVerificationTaskSummary({ ...task, progress: 100 })
+      if (options.presentResult || showVerificationPanel.value) {
+        verificationResult.value = result
         notifyVerificationOutcome(verificationResult.value)
+        showVerificationPanel.value = false
+      } else if (result.safe) {
+        ElMessage.success({ message: t('app.verificationTaskCompletedSafe'), type: 'success' })
       } else {
-        // 按 task 维度取反例，避免拿到旧任务/并发任务的 trace（不再 slice 全量用户 trace）
-        const traces = await boardApi.getTaskTraces(taskId)
-        verificationResult.value = {
-          safe: false,
-          traces,
-          specResults: [],
-          checkLogs: task.checkLogs || [],
-          nusmvOutput: task.nusmvOutput || '',
-          disabledRuleCount: task.disabledRuleCount,
-          skippedSpecCount: task.skippedSpecCount
-        }
-        notifyVerificationOutcome(verificationResult.value)
+        ElMessage.warning({ message: getVerificationFailureMessage(result), type: 'warning' })
       }
-      showVerificationPanel.value = false
+      await loadVerificationTraces()
       return
     } else if (task.status === 'FAILED' || task.status === 'CANCELLED') {
       throw new Error(task.errorMessage || t('app.verificationFailed'))
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
-    await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+    await waitForNextPoll()
     pollCount++
   }
 
@@ -2811,27 +3310,32 @@ const pollAsyncVerification = async (taskId: number): Promise<void> => {
 
 // 轮询异步模拟任务
 const pollAsyncSimulation = async (taskId: number): Promise<any> => {
-  const maxPollCount = 120  // 最多轮询 2 分钟 (120 * 1000ms)
-  const pollInterval = 1000  // 每秒轮询一次
   let pollCount = 0
 
-  while (pollCount < maxPollCount) {
+  while (pollCount < ASYNC_TASK_MAX_POLLS) {
+    throwIfPollingAborted()
     let task: any
     try {
       // 获取任务进度 + 状态（瞬时网络错误容忍：进入 catch 后继续轮询）
       const progress = await simulationApi.getTaskProgress(taskId)
-      asyncSimulationTask.value.progress = progress
+      throwIfPollingAborted()
+      asyncSimulationTask.value.progress = normalizeTaskProgress(progress)
 
       task = await simulationApi.getTask(taskId)
-      asyncSimulationTask.value.status = task.status
+      throwIfPollingAborted()
+      asyncSimulationTask.value.status = formatAsyncTaskStatus(task.status)
+      upsertSimulationTaskSummary(task)
     } catch (error: any) {
+      if (isPollingAbortedError(error)) {
+        throw error
+      }
       // Permanent errors (401/403/404/task-not-found) fail fast; only transient
       // errors (network blips, 5xx) retry until the poll ceiling.
       if (isPermanentPollError(error)) {
         throw new Error(error?.message || t('app.failedToGetSimulationStatus'))
       }
       console.error('Poll error (transient, will retry):', error)
-      await new Promise(resolve => setTimeout(resolve, pollInterval))
+      await waitForNextPoll()
       pollCount++
       continue
     }
@@ -2841,6 +3345,9 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
     if (task.status === 'COMPLETED') {
       if (task.simulationTraceId) {
         const trace = await simulationApi.getSimulation(task.simulationTraceId)
+        throwIfPollingAborted()
+        upsertSimulationTaskSummary({ ...task, progress: 100 })
+        await loadSimulationTraces()
         return {
           traceId: trace.id,
           states: trace.states,
@@ -2851,6 +3358,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
           nusmvOutput: trace.nusmvOutput
         }
       }
+      upsertSimulationTaskSummary({ ...task, progress: 100 })
       return { states: [], steps: 0, requestedSteps: 0, logs: [t('app.taskCompletedNoTraceFound')] }
     } else if (task.status === 'FAILED') {
       throw new Error(task.errorMessage || t('app.asyncSimulationFailed'))
@@ -2859,7 +3367,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
-    await new Promise(resolve => setTimeout(resolve, pollInterval))
+    await waitForNextPoll()
     pollCount++
   }
 
@@ -2871,6 +3379,24 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
 const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
 const verificationCheckLogs = computed(() => verificationResult.value?.checkLogs || [])
+const verificationSpecResultSummary = computed(() => {
+  const results = normalizeSpecResults(verificationResult.value?.specResults)
+  const passed = results.filter(result => result.passed).length
+  return {
+    results,
+    total: results.length,
+    passed,
+    failed: results.length - passed
+  }
+})
+const verificationViolationCount = computed(() =>
+  Math.max(verificationSpecResultSummary.value.failed, verificationResult.value?.traces?.length || 0)
+)
+const verificationUnsafeDetail = computed(() =>
+  verificationViolationCount.value > 0
+    ? t('app.foundViolations', { count: verificationViolationCount.value })
+    : t('app.verificationResultUnreliable')
+)
 
 const closeResultDialog = () => {
   verificationResult.value = null
@@ -2972,18 +3498,19 @@ const closeResultDialog = () => {
           :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full text-white shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel) 
+            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
               ? 'bg-blue-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-blue-500 hover:bg-blue-600'
           ]"
           :title="t('app.simulationTitle')"
         >
-          <span class="material-symbols-outlined text-xl">play_circle</span>
+          <span v-if="isSimulating" class="material-symbols-outlined text-xl animate-spin">sync</span>
+          <span v-else class="material-symbols-outlined text-xl">play_circle</span>
           <!-- Active indicator badge -->
           <span v-if="simulationAnimationState.visible" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
           <!-- Tooltip -->
           <span class="absolute right-full mr-3 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none shadow-xl">
-            {{ simulationAnimationState.visible ? t('app.simulationRunning') : t('app.simulationTitle') }}
+            {{ isSimulating ? t('app.simulationRunning') : (simulationAnimationState.visible ? t('app.simulationRunning') : t('app.simulationTitle')) }}
             <span v-if="simulationAnimationState.visible" class="ml-1 text-blue-300">({{ t('app.active') }})</span>
           </span>
         </button>
@@ -2998,10 +3525,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="togglePanel('verification')"
-          :disabled="isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
+          :disabled="traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
+            (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || showSpecRecommendationPanel)
               ? 'bg-green-300 cursor-not-allowed disabled:hover:scale-100' 
               : 'bg-green-500 hover:bg-green-600'
           ]"
@@ -3045,10 +3572,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchRuleRecommendations"
-          :disabled="!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel)"
+          :disabled="!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingRules && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel))
+            (!isRecommendingRules && (traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || showDeviceRecommendationPanel || showSpecRecommendationPanel))
               ? 'bg-amber-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingRules
                 ? 'bg-red-500 hover:bg-red-600'
@@ -3074,10 +3601,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchDeviceRecommendations"
-          :disabled="!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
+          :disabled="!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingDevices && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
+            (!isRecommendingDevices && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
               ? 'bg-purple-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingDevices
                 ? 'bg-red-500 hover:bg-red-600'
@@ -3103,10 +3630,10 @@ const closeResultDialog = () => {
         ></div>
         <button
           @click="fetchSpecRecommendations"
-          :disabled="!isRecommendingSpecs && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
+          :disabled="!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel)"
           :class="[
             'w-12 h-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 active:scale-95 flex items-center justify-center relative',
-            (!isRecommendingSpecs && (isVerifying || traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
+            (!isRecommendingSpecs && (traceAnimationState.visible || simulationAnimationState.visible || showRecommendationPanel || showDeviceRecommendationPanel || isAnimationLocked || showSpecRecommendationPanel))
               ? 'bg-red-300 cursor-not-allowed disabled:hover:scale-100' 
               : isRecommendingSpecs
                 ? 'bg-red-500 hover:bg-red-600'
@@ -3127,21 +3654,93 @@ const closeResultDialog = () => {
     <TraceHistoryPanel
       v-if="showHistoryPanel"
       :active-tab="activeHistoryTab"
+      :verification-tasks="verificationTasks"
+      :simulation-tasks="simulationTasks"
       :verification-traces="verificationTraces"
       :simulation-traces="simulationTraces"
+      :loading-tasks="loadingTaskHistory"
       :loading-verification="loadingVerificationHistory"
       :loading-simulation="loadingSimulationHistory"
       :action-locked="historyActionLocked"
       @update:active-tab="setHistoryTab"
       @close="closeHistoryPanel"
+      @refresh-tasks="loadTaskInbox"
       @refresh-verification="loadVerificationTraces"
       @refresh-simulation="loadSimulationTraces"
+      @watch-verification-task="watchVerificationTask"
+      @watch-simulation-task="watchSimulationTask"
+      @view-verification-task="openVerificationTaskResult"
+      @view-simulation-task="openSimulationTaskResult"
+      @cancel-verification-task="cancelVerificationTaskFromInbox"
+      @cancel-simulation-task="cancelSimulationTaskFromInbox"
       @view-verification="selectAndPlayVerificationTrace"
       @fix-verification="openFixForVerificationTrace"
       @delete-verification="deleteVerificationTrace"
       @view-simulation="selectAndPlaySimulationTrace"
       @delete-simulation="deleteSimulationTrace"
     />
+
+    <div
+      v-if="miniTaskItems.length > 0"
+      class="fixed right-5 bottom-5 z-40 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-cyan-200 bg-white shadow-2xl dark:border-cyan-900 dark:bg-slate-900"
+    >
+      <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-800">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-cyan-600 text-lg">pending_actions</span>
+          <span class="text-xs font-bold text-slate-700 dark:text-slate-100">
+            {{ t('app.backgroundTasks') }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+          @click="openTaskInbox"
+        >
+          <span class="material-symbols-outlined text-sm">inbox</span>
+          {{ t('app.taskInbox') }}
+        </button>
+      </div>
+      <div class="space-y-2 p-3">
+        <div
+          v-for="task in miniTaskItems.slice(0, 3)"
+          :key="task.key"
+          class="rounded-lg bg-slate-50 p-2 dark:bg-slate-800"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-100">
+                {{ task.label }} #{{ task.id }}
+              </div>
+              <div class="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                {{ task.status }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-300 dark:hover:bg-red-950/40 dark:hover:text-red-200"
+              :title="task.kind === 'verification' ? t('app.cancelVerificationTask') : t('app.cancelSimulationTask')"
+              @click="cancelMiniTask(task.kind, task.id)"
+            >
+              <span class="material-symbols-outlined text-sm">cancel</span>
+            </button>
+          </div>
+          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+            <div
+              class="h-full rounded-full bg-cyan-600 transition-all"
+              :style="{ width: `${task.progress}%` }"
+            ></div>
+          </div>
+        </div>
+        <button
+          v-if="miniTaskItems.length > 3"
+          type="button"
+          class="w-full rounded-md px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 dark:text-cyan-200 dark:hover:bg-cyan-950/40"
+          @click="openTaskInbox"
+        >
+          {{ t('app.viewMoreTasks', { count: miniTaskItems.length - 3 }) }}
+        </button>
+      </div>
+    </div>
 
     <!-- Verification Panel -->
     <div 
@@ -3183,8 +3782,10 @@ const closeResultDialog = () => {
             </label>
           </div>
           <button
+            type="button"
+            :disabled="isVerifying"
             @click="verificationForm.isAttack = !verificationForm.isAttack"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="verificationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
           >
             <span
@@ -3204,10 +3805,11 @@ const closeResultDialog = () => {
           </label>
           <input
             v-model.number="verificationForm.intensity"
+            :disabled="isVerifying"
             type="range"
             min="0"
             max="50"
-            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500 disabled:cursor-not-allowed disabled:opacity-60"
           />
           <div class="flex justify-between text-[10px] text-red-400 mt-1">
             <span>{{ t('app.weak') }}</span>
@@ -3226,8 +3828,10 @@ const closeResultDialog = () => {
             </label>
           </div>
           <button
+            type="button"
+            :disabled="isVerifying"
             @click="verificationForm.enablePrivacy = !verificationForm.enablePrivacy"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="verificationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
           >
             <span
@@ -3240,36 +3844,50 @@ const closeResultDialog = () => {
           </button>
         </div>
 
-        <!-- Async Mode -->
-        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
-          <div class="flex items-center gap-3">
+        <!-- Run Mode -->
+        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3 mb-2">
             <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
               <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              {{ t('app.asyncMode') }}
+              {{ t('app.runMode') }}
             </label>
           </div>
-          <button
-            @click="verificationForm.isAsync = !verificationForm.isAsync"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-            :class="verificationForm.isAsync ? 'bg-blue-500' : 'bg-slate-300'"
-          >
-            <span
-              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-              :style="{ 
-                transform: verificationForm.isAsync ? 'translateX(20px)' : 'translateX(4px)',
-                willChange: 'transform'
-              }"
-            />
-          </button>
+          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+            <button
+              type="button"
+              :disabled="isVerifying"
+              @click="verificationForm.isAsync = false"
+              :aria-pressed="!verificationForm.isAsync"
+              :title="t('app.syncVerificationModeHint')"
+              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              :class="!verificationForm.isAsync ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            >
+              {{ t('app.runNow') }}
+            </button>
+            <button
+              type="button"
+              :disabled="isVerifying"
+              @click="verificationForm.isAsync = true"
+              :aria-pressed="verificationForm.isAsync"
+              :title="t('app.asyncVerificationModeHint')"
+              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              :class="verificationForm.isAsync ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            >
+              {{ t('app.backgroundTask') }}
+            </button>
+          </div>
+          <p class="mt-2 text-[11px] leading-snug text-slate-500">
+            {{ verificationForm.isAsync ? t('app.asyncVerificationModeHint') : t('app.syncVerificationModeHint') }}
+          </p>
         </div>
 
         <!-- Async Progress (visible when async verification is running) -->
-        <div v-if="isVerifying && asyncVerificationTask.taskId" class="space-y-1">
+        <div v-if="isVerifying && asyncVerificationActive" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
             <span class="text-green-600 font-medium">{{ asyncVerificationTask.status }}</span>
-            <div class="flex items-center gap-2">
+            <div v-if="asyncVerificationTask.taskId" class="flex items-center gap-2">
               <span class="text-green-600 font-bold">{{ asyncVerificationTask.progress }}%</span>
               <button
                 type="button"
@@ -3285,7 +3903,8 @@ const closeResultDialog = () => {
           <div class="w-full h-2 bg-green-200 rounded-full overflow-hidden">
             <div 
               class="h-full bg-green-500 transition-all duration-500 ease-out"
-              :style="{ width: `${asyncVerificationTask.progress}%` }"
+              :class="{ 'animate-pulse': !asyncVerificationTask.taskId }"
+              :style="{ width: asyncVerificationTask.taskId ? `${asyncVerificationTask.progress}%` : '35%' }"
             />
           </div>
         </div>
@@ -3302,7 +3921,7 @@ const closeResultDialog = () => {
           </template>
           <template v-else>
             <span class="material-symbols-outlined text-sm">play_arrow</span>
-            {{ t('app.run') }}
+            {{ verificationForm.isAsync ? t('app.createVerificationTask') : t('app.runVerificationNow') }}
           </template>
         </button>
       </div>
@@ -3736,10 +4355,11 @@ const closeResultDialog = () => {
             <span class="material-symbols-outlined text-indigo-300">fast_rewind</span>
             <input
               v-model.number="simulationForm.steps"
+              :disabled="isSimulating"
               type="range"
               min="1"
               max="100"
-              class="flex-1 h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+              class="flex-1 h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
             />
             <span class="material-symbols-outlined text-indigo-300">fast_forward</span>
           </div>
@@ -3756,8 +4376,10 @@ const closeResultDialog = () => {
             </label>
           </div>
           <button
+            type="button"
+            :disabled="isSimulating"
             @click="simulationForm.isAttack = !simulationForm.isAttack"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="simulationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
           >
             <span
@@ -3777,10 +4399,11 @@ const closeResultDialog = () => {
           </label>
           <input
             v-model.number="simulationForm.intensity"
+            :disabled="isSimulating"
             type="range"
             min="0"
             max="50"
-            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500"
+            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500 disabled:cursor-not-allowed disabled:opacity-60"
           />
           <div class="flex justify-between text-[10px] text-red-400 mt-1">
             <span>{{ t('app.weak') }}</span>
@@ -3799,8 +4422,10 @@ const closeResultDialog = () => {
             </label>
           </div>
           <button
+            type="button"
+            :disabled="isSimulating"
             @click="simulationForm.enablePrivacy = !simulationForm.enablePrivacy"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="simulationForm.enablePrivacy ? 'bg-purple-500' : 'bg-slate-300'"
           >
             <span
@@ -3813,63 +4438,83 @@ const closeResultDialog = () => {
           </button>
         </div>
 
-        <!-- Async Mode -->
-        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
-          <div class="flex items-center gap-3">
+        <!-- Run Mode -->
+        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center gap-3 mb-2">
             <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
               <span class="material-symbols-outlined text-blue-500 text-lg">schedule</span>
             </div>
             <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              {{ t('app.asyncMode') }}
+              {{ t('app.runMode') }}
             </label>
           </div>
-          <button
-            @click="simulationForm.isAsync = !simulationForm.isAsync"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-            :class="simulationForm.isAsync ? 'bg-blue-500' : 'bg-slate-300'"
-          >
-            <span
-              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-              :style="{ 
-                transform: simulationForm.isAsync ? 'translateX(20px)' : 'translateX(4px)',
-                willChange: 'transform'
-              }"
-            />
-          </button>
+          <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+            <button
+              type="button"
+              :disabled="isSimulating"
+              @click="simulationForm.isAsync = false"
+              :aria-pressed="!simulationForm.isAsync"
+              :title="t('app.syncSimulationModeHint')"
+              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              :class="!simulationForm.isAsync ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            >
+              {{ t('app.previewNow') }}
+            </button>
+            <button
+              type="button"
+              :disabled="isSimulating"
+              @click="simulationForm.isAsync = true"
+              :aria-pressed="simulationForm.isAsync"
+              :title="t('app.asyncSimulationModeHint')"
+              class="min-w-0 rounded-md px-2 py-1.5 text-[11px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              :class="simulationForm.isAsync ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            >
+              {{ t('app.saveInBackground') }}
+            </button>
+          </div>
+          <p class="mt-2 text-[11px] leading-snug text-slate-500">
+            {{ simulationForm.isAsync ? t('app.asyncSimulationModeHint') : t('app.syncSimulationModeHint') }}
+          </p>
         </div>
 
         <!-- Save History -->
-        <div class="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
-          <div class="flex items-center gap-3">
-            <div class="w-8 h-8 bg-cyan-100 rounded-lg flex items-center justify-center">
-              <span class="material-symbols-outlined text-cyan-600 text-lg">history</span>
+        <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 bg-cyan-100 rounded-lg flex items-center justify-center">
+                <span class="material-symbols-outlined text-cyan-600 text-lg">history</span>
+              </div>
+              <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                {{ t('app.saveToHistory') }}
+              </label>
             </div>
-            <label class="text-xs font-bold text-slate-700 uppercase tracking-wide">
-              {{ t('app.saveToHistory') }}
-            </label>
+            <button
+              type="button"
+              @click="simulationForm.saveToHistory = !simulationForm.saveToHistory"
+              :disabled="simulationForm.isAsync || isSimulating"
+              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+              :class="(simulationForm.isAsync || simulationForm.saveToHistory) ? 'bg-cyan-600' : 'bg-slate-300'"
+              :title="simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory')"
+            >
+              <span
+                class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
+                :style="{
+                  transform: (simulationForm.isAsync || simulationForm.saveToHistory) ? 'translateX(20px)' : 'translateX(4px)',
+                  willChange: 'transform'
+                }"
+              />
+            </button>
           </div>
-          <button
-            @click="simulationForm.saveToHistory = !simulationForm.saveToHistory"
-            :disabled="simulationForm.isAsync"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
-            :class="(simulationForm.isAsync || simulationForm.saveToHistory) ? 'bg-cyan-600' : 'bg-slate-300'"
-            :title="simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory')"
-          >
-            <span
-              class="h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 ease-spring"
-              :style="{
-                transform: (simulationForm.isAsync || simulationForm.saveToHistory) ? 'translateX(20px)' : 'translateX(4px)',
-                willChange: 'transform'
-              }"
-            />
-          </button>
+          <p class="mt-2 pl-11 text-[11px] leading-snug text-slate-500">
+            {{ simulationForm.isAsync ? t('app.asyncSimulationsSavedAutomatically') : t('app.saveSyncSimulationToHistory') }}
+          </p>
         </div>
 
         <!-- Async Progress (visible when async simulation is running) -->
-        <div v-if="isSimulating && asyncSimulationTask.taskId" class="space-y-1">
+        <div v-if="isSimulating && asyncSimulationActive" class="space-y-1">
           <div class="flex items-center justify-between text-xs">
             <span class="text-indigo-700 font-medium">{{ t('app.progress') }}</span>
-            <div class="flex items-center gap-2">
+            <div v-if="asyncSimulationTask.taskId" class="flex items-center gap-2">
               <span class="text-indigo-600">{{ asyncSimulationTask.progress }}%</span>
               <button
                 type="button"
@@ -3885,7 +4530,8 @@ const closeResultDialog = () => {
           <div class="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
             <div 
               class="h-full bg-green-500 transition-all duration-300"
-              :style="{ width: `${asyncSimulationTask.progress}%` }"
+              :class="{ 'animate-pulse': !asyncSimulationTask.taskId }"
+              :style="{ width: asyncSimulationTask.taskId ? `${asyncSimulationTask.progress}%` : '35%' }"
             ></div>
           </div>
           <div class="text-xs text-indigo-500 text-center">{{ asyncSimulationTask.status }}</div>
@@ -3903,7 +4549,7 @@ const closeResultDialog = () => {
           </template>
           <template v-else>
             <span class="material-symbols-outlined text-sm">play_arrow</span>
-            {{ t('app.run') }}
+            {{ simulationForm.isAsync ? t('app.createSimulationTask') : t('app.runSimulationNow') }}
           </template>
         </button>
       </div>
@@ -4234,7 +4880,7 @@ const closeResultDialog = () => {
             </div>
             <div>
               <h3 class="text-xl font-bold text-slate-800">{{ t('app.verificationResult') }}</h3>
-              <p class="text-sm text-slate-600">{{ verificationResult?.safe ? t('app.allSpecificationsPassed') : t('app.violationsDetected') }}</p>
+              <p class="text-sm text-slate-600">{{ verificationResult?.safe ? t('app.allSpecificationsPassed') : verificationUnsafeDetail }}</p>
             </div>
           </div>
           <button @click="closeResultDialog" class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all">
@@ -4265,8 +4911,56 @@ const closeResultDialog = () => {
                   {{ verificationResult.safe ? t('app.systemSafe') : t('app.systemUnsafe') }}
                 </span>
                 <p class="text-sm" :class="verificationResult.safe ? 'text-green-600' : 'text-red-600'">
-                  {{ verificationResult.safe ? t('app.allSpecsPassedVerification') : t('app.foundViolations', { count: verificationResult.traces?.length || 0 }) }}
+                  {{ verificationResult.safe ? t('app.allSpecsPassedVerification') : verificationUnsafeDetail }}
                 </p>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="verificationSpecResultSummary.total > 0" class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <div class="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h4 class="text-sm font-bold text-slate-700">{{ t('app.specResults') }}</h4>
+                <p class="text-xs text-slate-500 mt-1">
+                  {{ t('app.specResultsSummary', {
+                    total: verificationSpecResultSummary.total,
+                    passed: verificationSpecResultSummary.passed,
+                    failed: verificationSpecResultSummary.failed
+                  }) }}
+                </p>
+              </div>
+              <span
+                class="material-symbols-outlined text-lg"
+                :class="verificationSpecResultSummary.failed > 0 ? 'text-red-500' : 'text-green-500'"
+              >
+                {{ verificationSpecResultSummary.failed > 0 ? 'rule' : 'verified' }}
+              </span>
+            </div>
+            <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+              <div
+                v-for="(result, index) in verificationSpecResultSummary.results"
+                :key="`${result.specId}-${index}`"
+                class="rounded-lg border bg-white px-3 py-2"
+                :class="result.passed ? 'border-green-200' : 'border-red-200'"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-xs font-semibold text-slate-500">#{{ Number(index) + 1 }}</span>
+                      <span class="font-mono text-xs font-semibold text-slate-700 break-all">{{ result.specId }}</span>
+                    </div>
+                    <p v-if="result.expression" class="mt-1 max-w-full font-mono text-xs leading-5 text-slate-600 break-all">
+                      {{ result.expression }}
+                    </p>
+                  </div>
+                  <span
+                    class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold"
+                    :class="result.passed ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'"
+                  >
+                    <span class="material-symbols-outlined text-sm">{{ result.passed ? 'check_circle' : 'error' }}</span>
+                    {{ result.passed ? t('app.specPassed') : t('app.specViolated') }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -4486,11 +5180,14 @@ const closeResultDialog = () => {
        result dialog), so this lets the user reach the execution logs / raw NuSMV output on demand. -->
   <button
     v-if="simulationAnimationState.visible && lastSimulationResult"
+    type="button"
     @click="openSimulationLogs"
+    :title="t('app.showSimulationLogs')"
+    :aria-label="t('app.showSimulationLogs')"
     class="fixed left-2/3 -translate-x-1/2 bottom-2 z-40 px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs shadow-lg flex items-center gap-1"
   >
     <span class="material-symbols-outlined text-sm">description</span>
-    View logs
+    {{ t('app.showSimulationLogs') }}
   </button>
 
   <!-- Fix Result Dialog 组件 -->

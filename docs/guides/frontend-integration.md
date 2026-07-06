@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-05. Source: `frontend/src/api/`, `frontend/src/types/`.
+Verified against code on 2026-07-06. Source: `frontend/src/api/`, `frontend/src/types/`.
 
 ---
 
@@ -105,13 +105,16 @@ Its methods return already-unwrapped values. Non-exhaustive:
   derives visible rule connections from `rules`.
 - Templates: `getDeviceTemplates`, `addDeviceTemplate`, `deleteDeviceTemplate`, `reloadDeviceTemplates`.
 - Recommendation: `recommendRelatedDevices`, `recommendSpecifications`.
-- Verification: `verify(req)`, `verifyAsync(req): Promise<number>`, `getTask`,
-  `getTaskProgress`, `cancelTask`, and trace list/detail/delete.
+- Verification: `verify(req)`, `verifyAsync(req): Promise<number>`, `getTasks`,
+  `getTask`, `getTaskProgress`, `cancelTask`, and trace list/detail/delete.
 - Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?)`.
 
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<number>` — it takes only the
 > request and resolves to the **server-generated** `taskId`. The client does not pass
 > a taskId in.
+> If this promise rejects with validation (`400` DTO errors or `422` service/runtime
+> errors) or service-unavailable errors, no pollable task id exists for the UI flow;
+> show the submit error and do not start polling.
 
 Rules sent through `saveRules`, `checkDuplicateRule`, `verify`, or `simulate` must have
 at least one concrete trigger source. The frontend stores new rule source/target device
@@ -148,6 +151,21 @@ Use a serial `while`/`await sleep` loop rather than `setInterval(async ...)` so 
 does not re-enter while a previous request is still in flight. Keep any page-level
 `isVerifying`/loading state alive until this loop exits, including the cancelled and
 failed terminal states.
+When a board view unmounts, stop client-side polling and skip any late state writes.
+The backend task should keep running unless the user explicitly calls the cancel API.
+For a background-task UI, do not trap the user inside the submit panel. Allow the panel
+to close, keep a global mini task indicator visible while active tasks exist, and expose
+`GET /api/verify/tasks` plus `GET /api/simulate/tasks` through a task inbox so users can
+recover in-progress tasks after refreshing the page.
+When a task is already being watched through the 1s per-task polling loop, pass
+`excludeTaskIds` to the summary-list refresh so the inbox does not fetch and merge the
+same task redundantly; keep the locally watched task in the list until the watch loop
+ends.
+
+User-facing verification modes should distinguish behavior, not implementation jargon:
+synchronous `verify` waits on the current page and returns the result directly;
+asynchronous `verifyAsync` creates a pollable task with progress/cancel controls and
+task-backed results.
 
 Verification results and completed async verification tasks include `disabledRuleCount`
 and `skippedSpecCount`, and generation warnings appear in `checkLogs` with
@@ -155,9 +173,18 @@ and `skippedSpecCount`, and generation warnings appear in `checkLogs` with
 when `safe === true`, because they mean the generated SMV model omitted or degraded part
 of the requested rules/specs.
 
-Completed async verification tasks also expose `nusmvOutput`, matching synchronous
-verification results. Completed async simulations expose their raw NuSMV output through
-the persisted `SimulationTraceDto` referenced by `simulationTraceId`.
+Completed async verification tasks also expose `specResults` and `nusmvOutput`,
+matching synchronous verification results. Completed async simulations expose their raw
+NuSMV output through the persisted `SimulationTraceDto` referenced by
+`simulationTraceId`.
+
+Verification `specResults` is an array of `{ specId, passed, expression }` objects for
+the specifications actually emitted to NuSMV. Frontend code should key rows and maps by
+`specId`; the array order is the verifier-emission order, not necessarily the current
+canvas display order. A completed verification can be `safe=false` with an empty
+`specResults` array when generation emitted no specifications or NuSMV produced no
+trustworthy per-spec result; show that as an unreliable/incomplete verification, not as
+"all specifications passed".
 
 Verification requests (`verify` and `verifyAsync`) must include at least one specification.
 Simulation remains the no-spec workflow.
@@ -178,9 +205,20 @@ ignored.
 
 ## Simulation — `api/simulation.ts`
 
-Default-export object: `simulate`, `simulateAsync (→ Promise<number>)`, `getTask`,
-`getTaskProgress`, `cancelTask`, `simulateAndSave`, `getUserSimulations`,
+Default-export object: `simulate`, `simulateAsync (→ Promise<number>)`, `getTasks`,
+`getTask`, `getTaskProgress`, `cancelTask`, `simulateAndSave`, `getUserSimulations`,
 `getSimulation`, `deleteSimulation`. Same unwrap convention as `board.ts`.
+Like `verifyAsync`, `simulateAsync` resolves to a server-generated task id only after
+the backend has accepted the task. If the promise rejects with validation or
+service-unavailable errors, do not start polling.
+Synchronous `simulate` and `simulateAndSave` also reject invalid requests instead of
+returning a success-shaped empty result, so UI error handling should use the same submit
+error path as async simulation.
+For users, present simulation modes as "preview now" versus "save in background": plain
+`simulate` previews immediately and does not persist a trace, `simulateAndSave` previews
+and stores the synchronous trace, and `simulateAsync` stores the trace automatically when
+the task completes. A background simulation completion should update the task inbox and
+saved-run history instead of forcibly opening the timeline over the user's current work.
 
 ## Rule recommendation — `api/rules.ts`
 

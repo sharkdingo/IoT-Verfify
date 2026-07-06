@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
@@ -14,7 +15,9 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.*;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
+import cn.edu.nju.Iot_Verify.dto.verification.SpecResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -34,7 +37,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,6 +66,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private final TraceMapper traceMapper;
     private final SpecificationMapper specificationMapper;
     private final VerificationTaskMapper verificationTaskMapper;
+    private final ThreadPoolTaskExecutor verificationTaskExecutor;
     private final ThreadPoolTaskExecutor syncVerificationExecutor;
     private final TransactionTemplate transactionTemplate;
 
@@ -76,6 +80,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                    SpecificationMapper specificationMapper,
                                    VerificationTaskMapper verificationTaskMapper,
                                    ObjectMapper objectMapper,
+                                   @Qualifier("verificationTaskExecutor") ThreadPoolTaskExecutor verificationTaskExecutor,
                                    @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor,
                                    TransactionTemplate transactionTemplate) {
         super(objectMapper, "VerificationTask");
@@ -88,6 +93,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         this.traceMapper = traceMapper;
         this.specificationMapper = specificationMapper;
         this.verificationTaskMapper = verificationTaskMapper;
+        this.verificationTaskExecutor = verificationTaskExecutor;
         this.syncVerificationExecutor = syncVerificationExecutor;
         this.transactionTemplate = transactionTemplate;
     }
@@ -115,29 +121,17 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     @Override
     public VerificationResultDto verify(Long userId, VerificationRequestDto request) {
-        List<DeviceVerificationDto> devices = request.getDevices();
-        List<RuleDto> rules = request.getRules();
-        List<SpecificationDto> specs = request.getSpecs();
-        boolean isAttack = request.isAttack();
-        int intensity = request.getIntensity();
-        boolean enablePrivacy = request.isEnablePrivacy();
-
-        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
-        if (devices == null || devices.isEmpty()) {
-            return buildErrorResult("", List.of("Error: devices list cannot be empty"));
-        }
-        if (specs == null || specs.isEmpty()) {
-            throw new ValidationException("specs", "Specs list cannot be empty");
-        }
+        VerificationInput input = validateAndNormalize(request);
 
         log.info("Starting sync verification: userId={}, devices={}, specs={}, attack={}, intensity={}",
-                userId, devices.size(), specs.size(), isAttack, intensity);
+                userId, input.devices().size(), input.specs().size(), input.attack(), input.intensity());
 
         long timeoutMs = nusmvConfig.getTimeoutMs() * 2; // generate + execute total timeout
         Future<VerificationResultDto> future;
         try {
             future = syncVerificationExecutor.submit(() ->
-                    doVerify(userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, request));
+                    doVerify(userId, input.devices(), input.rules(), input.specs(),
+                            input.attack(), input.intensity(), input.enablePrivacy(), input.request()));
         } catch (RejectedExecutionException e) {
             log.warn("Sync verification request rejected: executor is saturated ({})", syncVerificationExecutorSnapshot());
             throw new ServiceUnavailableException("Verification service is busy, please retry later", e);
@@ -208,7 +202,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
             // Build per-spec results and reuse deviceSmvMap from generation stage.
             finalResult = buildVerificationResult(result, devices, rules, specs, userId, null, checkLogs, deviceSmvMap,
-                    requestJson, genResult.disabledRuleCount(), genResult.skippedSpecCount());
+                    requestJson, genResult.emittedSpecs(), genResult.disabledRuleCount(), genResult.skippedSpecCount());
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
@@ -274,6 +268,67 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         return JsonUtils.toJson(request);
     }
 
+    private VerificationInput validateAndNormalize(VerificationRequestDto request) {
+        if (request == null) {
+            throw new ValidationException("request", "Verification request cannot be null");
+        }
+        VerificationRequestDto snapshot = snapshotRequest(request);
+        List<DeviceVerificationDto> devices = copyRequiredList(
+                snapshot.getDevices(), "devices", "Devices list cannot be empty");
+        List<SpecificationDto> specs = copyRequiredList(
+                snapshot.getSpecs(), "specs", "Specs list cannot be empty");
+        List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
+        int intensity = snapshot.getIntensity();
+        if (intensity < 0 || intensity > 50) {
+            throw new ValidationException("intensity", "Intensity must be between 0 and 50");
+        }
+        snapshot.setDevices(devices);
+        snapshot.setRules(rules);
+        snapshot.setSpecs(specs);
+        snapshot.setIntensity(intensity);
+
+        Map<String, String> errors = NusmvRequestValidator.newErrors();
+        NusmvRequestValidator.validateDevices(devices, errors);
+        NusmvRequestValidator.validateRules(rules, errors);
+        NusmvRequestValidator.validateSpecifications(specs, errors);
+        NusmvRequestValidator.throwIfErrors(errors);
+
+        return new VerificationInput(devices, rules, specs, snapshot.isAttack(), intensity,
+                snapshot.isEnablePrivacy(), snapshot);
+    }
+
+    private VerificationRequestDto snapshotRequest(VerificationRequestDto request) {
+        try {
+            return objectMapper.convertValue(request, VerificationRequestDto.class);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("request", "Verification request cannot be snapshotted");
+        }
+    }
+
+    private <T> List<T> copyRequiredList(List<T> values, String field, String emptyMessage) {
+        if (values == null || values.isEmpty()) {
+            throw new ValidationException(field, emptyMessage);
+        }
+        return copyList(values, field);
+    }
+
+    private <T> List<T> copyOptionalList(List<T> values, String field) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return copyList(values, field);
+    }
+
+    private <T> List<T> copyList(List<T> values, String field) {
+        List<T> copy = new ArrayList<>(values);
+        for (int i = 0; i < copy.size(); i++) {
+            if (copy.get(i) == null) {
+                throw new ValidationException(field + "[" + i + "]", "must not be null");
+            }
+        }
+        return copy;
+    }
+
     private Result<VerificationResultDto> wrapResultForDebugFile(VerificationResultDto verificationResult) {
         Result<VerificationResultDto> wrapped = new Result<>();
         wrapped.setData(verificationResult);
@@ -321,6 +376,20 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     // ==================== 异步验证 ====================
 
     @Override
+    public Long submitVerification(Long userId, VerificationRequestDto request) {
+        VerificationInput input = validateAndNormalize(request);
+        Long taskId = createTask(userId);
+        try {
+            enqueueVerificationTask(userId, taskId, input);
+        } catch (TaskRejectedException e) {
+            log.warn("Verification task {} rejected: thread pool full", taskId);
+            failTaskById(taskId, "Server busy, please try again later");
+            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        }
+        return taskId;
+    }
+
+    @Override
     @Transactional
     public Long createTask(Long userId) {
         VerificationTaskPo task = VerificationTaskPo.builder()
@@ -341,17 +410,38 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     @Override
-    @Async("verificationTaskExecutor")
     public void verifyAsync(Long userId, Long taskId, VerificationRequestDto request) {
-        List<DeviceVerificationDto> devices = request.getDevices();
-        List<RuleDto> rules = request.getRules();
-        List<SpecificationDto> specs = request.getSpecs();
-        boolean isAttack = request.isAttack();
-        int intensity = request.getIntensity();
-        boolean enablePrivacy = request.isEnablePrivacy();
+        Long requiredTaskId = requireTaskId(taskId);
+        VerificationInput input;
+        try {
+            input = validateAndNormalize(request);
+        } catch (ValidationException e) {
+            failTaskById(requiredTaskId, e.getMessage());
+            throw e;
+        }
+        try {
+            enqueueVerificationTask(userId, requiredTaskId, input);
+        } catch (TaskRejectedException e) {
+            failTaskById(requiredTaskId, "Server busy, please try again later");
+            throw new ServiceUnavailableException("Server busy, please try again later", e);
+        }
+    }
 
-        List<RuleDto> safeRules = (rules != null) ? rules : List.of();
-        String requestJson = buildRequestSnapshot(request);
+    private void enqueueVerificationTask(Long userId, Long taskId, VerificationInput input) {
+        Long requiredTaskId = requireTaskId(taskId);
+        VerificationInput requiredInput = Objects.requireNonNull(input, "verification input must not be null");
+        verificationTaskExecutor.execute(() -> runVerificationTask(userId, requiredTaskId, requiredInput));
+    }
+
+    private Long requireTaskId(Long taskId) {
+        if (taskId == null) {
+            throw new ValidationException("taskId", "Task id cannot be null");
+        }
+        return taskId;
+    }
+
+    private void runVerificationTask(Long userId, Long taskId, VerificationInput input) {
+        String requestJson = buildRequestSnapshot(input.request());
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
         registerRunningTask(taskId, Thread.currentThread());
@@ -388,22 +478,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 return;
             }
 
-            if (devices == null || devices.isEmpty()) {
-                String msg = "Invalid input: devices list cannot be empty";
-                failTask(task, msg);
-                finalResult = buildErrorResult("", List.of(msg));
-                return;
-            }
-            if (specs == null || specs.isEmpty()) {
-                String msg = "Invalid input: specs list cannot be empty";
-                failTask(task, msg);
-                finalResult = buildErrorResult("", List.of(msg));
-                return;
-            }
-
             updateTaskProgress(taskId, 20, "Generating NuSMV model");
             SmvGenerator.GenerateResult genResult = smvGenerator.generate(
-                    userId, devices, safeRules, specs, isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION);
+                    userId, input.devices(), input.rules(), input.specs(), input.attack(), input.intensity(),
+                    input.enablePrivacy(), SmvGenerator.GeneratePurpose.VERIFICATION);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
             List<String> checkLogs = new ArrayList<>();
@@ -440,13 +518,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
             updateTaskProgress(taskId, 80, "Parsing results");
             finalResult = buildVerificationResult(
-                    result, devices, safeRules, specs, userId, taskId, checkLogs, deviceSmvMap, requestJson,
-                    genResult.disabledRuleCount(), genResult.skippedSpecCount());
+                    result, input.devices(), input.rules(), input.specs(), userId, taskId, checkLogs, deviceSmvMap, requestJson,
+                    genResult.emittedSpecs(), genResult.disabledRuleCount(), genResult.skippedSpecCount());
 
             updateTaskProgress(taskId, 100, "Verification completed");
             completeTask(task, finalResult.isSafe(),
-                    finalResult.getTraces() != null ? finalResult.getTraces().size() : 0,
-                    finalResult.getCheckLogs(), truncateOutput(result.getOutput()),
+                    countViolatedSpecs(finalResult.getSpecResults(), finalResult.getTraces()),
+                    finalResult.getSpecResults(), finalResult.getCheckLogs(), truncateOutput(result.getOutput()),
                     finalResult.getDisabledRuleCount(), finalResult.getSkippedSpecCount());
 
         } catch (Exception e) {
@@ -473,6 +551,14 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
     }
 
+    private record VerificationInput(List<DeviceVerificationDto> devices,
+                                     List<RuleDto> rules,
+                                     List<SpecificationDto> specs,
+                                     boolean attack,
+                                     int intensity,
+                                     boolean enablePrivacy,
+                                     VerificationRequestDto request) {}
+
     // ==================== 查询方法 ====================
 
     @Override
@@ -482,6 +568,27 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .orElseThrow(() -> new ResourceNotFoundException("VerificationTask", taskId));
         task.setCheckLogs(readCheckLogs(task));
         return verificationTaskMapper.toDto(task);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<VerificationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds) {
+        List<Long> normalizedExcludedIds = normalizeExcludedTaskIds(excludedTaskIds);
+        List<VerificationTaskPo> tasks = normalizedExcludedIds.isEmpty()
+                ? taskRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                : taskRepository.findByUserIdAndIdNotInOrderByCreatedAtDesc(userId, normalizedExcludedIds);
+        return verificationTaskMapper.toSummaryDtoList(
+                tasks);
+    }
+
+    private static List<Long> normalizeExcludedTaskIds(List<Long> excludedTaskIds) {
+        if (excludedTaskIds == null || excludedTaskIds.isEmpty()) {
+            return List.of();
+        }
+        return excludedTaskIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
     }
 
     @Override
@@ -539,24 +646,20 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                                           List<String> checkLogs,
                                                           Map<String, DeviceSmvData> deviceSmvMap,
                                                           String requestJson,
+                                                          List<SmvGenerationContext.EmittedSpec> emittedSpecs,
                                                           int disabledRuleCount,
                                                           int skippedSpecCount) {
-        List<Boolean> specResults = new ArrayList<>();
+        List<SpecResultDto> specResults = new ArrayList<>();
         List<TraceDto> traces = new ArrayList<>();
         List<SpecCheckResult> specCheckResults = result.getSpecResults();
+        List<SmvGenerationContext.EmittedSpec> effectiveSpecs = emittedSpecs != null ? emittedSpecs : List.of();
 
-        // Filter empty specs to align with SmvSpecificationBuilder skip logic.
-        List<SpecificationDto> effectiveSpecs = specs.stream()
-                .filter(s -> s != null)
-                .filter(s -> (s.getAConditions() != null && !s.getAConditions().isEmpty()) ||
-                             (s.getIfConditions() != null && !s.getIfConditions().isEmpty()))
-                .toList();
-
-        // effectiveSpecs=0 means all specs were filtered out (no A/IF conditions).
+        // effectiveSpecs=0 means all specs were filtered out before SMV emission.
         if (effectiveSpecs.isEmpty()) {
-            checkLogs.add("No valid specifications to verify (all filtered out)");
+            checkLogs.add("No valid specifications to verify (no specifications were emitted to NuSMV; all filtered out)");
+            checkLogs.add("Verification marked unsafe because no specifications were emitted to NuSMV.");
             return VerificationResultDto.builder()
-                    .safe(true).traces(List.of()).specResults(List.of())
+                    .safe(false).traces(List.of()).specResults(List.of())
                     .checkLogs(checkLogs)
                     .disabledRuleCount(disabledRuleCount)
                     .skippedSpecCount(skippedSpecCount)
@@ -569,7 +672,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (specCheckResults.isEmpty()) {
             checkLogs.add("Warning: could not parse per-spec results from NuSMV output");
             log.warn("No spec results parsed from NuSMV output, marking all {} specs as failed (fail-closed)", effectiveSpecs.size());
-            for (int i = 0; i < effectiveSpecs.size(); i++) specResults.add(false);
+            for (SmvGenerationContext.EmittedSpec emittedSpec : effectiveSpecs) {
+                specResults.add(toSpecResult(emittedSpec, false, null));
+            }
             parseIncomplete = true;
         } else if (specCheckResults.size() != effectiveSpecs.size()) {
             // 数量不一致：结果不可信，fail-closed
@@ -583,29 +688,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             int bound = Math.min(specCheckResults.size(), effectiveSpecs.size());
             for (int specIdx = 0; specIdx < bound; specIdx++) {
                 SpecCheckResult scr = specCheckResults.get(specIdx);
-                specResults.add(scr.isPassed());
-                SpecificationDto violatedSpec = effectiveSpecs.get(specIdx);
-                if (!scr.isPassed() && scr.getCounterexample() != null) {
-                    checkLogs.add("Spec " + (specIdx + 1) + " violated: " + scr.getSpecExpression());
-                    List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
-                            scr.getCounterexample(), deviceSmvMap);
-                    if (!states.isEmpty()) {
-                        TraceDto trace = TraceDto.builder()
-                                .userId(userId)
-                                .verificationTaskId(taskId)
-                                .violatedSpecId(violatedSpec.getId() != null ? violatedSpec.getId() : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID)
-                                .violatedSpecJson(specificationMapper.toJson(violatedSpec))
-                                .states(states)
-                                .requestJson(requestJson)
-                                .createdAt(LocalDateTime.now())
-                                .build();
-                        traces.add(trace);
-                    }
-                } else if (scr.isPassed()) {
-                    checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
-                } else {
-                    checkLogs.add("Spec " + (specIdx + 1) + " violated (no counterexample): " + scr.getSpecExpression());
-                }
+                appendParsedSpecResult(specResults, traces, specIdx, scr, effectiveSpecs.get(specIdx),
+                        userId, taskId, checkLogs, deviceSmvMap, requestJson);
             }
             // Log extra NuSMV results but do not append them to specResults.
             if (specCheckResults.size() > effectiveSpecs.size()) {
@@ -614,41 +698,22 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
             // Missing spec results are treated as false.
             for (int i = specCheckResults.size(); i < effectiveSpecs.size(); i++) {
-                specResults.add(false);
-                checkLogs.add("Spec " + (i + 1) + " result missing, treated as violated (fail-closed)");
+                SmvGenerationContext.EmittedSpec emittedSpec = effectiveSpecs.get(i);
+                specResults.add(toSpecResult(emittedSpec, false, null));
+                checkLogs.add("Spec " + describeSpec(emittedSpec, i)
+                        + " result missing, treated as violated (fail-closed)");
             }
         } else {
             int specIdx = 0;
             for (SpecCheckResult scr : specCheckResults) {
-                specResults.add(scr.isPassed());
-                SpecificationDto violatedSpec = specIdx < effectiveSpecs.size() ? effectiveSpecs.get(specIdx) : null;
-                if (!scr.isPassed() && scr.getCounterexample() != null) {
-                    checkLogs.add("Spec " + (specIdx + 1) + " violated: " + scr.getSpecExpression());
-                    List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
-                            scr.getCounterexample(), deviceSmvMap);
-                    if (!states.isEmpty()) {
-                        TraceDto trace = TraceDto.builder()
-                                .userId(userId)
-                                .verificationTaskId(taskId)
-                                .violatedSpecId(violatedSpec != null ? violatedSpec.getId() : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID)
-                                .violatedSpecJson(violatedSpec != null ? specificationMapper.toJson(violatedSpec) : null)
-                                .states(states)
-                                .requestJson(requestJson)
-                                .createdAt(LocalDateTime.now())
-                                .build();
-                        traces.add(trace);
-                    }
-                } else if (scr.isPassed()) {
-                    checkLogs.add("Spec " + (specIdx + 1) + " satisfied");
-                } else {
-                    checkLogs.add("Spec " + (specIdx + 1) + " violated (no counterexample): " + scr.getSpecExpression());
-                }
+                appendParsedSpecResult(specResults, traces, specIdx, scr, effectiveSpecs.get(specIdx),
+                        userId, taskId, checkLogs, deviceSmvMap, requestJson);
                 specIdx++;
             }
         }
 
         // safe is based on specResults; force unsafe when parsing is incomplete.
-        boolean safe = !parseIncomplete && specResults.stream().allMatch(r -> r);
+        boolean safe = !parseIncomplete && specResults.stream().allMatch(SpecResultDto::isPassed);
         if (!traces.isEmpty()) {
             saveTraces(traces, userId, taskId);
             checkLogs.add("Auto-saved " + traces.size() + " violation trace(s).");
@@ -672,21 +737,118 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .build();
     }
 
+    private void appendParsedSpecResult(List<SpecResultDto> specResults,
+                                        List<TraceDto> traces,
+                                        int specIdx,
+                                        SpecCheckResult scr,
+                                        SmvGenerationContext.EmittedSpec emittedSpec,
+                                        Long userId,
+                                        Long taskId,
+                                        List<String> checkLogs,
+                                        Map<String, DeviceSmvData> deviceSmvMap,
+                                        String requestJson) {
+        specResults.add(toSpecResult(emittedSpec, scr.isPassed(), scr.getSpecExpression()));
+        if (!scr.isPassed() && scr.getCounterexample() != null) {
+            checkLogs.add("Spec " + describeSpec(emittedSpec, specIdx) + " violated: "
+                    + firstText(scr.getSpecExpression(), expression(emittedSpec)));
+            List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
+                    scr.getCounterexample(), deviceSmvMap);
+            if (!states.isEmpty()) {
+                SpecificationDto violatedSpec = emittedSpec.spec();
+                TraceDto trace = TraceDto.builder()
+                        .userId(userId)
+                        .verificationTaskId(taskId)
+                        .violatedSpecId(specId(emittedSpec))
+                        .violatedSpecJson(violatedSpec != null ? specificationMapper.toJson(violatedSpec) : null)
+                        .states(states)
+                        .requestJson(requestJson)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                traces.add(trace);
+            }
+        } else if (scr.isPassed()) {
+            checkLogs.add("Spec " + describeSpec(emittedSpec, specIdx) + " satisfied");
+        } else {
+            checkLogs.add("Spec " + describeSpec(emittedSpec, specIdx)
+                    + " violated (no counterexample): "
+                    + firstText(scr.getSpecExpression(), expression(emittedSpec)));
+        }
+    }
+
+    private SpecResultDto toSpecResult(SmvGenerationContext.EmittedSpec emittedSpec,
+                                       boolean passed,
+                                       String parsedExpression) {
+        return SpecResultDto.builder()
+                .specId(specId(emittedSpec))
+                .passed(passed)
+                .expression(firstText(parsedExpression, expression(emittedSpec)))
+                .build();
+    }
+
+    private String specId(SmvGenerationContext.EmittedSpec emittedSpec) {
+        if (emittedSpec != null && emittedSpec.specId() != null && !emittedSpec.specId().isBlank()) {
+            return emittedSpec.specId();
+        }
+        SpecificationDto spec = emittedSpec != null ? emittedSpec.spec() : null;
+        return specId(spec);
+    }
+
+    private String specId(SpecificationDto spec) {
+        if (spec != null && spec.getId() != null && !spec.getId().isBlank()) {
+            return spec.getId();
+        }
+        return SmvConstants.UNKNOWN_VIOLATED_SPEC_ID;
+    }
+
+    private String describeSpec(SmvGenerationContext.EmittedSpec emittedSpec, int index) {
+        String id = specId(emittedSpec);
+        return "#" + (index + 1) + " (" + id + ")";
+    }
+
+    private String expression(SmvGenerationContext.EmittedSpec emittedSpec) {
+        if (emittedSpec != null && emittedSpec.expression() != null) {
+            return emittedSpec.expression();
+        }
+        return "";
+    }
+
+    private String firstText(String preferred, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred;
+        }
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback;
+        }
+        return "";
+    }
+
     // ==================== Task Status Management ====================
 
-    private void completeTask(VerificationTaskPo task, boolean isSafe, int traceCount,
-                              List<String> checkLogs, String nusmvOutput,
+    private int countViolatedSpecs(List<SpecResultDto> specResults, List<TraceDto> traces) {
+        if (specResults != null && !specResults.isEmpty()) {
+            return (int) specResults.stream()
+                    .filter(Objects::nonNull)
+                    .filter(specResult -> !specResult.isPassed())
+                    .count();
+        }
+        return traces != null ? traces.size() : 0;
+    }
+
+    private void completeTask(VerificationTaskPo task, boolean isSafe, int violatedSpecCount,
+                              List<SpecResultDto> specResults, List<String> checkLogs, String nusmvOutput,
                               int disabledRuleCount, int skippedSpecCount) {
         try {
             LocalDateTime completedAt = LocalDateTime.now();
             Long processingTimeMs = task.getStartedAt() != null
                     ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
             String checkLogsJson = serializeCheckLogs(checkLogs);
+            String specResultsJson = JsonUtils.toJsonOrEmpty(specResults);
             int updated = taskRepository.completeTaskIfNotCancelled(
                     task.getId(),
                     VerificationTaskPo.TaskStatus.COMPLETED,
-                    completedAt, isSafe, traceCount,
+                    completedAt, isSafe, violatedSpecCount,
                     disabledRuleCount, skippedSpecCount,
+                    specResultsJson,
                     checkLogsJson, truncateOutput(nusmvOutput),
                     null, processingTimeMs,
                     VerificationTaskPo.TaskStatus.CANCELLED);

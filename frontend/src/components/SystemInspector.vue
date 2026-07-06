@@ -25,7 +25,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 // Panel state
-const isCollapsed = ref(false)
+const isCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
 
 // Emits
 const emit = defineEmits<{

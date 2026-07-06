@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-05.
+Verified against code on 2026-07-06.
 
 ---
 
@@ -59,6 +59,7 @@ Verified against code on 2026-07-05.
 | :--- | :--- | :--- | :--- |
 | POST | `/api/verify` | Synchronous verification | `docs/api/verification.md` |
 | POST | `/api/verify/async` | Async verification, returns `taskId` (Long) | `docs/api/verification.md` |
+| GET | `/api/verify/tasks` | Verification task inbox (summary list) | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}` | Task status | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}/progress` | Task progress (0–100) | `docs/api/verification.md` |
 | POST | `/api/verify/tasks/{id}/cancel` | Cancel task | `docs/api/verification.md` |
@@ -76,6 +77,7 @@ Verified against code on 2026-07-05.
 | :--- | :--- | :--- | :--- |
 | POST | `/api/simulate` | Synchronous simulation (not persisted) | `docs/api/verification.md` |
 | POST | `/api/simulate/async` | Async simulation, returns `taskId` (Long) | `docs/api/verification.md` |
+| GET | `/api/simulate/tasks` | Simulation task inbox (summary list) | `docs/api/verification.md` |
 | GET | `/api/simulate/tasks/{id}` | Task status | `docs/api/verification.md` |
 | GET | `/api/simulate/tasks/{id}/progress` | Task progress (0–100) | `docs/api/verification.md` |
 | POST | `/api/simulate/tasks/{id}/cancel` | Cancel task | `docs/api/verification.md` |

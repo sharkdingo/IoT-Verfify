@@ -113,6 +113,46 @@
   font-size: 20px;
 }
 
+@media (max-width: 640px) {
+  .board-nav-bar {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .board-nav-bar .nav-content {
+    padding: 0;
+    gap: 0.5rem;
+  }
+
+  .board-nav-bar .logo-left {
+    flex: 0 0 auto;
+    font-size: 1.1rem;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .board-nav-bar .nav-actions {
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .board-nav-bar .ai-assistant-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 0;
+  }
+
+  .board-nav-bar .ai-assistant-btn span:not(.material-symbols-outlined) {
+    display: none;
+  }
+
+  .board-nav-bar .nav-logout-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+}
+
 /* ========== 页面 & 画布 ========== */
 
 .iot-board {
@@ -143,6 +183,31 @@
 
 .iot-board .board-floating-actions {
     right: var(--board-floating-action-right);
+}
+
+@media (max-width: 1023px) {
+    .iot-board .board-floating-panel {
+        left: var(--board-floating-gap);
+        right: var(--board-floating-gap);
+        width: auto;
+        max-width: none;
+        max-height: calc(100vh - 6rem);
+        overflow-y: auto;
+        z-index: 45;
+    }
+}
+
+@media (max-width: 640px) {
+    .iot-board .modern-panel,
+    .iot-board .glass-panel {
+        top: 3.5rem !important;
+    }
+
+    .iot-board .board-floating-actions {
+        top: 5rem;
+        right: 0.75rem;
+        gap: 0.6rem;
+    }
 }
 
 .iot-board .board-floating-panel > .relative:first-child h3,

@@ -10,7 +10,7 @@ import type { BoardLayoutDto } from '../types/canvas'
 import type { PanelActive } from '../types/panel'
 import type { RuleForm } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
-import type { VerificationRequest, VerificationResult, VerificationTask, Trace } from '@/types/verify'
+import type { VerificationRequest, VerificationResult, VerificationTask, VerificationTaskSummary, Trace } from '@/types/verify'
 import type {
     FaultRule,
     FixApplyRequest,
@@ -287,6 +287,12 @@ export default {
     },
     getTask: async (taskId: number): Promise<VerificationTask> => {
         return unpack<VerificationTask>(await api.get(`/verify/tasks/${taskId}`));
+    },
+    getTasks: async (excludeTaskIds: number[] = []): Promise<VerificationTaskSummary[]> => {
+        const params = excludeTaskIds.length > 0
+            ? { excludeTaskIds: excludeTaskIds.join(',') }
+            : undefined;
+        return unpack<VerificationTaskSummary[]>(await api.get('/verify/tasks', { params }));
     },
     getTaskProgress: async (taskId: number): Promise<number> => {
         return unpack<number>(await api.get(`/verify/tasks/${taskId}/progress`));

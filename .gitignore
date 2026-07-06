@@ -29,6 +29,7 @@ Desktop.ini
 # artifacts) — transient, machine-specific, never committed.
 .codex-review/
 tmp-run/
+playwright-real-review/
 
 # ======================= Secrets / env ======================
 # Never commit real env files; the *.example templates ARE committed.
