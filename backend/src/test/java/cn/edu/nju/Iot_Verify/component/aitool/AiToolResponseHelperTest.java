@@ -30,7 +30,7 @@ class AiToolResponseHelperTest {
     }
 
     @Test
-    void success_whenSerializationFails_shouldReturnFallbackSuccessJson() throws Exception {
+    void success_whenSerializationFails_shouldReturnUnavailableResultJson() throws Exception {
         ObjectMapper failingMapper = mock(ObjectMapper.class);
         when(failingMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("boom") {
         });
@@ -41,7 +41,9 @@ class AiToolResponseHelperTest {
                 "Operation accepted.");
 
         JsonNode json = new ObjectMapper().readTree(result);
-        assertEquals("Operation accepted.", json.path("message").asText());
-        assertTrue(json.path("warning").asText().contains("serialization degraded"));
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertTrue(json.path("message").asText().contains("may already have been committed"));
+        assertTrue(json.path("warning").asText().contains("serialization failed"));
+        assertTrue(json.path("mutationMayHaveCommitted").asBoolean());
     }
 }

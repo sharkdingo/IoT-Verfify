@@ -1,48 +1,92 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeUpdateDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceUpdateResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceEdgeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceDeletionResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetResultDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 
 import java.util.List;
+import java.util.Set;
 
 public interface BoardStorageService {
-    List<DeviceNodeDto> getNodes(Long userId);
-    List<DeviceNodeDto> saveNodes(Long userId, List<DeviceNodeDto> nodes);
+    /**
+     * Captures every persisted collection that defines the formal model, including the exact
+     * device-template manifests, under one user/database lock and one transaction.
+     */
+    BoardSemanticSnapshotDto getSemanticSnapshot(Long userId);
 
-    List<DeviceEdgeDto> getEdges(Long userId);
-    List<DeviceEdgeDto> saveEdges(Long userId, List<DeviceEdgeDto> edges);
+    List<DeviceNodeDto> getNodes(Long userId);
+    DeviceMutationResultDto addNodes(Long userId, List<DeviceNodeDto> nodes,
+                                     List<BoardEnvironmentVariableDto> environmentVariablePatches);
+    DeviceUpdateResultDto updateNodeLayout(Long userId, String nodeId, DeviceLayoutDto layout);
+    DeviceUpdateResultDto updateNodeRuntime(Long userId, String nodeId, DeviceRuntimeUpdateDto runtime);
+    DeviceMutationResultDto renameNode(Long userId, String nodeId, String newLabel);
+    DeviceDeletionResultDto previewNodeDeletion(Long userId, String nodeId);
+    DeviceDeletionResultDto deleteNodeCascade(Long userId, String nodeId, String expectedImpactToken);
+    List<BoardEnvironmentVariableDto> getEnvironmentVariables(Long userId);
+    /** Applies non-null fields as name-keyed patches and returns the authoritative result. */
+    EnvironmentMutationResultDto saveEnvironmentVariables(
+            Long userId, List<BoardEnvironmentVariableDto> variables);
+
+    /**
+     * Atomic read-modify-write of the board-level environment pool under the per-user write lock.
+     * The mutator receives the complete materialized pool, including template defaults.
+     */
+    List<BoardEnvironmentVariableDto> updateEnvironmentVariables(
+            Long userId,
+            java.util.function.UnaryOperator<List<BoardEnvironmentVariableDto>> mutator);
+
+    /**
+     * Atomically create one node chosen from the current node snapshot. The result includes the
+     * authoritative Environment Pool and its exact changes from the same transaction.
+     */
+    DeviceMutationResultDto createNode(
+            Long userId,
+            java.util.function.Function<List<DeviceNodeDto>, DeviceNodeDto> nodeFactory);
 
     List<SpecificationDto> getSpecs(Long userId);
-    List<SpecificationDto> saveSpecs(Long userId, List<SpecificationDto> specs);
     /** Atomically add a single spec under user-level lock. */
-    List<SpecificationDto> addSpec(Long userId, SpecificationDto spec);
-    /** Atomically remove a single spec by ID under user-level lock. Returns remaining specs, or null if not found. */
-    List<SpecificationDto> removeSpec(Long userId, String specId);
+    CollectionMutationResultDto<SpecificationDto> addSpec(Long userId, SpecificationDto spec);
+    /** Atomically remove a single spec by ID under user-level lock. */
+    CollectionMutationResultDto<SpecificationDto> removeSpec(Long userId, String specId);
 
     List<RuleDto> getRules(Long userId);
-    List<RuleDto> saveRules(Long userId, List<RuleDto> rules);
     /** Atomically add a single rule under user-level lock. */
-    List<RuleDto> addRule(Long userId, RuleDto rule);
-    /** Atomically remove a single rule by ID under user-level lock. Returns remaining rules, or null if not found. */
-    List<RuleDto> removeRule(Long userId, long ruleId);
+    CollectionMutationResultDto<RuleDto> addRule(Long userId, RuleDto rule);
+    /** Atomically remove a single rule by ID under user-level lock. */
+    CollectionMutationResultDto<RuleDto> removeRule(Long userId, long ruleId);
+    /** Atomically replace only the execution order; the request must contain every current rule id once. */
+    List<RuleDto> reorderRules(Long userId, List<Long> ruleIds);
 
     /**
-     * Atomic read-modify-write of a user's rules under the per-user write lock and one transaction.
-     * The mutator receives the current persisted rules and returns the new list to save; any exception
-     * it throws rolls back without saving. Use this when a decision (e.g. drift check) must be made on
-     * the same snapshot that is written, so a concurrent save cannot interleave between read and write.
+     * Atomic read-modify-write of rules against the complete current model snapshot. The mutator's
+     * decision and the persisted rule list share one lock and transaction; exceptions roll back.
      */
-    List<RuleDto> updateRules(Long userId, java.util.function.UnaryOperator<List<RuleDto>> mutator);
+    List<RuleDto> updateRulesAgainstSnapshot(
+            Long userId,
+            java.util.function.Function<BoardSemanticSnapshotDto, List<RuleDto>> mutator);
+
+    /** Returns the exact current-board impact token and counts for destructive confirmation. */
+    BoardReplacementPreviewDto previewBoardReplacement(Long userId);
 
     /**
-     * Atomically save nodes + rules + specs in one transaction under the user write lock.
-     * A null collection in the batch is left unchanged. Used for device delete/rename where the three
-     * collections must change together to avoid a half-saved board.
+     * Atomically replaces all four scene collections under the user/database write lock after
+     * confirming that the preview impact token still matches. Ordinary mutations use targeted
+     * methods above.
      */
     BoardBatchDto saveBoardBatch(Long userId, BoardBatchDto batch);
 
@@ -51,12 +95,12 @@ public interface BoardStorageService {
 
     List<DeviceTemplateDto> getDeviceTemplates(Long userId);
     DeviceTemplateDto addDeviceTemplate(Long userId, DeviceTemplateDto templateDto);
-    void deleteDeviceTemplate(Long userId, Long templateId);
+    DeviceTemplateDeletionResultDto previewDeviceTemplateDeletion(Long userId, Long templateId);
+    DeviceTemplateDeletionResultDto deleteDeviceTemplate(
+            Long userId, Long templateId, String expectedImpactToken);
 
-    /**
-     * 重新加载设备模板（从资源文件重新初始化默认模板）
-     * @param userId 用户ID
-     * @return 重新加载的模板数量
-     */
-    int reloadDeviceTemplates(Long userId);
+    DefaultTemplateResetResultDto previewDefaultTemplateReset(Long userId);
+
+    /** Atomically resets every bundled default after the caller confirms the exact preview. */
+    DefaultTemplateResetResultDto resetDefaultTemplates(Long userId, String expectedImpactToken);
 }

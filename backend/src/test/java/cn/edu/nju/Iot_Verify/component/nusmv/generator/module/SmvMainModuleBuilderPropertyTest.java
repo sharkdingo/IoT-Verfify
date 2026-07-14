@@ -3,22 +3,23 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Unit tests for trust/privacy property condition logic in SmvMainModuleBuilder.
- * Covers parseStateValueSet, collectStatePropertyPartsIncluding/Excluding,
- * resolveAttributeAsMode, and the fail-closed behavior of appendRulePropertyConditions.
- */
+/** Regression tests for MEDIC trust/privacy propagation predicates. */
 class SmvMainModuleBuilderPropertyTest {
 
     private SmvMainModuleBuilder builder;
@@ -28,337 +29,363 @@ class SmvMainModuleBuilderPropertyTest {
         builder = new SmvMainModuleBuilder();
     }
 
-    // ── Test data builders ──
-
     private static DeviceSmvData buildMultiModeDevice() {
-        DeviceSmvData d = new DeviceSmvData();
-        d.setVarName("aircon_1");
-        d.setModes(List.of("cool", "heat"));
-        d.setModeStates(new LinkedHashMap<>(Map.of(
-                "cool", List.of("on", "off", "standby"),
-                "heat", List.of("on", "off", "standby"))));
-        d.setStates(List.of("on", "off", "standby"));
-        return d;
+        DeviceSmvData device = new DeviceSmvData();
+        device.setVarName("aircon_1");
+        device.setModes(List.of("Power", "Fan"));
+        Map<String, List<String>> states = new LinkedHashMap<>();
+        states.put("Power", List.of("on", "off"));
+        states.put("Fan", List.of("high", "low"));
+        device.setModeStates(states);
+        device.setManifest(DeviceManifest.builder().modes(device.getModes()).build());
+        return device;
     }
 
-    private static DeviceSmvData buildSingleModeDevice() {
-        DeviceSmvData d = new DeviceSmvData();
-        d.setVarName("light_1");
-        d.setModes(List.of("power"));
-        d.setModeStates(new LinkedHashMap<>(Map.of(
-                "power", List.of("on", "off", "dim"))));
-        d.setStates(List.of("on", "off", "dim"));
-        return d;
+    private static DeviceSmvData buildVariableDevice() {
+        DeviceManifest.InternalVariable temperature = DeviceManifest.InternalVariable.builder()
+                .name("temperature")
+                .isInside(true)
+                .lowerBound(0)
+                .upperBound(100)
+                .build();
+        DeviceManifest.InternalVariable humidity = DeviceManifest.InternalVariable.builder()
+                .name("humidity")
+                .isInside(true)
+                .lowerBound(0)
+                .upperBound(100)
+                .build();
+        DeviceSmvData device = new DeviceSmvData();
+        device.setVarName("sensor_1");
+        device.setManifest(DeviceManifest.builder()
+                .internalVariables(List.of(temperature, humidity))
+                .build());
+        device.setVariables(List.of(temperature, humidity));
+        return device;
     }
 
-    private static DeviceSmvData buildNoModeDevice() {
-        DeviceSmvData d = new DeviceSmvData();
-        d.setVarName("sensor_1");
-        d.setModes(List.of());
-        d.setModeStates(new LinkedHashMap<>());
-        d.setStates(List.of("active", "idle"));
-        return d;
+    private String invokeCurrentStatePredicate(DeviceSmvData device,
+                                               PropertyDimension dimension,
+                                               String targetMode) throws Exception {
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildCurrentStatePropertyPredicate",
+                DeviceSmvData.class, String.class, PropertyDimension.class, String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(builder, device, device.getVarName(), dimension, targetMode);
     }
 
-    // ── Reflection helpers ──
-
-    private Set<String> invokeParseStateValueSet(String raw, DeviceSmvData condSmv) throws Exception {
-        Method m = SmvMainModuleBuilder.class.getDeclaredMethod("parseStateValueSet", String.class, DeviceSmvData.class);
-        m.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Set<String> result = (Set<String>) m.invoke(builder, raw, condSmv);
-        return result;
+    private String invokeRulePropertyConditions(RuleDto rule,
+                                                Map<String, DeviceSmvData> devices,
+                                                PropertyDimension dimension) throws Exception {
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "appendRulePropertyConditions",
+                StringBuilder.class, RuleDto.class, Map.class, PropertyDimension.class,
+                SmvGenerationContext.class);
+        method.setAccessible(true);
+        StringBuilder result = new StringBuilder();
+        method.invoke(builder, result, rule, devices, dimension, SmvGenerationContext.noop());
+        return result.toString();
     }
 
-    private String invokeCollectIncluding(DeviceSmvData condSmv, String varName,
-                                          PropertyDimension dim, Set<String> values,
-                                          String targetMode) throws Exception {
-        Method m = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "collectStatePropertyPartsIncluding",
-                DeviceSmvData.class, String.class, PropertyDimension.class, Set.class, String.class);
-        m.setAccessible(true);
-        return (String) m.invoke(builder, condSmv, varName, dim, values, targetMode);
+    private String invokePropertyTransitions(DeviceSmvData target,
+                                             List<RuleDto> rules,
+                                             Map<String, DeviceSmvData> devices,
+                                             PropertyDimension dimension) throws Exception {
+        Method method = java.util.Arrays.stream(SmvMainModuleBuilder.class.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals("appendPropertyTransitions"))
+                .findFirst()
+                .orElseThrow();
+        method.setAccessible(true);
+        DeviceVerificationDto targetDto = new DeviceVerificationDto();
+        targetDto.setVarName(target.getVarName());
+        StringBuilder result = new StringBuilder();
+        method.invoke(builder, result, List.of(targetDto), rules, devices, false,
+                dimension, null, SmvGenerationContext.noop());
+        return result.toString();
     }
 
-    private String invokeCollectExcluding(DeviceSmvData condSmv, String varName,
-                                          PropertyDimension dim, Set<String> values,
-                                          String targetMode) throws Exception {
-        Method m = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "collectStatePropertyPartsExcluding",
-                DeviceSmvData.class, String.class, PropertyDimension.class, Set.class, String.class);
-        m.setAccessible(true);
-        return (String) m.invoke(builder, condSmv, varName, dim, values, targetMode);
+    private static DeviceSmvData buildRuleTarget(List<DeviceManifest.API> apis) {
+        DeviceSmvData target = new DeviceSmvData();
+        target.setVarName("target_1");
+        target.setSensor(false);
+        target.setModes(List.of("Power"));
+        target.setModeStates(Map.of("Power", List.of("off", "on")));
+        target.setManifest(DeviceManifest.builder()
+                .modes(target.getModes())
+                .apis(apis)
+                .build());
+        return target;
     }
 
-    private static String invokeResolveAttributeAsMode(DeviceSmvData condSmv,
-                                                       RuleDto.Condition condition) throws Exception {
-        Method m = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "resolveAttributeAsMode", DeviceSmvData.class, RuleDto.Condition.class);
-        m.setAccessible(true);
-        return (String) m.invoke(null, condSmv, condition);
+    private static RuleDto commandRule(String sourceAttribute, String action) {
+        return RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1")
+                        .targetType("variable")
+                        .attribute(sourceAttribute)
+                        .relation(">")
+                        .value("30")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("target_1")
+                        .action(action)
+                        .build())
+                .build();
     }
 
-    // ── parseStateValueSet ──
+    @Test
+    @DisplayName("State property labels are guarded by the actual current state")
+    void currentStatePredicate_guardsEveryLabel() throws Exception {
+        String result = invokeCurrentStatePredicate(
+                buildMultiModeDevice(), PropertyDimension.TRUST, "Power");
 
-    @Nested
-    @DisplayName("parseStateValueSet")
-    class ParseStateValueSetTests {
-
-        @Test
-        @DisplayName("single-mode: splits by comma, semicolon, and pipe")
-        void singleMode_allSeparators() throws Exception {
-            Set<String> result = invokeParseStateValueSet("A,B;C|D", buildSingleModeDevice());
-            assertEquals(Set.of("A", "B", "C", "D"), result);
-        }
-
-        @Test
-        @DisplayName("multi-mode: preserves semicolon as tuple separator, splits by comma and pipe")
-        void multiMode_preservesSemicolon() throws Exception {
-            Set<String> result = invokeParseStateValueSet("cool;on,heat;off", buildMultiModeDevice());
-            assertEquals(Set.of("cool;on", "heat;off"), result);
-        }
-
-        @Test
-        @DisplayName("multi-mode: pipe separates values")
-        void multiMode_pipeSeparator() throws Exception {
-            Set<String> result = invokeParseStateValueSet("on|off", buildMultiModeDevice());
-            assertEquals(Set.of("on", "off"), result);
-        }
-
-        @Test
-        @DisplayName("strips brackets")
-        void stripsBrackets() throws Exception {
-            Set<String> result = invokeParseStateValueSet("[A,B,C]", buildSingleModeDevice());
-            assertEquals(Set.of("A", "B", "C"), result);
-        }
-
-        @Test
-        @DisplayName("strips spaces")
-        void stripsSpaces() throws Exception {
-            Set<String> result = invokeParseStateValueSet(" A , B , C ", buildSingleModeDevice());
-            assertEquals(Set.of("A", "B", "C"), result);
-        }
+        assertTrue(result.contains("aircon_1.Power=on & aircon_1.trust_Power_on=trusted"));
+        assertTrue(result.contains("aircon_1.Power=off & aircon_1.trust_Power_off=trusted"));
+        assertTrue(result.contains(" | "));
+        assertFalse(result.contains("trust_Fan_"));
     }
 
-    // ── resolveAttributeAsMode ──
+    @Test
+    @DisplayName("State privacy uses the current state and private active label")
+    void currentStatePrivacy_usesPrivatePredicate() throws Exception {
+        String result = invokeCurrentStatePredicate(
+                buildMultiModeDevice(), PropertyDimension.PRIVACY, null);
 
-    @Nested
-    @DisplayName("resolveAttributeAsMode")
-    class ResolveAttributeAsModeTests {
-
-        @Test
-        @DisplayName("returns mode name when attribute matches a mode")
-        void attributeIsMode() throws Exception {
-            RuleDto.Condition cond = RuleDto.Condition.builder()
-                    .deviceName("aircon").attribute("cool").relation("!=").value("on").build();
-            assertEquals("cool", invokeResolveAttributeAsMode(buildMultiModeDevice(), cond));
-        }
-
-        @Test
-        @DisplayName("returns null when attribute does not match any mode")
-        void attributeNotMode() throws Exception {
-            RuleDto.Condition cond = RuleDto.Condition.builder()
-                    .deviceName("aircon").attribute("state").relation("!=").value("on").build();
-            assertNull(invokeResolveAttributeAsMode(buildMultiModeDevice(), cond));
-        }
-
-        @Test
-        @DisplayName("returns null for no-mode device")
-        void noModeDevice_returnsNull() throws Exception {
-            RuleDto.Condition cond = RuleDto.Condition.builder()
-                    .deviceName("sensor").attribute("active").relation("=").value("true").build();
-            assertNull(invokeResolveAttributeAsMode(buildNoModeDevice(), cond));
-        }
+        assertTrue(result.contains("aircon_1.Power=on & aircon_1.privacy_Power_on=private"));
+        assertTrue(result.contains("aircon_1.Fan=high & aircon_1.privacy_Fan_high=private"));
+        assertTrue(result.contains(") | ("));
     }
 
-    // ── collectStatePropertyPartsIncluding ──
+    @Test
+    @DisplayName("Multi-mode state trust retains control when any referenced mode is trusted")
+    void currentStateTrust_acrossModesUsesOr() throws Exception {
+        String result = invokeCurrentStatePredicate(
+                buildMultiModeDevice(), PropertyDimension.TRUST, null);
 
-    @Nested
-    @DisplayName("collectStatePropertyPartsIncluding")
-    class IncludingTests {
-
-        @Test
-        @DisplayName("no targetMode: simple value finds first matching mode")
-        void noTargetMode_simpleValue() throws Exception {
-            // "on" exists in both cool and heat; should pick first mode (cool)
-            String result = invokeCollectIncluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on"), null);
-            assertEquals("aircon_1.trust_cool_on=trusted", result);
-        }
-
-        @Test
-        @DisplayName("targetMode: scopes to specified mode even when shared state")
-        void targetMode_scopesToMode() throws Exception {
-            // with targetMode="heat", should pick heat, not cool
-            String result = invokeCollectIncluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on"), "heat");
-            assertEquals("aircon_1.trust_heat_on=trusted", result);
-        }
-
-        @Test
-        @DisplayName("no targetMode: tuple value resolved per-mode")
-        void noTargetMode_tupleValue() throws Exception {
-            String result = invokeCollectIncluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on;off"), null);
-            // Tuple "on;off" → cool=on, heat=off
-            assertNotNull(result);
-            assertTrue(result.contains("trust_cool_on=trusted"));
-            assertTrue(result.contains("trust_heat_off=trusted"));
-        }
-
-        @Test
-        @DisplayName("multiple values joined with &")
-        void multipleValues() throws Exception {
-            String result = invokeCollectIncluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, new LinkedHashSet<>(List.of("on", "off")), "cool");
-            assertNotNull(result);
-            assertTrue(result.contains("trust_cool_on=trusted"));
-            assertTrue(result.contains("trust_cool_off=trusted"));
-            assertTrue(result.contains(" & "));
-        }
-
-        @Test
-        @DisplayName("no-mode device: values used directly")
-        void noModeDevice_valuesUsedDirectly() throws Exception {
-            String result = invokeCollectIncluding(buildNoModeDevice(), "sensor_1",
-                    PropertyDimension.PRIVACY, Set.of("active"), null);
-            assertEquals("sensor_1.privacy_active=private", result);
-        }
-
-        @Test
-        @DisplayName("returns null when no values match")
-        void noMatch() throws Exception {
-            String result = invokeCollectIncluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("nonexistent"), "cool");
-            assertNull(result);
-        }
+        assertTrue(result.contains("aircon_1.trust_Power_on=trusted"));
+        assertTrue(result.contains("aircon_1.trust_Fan_high=trusted"));
+        assertTrue(result.contains(") | ("));
     }
 
-    // ── collectStatePropertyPartsExcluding ──
+    @Test
+    @DisplayName("A partial full-state condition propagates only the mode it reads")
+    void partialStateCondition_usesOnlyReferencedMode() throws Exception {
+        DeviceSmvData device = buildMultiModeDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("aircon_1").targetType("state")
+                        .attribute("state").relation("=").value("on").build()
+        )).build();
 
-    @Nested
-    @DisplayName("collectStatePropertyPartsExcluding")
-    class ExcludingTests {
+        String result = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.TRUST);
 
-        @Test
-        @DisplayName("no targetMode: excludes value from all modes that contain it")
-        void noTargetMode_excludesFromAllModes() throws Exception {
-            // Exclude "on" → for each mode, only off and standby remain
-            String result = invokeCollectExcluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on"), null);
-            assertNotNull(result);
-            assertTrue(result.contains("trust_cool_off=trusted"));
-            assertTrue(result.contains("trust_cool_standby=trusted"));
-            assertTrue(result.contains("trust_heat_off=trusted"));
-            assertTrue(result.contains("trust_heat_standby=trusted"));
-            assertFalse(result.contains("trust_cool_on=trusted"));
-            assertFalse(result.contains("trust_heat_on=trusted"));
-        }
-
-        @Test
-        @DisplayName("targetMode: only excludes within the specified mode")
-        void targetMode_scopedExclusion() throws Exception {
-            // Exclude "on" scoped to cool → only cool's off/standby, heat untouched
-            String result = invokeCollectExcluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on"), "cool");
-            assertNotNull(result);
-            assertTrue(result.contains("trust_cool_off=trusted"));
-            assertTrue(result.contains("trust_cool_standby=trusted"));
-            assertFalse(result.contains("trust_cool_on=trusted"));
-            // Heat states should NOT appear (scoped to cool only)
-            assertFalse(result.contains("trust_heat_"));
-        }
-
-        @Test
-        @DisplayName("no targetMode: tuple exclusion resolved per-mode")
-        void noTargetMode_tupleExclusion() throws Exception {
-            // Exclude "on;off" → cool excludes "on", heat excludes "off"
-            String result = invokeCollectExcluding(buildMultiModeDevice(), "aircon_1",
-                    PropertyDimension.TRUST, Set.of("on;off"), null);
-            assertNotNull(result);
-            // cool: off, standby remain (on excluded)
-            assertTrue(result.contains("trust_cool_off=trusted"));
-            assertTrue(result.contains("trust_cool_standby=trusted"));
-            assertFalse(result.contains("trust_cool_on=trusted"));
-            // heat: on, standby remain (off excluded)
-            assertTrue(result.contains("trust_heat_on=trusted"));
-            assertTrue(result.contains("trust_heat_standby=trusted"));
-            assertFalse(result.contains("trust_heat_off=trusted"));
-        }
-
-        @Test
-        @DisplayName("no-mode device: excludes directly from states")
-        void noModeDevice_excludesDirectly() throws Exception {
-            String result = invokeCollectExcluding(buildNoModeDevice(), "sensor_1",
-                    PropertyDimension.PRIVACY, Set.of("active"), null);
-            assertEquals("sensor_1.privacy_idle=private", result);
-        }
-
-        @Test
-        @DisplayName("returns null when all states excluded")
-        void allExcluded() throws Exception {
-            String result = invokeCollectExcluding(buildNoModeDevice(), "sensor_1",
-                    PropertyDimension.TRUST, Set.of("active", "idle"), null);
-            assertNull(result);
-        }
+        assertTrue(result.contains("trust_Power_on=trusted"));
+        assertFalse(result.contains("trust_Fan_"));
     }
 
-    // ── fail-closed behavior ──
+    @Test
+    @DisplayName("A compound state condition combines trust and privacy with MEDIC semantics")
+    void compoundStateCondition_combinesLabelsByDimension() throws Exception {
+        DeviceSmvData device = buildMultiModeDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("aircon_1").targetType("state")
+                        .attribute("state").relation("=").value("on;high").build()
+        )).build();
 
-    @Nested
-    @DisplayName("appendRulePropertyConditions fail-closed")
-    class FailClosedTests {
+        String trust = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.TRUST);
+        String privacy = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.PRIVACY);
 
-        private String invokeAppendRulePropertyConditions(RuleDto rule,
-                                                          Map<String, DeviceSmvData> deviceSmvMap,
-                                                          PropertyDimension dim) throws Exception {
-            Method m = SmvMainModuleBuilder.class.getDeclaredMethod(
-                    "appendRulePropertyConditions",
-                    StringBuilder.class, RuleDto.class, Map.class, PropertyDimension.class,
-                    SmvGenerationContext.class);
-            m.setAccessible(true);
-            StringBuilder sb = new StringBuilder();
-            m.invoke(builder, sb, rule, deviceSmvMap, dim, SmvGenerationContext.noop());
-            return sb.toString();
-        }
+        assertTrue(trust.contains(") | ("));
+        assertTrue(privacy.contains(") | ("));
+    }
 
-        @Test
-        @DisplayName("no conditions → FALSE (fail-closed)")
-        void noConditions_returnsFalse() throws Exception {
-            RuleDto rule = RuleDto.builder().conditions(List.of()).build();
-            String result = invokeAppendRulePropertyConditions(rule, Map.of(), PropertyDimension.TRUST);
-            assertEquals("FALSE", result);
-        }
+    @Test
+    @DisplayName("A multi-mode API event propagates every changed state's label")
+    void multiModeApiCondition_combinesChangedStateLabels() throws Exception {
+        DeviceSmvData device = buildMultiModeDevice();
+        device.setManifest(DeviceManifest.builder()
+                .modes(device.getModes())
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("set profile")
+                        .endState("on;high")
+                        .signal(true)
+                        .build()))
+                .build());
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("aircon_1").targetType("api")
+                        .attribute("set profile").build()
+        )).build();
 
-        @Test
-        @DisplayName("conditions exist but all return null property parts → FALSE (fail-closed)")
-        void allNullParts_returnsFalse() throws Exception {
-            DeviceSmvData device = buildMultiModeDevice();
-            device.setManifest(new cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest());
-            Map<String, DeviceSmvData> map = Map.of("aircon_1", device);
+        String trust = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.TRUST);
+        String privacy = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.PRIVACY);
 
-            // Condition with > relation on state — buildPropertyConditionPart returns null
-            RuleDto.Condition cond = RuleDto.Condition.builder()
-                    .deviceName("aircon_1").attribute("state").relation(">").value("5").build();
-            RuleDto rule = RuleDto.builder().conditions(List.of(cond)).build();
+        assertEquals("(aircon_1.trust_Power_on=trusted | aircon_1.trust_Fan_high=trusted)", trust);
+        assertEquals("(aircon_1.privacy_Power_on=private | aircon_1.privacy_Fan_high=private)", privacy);
+    }
 
-            String result = invokeAppendRulePropertyConditions(rule, map, PropertyDimension.TRUST);
-            assertEquals("FALSE", result);
-        }
+    @Test
+    @DisplayName("A multi-mode API pulse observes the complete transition and a real change")
+    void multiModeApiPulse_usesCompleteStartAndEndTuples() throws Exception {
+        DeviceSmvData device = buildMultiModeDevice();
+        Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
+                "buildStateEventCondition", DeviceSmvData.class, String.class, String.class, String.class);
+        method.setAccessible(true);
 
-        @Test
-        @DisplayName("conditions with valid = relation → generates property condition")
-        void validEqCondition_generatesCondition() throws Exception {
-            DeviceSmvData device = buildMultiModeDevice();
-            device.setManifest(new cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest());
-            Map<String, DeviceSmvData> map = Map.of("aircon_1", device);
+        String result = (String) method.invoke(
+                builder, device, "aircon_1", "off;low", "on;high");
 
-            RuleDto.Condition cond = RuleDto.Condition.builder()
-                    .deviceName("aircon_1").attribute("cool").relation("=").value("on").build();
-            RuleDto rule = RuleDto.builder().conditions(List.of(cond)).build();
+        assertTrue(result.contains("aircon_1.Power=off"), result);
+        assertTrue(result.contains("aircon_1.Fan=low"), result);
+        assertTrue(result.contains("next(aircon_1.Power)=on"), result);
+        assertTrue(result.contains("next(aircon_1.Fan)=high"), result);
+        assertTrue(result.contains("aircon_1.Power!=on | aircon_1.Fan!=high"), result);
+    }
 
-            String result = invokeAppendRulePropertyConditions(rule, map, PropertyDimension.TRUST);
-            assertEquals("aircon_1.trust_cool_on=trusted", result);
-        }
+    @Test
+    @DisplayName("MEDIC trust propagation is untrusted only when every source is untrusted")
+    void trustConditions_retainControlWhenAnySourceIsTrusted() throws Exception {
+        DeviceSmvData device = buildVariableDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("temperature").relation(">").value("30").build(),
+                RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("humidity").relation(">").value("70").build()
+        )).build();
+
+        String result = invokeRulePropertyConditions(
+                rule, Map.of("sensor_1", device), PropertyDimension.TRUST);
+
+        assertEquals("sensor_1.trust_temperature=trusted | sensor_1.trust_humidity=trusted", result);
+    }
+
+    @Test
+    @DisplayName("MEDIC privacy propagation is private when any source is private")
+    void privacyConditions_combinePrivatePredicatesWithOr() throws Exception {
+        DeviceSmvData device = buildVariableDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("temperature").relation(">").value("30").build(),
+                RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("humidity").relation(">").value("70").build()
+        )).build();
+
+        String result = invokeRulePropertyConditions(
+                rule, Map.of("sensor_1", device), PropertyDimension.PRIVACY);
+
+        assertEquals("sensor_1.privacy_temperature=private | sensor_1.privacy_humidity=private", result);
+    }
+
+    @Test
+    @DisplayName("Property labels use the same API start-state guard as the selected command")
+    void propertyTransition_requiresTheCommandApiStartState() throws Exception {
+        DeviceSmvData source = buildVariableDevice();
+        DeviceSmvData target = buildRuleTarget(List.of(DeviceManifest.API.builder()
+                .name("turn on").startState("off").endState("on").build()));
+
+        String result = invokePropertyTransitions(target,
+                List.of(commandRule("temperature", "turn on")),
+                Map.of("sensor_1", source, "target_1", target),
+                PropertyDimension.PRIVACY);
+        String onBlock = result.substring(result.indexOf("next(target_1.privacy_Power_on)"));
+
+        assertTrue(onBlock.contains("target_1.Power=off"), onBlock);
+    }
+
+    @Test
+    @DisplayName("A multi-mode API requires its complete start-state tuple")
+    void propertyTransition_requiresEveryApiStartStateComponent() throws Exception {
+        DeviceSmvData source = buildVariableDevice();
+        DeviceSmvData target = buildMultiModeDevice();
+        target.setVarName("target_1");
+        target.setManifest(DeviceManifest.builder()
+                .modes(target.getModes())
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("activate profile")
+                        .startState("off;low")
+                        .endState("on;high")
+                        .build()))
+                .build());
+
+        String result = invokePropertyTransitions(target,
+                List.of(commandRule("temperature", "activate profile")),
+                Map.of("sensor_1", source, "target_1", target),
+                PropertyDimension.PRIVACY);
+        String onBlock = result.substring(result.indexOf("next(target_1.privacy_Power_on)"));
+
+        assertTrue(onBlock.contains("target_1.Power=off"), onBlock);
+        assertTrue(onBlock.contains("target_1.Fan=low"), onBlock);
+    }
+
+    @Test
+    @DisplayName("A later rule cannot update labels when an earlier rule won the target mode")
+    void propertyTransition_excludesEarlierCompetingRuleBranches() throws Exception {
+        DeviceSmvData source = buildVariableDevice();
+        DeviceSmvData target = buildRuleTarget(List.of(
+                DeviceManifest.API.builder().name("turn off").endState("off").build(),
+                DeviceManifest.API.builder().name("turn on").endState("on").build()));
+
+        String result = invokePropertyTransitions(target,
+                List.of(commandRule("temperature", "turn off"), commandRule("humidity", "turn on")),
+                Map.of("sensor_1", source, "target_1", target),
+                PropertyDimension.PRIVACY);
+        String onBlock = result.substring(result.indexOf("next(target_1.privacy_Power_on)"));
+
+        assertTrue(onBlock.contains("sensor_1.humidity>30"), onBlock);
+        assertTrue(onBlock.contains("!((sensor_1.temperature>30))"), onBlock);
+    }
+
+    @Test
+    @DisplayName("An overlapping multi-mode API action is never partially applied")
+    void propertyTransition_blocksWholeLowerActionWhenAnyModeOverlaps() throws Exception {
+        DeviceSmvData source = buildVariableDevice();
+        DeviceSmvData target = buildMultiModeDevice();
+        target.setVarName("target_1");
+        target.setManifest(DeviceManifest.builder()
+                .modes(target.getModes())
+                .apis(List.of(
+                        DeviceManifest.API.builder().name("power off").endState("off;").build(),
+                        DeviceManifest.API.builder().name("activate profile").endState("on;high").build()))
+                .build());
+
+        String result = invokePropertyTransitions(target,
+                List.of(commandRule("temperature", "power off"),
+                        commandRule("humidity", "activate profile")),
+                Map.of("sensor_1", source, "target_1", target),
+                PropertyDimension.PRIVACY);
+        String highBlock = result.substring(result.indexOf("next(target_1.privacy_Fan_high)"));
+
+        assertTrue(highBlock.contains("sensor_1.humidity>30"), highBlock);
+        assertTrue(highBlock.contains("!((sensor_1.temperature>30))"), highBlock);
+    }
+
+    @Test
+    @DisplayName("No source conditions fail closed")
+    void noConditions_returnsFalse() throws Exception {
+        RuleDto rule = RuleDto.builder().conditions(List.of()).build();
+        assertEquals("FALSE", invokeRulePropertyConditions(rule, Map.of(), PropertyDimension.TRUST));
+    }
+
+    @Test
+    @DisplayName("Unsupported source semantics fail closed")
+    void unsupportedSource_returnsFalse() throws Exception {
+        DeviceSmvData device = buildVariableDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("unknown")
+                        .attribute("temperature").relation("=").value("1").build()
+        )).build();
+
+        assertEquals("FALSE", invokeRulePropertyConditions(
+                rule, Map.of("sensor_1", device), PropertyDimension.TRUST));
     }
 }

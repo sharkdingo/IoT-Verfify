@@ -6,7 +6,7 @@
 			"Name": "waterTemperature",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",
 			"LowerBound": 0,
@@ -14,14 +14,13 @@
 			"NaturalChangeRate": "[-1, 1]"
 		}
 	],
-	"ImpactedVariables": ["waterTemperature"],
+	"ImpactedVariables": [],
 	"Modes": ["MachineState"],
 	"InitState": "on",
 	"WorkingStates": [
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -34,7 +33,6 @@
 					"ChangeRate":"1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

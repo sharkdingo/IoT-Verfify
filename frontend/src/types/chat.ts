@@ -4,9 +4,14 @@
 export interface ChatSession {
     id: string
     userId: number
-    title: string
+    title: string | null
     createdAt?: string
     updatedAt: string
+}
+
+export interface ChatSessionActivity {
+    sessionId: string
+    active: boolean
 }
 
 // Matches backend ChatMessageResponseDto.

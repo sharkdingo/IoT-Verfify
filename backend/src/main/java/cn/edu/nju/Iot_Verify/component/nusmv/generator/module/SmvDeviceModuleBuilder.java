@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
-import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvBoundsUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
@@ -24,7 +23,7 @@ public class SmvDeviceModuleBuilder {
     private static final String DEFAULT_TRUST = "trusted";
 
 
-    public String build(DeviceSmvData smv, boolean isAttack, int intensity, boolean enablePrivacy) {
+    public String build(DeviceSmvData smv, boolean isAttack, boolean enablePrivacy) {
         // 参数验证
         if (smv == null) {
             log.error("SmvDeviceModuleBuilder.build: smv 参数不能为 null");
@@ -57,7 +56,7 @@ public class SmvDeviceModuleBuilder {
         // FROZENVAR for sensors (attack mode + variable trust/privacy)
         appendFrozenVarSection(content, smv, isAttack, isSensor, enablePrivacy);
 
-        appendVariables(content, smv, isSensor, isAttack, intensity, enablePrivacy);
+        appendVariables(content, smv, isSensor, enablePrivacy);
         appendAssignments(content, smv, isAttack, isSensor, enablePrivacy);
 
         return content.toString();
@@ -73,6 +72,12 @@ public class SmvDeviceModuleBuilder {
         }
 
         if (isSensor) {
+            hasFrozenVar |= appendStatePropertyVariables(
+                    frozenVars, smv, PropertyDimension.TRUST);
+            if (enablePrivacy) {
+                hasFrozenVar |= appendStatePropertyVariables(
+                        frozenVars, smv, PropertyDimension.PRIVACY);
+            }
             for (DeviceManifest.InternalVariable var : smv.getVariables()) {
                 frozenVars.append("\n\ttrust_").append(var.getName()).append(": {trusted, untrusted};");
                 if (enablePrivacy) {
@@ -82,13 +87,12 @@ public class SmvDeviceModuleBuilder {
             }
         }
 
-        // IsChangeable=false 的 content → FROZENVAR（隐私不可变）
+        // Content visibility is a classification of the source data, not a value
+        // changed merely because an automation rule references that content.
         if (enablePrivacy) {
             for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
-                if (!ci.isChangeable()) {
-                    frozenVars.append("\n\tprivacy_").append(ci.getName()).append(": {public, private};");
-                    hasFrozenVar = true;
-                }
+                frozenVars.append("\n\tprivacy_").append(ci.getName()).append(": {public, private};");
+                hasFrozenVar = true;
             }
         }
 
@@ -97,11 +101,11 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    private void appendVariables(StringBuilder content, DeviceSmvData smv, boolean isSensor, boolean isAttack, int intensity, boolean enablePrivacy) {
+    private void appendVariables(StringBuilder content, DeviceSmvData smv, boolean isSensor, boolean enablePrivacy) {
         StringBuilder varContent = new StringBuilder();
 
         appendModeVariables(varContent, smv);
-        appendInternalVariables(varContent, smv, isAttack, intensity);
+        appendInternalVariables(varContent, smv);
         appendSignalVariables(varContent, smv);
         appendVariableRates(varContent, smv);
         if (!isSensor) {
@@ -110,15 +114,6 @@ public class SmvDeviceModuleBuilder {
                 appendPropertyVariables(varContent, smv, PropertyDimension.PRIVACY);
             }
         }
-        // IsChangeable=true 的 content → VAR（隐私可被规则修改）
-        if (enablePrivacy) {
-            for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
-                if (ci.isChangeable()) {
-                    varContent.append("\n\tprivacy_").append(ci.getName()).append(": {public, private};");
-                }
-            }
-        }
-
         if (!varContent.isEmpty()) {
             content.append("\nVAR").append(varContent);
         }
@@ -127,22 +122,21 @@ public class SmvDeviceModuleBuilder {
     private void appendAssignments(StringBuilder content, DeviceSmvData smv, boolean isAttack, boolean isSensor, boolean enablePrivacy) {
         StringBuilder assignContent = new StringBuilder();
 
-        appendInitialValues(assignContent, smv, isSensor);
+        appendInitialValues(assignContent, smv, isAttack);
 
         if (isAttack) {
             assignContent.append("\n\tinit(is_attack) := {TRUE, FALSE};");
         }
 
-        appendInitialProperty(assignContent, smv, isAttack, isSensor, PropertyDimension.TRUST);
+        appendInitialProperty(assignContent, smv, isAttack, PropertyDimension.TRUST);
         if (enablePrivacy) {
-            appendInitialProperty(assignContent, smv, isAttack, isSensor, PropertyDimension.PRIVACY);
+            appendInitialProperty(assignContent, smv, isAttack, PropertyDimension.PRIVACY);
         }
 
         // content 隐私初始化
         if (enablePrivacy) {
             for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
-                String cp = DeviceSmvDataFactory.normalizeTrustPrivacy(
-                        ci.getPrivacy() != null ? ci.getPrivacy() : "public");
+                String cp = DeviceSmvDataFactory.normalizeTrustPrivacy(ci.getPrivacy());
                 assignContent.append("\n\tinit(privacy_").append(ci.getName()).append(") := ")
                         .append(cp).append(";");
             }
@@ -160,14 +154,16 @@ public class SmvDeviceModuleBuilder {
             // 单模式和多模式统一处理：用模式名作为变量名
             for (String mode : smv.getModes()) {
                 List<String> modeStateList = smv.getModeStates().get(mode);
-                if (modeStateList != null && !modeStateList.isEmpty()) {
-                    content.append("\n\t").append(mode).append(": {").append(String.join(", ", modeStateList)).append("};");
+                if (modeStateList == null || modeStateList.isEmpty()) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                            "Mode '" + mode + "' has no declared states");
                 }
+                content.append("\n\t").append(mode).append(": {").append(String.join(", ", modeStateList)).append("};");
             }
         }
     }
 
-    private void appendInternalVariables(StringBuilder content, DeviceSmvData smv, boolean isAttack, int intensity) {
+    private void appendInternalVariables(StringBuilder content, DeviceSmvData smv) {
         for (DeviceManifest.InternalVariable var : smv.getVariables()) {
             String varDef;
             if (var.getValues() != null && !var.getValues().isEmpty()) {
@@ -180,14 +176,10 @@ public class SmvDeviceModuleBuilder {
             } else if (var.getLowerBound() != null && var.getUpperBound() != null) {
                 int lower = var.getLowerBound();
                 int upper = var.getUpperBound();
-                // 攻击模式下扩大传感器数值范围，模拟数据篡改攻击
-                // 扩展量与 intensity 成正比：intensity=0 → 无扩展，intensity=50 → range/5
-                if (isAttack && smv.isSensor()) {
-                    upper = SmvBoundsUtils.resolveEffectiveUpperBound(lower, upper, true, intensity);
-                }
                 varDef = lower + ".." + upper;
             } else {
-                varDef = "boolean";
+                throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                        "Variable '" + var.getName() + "' has no declared value domain");
             }
             content.append("\n\t").append(var.getName()).append(": ").append(varDef).append(";");
         }
@@ -201,8 +193,8 @@ public class SmvDeviceModuleBuilder {
 
     private void appendVariableRates(StringBuilder content, DeviceSmvData smv) {
         for (String varName : smv.getImpactedVariables()) {
-            // 枚举型变量不需要 _rate（用 Dynamics.Value 直接赋值）
-            if (isEnumVariable(smv, varName)) continue;
+            // Only numeric impacted variables use a rate. Enum/boolean dynamics use Value.
+            if (!isNumericVariable(smv, varName)) continue;
             int[] range = computeRateRange(smv, varName);
             content.append("\n\t").append(varName).append("_rate: ")
                    .append(range[0]).append("..").append(range[1]).append(";");
@@ -210,8 +202,8 @@ public class SmvDeviceModuleBuilder {
     }
 
     /**
-     * 扫描所有 WorkingState.Dynamics 中该变量的 ChangeRate，计算 _rate 的合法范围。
-     * 默认 fallback 为 -10..10（与旧行为一致）。
+     * Scan validated WorkingState.Dynamics and derive the exact rate domain.
+     * A numeric impacted variable without an explicit active rate stutters at zero.
      */
     private int[] computeRateRange(DeviceSmvData smv, String varName) {
         int minRate = 0, maxRate = 0;
@@ -221,25 +213,27 @@ public class SmvDeviceModuleBuilder {
                 if (ws.getDynamics() == null) continue;
                 for (DeviceManifest.Dynamic dyn : ws.getDynamics()) {
                     if (varName.equals(dyn.getVariableName()) && dyn.getChangeRate() != null) {
+                        int rate;
                         try {
-                            int rate = Integer.parseInt(dyn.getChangeRate().trim());
-                            if (!found) {
-                                minRate = rate;
-                                maxRate = rate;
-                                found = true;
-                            } else {
-                                minRate = Math.min(minRate, rate);
-                                maxRate = Math.max(maxRate, rate);
-                            }
+                            rate = Integer.parseInt(dyn.getChangeRate().trim());
                         } catch (NumberFormatException e) {
-                            log.warn("Device '{}': non-integer ChangeRate '{}' for variable '{}', this entry ignored",
-                                    smv.getVarName(), dyn.getChangeRate(), varName);
+                            throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                                    "WorkingState Dynamics for '" + varName
+                                            + "' has non-integer ChangeRate '" + dyn.getChangeRate() + "'");
+                        }
+                        if (!found) {
+                            minRate = rate;
+                            maxRate = rate;
+                            found = true;
+                        } else {
+                            minRate = Math.min(minRate, rate);
+                            maxRate = Math.max(maxRate, rate);
                         }
                     }
                 }
             }
         }
-        if (!found) return new int[]{-10, 10};
+        if (!found) return new int[]{0, 0};
         // 确保 0 在范围内（rate=0 是 TRUE 分支的默认值）
         minRate = Math.min(minRate, 0);
         maxRate = Math.max(maxRate, 0);
@@ -248,21 +242,31 @@ public class SmvDeviceModuleBuilder {
 
     private void appendPropertyVariables(StringBuilder content, DeviceSmvData smv, PropertyDimension dim) {
         String domain = (dim == PropertyDimension.TRUST) ? "{untrusted, trusted}" : "{private, public}";
-        for (String mode : smv.getModes()) {
-            List<String> states = smv.getModeStates().get(mode);
-            if (states == null) continue;
-            for (String state : states) {
-                content.append("\n\t").append(dim.prefix).append(mode).append("_").append(state)
-                       .append(": ").append(domain).append(";");
-            }
-        }
+        appendStatePropertyVariables(content, smv, dim);
         for (DeviceManifest.InternalVariable var : smv.getVariables()) {
             content.append("\n\t").append(dim.prefix).append(var.getName())
                    .append(": ").append(domain).append(";");
         }
     }
 
-    private void appendInitialProperty(StringBuilder content, DeviceSmvData smv, boolean isAttack, boolean isSensor,
+    private boolean appendStatePropertyVariables(StringBuilder content,
+                                                 DeviceSmvData smv,
+                                                 PropertyDimension dim) {
+        String domain = (dim == PropertyDimension.TRUST) ? "{untrusted, trusted}" : "{private, public}";
+        boolean appended = false;
+        for (String mode : smv.getModes()) {
+            List<String> states = smv.getModeStates().get(mode);
+            if (states == null) continue;
+            for (String state : states) {
+                content.append("\n\t").append(dim.prefix).append(mode).append("_").append(state)
+                       .append(": ").append(domain).append(";");
+                appended = true;
+            }
+        }
+        return appended;
+    }
+
+    private void appendInitialProperty(StringBuilder content, DeviceSmvData smv, boolean isAttack,
                                        PropertyDimension dim) {
         String defaultVal = (dim == PropertyDimension.TRUST) ? DEFAULT_TRUST : DEFAULT_PRIVACY;
 
@@ -295,15 +299,17 @@ public class SmvDeviceModuleBuilder {
                     // Bug1 修复：instanceStateTrust 仅应用于当前状态
                     boolean isCurrentState = state.equals(currentState);
                     String instanceOverride = isCurrentState ? smv.getInstanceStateTrust() : null;
+                    String extractedTrust = smv.getModeStateTrust().get(key);
                     value = instanceOverride != null ? instanceOverride
-                            : smv.getModeStateTrust().getOrDefault(key, defaultVal);
+                            : extractedTrust != null ? extractedTrust
+                            : resolveManifestStateProperty(
+                                    smv, mode, state, defaultVal, PropertyDimension.TRUST);
                 } else {
-                    // P1 修复：先按 mode_state 格式查找，再按裸状态名查找
-                    String instanceOverride = smv.getInstanceVariablePrivacy().get(key);
-                    if (instanceOverride == null) {
-                        instanceOverride = smv.getInstanceVariablePrivacy().get(state);
-                    }
-                    value = instanceOverride != null ? instanceOverride : resolveManifestPrivacy(smv, mode, state, defaultVal);
+                    boolean isCurrentState = state.equals(currentState);
+                    String instanceOverride = isCurrentState ? smv.getInstanceStatePrivacy() : null;
+                    value = instanceOverride != null ? instanceOverride
+                            : resolveManifestStateProperty(
+                                    smv, mode, state, defaultVal, PropertyDimension.PRIVACY);
                 }
                 value = DeviceSmvDataFactory.normalizeTrustPrivacy(value);
 
@@ -320,7 +326,7 @@ public class SmvDeviceModuleBuilder {
                 value = instanceVarTrust != null ? instanceVarTrust
                         : DeviceSmvDataFactory.normalizeTrustPrivacy(var.getTrust() != null ? var.getTrust() : defaultVal);
                 value = DeviceSmvDataFactory.normalizeTrustPrivacy(value);
-                if (isAttack && isSensor) {
+                if (isAttack && Boolean.TRUE.equals(var.getFalsifiableWhenCompromised())) {
                     content.append("\n\tinit(trust_").append(var.getName()).append(") :=\n");
                     content.append("\tcase\n");
                     content.append("\t\tis_attack=TRUE: untrusted;\n");
@@ -338,8 +344,12 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    /** 从 manifest WorkingState 解析 privacy 默认值（支持多模式复合状态名） */
-    private String resolveManifestPrivacy(DeviceSmvData smv, String mode, String state, String defaultVal) {
+    /** Resolve a WorkingState label directly when low-level callers did not pre-extract it. */
+    private String resolveManifestStateProperty(DeviceSmvData smv,
+                                                String mode,
+                                                String state,
+                                                String defaultVal,
+                                                PropertyDimension dim) {
         if (smv.getManifest() != null && smv.getManifest().getWorkingStates() != null) {
             int modeIdx = smv.getModes().indexOf(mode);
             for (DeviceManifest.WorkingState ws : smv.getManifest().getWorkingStates()) {
@@ -348,7 +358,7 @@ public class SmvDeviceModuleBuilder {
                 // 单模式或非复合名：直接匹配
                 if (!ws.getName().contains(";")) {
                     if (state.equals(wsName)) {
-                        return DeviceSmvDataFactory.normalizeTrustPrivacy(ws.getPrivacy() != null ? ws.getPrivacy() : defaultVal);
+                        return normalizeWorkingStateProperty(ws, dim, defaultVal);
                     }
                 } else {
                     // 多模式复合名（如 "on;locked"）：按分号拆分，匹配对应 mode 索引的段
@@ -356,7 +366,7 @@ public class SmvDeviceModuleBuilder {
                     if (modeIdx >= 0 && modeIdx < parts.length && !parts[modeIdx].trim().isEmpty()) {
                         String cleanPart = DeviceSmvDataFactory.cleanStateName(parts[modeIdx].trim());
                         if (state.equals(cleanPart)) {
-                            return DeviceSmvDataFactory.normalizeTrustPrivacy(ws.getPrivacy() != null ? ws.getPrivacy() : defaultVal);
+                            return normalizeWorkingStateProperty(ws, dim, defaultVal);
                         }
                     }
                 }
@@ -365,19 +375,36 @@ public class SmvDeviceModuleBuilder {
         return DeviceSmvDataFactory.normalizeTrustPrivacy(defaultVal);
     }
 
-    private void appendInitialValues(StringBuilder content, DeviceSmvData smv, boolean isSensor) {
+    private String normalizeWorkingStateProperty(DeviceManifest.WorkingState state,
+                                                 PropertyDimension dim,
+                                                 String defaultVal) {
+        String value = dim == PropertyDimension.TRUST ? state.getTrust() : state.getPrivacy();
+        return DeviceSmvDataFactory.normalizeTrustPrivacy(value != null ? value : defaultVal);
+    }
+
+    private void appendInitialValues(StringBuilder content, DeviceSmvData smv, boolean isAttack) {
         // 优先级：用户输入 > 模板 InitState > 非确定性
         for (String mode : smv.getModes()) {
             List<String> modeStateList = smv.getModeStates().get(mode);
             if (modeStateList == null || modeStateList.isEmpty()) continue;
 
             // 优先使用用户指定的当前模式状态
+            boolean hasExplicitModeState = smv.getCurrentModeStates().containsKey(mode);
             String userState = smv.getCurrentModeStates().get(mode);
+            if (hasExplicitModeState && (userState == null || !modeStateList.contains(userState))) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                        "Initial state '" + userState + "' for mode '" + mode
+                                + "' is not in " + modeStateList);
+            }
             if (userState == null && smv.getCurrentState() != null) {
                 // M5 修复：currentState 需要清洗后再匹配
                 String cleanCurrentState = DeviceSmvDataFactory.cleanStateName(smv.getCurrentState());
                 if (modeStateList.contains(cleanCurrentState)) {
                     userState = cleanCurrentState;
+                } else if (smv.getModes().size() == 1) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                            "Initial state '" + smv.getCurrentState() + "' for mode '" + mode
+                                    + "' is not in " + modeStateList);
                 }
             }
 
@@ -386,7 +413,12 @@ public class SmvDeviceModuleBuilder {
             } else {
                 // fallback: 模板 InitState
                 String templateState = smv.getTemplateInitModeStates().get(mode);
-                if (templateState != null && modeStateList.contains(templateState)) {
+                if (templateState != null) {
+                    if (!modeStateList.contains(templateState)) {
+                        throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                                "Template initial state '" + templateState + "' for mode '" + mode
+                                        + "' is not in " + modeStateList);
+                    }
                     content.append("\n\tinit(").append(mode).append(") := ").append(templateState).append(";");
                 } else {
                     // 最终 fallback: 非确定性初始状态
@@ -403,7 +435,14 @@ public class SmvDeviceModuleBuilder {
                 continue;
             }
             String initValue = validateInternalInitValue(smv, var);
-            if (initValue != null) {
+            if (isAttack && Boolean.TRUE.equals(var.getFalsifiableWhenCompromised())) {
+                content.append("\n\tinit(").append(var.getName()).append(") :=\n")
+                        .append("\tcase\n")
+                        .append("\t\tis_attack=TRUE: ").append(variableDomainExpression(var)).append(";\n")
+                        .append("\t\tTRUE: ")
+                        .append(initValue != null ? initValue : variableDomainExpression(var)).append(";\n")
+                        .append("\tesac;");
+            } else if (initValue != null) {
                 content.append("\n\tinit(").append(var.getName()).append(") := ").append(initValue).append(";");
             }
         }
@@ -413,26 +452,33 @@ public class SmvDeviceModuleBuilder {
         }
 
         for (String varName : smv.getImpactedVariables()) {
-            if (isEnumVariable(smv, varName)) continue;
+            if (!isNumericVariable(smv, varName)) continue;
             content.append("\n\tinit(").append(varName).append("_rate) := 0;");
         }
     }
 
-    private boolean isEnumVariable(DeviceSmvData smv, String varName) {
-        for (DeviceManifest.InternalVariable var : smv.getVariables()) {
-            if (var.getName().equals(varName) && var.getValues() != null && !var.getValues().isEmpty()) {
-                return true;
-            }
+    private String variableDomainExpression(DeviceManifest.InternalVariable variable) {
+        if (variable.getValues() != null && !variable.getValues().isEmpty()) {
+            List<String> values = variable.getValues().stream()
+                    .map(value -> value.replace(" ", ""))
+                    .toList();
+            return "{" + String.join(", ", values) + "}";
         }
-        return false;
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
+            return variable.getLowerBound() + ".." + variable.getUpperBound();
+        }
+        throw SmvGenerationException.templateInvalid("device",
+                "Variable '" + variable.getName() + "' has no declared value domain");
     }
 
-    /**
-     * 校验内部变量的初始值合法性，返回 null 表示跳过 init（保持非确定初始化）。
-     * 枚举变量：值不在枚举内时回退首值并 warn。
-     * 数值变量：超范围 clamp；非数字忽略用户值并回退默认值。
-     * 其他变量（无枚举/无范围）：不生成 init()，保持原有非确定行为。
-     */
+    private boolean isNumericVariable(DeviceSmvData smv, String varName) {
+        DeviceManifest.InternalVariable impactedDomain = smv.getImpactedEnvironmentVariables().get(varName);
+        return impactedDomain != null
+                && impactedDomain.getLowerBound() != null
+                && impactedDomain.getUpperBound() != null;
+    }
+
+    /** Validate explicit local initial values without changing their authored meaning. */
     private String validateInternalInitValue(DeviceSmvData smv, DeviceManifest.InternalVariable var) {
         String userValue = smv.getVariableValues().get(var.getName());
 
@@ -442,44 +488,45 @@ public class SmvDeviceModuleBuilder {
             for (String v : var.getValues()) {
                 cleanValues.add(v.replace(" ", ""));
             }
-            String defaultValue = cleanValues.get(0);
             if (userValue == null) {
-                return defaultValue;
+                return cleanValues.get(0);
             }
             String cleanUser = userValue.replace(" ", "");
             if (cleanValues.contains(cleanUser)) {
                 return cleanUser;
             }
-            log.warn("Device '{}': init value '{}' for enum variable '{}' not in {}; falling back to '{}'",
-                    smv.getVarName(), userValue, var.getName(), cleanValues, defaultValue);
-            return defaultValue;
+            throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                    "Initial value '" + userValue + "' for enum variable '" + var.getName()
+                            + "' is not in " + cleanValues);
         }
 
         if (var.getLowerBound() != null && var.getUpperBound() != null) {
             // 数值变量
             int lower = var.getLowerBound();
             int upper = var.getUpperBound();
-            String defaultValue = String.valueOf(lower);
             if (userValue == null) {
-                return defaultValue;
+                return String.valueOf(lower);
             }
             try {
                 int parsed = Integer.parseInt(userValue.trim());
                 if (parsed < lower || parsed > upper) {
-                    int clamped = Math.max(lower, Math.min(upper, parsed));
-                    log.warn("Device '{}': init value {} for variable '{}' out of range [{}..{}]; clamped to {}",
-                            smv.getVarName(), parsed, var.getName(), lower, upper, clamped);
-                    return String.valueOf(clamped);
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                            "Initial value " + parsed + " for variable '" + var.getName()
+                                    + "' is outside [" + lower + ".." + upper + "]");
                 }
                 return String.valueOf(parsed);
             } catch (NumberFormatException e) {
-                log.warn("Device '{}': non-numeric init value '{}' for variable '{}' [{}..{}]; falling back to {}",
-                        smv.getVarName(), userValue, var.getName(), lower, upper, defaultValue);
-                return defaultValue;
+                throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                        "Initial value '" + userValue + "' for variable '" + var.getName()
+                                + "' is not a valid integer");
             }
         }
 
-        // 无枚举/无范围的变量：不生成 init()，保持 NuSMV 非确定初始化
+        if (userValue != null) {
+            throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                    "Variable '" + var.getName() + "' has an explicit value but no declared domain");
+        }
+        // No explicit value and no declared domain: preserve the existing non-deterministic state.
         return null;
     }
 

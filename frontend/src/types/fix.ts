@@ -3,41 +3,57 @@
  * 对应后端 DTO: FaultRuleDto, FixResultDto, FixSuggestionDto, ParameterAdjustment, ConditionAdjustment
  */
 
+import type { RuleForm, RuleSourceItemType } from './rule'
+import type { ModelGenerationIssue } from './verify'
+
 // 故障规则定位结果
 export interface FaultRule {
-  ruleIndex: number
-  ruleId?: number
   ruleString: string
-  triggerStep: number
-  targetDevice: string
-  targetAction: string
+  transitionNumber: number
+  targetDeviceLabel: string
+  targetActionLabel: string
   conflicting: boolean
-  conflictWithRuleIndex?: number
+  conflictingRuleString?: string
+  targetEndState?: string
+  conflictingEndState?: string
+  reasonCode: 'TRIGGERED' | 'CONFLICTING_END_STATES'
   reason: string
 }
 
-export type FixStrategyName = 'parameter' | 'condition' | 'disable'
+export interface FaultLocalizationResult {
+  traceId: number
+  violatedSpecId: string
+  sourceModelComplete: boolean
+  sourceDisabledRuleCount: number
+  sourceSkippedSpecCount: number
+  sourceGenerationIssues: ModelGenerationIssue[]
+  faultRules: FaultRule[]
+  summary: string
+  warnings: string[]
+}
+
+export type FixStrategyName = 'parameter' | 'condition' | 'remove'
 
 // §5.1 参数调整结果
 export interface ParameterAdjustment {
-  ruleIndex: number
-  conditionIndex: number
+  targetId: string
   attribute: string
   relation: string
   originalValue: string
   newValue: string
   lowerBound: number
   upperBound: number
+  description: string
 }
 
 // §5.2 条件调整结果
 export interface ConditionAdjustment {
-  ruleIndex: number
-  conditionIndex: number
   action: 'remove' | 'keep' | 'add'
   attribute: string
+  targetType?: RuleSourceItemType
   description: string
-  deviceName?: string
+  ruleDescription?: string
+  deviceLabel?: string
   relation?: string
   value?: string
 }
@@ -48,9 +64,28 @@ export interface FixSuggestion {
   description: string
   parameterAdjustments?: ParameterAdjustment[]
   conditionAdjustments?: ConditionAdjustment[]
-  disabledRuleIndices?: number[]
+  removedRuleDescriptions?: string[]
   verified: boolean
 }
+
+export type FixStrategyAttemptStatus =
+  | 'VERIFIED'
+  | 'NOT_VERIFIED'
+  | 'NO_VERIFIED_SUGGESTION'
+  | 'TIMED_OUT'
+  | 'SKIPPED_TIMEOUT'
+  | 'SKIPPED_NO_SPEC'
+  | 'SKIPPED_NO_FAULT_RULES'
+  | 'SKIPPED_INCOMPLETE_SOURCE_MODEL'
+  | 'SKIPPED_UNSUPPORTED'
+
+export interface FixStrategyAttempt {
+  strategy: FixStrategyName
+  status: FixStrategyAttemptStatus
+  reason: string
+}
+
+export type TemplateSnapshotComparison = 'NOT_CHECKED' | 'UNCHANGED' | 'CHANGED' | 'UNAVAILABLE'
 
 // 修复结果
 export interface FixResult {
@@ -58,15 +93,22 @@ export interface FixResult {
   violatedSpecId: string
   faultRules: FaultRule[]
   suggestions: FixSuggestion[]
+  strategyAttempts: FixStrategyAttempt[]
   fixable: boolean
+  sourceModelComplete: boolean
+  sourceDisabledRuleCount: number
+  sourceSkippedSpecCount: number
+  sourceGenerationIssues: ModelGenerationIssue[]
+  templateSnapshotComparison: TemplateSnapshotComparison
   summary: string
-  unusedPreferredRangeKeys?: string[]
+  warnings: string[]
+  unusedPreferredRangeSelections?: PreferredRangeSelection[]
 }
 
 // 修复请求（可选）
 export interface FixRequest {
   strategies?: FixStrategyName[]
-  preferredRanges?: Record<string, PreferredRange>
+  preferredRangeSelections?: PreferredRangeSelection[]
 }
 
 // Preferred value range for parameter-adjustment fixes.
@@ -76,17 +118,25 @@ export interface PreferredRange {
   upper: number
 }
 
-// 应用修复请求：客户端回传当前展示的建议，服务端会重算并校验等价后再落库。
-export interface FixApplyRequest {
-  strategy: FixStrategyName
-  suggestion: FixSuggestion
-  preferredRanges?: Record<string, PreferredRange>
+// User/API-facing preferred value range target selected from a parameter adjustment.
+export interface PreferredRangeSelection extends PreferredRange {
+  targetId: string
 }
 
-// 应用修复结果：rules 为后端 RuleDto 形状，调用方通常成功后重新拉取画布规则。
+// Apply a strategy only. The backend recomputes and verifies the concrete proposal from the trace.
+export interface FixApplyRequest {
+  strategy: FixStrategyName
+  preferredRangeSelections?: PreferredRangeSelection[]
+}
+
+// Applied-fix result after boardApi maps the authoritative backend RuleDto snapshot.
 export interface FixApplyResult {
   applied: boolean
   strategy: FixStrategyName
+  verificationRechecked: boolean
+  appliedSuggestion: FixSuggestion
+  previousRuleCount: number
+  currentRuleCount: number
   message: string
-  rules: Record<string, unknown>[]
+  rules: RuleForm[]
 }

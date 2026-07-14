@@ -97,8 +97,8 @@ class BoardStorageServiceImplStripedLockTest {
      */
     private BoardStorageServiceImpl createMinimalService() {
         return new BoardStorageServiceImpl(
-                null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null
         );
     }
 }

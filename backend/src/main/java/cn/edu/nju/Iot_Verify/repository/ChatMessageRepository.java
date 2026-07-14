@@ -4,6 +4,7 @@ package cn.edu.nju.Iot_Verify.repository;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessagePo, Long> {
@@ -15,4 +16,5 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessagePo, Long
     List<ChatMessagePo> findTop80BySessionIdOrderByCreatedAtDesc(String sessionId);
 
     void deleteBySessionId(String sessionId);
+    void deleteBySessionIdIn(Collection<String> sessionIds);
 }

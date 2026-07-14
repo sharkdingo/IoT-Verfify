@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationOutcome;
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.TaskView;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -28,6 +30,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public abstract class AbstractAsyncTaskService<T extends TaskView> {
 
     protected static final int MAX_OUTPUT_LENGTH = 10_000;
+    private static final String DIAGNOSTIC_LOSS_MESSAGE =
+            "[diagnostic-loss] Task diagnostic logs could not be serialized or parsed.";
+    private static final String DIAGNOSTIC_LOSS_JSON =
+            "[\"[diagnostic-loss] Task diagnostic logs could not be serialized or parsed.\"]";
     protected final ObjectMapper objectMapper;
 
     // ── 并发容器（private，通过语义操作方法暴露）──────────────────────
@@ -55,10 +61,6 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
         return cancelledTasks.contains(taskId);
     }
 
-    protected void markCancelled(Long taskId) {
-        cancelledTasks.add(taskId);
-    }
-
     /**
      * 从取消标记集合中移除任务。
      * @return true 如果任务确实在已取消集合中（即需要执行取消收尾）
@@ -75,10 +77,6 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
         taskProgress.remove(taskId);
     }
 
-    protected Thread getRunningTaskThread(Long taskId) {
-        return runningTasks.get(taskId);
-    }
-
     // ── 直接搬入的具体方法（无领域差异）─────────────────────────────
 
     protected String serializeCheckLogs(List<String> logs) {
@@ -86,7 +84,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
             return objectMapper.writeValueAsString(logs == null ? List.of() : logs);
         } catch (Exception e) {
             log.warn("Failed to serialize check logs", e);
-            return "[]";
+            return DIAGNOSTIC_LOSS_JSON;
         }
     }
 
@@ -98,7 +96,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
             return objectMapper.readValue(task.getCheckLogsJson(), new TypeReference<List<String>>() {});
         } catch (Exception e) {
             log.warn("Failed to parse checkLogsJson for {} {}", taskResourceType, task.getId(), e);
-            return new ArrayList<>();
+            return new ArrayList<>(List.of(DIAGNOSTIC_LOSS_MESSAGE));
         }
     }
 
@@ -108,6 +106,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
             task.setCheckLogsJson(objectMapper.writeValueAsString(logs == null ? List.of() : logs));
         } catch (Exception e) {
             log.warn("Failed to serialize check logs for {} {}", taskResourceType, task.getId(), e);
+            task.setCheckLogsJson(DIAGNOSTIC_LOSS_JSON);
         }
     }
 
@@ -163,28 +162,69 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
     /**
      * 取消任务。
      *
-     * <p><b>语义保真</b>：先归属校验 → 原子 DB cancel → updated==0 返回 false。
+     * <p><b>语义保真</b>：先归属校验 → 原子 DB cancel → 返回实际取消结果和终态。
      *
      * <p>逻辑来源：VerificationServiceImpl:L504-529, SimulationServiceImpl:L298-321
      */
-    protected boolean cancelTask(Long userId, Long taskId) {
-        T task = findTaskByIdAndUserId(taskId, userId).orElse(null);
-        if (task == null) return false;
+    protected TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
+        T task = findTaskByIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
+        String statusBeforeCancellation = task.getTaskStatusName();
 
-        int updated = atomicCancelTask(taskId, LocalDateTime.now());
-        if (updated == 0) {
-            return false;
-        }
-
+        boolean markerWasPresent = cancelledTasks.contains(taskId);
         cancelledTasks.add(taskId);
-        Thread taskThread = runningTasks.get(taskId);
-        if (taskThread != null && taskThread.isAlive()) {
-            taskThread.interrupt();
-        } else {
-            cancelledTasks.remove(taskId);
-        }
+        try {
+            int updated = atomicCancelTask(taskId, LocalDateTime.now());
+            Thread taskThread = runningTasks.get(taskId);
+            if (updated == 0) {
+                T currentTask = findTaskByIdAndUserId(taskId, userId)
+                        .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
+                String currentStatus = currentTask.getTaskStatusName();
+                boolean alreadyCancelled = currentTask.isCancelledStatus();
+                if (alreadyCancelled && taskThread != null && taskThread.isAlive()) {
+                    taskThread.interrupt();
+                } else if (!markerWasPresent) {
+                    cancelledTasks.remove(taskId);
+                }
+                return TaskCancellationResultDto.builder()
+                        .taskId(taskId)
+                        .cancellationAccepted(false)
+                        .cancellationOutcome(cancellationOutcomeFor(currentStatus))
+                        .taskStatus(currentStatus)
+                        .executionMayStillBeStopping(alreadyCancelled
+                                && taskThread != null && taskThread.isAlive())
+                        .build();
+            }
 
-        return true;
+            boolean runningExecutionMayStillBeStopping = "RUNNING".equals(statusBeforeCancellation);
+            if (taskThread != null && taskThread.isAlive()) {
+                runningExecutionMayStillBeStopping = true;
+                taskThread.interrupt();
+            } else if (!markerWasPresent) {
+                cancelledTasks.remove(taskId);
+            }
+            return TaskCancellationResultDto.builder()
+                    .taskId(taskId)
+                    .cancellationAccepted(true)
+                    .cancellationOutcome(TaskCancellationOutcome.ACCEPTED)
+                    .taskStatus("CANCELLED")
+                    .executionMayStillBeStopping(runningExecutionMayStillBeStopping)
+                    .build();
+        } catch (RuntimeException e) {
+            if (!markerWasPresent) {
+                cancelledTasks.remove(taskId);
+            }
+            throw e;
+        }
+    }
+
+    private static TaskCancellationOutcome cancellationOutcomeFor(String status) {
+        return switch (status) {
+            case "CANCELLED" -> TaskCancellationOutcome.ALREADY_CANCELLED;
+            case "COMPLETED" -> TaskCancellationOutcome.ALREADY_COMPLETED;
+            case "FAILED" -> TaskCancellationOutcome.ALREADY_FAILED;
+            default -> TaskCancellationOutcome.NO_LONGER_CANCELLABLE;
+        };
     }
 
     /**

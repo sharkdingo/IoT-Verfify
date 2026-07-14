@@ -1,8 +1,8 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
@@ -28,7 +28,7 @@ class DeviceNodeMapperTest {
                 .build();
     }
 
-    // --- toDto state fallback ---
+    // --- toDto state integrity ---
 
     @Test
     void toDto_normalState_preserved() {
@@ -39,9 +39,10 @@ class DeviceNodeMapperTest {
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = {"   ", "\t"})
-    void toDto_blankOrNullState_fallsBackToWorking(String state) {
-        DeviceNodeDto dto = mapper.toDto(samplePo(state));
-        assertEquals("Working", dto.getState());
+    void toDto_blankOrNullState_failsClosed(String state) {
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(samplePo(state)));
+        assertEquals("state", error.getField());
     }
 
     @Test
@@ -55,6 +56,7 @@ class DeviceNodeMapperTest {
     void toDto_mapsAllFields() {
         DeviceNodePo po = samplePo("off");
         po.setCurrentStateTrust("trusted");
+        po.setCurrentStatePrivacy("private");
         DeviceNodeDto dto = mapper.toDto(po);
 
         assertEquals("node_1", dto.getId());
@@ -66,6 +68,18 @@ class DeviceNodeMapperTest {
         assertEquals(100, dto.getWidth());
         assertEquals(80, dto.getHeight());
         assertEquals("trusted", dto.getCurrentStateTrust());
+        assertEquals("private", dto.getCurrentStatePrivacy());
+    }
+
+    @Test
+    void toDto_blankPersistedRuntimeJsonFailsClosed() {
+        DeviceNodePo po = samplePo("off");
+        po.setVariablesJson("  ");
+
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(po));
+
+        assertEquals("variablesJson", error.getField());
     }
 
     // --- toEntity ---
@@ -77,25 +91,24 @@ class DeviceNodeMapperTest {
 
     @Test
     void toEntity_withUserId_setsUserId() {
-        DeviceNodeDto dto = mapper.toDto(samplePo("on"));
+        DeviceNodePo source = samplePo("on");
+        source.setCurrentStateTrust("untrusted");
+        source.setCurrentStatePrivacy("private");
+        DeviceNodeDto dto = mapper.toDto(source);
         DeviceNodePo po = mapper.toEntity(dto, 42L);
         assertEquals(42L, po.getUserId());
+        assertEquals("untrusted", po.getCurrentStateTrust());
+        assertEquals("private", po.getCurrentStatePrivacy());
     }
 
-    // --- toVerificationDto ---
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t"})
+    void toEntity_blankOrNullState_isCanonicalizedToWorking(String state) {
+        DeviceNodeDto dto = mapper.toDto(samplePo("on"));
+        dto.setState(state);
 
-    @Test
-    void toVerificationDto_null_returnsNull() {
-        assertNull(mapper.toVerificationDto(null));
+        assertEquals("Working", mapper.toEntity(dto).getState());
     }
 
-    @Test
-    void toVerificationDto_mapsStateFromDto() {
-        // Verify that toVerificationDto picks up the already-sanitized state from DTO
-        DeviceNodeDto dto = mapper.toDto(samplePo(null)); // state fallback to "Working"
-        DeviceVerificationDto vDto = mapper.toVerificationDto(dto);
-        assertEquals("Working", vDto.getState());
-        assertEquals("node_1", vDto.getVarName());
-        assertEquals("Light", vDto.getTemplateName());
-    }
 }

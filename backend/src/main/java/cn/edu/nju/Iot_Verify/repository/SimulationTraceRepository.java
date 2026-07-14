@@ -19,4 +19,6 @@ public interface SimulationTraceRepository extends JpaRepository<SimulationTrace
      * 根据ID和用户ID查询模拟轨迹
      */
     Optional<SimulationTracePo> findByIdAndUserId(Long id, Long userId);
+
+    void deleteByUserId(Long userId);
 }

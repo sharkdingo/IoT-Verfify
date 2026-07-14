@@ -2,13 +2,19 @@ package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
+import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import cn.edu.nju.Iot_Verify.util.SpecificationFormulaPreview;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +22,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -26,8 +33,7 @@ import java.util.UUID;
 @Component
 public class ManageSpecTool extends AbstractAiTool {
 
-    private static final Set<String> TARGET_TYPES = Set.of("state", "variable", "api", "trust", "privacy");
-    private static final Set<String> RELATIONS = Set.of("=", "!=", ">", "<", ">=", "<=", "in", "not in");
+    private static final Set<String> TARGET_TYPES = Set.of("state", "mode", "variable", "api", "trust", "privacy");
     private static final Set<String> API_STATE_RELATIONS = Set.of("=", "!=", "in", "not in");
     private static final Set<String> TEMPLATE_IDS = Set.of("1", "2", "3", "4", "5", "6", "7");
 
@@ -48,15 +54,18 @@ public class ManageSpecTool extends AbstractAiTool {
         Map<String, Object> conditionItemSchema = Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "deviceId", Map.of("type", "string", "description", "Device node ID on the board (optional when deviceLabel is provided)"),
-                        "deviceLabel", Map.of("type", "string", "description", "Device display name (optional when deviceId is provided)"),
-                        "targetType", Map.of("type", "string", "enum", List.of("state", "variable", "api", "trust", "privacy"),
-                                "description", "What to check: state, variable, api signal, trust level, or privacy level"),
-                        "key", Map.of("type", "string", "description", "The key to check (e.g. state, variable name, API name)"),
-                        "relation", Map.of("type", "string", "description", "Comparison: =, !=, >, <, >=, <=, in, not in"),
-                        "value", Map.of("type", "string", "description", "Expected value")
+                        "deviceId", Map.of("type", "string", "description", "Canonical device node ID on the board"),
+                        "deviceLabel", Map.of("type", "string", "description", "Optional display label; ignored for identity resolution"),
+                        "targetType", Map.of("type", "string", "enum", List.of("state", "mode", "variable", "api", "trust", "privacy"),
+                                "description", "What to check: full state, mode value, variable, API signal, trust level, or privacy level"),
+                        "key", Map.of("type", "string", "description", "The key to check: state for full state; mode name for mode; variable name for variable; Signal=true API name for api; mode name or variable name for trust/privacy according to propertyScope"),
+                        "propertyScope", Map.of("type", "string", "enum", List.of("state", "variable"),
+                                "description", "Required only for trust/privacy. state checks the label of the currently active state in the mode named by key; variable checks the variable named by key."),
+                        "relation", Map.of("type", "string", "description", "Comparison. Required for non-API conditions. All value conditions support =, !=, in, not in; numeric variables additionally support >, <, >=, <=. Omit with value for an API condition to materialize '= TRUE'."),
+                        "value", Map.of("type", "string", "description", "Expected value. Required for non-API conditions. API uses TRUE/FALSE and defaults with an omitted relation/value pair to TRUE; trust uses trusted/untrusted; privacy uses public/private")
                 ),
-                "required", List.of("targetType", "key")
+                "required", List.of("deviceId", "targetType", "key"),
+                "additionalProperties", false
         );
 
         Map<String, Object> props = new HashMap<>();
@@ -67,35 +76,35 @@ public class ManageSpecTool extends AbstractAiTool {
         ));
         props.put("templateId", Map.of(
                 "type", "string",
-                "description", "Optional for add. A short ID for the spec template (e.g. 1,2,3,4,5,6,7)."
-        ));
-        props.put("templateLabel", Map.of(
-                "type", "string",
-                "description", "Optional for add. Human-readable label for the property."
+                "description", "Required for add. Template ID 1,2,3,7 use aConditions only; 4,5,6 use ifConditions and thenConditions only."
         ));
         props.put("aConditions", Map.of(
                 "type", "array",
-                "description", "For add. A-part conditions. Can be empty.",
+                "description", "For add. A-part conditions. Required for templateId 1,2,3,7 and must be empty for 4,5,6.",
                 "items", conditionItemSchema
         ));
         props.put("ifConditions", Map.of(
                 "type", "array",
-                "description", "For add. IF-part conditions. Can be empty.",
+                "description", "For add. IF-part conditions. Required for templateId 4,5,6 and must be empty for 1,2,3,7.",
                 "items", conditionItemSchema
         ));
         props.put("thenConditions", Map.of(
                 "type", "array",
-                "description", "For add. THEN-part conditions. Optional for A-only templates and required for implication-style templates.",
+                "description", "For add. THEN-part conditions. Required for templateId 4,5,6 and must be empty for 1,2,3,7.",
                 "items", conditionItemSchema
         ));
         props.put("specId", Map.of(
                 "type", "string",
                 "description", "Required for delete. The ID of the specification to delete."
         ));
+        props.put("confirmed", Map.of(
+                "type", "boolean",
+                "description", "For delete: use false to preview the exact specification without changing it; use true only in a later turn after the user explicitly confirms that preview. Ignored for add."
+        ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, List.of("action"));
 
-        return LlmToolSpec.of(getName(), "Add or delete a formal specification. Use list_specs to inspect existing specs before deleting.", schema);
+        return LlmToolSpec.of(getName(), "Add a formal specification, or preview/delete one through explicit two-turn confirmation. Use list_specs before deleting.", schema);
     }
 
     protected String doExecute(Long userId, String argsJson) {
@@ -106,7 +115,10 @@ public class ManageSpecTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String action = args.path("action").asText("").trim().toLowerCase(Locale.ROOT);
+            requireOnlyFields(args, "arguments", Set.of(
+                    "action", "templateId", "aConditions", "ifConditions", "thenConditions",
+                    "specId", "confirmed"));
+            String action = requiredTextField(args, "action", "arguments").toLowerCase(Locale.ROOT);
 
             return switch (action) {
                 case "add" -> executeAdd(userId, args);
@@ -114,6 +126,8 @@ public class ManageSpecTool extends AbstractAiTool {
                 default -> errorJson("Unknown action: " + action + ". Use 'add' or 'delete'.",
                         "VALIDATION_ERROR", 400);
             };
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (IllegalArgumentException e) {
             log.warn("manage_spec validation failed: {}", e.getMessage());
             return errorJson(e.getMessage(), "VALIDATION_ERROR", 400);
@@ -131,6 +145,13 @@ public class ManageSpecTool extends AbstractAiTool {
     }
 
     private String executeAdd(Long userId, JsonNode args) throws Exception {
+        requireOnlyFields(args, "arguments", Set.of(
+                "action", "templateId", "aConditions", "ifConditions", "thenConditions"));
+        String templateId = requiredTextField(args, "templateId", "arguments");
+        if (!TEMPLATE_IDS.contains(templateId)) {
+            return errorJson("Unsupported templateId '" + templateId + "'. Allowed: 1,2,3,4,5,6,7.",
+                    "VALIDATION_ERROR", 400);
+        }
         DeviceLookup deviceLookup = buildDeviceLookup(userId);
         List<SpecConditionDto> aConditions = parseConditions(args.path("aConditions"), "a", deviceLookup);
         List<SpecConditionDto> ifConditions = parseConditions(args.path("ifConditions"), "if", deviceLookup);
@@ -141,19 +162,6 @@ public class ManageSpecTool extends AbstractAiTool {
                     "VALIDATION_ERROR", 400);
         }
 
-        String templateId = trimToNull(args.path("templateId").asText(null));
-        if (templateId == null) {
-            templateId = "1";
-        }
-        if (!TEMPLATE_IDS.contains(templateId)) {
-            return errorJson("Unsupported templateId '" + templateId + "'. Allowed: 1,2,3,4,5,6,7.",
-                    "VALIDATION_ERROR", 400);
-        }
-        String templateLabel = trimToNull(args.path("templateLabel").asText(null));
-        if (templateLabel == null) {
-            templateLabel = "Spec " + templateId;
-        }
-
         String templateCheckError = validateTemplateShape(templateId, aConditions, ifConditions, thenConditions);
         if (templateCheckError != null) {
             return errorJson(templateCheckError, "VALIDATION_ERROR", 400);
@@ -162,109 +170,121 @@ public class ManageSpecTool extends AbstractAiTool {
         SpecificationDto spec = new SpecificationDto();
         spec.setId(UUID.randomUUID().toString());
         spec.setTemplateId(templateId);
-        spec.setTemplateLabel(templateLabel);
         spec.setAConditions(aConditions);
         spec.setIfConditions(ifConditions);
         spec.setThenConditions(thenConditions);
 
-        List<SpecificationDto> saved = boardStorageService.addSpec(userId, spec);
+        CollectionMutationResultDto<SpecificationDto> mutation = boardStorageService.addSpec(userId, spec);
 
-        return successJson(Map.of(
-                "message", "Specification added successfully.",
-                "specId", spec.getId(),
-                "totalSpecs", saved.size()
-        ), "Specification added successfully.");
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("message", "Specification created as a structured property. It has not been formally verified.");
+        response.put("operation", "created");
+        response.put("verificationStatus", "NOT_VERIFIED");
+        response.put("specification", SpecificationToolPresenter.present(
+                mutation.getAffectedItem(), deviceLookup.presentationContext()));
+        response.put("totalSpecs", mutation.getCurrentCount());
+        return successJson(response, "Specification created but not formally verified.");
     }
 
     private String executeDelete(Long userId, JsonNode args) throws Exception {
-        String specId = trimToNull(args.path("specId").asText(null));
-        if (specId == null) {
-            return errorJson("'specId' is required for delete action.",
-                    "VALIDATION_ERROR", 400);
+        requireOnlyFields(args, "arguments", Set.of("action", "specId", "confirmed"));
+        String specId = requiredTextField(args, "specId", "arguments");
+
+        SpecificationDto target = safeList(boardStorageService.getSpecs(userId)).stream()
+                .filter(spec -> spec != null && specId.equals(spec.getId()))
+                .findFirst()
+                .orElse(null);
+        if (target == null) {
+            return errorJson("Specification not found: " + specId, "NOT_FOUND", 404);
         }
 
-        List<SpecificationDto> remaining = boardStorageService.removeSpec(userId, specId);
-        if (remaining == null) {
-            return errorJson("Specification with ID '" + specId + "' not found.",
-                    "NOT_FOUND", 404);
+        boolean confirmed = booleanArg(args, "confirmed", false);
+        if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+            Map<String, Object> preview = new LinkedHashMap<>();
+            preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this specification.");
+            preview.put("operation", "preview");
+            preview.put("requiresUserConfirmation", true);
+            preview.put("specification", SpecificationToolPresenter.present(
+                    target,
+                    currentPresentationContext(userId)));
+            return readOnlySuccessJson(preview, "Specification deletion preview unavailable.");
         }
 
-        return successJson(Map.of(
-                "message", "Specification deleted successfully.",
-                "totalSpecs", remaining.size()
-        ), "Specification deleted successfully.");
+        CollectionMutationResultDto<SpecificationDto> mutation = boardStorageService.removeSpec(userId, specId);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("message", "Specification deleted successfully.");
+        response.put("operation", "deleted");
+        response.put("deletedSpecification", SpecificationToolPresenter.present(
+                mutation.getAffectedItem(),
+                currentPresentationContext(userId)));
+        response.put("totalSpecs", mutation.getCurrentCount());
+        return successJson(response, "Specification deleted successfully.");
     }
 
-    private List<SpecConditionDto> parseConditions(JsonNode node, String side, DeviceLookup deviceLookup) {
+    private List<SpecConditionDto> parseConditions(JsonNode node,
+                                                   String side,
+                                                   DeviceLookup deviceLookup) throws ArgValidationException {
         List<SpecConditionDto> conditions = new ArrayList<>();
-        if (node == null || node.isMissingNode() || !node.isArray()) {
+        if (node == null || node.isMissingNode()) {
             return conditions;
+        }
+        String collectionPath = "arguments." + side + "Conditions";
+        if (!node.isArray()) {
+            throw new ArgValidationException(errorJson(
+                    collectionPath + " must be a JSON array when provided.",
+                    "VALIDATION_ERROR", 400));
         }
 
         int index = 0;
         for (JsonNode cn : node) {
-            String inputDeviceId = trimToNull(cn.path("deviceId").asText(null));
-            String inputDeviceLabel = trimToNull(cn.path("deviceLabel").asText(null));
-            String resolvedById = null;
-            String resolvedByLabel = null;
-
-            if (inputDeviceId != null) {
-                resolvedById = resolveDeviceIdById(inputDeviceId, deviceLookup);
-                if (resolvedById == null) {
-                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                            + "' cannot resolve deviceId '" + inputDeviceId + "' to an existing device.");
-                }
+            String displaySide = side == null ? "UNKNOWN" : side.trim().toUpperCase(Locale.ROOT);
+            String conditionLabel = "Condition " + (index + 1) + " on '" + displaySide + "'";
+            String conditionPath = collectionPath + "[" + index + "]";
+            requireOnlyFields(cn, conditionPath, Set.of(
+                    "deviceId", "deviceLabel", "targetType", "key", "propertyScope", "relation", "value"));
+            String inputDeviceId = nullableTextField(cn, "deviceId", conditionPath);
+            String deviceId = resolveDeviceIdById(inputDeviceId, deviceLookup);
+            if (deviceId == null) {
+                throw new IllegalArgumentException(conditionLabel
+                        + " must include an existing deviceId.");
             }
-
-            if (inputDeviceLabel != null) {
-                List<String> matchedIds = resolveDeviceIdsByLabel(inputDeviceLabel, deviceLookup);
-                if (matchedIds.isEmpty()) {
-                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                            + "' cannot resolve deviceLabel '" + inputDeviceLabel + "' to an existing deviceId.");
-                }
-                if (matchedIds.size() > 1) {
-                    throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                            + "' has ambiguous deviceLabel '" + inputDeviceLabel
-                            + "', matched deviceIds: " + matchedIds + ".");
-                }
-                resolvedByLabel = matchedIds.get(0);
-            }
-
-            String deviceId = resolvedById != null ? resolvedById : resolvedByLabel;
-            if (resolvedById != null && resolvedByLabel != null && !resolvedById.equals(resolvedByLabel)) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' has inconsistent deviceId/deviceLabel: deviceId '" + inputDeviceId
-                        + "' maps to '" + resolvedById + "', but deviceLabel '" + inputDeviceLabel
-                        + "' maps to '" + resolvedByLabel + "'.");
-            }
-            String targetType = trimToNull(cn.path("targetType").asText(null));
-            String key = trimToNull(cn.path("key").asText(null));
+            String targetType = nullableTextField(cn, "targetType", conditionPath);
+            String key = nullableTextField(cn, "key", conditionPath);
 
             if (deviceId == null || targetType == null || key == null) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' must include non-empty targetType/key, and either deviceId or resolvable deviceLabel.");
+                throw new IllegalArgumentException(conditionLabel
+                        + " must include non-empty deviceId, targetType, and key.");
             }
 
             String normalizedTargetType = targetType.toLowerCase(Locale.ROOT);
             if (!TARGET_TYPES.contains(normalizedTargetType)) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' has unsupported targetType '" + targetType
-                        + "'. Allowed: state, variable, api, trust, privacy.");
+                throw new IllegalArgumentException(conditionLabel
+                        + " has unsupported targetType '" + targetType
+                        + "'. Allowed: state, mode, variable, api, trust, privacy.");
+            }
+            String propertyScope = nullableTextField(cn, "propertyScope", conditionPath);
+            if ("trust".equals(normalizedTargetType) || "privacy".equals(normalizedTargetType)) {
+                propertyScope = propertyScope == null ? null : propertyScope.toLowerCase(Locale.ROOT);
+                if (!Set.of("state", "variable").contains(propertyScope)) {
+                    throw new IllegalArgumentException(conditionLabel
+                            + " requires propertyScope='state' or 'variable' for trust/privacy.");
+                }
+            } else if (propertyScope != null) {
+                throw new IllegalArgumentException(conditionLabel
+                        + " may use propertyScope only with trust/privacy.");
             }
 
-            String relationInput = trimToNull(cn.path("relation").asText(null));
+            String relationInput = nullableTextField(cn, "relation", conditionPath);
             String relation = normalizeRelation(relationInput);
-            String value = trimToNull(cn.path("value").asText(null));
+            String value = nullableTextField(cn, "value", conditionPath);
 
             if (relationInput != null && relation == null) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' has unsupported relation '" + relationInput
+                throw new IllegalArgumentException(conditionLabel
+                        + " has unsupported relation '" + relationInput
                         + "'. Allowed: =, !=, >, <, >=, <=, in, not in.");
             }
 
-            if (relation == null && value != null) {
-                relation = "=";
-            }
             if ("api".equals(normalizedTargetType)) {
                 if (relation == null) {
                     relation = "=";
@@ -275,30 +295,44 @@ public class ManageSpecTool extends AbstractAiTool {
             }
 
             if (relation == null || value == null) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' requires relation/value (api allows default '= TRUE').");
+                throw new IllegalArgumentException(conditionLabel
+                        + " requires relation/value (api allows default '= TRUE').");
             }
 
             if (("in".equals(relation) || "not in".equals(relation)) && isEmptyValueList(value)) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' has empty value list for relation '" + relation + "'.");
+                throw new IllegalArgumentException(conditionLabel
+                        + " has empty value list for relation '" + relation + "'.");
             }
 
-            if (("state".equals(normalizedTargetType) || "api".equals(normalizedTargetType))
+            if (("state".equals(normalizedTargetType)
+                    || "mode".equals(normalizedTargetType)
+                    || "api".equals(normalizedTargetType)
+                    || "trust".equals(normalizedTargetType)
+                    || "privacy".equals(normalizedTargetType))
                     && !API_STATE_RELATIONS.contains(relation)) {
-                throw new IllegalArgumentException("Condition index " + index + " on '" + side
-                        + "' targetType='" + normalizedTargetType + "' only supports =, !=, in, not in.");
+                throw new IllegalArgumentException(conditionLabel
+                        + " targetType='" + normalizedTargetType + "' only supports =, !=, in, not in.");
             }
 
             SpecConditionDto dto = new SpecConditionDto();
             dto.setId(UUID.randomUUID().toString());
             dto.setSide(side);
             dto.setDeviceId(deviceId);
-            dto.setDeviceLabel(inputDeviceLabel != null ? inputDeviceLabel : deviceId);
+            dto.setDeviceLabel(deviceLookup.labelsById().getOrDefault(deviceId, deviceId));
             dto.setTargetType(normalizedTargetType);
             dto.setKey(key);
+            dto.setPropertyScope(propertyScope);
             dto.setRelation(relation);
             dto.setValue(value);
+            String semanticError = BoardSemanticValidator.validateSpecCondition(
+                    deviceLookup.semanticContext(),
+                    dto,
+                    side,
+                    index
+            );
+            if (semanticError != null) {
+                throw new IllegalArgumentException(semanticError);
+            }
             conditions.add(dto);
             index++;
         }
@@ -306,9 +340,11 @@ public class ManageSpecTool extends AbstractAiTool {
     }
 
     private DeviceLookup buildDeviceLookup(Long userId) {
+        List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+        List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
         Map<String, String> idsByKey = new HashMap<>();
-        Map<String, List<String>> idsByLabelKey = new HashMap<>();
-        for (DeviceNodeDto node : safeList(boardStorageService.getNodes(userId))) {
+        Map<String, String> labelsById = new HashMap<>();
+        for (DeviceNodeDto node : nodes) {
             if (node == null) {
                 continue;
             }
@@ -319,14 +355,21 @@ public class ManageSpecTool extends AbstractAiTool {
             idsByKey.put(normalizeLookupKey(id), id);
             String label = trimToNull(node.getLabel());
             if (label != null) {
-                String labelKey = normalizeLookupKey(label);
-                List<String> ids = idsByLabelKey.computeIfAbsent(labelKey, k -> new ArrayList<>());
-                if (!ids.contains(id)) {
-                    ids.add(id);
-                }
+                labelsById.put(id, label);
             }
         }
-        return new DeviceLookup(idsByKey, idsByLabelKey);
+        return new DeviceLookup(
+                idsByKey,
+                labelsById,
+                BoardSemanticValidator.context(nodes, templates),
+                SpecificationToolPresenter.context(nodes, templates)
+        );
+    }
+
+    private SpecificationFormulaPreview.Context currentPresentationContext(Long userId) {
+        return SpecificationToolPresenter.context(
+                safeList(boardStorageService.getNodes(userId)),
+                safeList(boardStorageService.getDeviceTemplates(userId)));
     }
 
     private String resolveDeviceIdById(String value, DeviceLookup lookup) {
@@ -336,29 +379,45 @@ public class ManageSpecTool extends AbstractAiTool {
         return lookup.idsByKey().get(normalizeLookupKey(value));
     }
 
-    private List<String> resolveDeviceIdsByLabel(String value, DeviceLookup lookup) {
-        if (value == null || lookup == null || lookup.idsByLabelKey().isEmpty()) {
-            return List.of();
-        }
-        List<String> ids = lookup.idsByLabelKey().get(normalizeLookupKey(value));
-        return ids == null ? List.of() : ids;
-    }
-
     private String normalizeLookupKey(String value) {
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
-    private record DeviceLookup(Map<String, String> idsByKey, Map<String, List<String>> idsByLabelKey) {
+    private record DeviceLookup(Map<String, String> idsByKey,
+                                Map<String, String> labelsById,
+                                BoardSemanticValidator.BoardContext semanticContext,
+                                SpecificationFormulaPreview.Context presentationContext) {
     }
 
     private String validateTemplateShape(String templateId,
                                          List<SpecConditionDto> aConditions,
                                          List<SpecConditionDto> ifConditions,
                                          List<SpecConditionDto> thenConditions) {
-        // template 2/3/7 use aConditions only
-        if ("2".equals(templateId) || "3".equals(templateId) || "7".equals(templateId)) {
+        // single-side templates use aConditions only
+        if ("1".equals(templateId) || "2".equals(templateId) || "3".equals(templateId) || "7".equals(templateId)) {
             if (aConditions.isEmpty()) {
                 return "Template " + templateId + " requires non-empty aConditions.";
+            }
+            if (!ifConditions.isEmpty() || !thenConditions.isEmpty()) {
+                return "Template " + templateId + " uses aConditions only; ifConditions and thenConditions must be empty.";
+            }
+            if ("7".equals(templateId)) {
+                for (int index = 0; index < aConditions.size(); index++) {
+                    SpecConditionDto condition = aConditions.get(index);
+                    String targetType = condition.getTargetType();
+                    String relation = normalizeRelation(condition.getRelation());
+                    if ("trust".equals(targetType) || "privacy".equals(targetType)) {
+                        return "Template 7 derives the MEDIC control-source label automatically; condition " + (index + 1)
+                                + " must describe a protected state, mode, variable, or signal API.";
+                    }
+                    if (("state".equals(targetType) || "mode".equals(targetType)) && !"=".equals(relation)) {
+                        return "Template 7 state and mode condition " + (index + 1) + " must use '='.";
+                    }
+                    if ("api".equals(targetType)
+                            && (!"=".equals(relation) || !"TRUE".equalsIgnoreCase(condition.getValue()))) {
+                        return "Template 7 API condition " + (index + 1) + " must use '= TRUE'.";
+                    }
+                }
             }
             return null;
         }
@@ -368,40 +427,20 @@ public class ManageSpecTool extends AbstractAiTool {
             if (ifConditions.isEmpty() || thenConditions.isEmpty()) {
                 return "Template " + templateId + " requires non-empty ifConditions and thenConditions.";
             }
-            return null;
-        }
-
-        // template 1: allow either A-only or IF-THEN
-        if ("1".equals(templateId)) {
-            boolean validA = !aConditions.isEmpty();
-            boolean validImplication = !ifConditions.isEmpty() && !thenConditions.isEmpty();
-            if (!validA && !validImplication) {
-                return "Template 1 (always): requires non-empty aConditions for AG(A), or both ifConditions and thenConditions for AG(IF→THEN).";
+            if (!aConditions.isEmpty()) {
+                return "Template " + templateId + " uses ifConditions/thenConditions only; aConditions must be empty.";
             }
+            return null;
         }
         return null;
     }
 
     private String normalizeRelation(String relation) {
-        if (relation == null) {
+        String normalized = SmvRelationUtils.normalizeRelation(relation);
+        if (normalized == null || normalized.isBlank()) {
             return null;
         }
-        String normalized = relation.trim();
-        if (normalized.isEmpty()) {
-            return null;
-        }
-        normalized = switch (normalized.toUpperCase(Locale.ROOT)) {
-            case "EQ", "==" -> "=";
-            case "NEQ", "!=" -> "!=";
-            case "GT" -> ">";
-            case "GTE" -> ">=";
-            case "LT" -> "<";
-            case "LTE" -> "<=";
-            case "IN" -> "in";
-            case "NOT_IN", "NOT IN" -> "not in";
-            default -> normalized;
-        };
-        return RELATIONS.contains(normalized) ? normalized : null;
+        return SmvRelationUtils.isSupportedRelation(normalized) ? normalized : null;
     }
 
     private boolean isEmptyValueList(String value) {

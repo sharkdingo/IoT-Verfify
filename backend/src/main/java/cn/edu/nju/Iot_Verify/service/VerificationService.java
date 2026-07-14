@@ -1,11 +1,16 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 验证服务接口
@@ -21,6 +26,12 @@ public interface VerificationService {
      */
     VerificationResultDto verify(Long userId, VerificationRequestDto request);
 
+    /** Internal board-run path using manifests captured in the same persisted board snapshot. */
+    VerificationResultDto verifyWithTemplateSnapshot(
+            Long userId,
+            VerificationRequestDto request,
+            Map<String, DeviceManifest> templateManifests);
+
     /**
      * 校验请求、创建任务并提交异步验证。请求非法时不会创建任务；队列拒绝时会
      * 将已创建任务标记为失败并抛出 ServiceUnavailableException。
@@ -30,6 +41,12 @@ public interface VerificationService {
      * @return 任务ID
      */
     Long submitVerification(Long userId, VerificationRequestDto request);
+
+    /** Internal async board-run path using manifests captured with the request collections. */
+    Long submitVerificationWithTemplateSnapshot(
+            Long userId,
+            VerificationRequestDto request,
+            Map<String, DeviceManifest> templateManifests);
     
     /**
      * 获取任务状态
@@ -48,6 +65,18 @@ public interface VerificationService {
      * @return 按创建时间倒序排列的任务摘要
      */
     List<VerificationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds);
+
+    /** Remove a failed or cancelled task that produced no history result. */
+    void deleteTask(Long userId, Long taskId);
+
+    /** Completed verification results, independent of foreground/background execution mode. */
+    List<VerificationRunSummaryDto> getRuns(Long userId);
+
+    VerificationRunDto getRun(Long userId, Long runId);
+
+    List<TraceDto> getRunTraces(Long userId, Long runId);
+
+    void deleteRun(Long userId, Long runId);
     
     /**
      * 获取用户的所有 Trace
@@ -88,9 +117,9 @@ public interface VerificationService {
      *
      * @param userId 用户ID
      * @param taskId 任务ID
-     * @return 是否成功取消
+     * @return 本次请求是否改变任务，以及任务的实际状态
      */
-    boolean cancelTask(Long userId, Long taskId);
+    TaskCancellationResultDto cancelTask(Long userId, Long taskId);
 
     /**
      * 更新任务进度

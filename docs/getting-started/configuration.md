@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-05. Source:
+Verified against code on 2026-07-09. Source:
 `backend/src/main/resources/application.yaml`, `configure/ProductionSafetyCheck`,
 `frontend/src/api/`, `frontend/.env.example`.
 
@@ -67,15 +67,21 @@ Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 
 ## LLM (AI)
 
 Any OpenAI-compatible endpoint — the official OpenAI API, a self-hosted gateway, or a
-relay. Point `OPENAI_BASE_URL` at the endpoint and supply the matching key.
+relay. Point `IOT_VERIFY_OPENAI_BASE_URL` at the endpoint and supply the matching key.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `OPENAI_API_KEY` | `your_api_key_here` | API key for the endpoint. **Placeholder default — must be overridden in production.** |
-| `OPENAI_MODEL` | `gpt-4o` | Model id / deployment name sent to the endpoint |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL (official API or relay) |
+| `IOT_VERIFY_OPENAI_API_KEY` | `your_api_key_here` | API key for the endpoint. **Placeholder default — must be overridden in production.** |
+| `IOT_VERIFY_OPENAI_MODEL` | `gpt-5.5` | Model id / deployment name sent to the endpoint |
+| `IOT_VERIFY_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL (official API or relay) |
 | `LLM_PROVIDER` | `openai` | Provider implementation selector (currently only `openai`) |
 | `LLM_TIMEOUT_MINUTES` | `5` | AI request timeout (minutes) |
+
+On Windows, changing a User environment variable does not update already-running
+terminals, IDEs, or backend processes. Restart the process that launches Spring Boot, or
+set the process value explicitly before startup, for example
+`$env:IOT_VERIFY_OPENAI_MODEL = "gpt-5.5"`. The backend only sees the environment of the
+process that starts it.
 
 ## Chat Streaming
 
@@ -97,7 +103,7 @@ relay. Point `OPENAI_BASE_URL` at the endpoint and supply the matching key.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `FIX_MAX_ATTEMPTS` | `20` | Max NuSMV calls per fix strategy |
+| `FIX_MAX_ATTEMPTS` | `20` | Max main search attempts per fix strategy; parameter refinement is separately bounded by `FIX_MAX_REFINE_ATTEMPTS`, and the whole pipeline by `FIX_TIMEOUT_MS` |
 | `FIX_MAX_CANDIDATES_PER_RULE` | `5` | Max candidate fixes per rule |
 | `FIX_MAX_REFINE_ATTEMPTS` | `10` | Max refinement-loop iterations |
 | `FIX_TIMEOUT_MS` | `300000` | Overall fix timeout / soft deadline (ms) |
@@ -140,7 +146,7 @@ Example override: `THREAD_POOL_CHAT_CORE=20`.
 
 When `spring.profiles.active` contains `prod` or `production` (case-insensitive),
 `ProductionSafetyCheck` (`@PostConstruct`) refuses to start if any of these still hold
-their unsafe default: `JWT_SECRET`, `DB_PASSWORD`, `OPENAI_API_KEY`. Override all
+their unsafe default: `JWT_SECRET`, `DB_PASSWORD`, `IOT_VERIFY_OPENAI_API_KEY`. Override all
 three before deploying.
 
 ---

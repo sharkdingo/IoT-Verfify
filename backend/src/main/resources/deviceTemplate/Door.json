@@ -9,7 +9,6 @@
 		{
 			"Name": "locked",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -17,7 +16,6 @@
 		{
 			"Name": "unlocked",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

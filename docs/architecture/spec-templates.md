@@ -6,9 +6,10 @@ rules run before SMV generation.
 Request field contract for specs → [../api/verification.md](../api/verification.md).
 Modeling pipeline → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-04. Source:
+Verified against code on 2026-07-12. Source:
 `component/nusmv/generator/module/SmvSpecificationBuilder.java`,
-`component/nusmv/generator/SmvModelValidator.java`.
+`component/nusmv/generator/SmvModelValidator.java`,
+`frontend/src/assets/config/specTemplates.ts`.
 
 ---
 
@@ -18,16 +19,24 @@ Verified against code on 2026-07-04. Source:
 `templateId = "6"` (Persistence) is the only LTL one. Each spec has three condition
 groups — `aConditions` (A), `ifConditions` (IF), `thenConditions` (THEN).
 
+The shape is strict in both the backend builder and the frontend `requiredSides`
+configuration:
+
+| ids | Required groups | Forbidden groups |
+| :--- | :--- | :--- |
+| `1`, `2`, `3`, `7` | non-empty `aConditions` | `ifConditions`, `thenConditions` |
+| `4`, `5`, `6` | non-empty `ifConditions` and `thenConditions` | `aConditions` |
+
 ### CTL templates (`templateId != "6"`)
 
 | id | Name | Positive formula | Semantics |
 | :--- | :--- | :--- | :--- |
-| `1` | Always | `AG(A)`, or `AG((IF) -> (THEN))` when A is empty but IF/THEN are present | A holds globally; the implication form expresses an invariant without a separate template |
+| `1` | Always | `AG(A)` | A holds globally |
 | `2` | Eventually | `AF(A)` | A eventually holds on all paths |
 | `3` | Never | `AG !(A)` | A never holds on any path |
 | `4` | Immediate | `AG((IF) -> AX(THEN))` | Right after IF, THEN holds in the next state |
 | `5` | Response | `AG((IF) -> AF(THEN))` | After IF, THEN eventually holds on all paths |
-| `7` | Safety | `AG !(body)` where `body` = A conditions + injected trust/attack terms | The condition must not hold in an untrusted state |
+| `7` | Untrusted-labelled event safety | `AG !(body)` where `body` = A conditions + each condition's resolved untrusted-label term | A protected A condition must not hold while its propagated control-source label is `untrusted`. For an automation target, MEDIC propagation makes that label untrusted only when all actual trigger sources were untrusted; for a composite mode-state tuple, any participating mode-state label can taint the tuple. |
 
 ### LTL template (`templateId == "6"`)
 
@@ -43,7 +52,7 @@ what actually runs). For reference, the negated forms in
 
 | id | Negated formula |
 | :--- | :--- |
-| `1` | `EF(!(A))`, or `EF((IF) & !(THEN))` for the implication form |
+| `1` | `EF(!(A))` |
 | `2` | `EG(!(A))` |
 | `3` | `EF(A)` |
 | `4` | `EF((IF) & EX(!(THEN)))` |
@@ -55,21 +64,29 @@ what actually runs). For reference, the negated forms in
 
 ## Safety template (id 7) detail
 
-`buildSafetySpec()` injects, for each A-condition, the matching trust term and (in
-attack mode) an `is_attack` term:
+`buildSafetySpec()` injects the matching untrusted control-source term for each
+A-condition. Attack selection is not used to exclude a condition from the property:
 
 ```smv
 -- input: aConditions = [{ deviceId: "fan_1", targetType: "state", key: "FanMode", value: "auto" }]
--- isAttack = true  →
-CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted & fan_1.is_attack=FALSE)
--- isAttack = false →  (no is_attack term — that variable is not declared)
 CTLSPEC AG !(fan_1.FanMode=auto & fan_1.trust_FanMode_auto=untrusted)
 ```
 
-The `is_attack=FALSE` term restricts the check to non-attacking devices' untrusted
-states. For an environment-variable A-condition written as `a_varName OP value`, the
-injected trust term uses `deviceVarName.trust_varName` (the `a_` prefix is dropped — it
-does not generate a non-existent `trust_a_varName`).
+The same formula shape is emitted with attack modeling on or off. When attack modeling
+is on, compromised falsifiable readings can make the trust predicate untrusted and are
+therefore included in the safety check; there is deliberately no
+`device.is_attack=FALSE` escape clause. The selected attack budget is enforced once by
+the main-module invariant, not duplicated in individual properties.
+
+For an environment-variable A-condition whose literal key is `varName`, the
+SMV value expression uses `a_varName` and the injected trust term uses
+`deviceVarName.trust_varName`. If the real template variable name itself starts with
+`a_`, that prefix is part of the literal name, so `key: "a_temperature"` generates the
+SMV value identifier `a_a_temperature` and the trust key `trust_a_temperature`.
+The same literal-key rule applies to `trust` and `privacy` conditions: generated
+prefixes are not stripped from user keys. `key: "trust_temperature"` targets a real
+property key named `trust_temperature` and therefore generates
+`device.trust_trust_temperature`.
 
 ---
 
@@ -79,46 +96,61 @@ Each `SpecConditionDto` maps by `targetType`:
 
 ```
 state    → deviceVarName.ModeName = stateName
-variable → a_varName OP value            (environment var: key starts with "a_", or is in the device's envVariables)
+mode     → deviceVarName.ModeName OP stateName   (key is the concrete mode name; value must be legal in that mode)
+variable → a_varName OP value            (environment var: key is the literal template variable name in the device's envVariables)
          → deviceVarName.varName OP value (internal var: key is in the device's internalVariables)
          → otherwise → InvalidConditionException
-api      → deviceVarName.apiName_a OP TRUE/FALSE   (only =, !=, IN, NOT_IN)
-trust    → deviceVarName.trust_{key} OP value      (key resolved via resolvePropertyKey)
-privacy  → deviceVarName.privacy_{key} OP value    (key resolved via resolvePropertyKey)
+api      → deviceVarName.apiName_a OP TRUE/FALSE   (only =, !=, IN, NOT_IN; authoring helpers default omitted value to TRUE)
+trust    → deviceVarName.trust_{key} OP value      (key is literal; no generated-prefix stripping)
+privacy  → deviceVarName.privacy_{key} OP value    (key is literal; no generated-prefix stripping)
 unknown  → InvalidConditionException  (fail-closed; no guessing)
 ```
 
-Conditions in a group are joined with `&`. `IN` / `NOT_IN` take a comma-separated value
-set. `deviceId` uses strict resolution (varName first, then a unique templateName);
-ambiguity throws `AMBIGUOUS_DEVICE_REFERENCE` (not fail-closed).
+Conditions in a group are joined with `&`. `IN` / `NOT_IN` take a set value: enum-like
+mode/variable/API/trust/privacy values may be comma-, semicolon-, or pipe-separated,
+while multi-mode `state` values use semicolon inside each tuple and therefore separate
+tuples with comma or pipe (`home;idle,sleep;idle`). `deviceId` is the canonical model
+`varName` derived from the board node id; display labels and template names are not
+identity fallbacks.
 
-### Fail-closed behavior
+### Explicit omission behavior
 
 - If a condition cannot be built (unsupported relation, empty value, unresolvable key,
-  unsupported targetType), the spec is **not** silently dropped — it degrades to
-  `CTLSPEC FALSE -- invalid spec: <reason>`, keeping the spec count aligned.
-- Privacy specs when `enablePrivacy = false` degrade to
-  `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false` (defense-in-depth;
-  `validateNoPrivacySpecs` upstream is the primary guard).
+  unsupported targetType), the spec is omitted from NuSMV emission. It increments
+  `skippedSpecCount` and adds a `SPECIFICATION_SKIPPED` item to `generationIssues`
+  with the specification label and an actionable reason. It is never replaced by
+  `CTLSPEC FALSE`, because an always-false placeholder would manufacture a violation
+  and counterexample for a property that was not actually checked.
+- A privacy spec with `enablePrivacy = false` is rejected by
+  `validateNoPrivacySpecs` before execution. The builder's defense-in-depth path also
+  omits it and records the same structured issue instead of emitting a property.
 - Specs with an unsupported `templateId` throw `InvalidConditionException` during
   generation and are recorded as `[spec-skipped]` warnings. Empty A/IF specs are also
   skipped explicitly. Both paths increment `skippedSpecCount` and surface in verification
-  `checkLogs`; they are never treated as silently satisfied.
+  `generationIssues` plus technical `checkLogs`; they are neither silently satisfied nor
+  reported as violated.
 - `SpecificationDto.templateId` is also constrained at the DTO boundary to `"1"` through
   `"7"`; AI recommendation prompts and validators enforce the same enum before data reaches
   persistence or SMV generation.
 
 ### Attack budget and vacuity
 
-The builder does **not** inject `& intensity<=N` into a spec's antecedent (that would
-cause vacuous truth). The attack budget lives in `main` instead:
+The builder does **not** inject the attack budget or an `is_attack=FALSE` filter into a
+spec's antecedent (either could hide relevant attacked paths or cause vacuous truth).
+The attack budget lives in `main` instead:
 
 ```smv
 MODULE main
 FROZENVAR
-    intensity: 0..50;
-INVAR intensity <= 3;
+    iot_verify_compromised_point_count: 0..(EFFECTFUL_DEVICE_COUNT + RULE_COUNT);
+INVAR iot_verify_compromised_point_count <= 3;
 ```
+
+The generated name is internal. Public requests use `attackBudget`, and traces expose
+the actual branch count as `compromisedPointCount`. Only device instances with a declared
+falsifiable reading or an incoming rule command are device points; logical automation
+command-delivery links are separate points. The invariant is an upper bound;
+it includes every modeled selection from zero through the budget.
 
 ---
 
@@ -134,17 +166,21 @@ INVAR intensity <= 3;
 | P4 | trust values ∈ {`trusted`,`untrusted`}, privacy ∈ {`public`,`private`} (case-insensitive, normalized); applies to instance-, template-, and content-level | `SmvGenerationException` (`[INVALID_PROPERTY_VALUE]`) |
 | P5 | A shared environment variable (`IsInside=false`) has consistent range/enum values across templates | `envVarConflict` |
 
-### Soft validation (warn only, non-blocking)
+### Generator input behavior
 
-- A user-supplied variable name not present in the template.
-- A modeless sensor receiving a `state` argument.
-- Internal-variable `init()` value checks
-  (`SmvDeviceModuleBuilder.validateInternalInitValue()`): out-of-enum → first value;
-  out-of-range → clamp; no enum/range → no `init()` emitted.
-- Environment-variable `init()` value checks
-  (`SmvMainModuleBuilder.validateEnvVarInitValue()`): out-of-enum → first value;
-  out-of-range → clamp (attack mode uses the expanded upper bound); non-numeric →
-  ignored.
+The low-level generator follows the same fail-fast semantic contract as board, REST, AI,
+fix, and import callers. An explicit device-local or shared-environment initial value is
+never replaced with the first enum member, numerically clamped, assigned an invented
+`0..100` domain, or omitted after a validation failure. Unknown/duplicate environment
+entries, values outside declared domains, local variables without a domain, malformed
+natural-change rates, and signal APIs without a representable state change fail model
+generation. Only an *omitted* valid local initial value may use the template's declared
+default or documented nondeterministic initialization.
+
+`attackBudget` is likewise exact: every generator entry rejects values outside `0..50`,
+requires `1..50` when attack modeling is enabled, and requires `0` when it is disabled.
+The service layer additionally rejects a budget above the current behavior-changing
+attack-point count.
 
 ### Generation-time fail-closed (not part of P1–P5)
 
@@ -152,8 +188,9 @@ INVAR intensity <= 3;
   relation, empty value, empty `IN`/`NOT_IN` list, illegal API-signal relation/value)
   → the rule guard becomes `FALSE`, a `[rule-disabled]` warning is emitted, and
   `disabledRuleCount` increments.
-- Ambiguous templateName reference in a rule/command/spec device → throws
-  `AMBIGUOUS_DEVICE_REFERENCE` (does not fail-closed).
+- Rule/command/spec references use canonical device ids only. Unknown or non-canonical
+  references are rejected by service validation before generation; direct builder calls
+  fail closed or throw `DEVICE_NOT_FOUND` depending on the generation phase.
 - Transition triggers referencing an environment variable are rewritten to `a_<attr>`
   (not `device.<attr>`) during generation, avoiding references to undeclared internal
   variables.
@@ -178,8 +215,9 @@ The following chains are closed loops in the current backend implementation:
    creation runs a NuSMV probe-generate pre-check: InternalVariable/ImpactedVariable names
    must be legal identifiers and not reserved words; mode/state names are sanitized
    automatically at generation time; normalized identifiers of different kinds must not
-   collide (Mode vs InternalVariable vs ImpactedVariable), though InternalVariable and
-   ImpactedVariable may share a name (a common pattern). `loadManifest()` classifies
+   collide (Mode vs InternalVariable vs ImpactedVariable). InternalVariable and
+   ImpactedVariable may share a name only when the InternalVariable is an environment
+   variable (`IsInside=false`), never when it is local. `loadManifest()` classifies
    exceptions precisely: `BaseException` is re-thrown as-is, a JSON parse error →
    `MANIFEST_PARSE_ERROR`, and anything else → `TEMPLATE_LOAD_ERROR`.
 3. **Modeling loop**: `DeviceSmvDataFactory` → `SmvModelValidator (P1–P5)` →
@@ -203,22 +241,22 @@ The following chains are closed loops in the current backend implementation:
    error semantics.
 6. **Result loop (simulation)**: trace parsing, `steps` vs `requestedSteps` reconciliation
    (`steps = states.size() - 1`, which may be less than `requestedSteps`), optional
-   persistence, and async task lifecycle management. Cross-instance cancel safety:
-   `completeTask`/`failTask` use atomic conditional UPDATEs (`WHERE status <> CANCELLED`)
-   to eliminate TOCTOU races, returning the affected-row count (0 = already cancelled).
+   persistence, and async task lifecycle management. Cross-instance lifecycle safety:
+   `completeTask` completes only `RUNNING` tasks, while `failTask` fails only
+   `PENDING`/`RUNNING` tasks. These atomic conditional updates eliminate TOCTOU races and
+   keep terminal states immutable.
 7. **Observability loop**: `model.smv` / `request.json` / `output.txt` / `result.json`
    (the main verification and simulation paths) are available for replay and debugging;
    the cancel early-exit path must be diagnosed together with the task status.
 8. **Numeric-bounds loop**: `next()` candidate expressions for both environment and
    internal variables uniformly clamp with `max(lower, min(upper, expr))`, covering the
    boundary branches (WITH-rate / no-rate) and the TRUE branch, preventing arithmetic
-   results from exceeding the NuSMV VAR declared range. Under attack mode, the upper-bound
-   expansion formula is centralized in `SmvBoundsUtils.resolveEffectiveUpperBound()`,
-   shared by `SmvDeviceModuleBuilder` (VAR declaration) and `SmvMainModuleBuilder`
-   (transition clamp range), so the declared range and the transition clamp range stay
-   consistent.
+   results from exceeding the NuSMV VAR declared range. Attack falsification also stays
+   inside the same declared range. Which values are falsifiable is explicit in required
+   template field `InternalVariables[].FalsifiableWhenCompromised`; API presence does not
+   infer it.
 9. **Fix loop (Fix Pipeline)**: `FixServiceImpl` → `RuleFixer` → three strategies
-   (parameter/condition/disable) chained. A global soft timeout is controlled by
+   (parameter/condition/permanent removal) chained. A global deadline is controlled by
    `FixConfig.fixTimeoutMs` (default 300s, `@Min(1000)`); `FixContext.isExpired()` checks
    the deadline at the strategy-loop entry, the `forwardVerify()` entry, and inside each
    strategy loop; after timeout the summary appends "(fix timed out; results may be

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { getNodeCenter, getLinkPoints, getSelfLoopPath, updateRulesForNodeRename } from '../rule'
+import {
+  assertRuleHasTrigger,
+  duplicateRuleReasonKey,
+  getNodeCenter,
+  getLinkPoints,
+  getSelfLoopPath,
+  ruleSimilarityReasonKey,
+  updateRulesForNodeRename
+} from '../rule'
 
 describe('rule utils', () => {
   it('getNodeCenter should compute center correctly', () => {
@@ -37,6 +45,40 @@ describe('rule utils', () => {
     expect(changed).toBe(true)
     expect(rules[0].fromLabel).toBe('newLabel')
     expect(rules[1].toLabel).toBe('newLabel')
+  })
+
+  it('allows full-state triggers without a UI attribute but still requires a value', () => {
+    expect(() => assertRuleHasTrigger({
+      sources: [
+        { fromId: 'door-1', fromApi: '', itemType: 'state', relation: '=', value: 'closed;locked' }
+      ],
+      toId: 'alarm-1',
+      toApi: 'siren'
+    })).not.toThrow()
+
+    expect(() => assertRuleHasTrigger({
+      sources: [
+        { fromId: 'door-1', fromApi: '', itemType: 'state', relation: '=', value: '   ' }
+      ],
+      toId: 'alarm-1',
+      toApi: 'siren'
+    })).toThrow('state trigger requires relation and value')
+  })
+
+  it('uses a one-based display position instead of exposing a persisted rule id', () => {
+    expect(() => assertRuleHasTrigger({
+      id: '4821',
+      sources: [],
+      toId: 'alarm-1',
+      toApi: 'siren'
+    }, 2)).toThrow('Rule 3: at least one trigger source is required')
+  })
+
+  it('maps deterministic and AI similarity reasons without displaying backend prose', () => {
+    expect(duplicateRuleReasonKey('SAME_TRIGGER_SHAPE_DIFFERENT_VALUES'))
+      .toBe('app.ruleCheckSameShape')
+    expect(ruleSimilarityReasonKey('AI_HIGH_SCORE_REVIEW'))
+      .toBe('app.ruleSimilarityHighScoreReview')
   })
 })
 

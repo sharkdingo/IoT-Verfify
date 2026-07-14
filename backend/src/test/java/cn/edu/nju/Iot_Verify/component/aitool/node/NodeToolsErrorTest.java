@@ -1,11 +1,16 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
-import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableChangeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceCreationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceDeletionResultDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.DeviceLabelConflictException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
@@ -15,21 +20,20 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -68,16 +72,50 @@ class NodeToolsErrorTest {
     }
 
     @Test
-    void deleteNodeTool_whenDeviceMissing_shouldReturnStructuredError() throws Exception {
-        DeleteNodeTool tool = new DeleteNodeTool(nodeService, boardStorageService, objectMapper);
-        when(boardStorageService.getNodes(1L)).thenReturn(List.of());
+    void addNodeTool_whenExplicitLabelConflicts_shouldExplainThatNothingWasCreated() throws Exception {
+        AddNodeTool tool = new AddNodeTool(nodeService, objectMapper);
+        when(nodeService.addNode(1L, "Light", "Hall Light", null, null, null, null, null))
+                .thenThrow(new DeviceLabelConflictException("Hall Light", "Hall Light_1"));
 
-        String result = tool.execute("{\"label\":\"ghost\"}");
+        JsonNode json = objectMapper.readTree(
+                tool.execute("{\"templateName\":\"Light\",\"label\":\"Hall Light\"}"));
+
+        assertEquals("DEVICE_LABEL_CONFLICT", json.path("errorCode").asText());
+        assertEquals(409, json.path("status").asInt());
+        assertEquals("notCreated", json.path("operation").asText());
+        assertEquals("Hall Light", json.path("requestedLabel").asText());
+        assertEquals("Hall Light_1", json.path("suggestedLabel").asText());
+        assertTrue(json.path("requiresUserConfirmation").asBoolean());
+        assertTrue(json.path("userActionRequired").asBoolean());
+    }
+
+    @Test
+    void deleteNodeTool_whenDeviceMissing_shouldReturnStructuredError() throws Exception {
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
+        when(boardStorageService.previewNodeDeletion(1L, "ghost"))
+                .thenThrow(new ResourceNotFoundException("Device", "ghost"));
+
+        String result = tool.execute("{\"id\":\"ghost\",\"confirmed\":false}");
         JsonNode json = objectMapper.readTree(result);
 
-        assertEquals("Device not found for deletion: 'ghost'.", json.path("error").asText());
+        assertEquals("Device not found: ghost", json.path("error").asText());
         assertEquals("NOT_FOUND", json.path("errorCode").asText());
         assertEquals(404, json.path("status").asInt());
+    }
+
+    @Test
+    void deleteNodeTool_rejectsCoercedOrUnknownIdentityFieldsBeforePreview() throws Exception {
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
+
+        JsonNode numericId = objectMapper.readTree(tool.execute("{\"id\":42,\"confirmed\":false}"));
+        JsonNode unknownField = objectMapper.readTree(tool.execute(
+                "{\"id\":\"device_1\",\"confirmed\":false,\"label\":\"Kitchen\"}"));
+
+        assertEquals("VALIDATION_ERROR", numericId.path("errorCode").asText());
+        assertTrue(numericId.path("error").asText().contains("non-empty string"));
+        assertEquals("VALIDATION_ERROR", unknownField.path("errorCode").asText());
+        assertTrue(unknownField.path("error").asText().contains("label"));
+        verifyNoInteractions(boardStorageService);
     }
 
     @Test
@@ -86,37 +124,54 @@ class NodeToolsErrorTest {
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
         AddNodeTool tool = new AddNodeTool(nodeService, failingMapper);
         when(nodeService.addNode(1L, "Air Conditioner", null, null, null, null, null, null))
-                .thenReturn("Created device successfully: ac_1.");
+                .thenReturn(DeviceCreationResultDto.builder()
+                        .device(node("ac_1", "ac_1", "Air Conditioner"))
+                        .initialStateSource("templateDefault")
+                        .build());
 
         String result = tool.execute("{\"templateName\":\"Air Conditioner\"}");
         JsonNode json = objectMapper.readTree(result);
 
-        assertEquals("Created device successfully: ac_1.", json.path("message").asText());
-        assertTrue(json.path("warning").asText().contains("serialization degraded"));
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals(false, json.path("resultAvailable").asBoolean());
+        assertTrue(json.path("warning").asText().contains("serialization failed"));
     }
 
     @Test
     void deleteNodeTool_whenResponseSerializationFails_shouldReturnFallbackSuccess() throws Exception {
+        DeviceNodeDto node = node("ac_1", "ac_1", "Light");
+        DeviceDeletionResultDto preview = DeviceDeletionResultDto.builder()
+                .operation("preview")
+                .impactToken("preview-token")
+                .deletedDevice(node)
+                .build();
+        when(boardStorageService.previewNodeDeletion(1L, "ac_1")).thenReturn(preview);
+        DeleteNodeTool previewTool = new DeleteNodeTool(boardStorageService, objectMapper);
+        String impactToken = objectMapper.readTree(
+                previewTool.execute("{\"id\":\"ac_1\",\"confirmed\":false}"))
+                .path("impactToken").asText();
+
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
-        DeleteNodeTool tool = new DeleteNodeTool(nodeService, boardStorageService, failingMapper);
-        DeviceNodeDto node = node("ac_1", "ac_1", "Light");
-        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(boardStorageService.saveBoardBatch(eq(1L), any(BoardBatchDto.class)))
-                .thenReturn(new BoardBatchDto(List.of(), List.of(), List.of()));
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, failingMapper);
+        when(boardStorageService.deleteNodeCascade(1L, "ac_1", impactToken))
+                .thenReturn(DeviceDeletionResultDto.builder()
+                        .deletedDevice(node)
+                        .build());
+        UserContextHolder.setDestructiveActionConfirmed(true);
 
-        String result = tool.execute("{\"label\":\"ac_1\"}");
+        String result = tool.execute("{\"id\":\"ac_1\",\"confirmed\":true,\"impactToken\":\""
+                + impactToken + "\"}");
         JsonNode json = objectMapper.readTree(result);
 
-        assertEquals("Device deleted successfully.", json.path("message").asText());
-        assertTrue(json.path("warning").asText().contains("serialization degraded"));
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals(false, json.path("resultAvailable").asBoolean());
+        assertTrue(json.path("warning").asText().contains("serialization failed"));
     }
 
     @Test
-    void deleteNodeTool_deletesNodeAndRelatedRulesSpecsAtomically() throws Exception {
-        DeleteNodeTool tool = new DeleteNodeTool(nodeService, boardStorageService, objectMapper);
+    void deleteNodeTool_deletesOnlyTargetNodeAndRelatedRulesSpecsAtomically() throws Exception {
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
         DeviceNodeDto target = node("light_1", "KitchenLight", "Light");
         DeviceNodeDto variable = node("light_1_power", "power", "variable_power");
         DeviceNodeDto other = node("door_1", "Door", "Door");
@@ -124,51 +179,84 @@ class NodeToolsErrorTest {
         RuleDto relatedRule = RuleDto.builder()
                 .id(10L)
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("KitchenLight")
+                        .deviceName("light_1")
                         .attribute("state")
+                        .targetType("state")
                         .relation("=")
                         .value("on")
                         .build()))
                 .command(RuleDto.Command.builder()
-                        .deviceName("Door")
+                        .deviceName("door_1")
                         .action("lock")
                         .build())
                 .build();
         RuleDto remainingRule = RuleDto.builder()
                 .id(11L)
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Door")
+                        .deviceName("door_1")
                         .attribute("state")
+                        .targetType("state")
                         .relation("=")
                         .value("open")
                         .build()))
                 .command(RuleDto.Command.builder()
-                        .deviceName("Door")
+                        .deviceName("door_1")
                         .action("close")
                         .build())
                 .build();
 
         SpecificationDto relatedSpec = spec("spec-light", "light_1");
         SpecificationDto remainingSpec = spec("spec-door", "door_1");
+        EnvironmentVariableChangeDto removedEnvironment = EnvironmentVariableChangeDto.builder()
+                .changeType(EnvironmentVariableChangeDto.ChangeType.REMOVED)
+                .name("illuminance")
+                .previousValue(new BoardEnvironmentVariableDto(
+                        "illuminance", "20", "untrusted", "public"))
+                .build();
 
-        when(boardStorageService.getNodes(1L)).thenReturn(List.of(target, variable, other));
-        when(boardStorageService.getRules(1L)).thenReturn(List.of(relatedRule, remainingRule));
-        when(boardStorageService.getSpecs(1L)).thenReturn(List.of(relatedSpec, remainingSpec));
-        when(boardStorageService.saveBoardBatch(eq(1L), any(BoardBatchDto.class)))
-                .thenReturn(new BoardBatchDto(List.of(other), List.of(remainingRule), List.of(remainingSpec)));
+        DeviceDeletionResultDto preview = DeviceDeletionResultDto.builder()
+                .operation("preview")
+                .impactToken("preview-token")
+                .deletedDevice(target)
+                .removedRules(List.of(relatedRule))
+                .removedSpecifications(List.of(relatedSpec))
+                .environmentChanges(List.of(removedEnvironment))
+                .currentNodes(List.of(target, variable, other))
+                .currentRules(List.of(relatedRule, remainingRule))
+                .currentSpecifications(List.of(relatedSpec, remainingSpec))
+                .build();
+        when(boardStorageService.previewNodeDeletion(1L, "light_1")).thenReturn(preview);
+        when(boardStorageService.deleteNodeCascade(1L, "light_1", "preview-token"))
+                .thenReturn(DeviceDeletionResultDto.builder()
+                        .operation("deleted")
+                        .deletedDevice(target)
+                        .removedRules(List.of(relatedRule))
+                        .removedSpecifications(List.of(relatedSpec))
+                        .environmentChanges(List.of(removedEnvironment))
+                        .currentNodes(List.of(variable, other))
+                        .currentRules(List.of(remainingRule))
+                        .currentSpecifications(List.of(remainingSpec))
+                        .build());
 
-        String result = tool.execute("{\"identifier\":\"KitchenLight\"}");
+        String previewResult = tool.execute("{\"id\":\"light_1\",\"confirmed\":false}");
+        JsonNode previewJson = objectMapper.readTree(previewResult);
+        assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
+        verify(boardStorageService, org.mockito.Mockito.never())
+                .deleteNodeCascade(1L, "light_1", "preview-token");
+        assertEquals("illuminance",
+                previewJson.path("environmentChanges").path(0).path("name").asText());
+
+        UserContextHolder.setDestructiveActionConfirmed(true);
+        String result = tool.execute("{\"id\":\"light_1\",\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("impactToken").asText() + "\"}");
         JsonNode json = objectMapper.readTree(result);
 
-        ArgumentCaptor<BoardBatchDto> captor = ArgumentCaptor.forClass(BoardBatchDto.class);
-        verify(boardStorageService).saveBoardBatch(eq(1L), captor.capture());
-        BoardBatchDto batch = captor.getValue();
-
-        assertEquals(List.of("door_1"), batch.getNodes().stream().map(DeviceNodeDto::getId).toList());
-        assertEquals(List.of(11L), batch.getRules().stream().map(RuleDto::getId).toList());
-        assertEquals(List.of("spec-door"), batch.getSpecs().stream().map(SpecificationDto::getId).toList());
-        assertEquals(1, json.path("removedRules").asInt());
-        assertEquals(1, json.path("removedSpecs").asInt());
+        verify(boardStorageService).deleteNodeCascade(1L, "light_1", "preview-token");
+        assertEquals(1, json.path("removedRuleCount").asInt());
+        assertEquals(10L, json.path("removedRules").path(0).path("id").asLong());
+        assertEquals(1, json.path("removedSpecificationCount").asInt());
+        assertEquals("spec-light", json.path("removedSpecifications").path(0).path("id").asText());
+        assertEquals("illuminance", json.path("environmentChanges").path(0).path("name").asText());
     }
 
     private DeviceNodeDto node(String id, String label, String templateName) {
@@ -181,8 +269,8 @@ class NodeToolsErrorTest {
         position.setY(0.0);
         dto.setPosition(position);
         dto.setState("on");
-        dto.setWidth(110);
-        dto.setHeight(90);
+        dto.setWidth(176);
+        dto.setHeight(128);
         return dto;
     }
 

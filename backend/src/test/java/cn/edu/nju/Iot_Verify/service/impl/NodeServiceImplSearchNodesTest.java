@@ -1,7 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
-import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,8 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.never;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -21,7 +20,7 @@ import static org.mockito.Mockito.when;
 class NodeServiceImplSearchNodesTest {
 
     @Mock
-    private DeviceNodeRepository nodeRepo;
+    private BoardStorageService boardStorageService;
     @Mock
     private DeviceTemplateService deviceTemplateService;
 
@@ -29,41 +28,44 @@ class NodeServiceImplSearchNodesTest {
 
     @BeforeEach
     void setUp() {
-        nodeService = new NodeServiceImpl(nodeRepo, deviceTemplateService, new ObjectMapper());
+        nodeService = new NodeServiceImpl(boardStorageService, deviceTemplateService, new ObjectMapper());
     }
 
     @Test
     void searchNodes_withKeyword_shouldUseScopedSearchQuery() {
-        DeviceNodePo node = DeviceNodePo.builder()
-                .id("n1")
-                .userId(1L)
-                .templateName("Light")
-                .label("Living Light")
-                .posX(1.0)
-                .posY(2.0)
-                .state("On")
-                .width(110)
-                .height(90)
-                .build();
-        when(nodeRepo.searchByUserIdAndTemplateOrLabel(1L, "light"))
-                .thenReturn(List.of(node));
+        DeviceNodeDto light = node("n1", "Living Light", "Light");
+        DeviceNodeDto door = node("n2", "Front Door", "Door");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(light, door));
 
-        String result = nodeService.searchNodes(1L, "light");
+        List<DeviceNodeDto> result = nodeService.searchNodes(1L, "light");
 
-        verify(nodeRepo).searchByUserIdAndTemplateOrLabel(1L, "light");
-        verify(nodeRepo, never()).findByUserId(1L);
-        assertTrue(result.contains("\"userId\":1"));
-        assertTrue(result.contains("\"label\":\"Living Light\""));
+        verify(boardStorageService).getNodes(1L);
+        assertEquals(List.of(light), result);
     }
 
     @Test
     void searchNodes_withoutKeyword_shouldReturnAllUserNodes() {
-        when(nodeRepo.findByUserId(2L)).thenReturn(List.of());
+        DeviceNodeDto light = node("n1", "Living Light", "Light");
+        when(boardStorageService.getNodes(2L)).thenReturn(List.of(light));
 
-        String result = nodeService.searchNodes(2L, " ");
+        List<DeviceNodeDto> result = nodeService.searchNodes(2L, " ");
 
-        verify(nodeRepo).findByUserId(2L);
-        verify(nodeRepo, never()).searchByUserIdAndTemplateOrLabel(2L, " ");
-        assertTrue(!result.isBlank());
+        verify(boardStorageService).getNodes(2L);
+        assertEquals(List.of(light), result);
+    }
+
+    private DeviceNodeDto node(String id, String label, String templateName) {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId(id);
+        node.setLabel(label);
+        node.setTemplateName(templateName);
+        DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+        position.setX(1.0);
+        position.setY(2.0);
+        node.setPosition(position);
+        node.setState("On");
+        node.setWidth(176);
+        node.setHeight(128);
+        return node;
     }
 }

@@ -23,6 +23,16 @@ public class FixApplyResultDto {
     /** 已应用的策略。 */
     private String strategy;
 
+    /** Whether the server recomputed and forward-verified the applied suggestion. */
+    private boolean verificationRechecked;
+
+    /** The server-recomputed suggestion that was actually applied. */
+    private FixSuggestionDto appliedSuggestion;
+
+    private int previousRuleCount;
+
+    private int currentRuleCount;
+
     /** 人类可读的结果说明（成功摘要或拒绝原因）。 */
     private String message;
 

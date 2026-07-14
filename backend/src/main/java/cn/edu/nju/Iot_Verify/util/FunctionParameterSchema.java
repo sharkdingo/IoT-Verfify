@@ -10,6 +10,7 @@ public class FunctionParameterSchema {
     public String type;
     public Map<String, Object> properties;
     public List<String> required;
+    public boolean additionalProperties = false;
 
     public FunctionParameterSchema(String type, Map<String, Object> properties, List<String> required) {
         this.type = type;

@@ -1,5 +1,8 @@
 // src/utils/canvas/nodeResize.ts
 import type { DeviceNode } from '../../types/node'
+import { NODE_HEIGHT_RANGE, NODE_WIDTH_RANGE } from './nodeLayout'
+
+export { NODE_HEIGHT_RANGE, NODE_WIDTH_RANGE } from './nodeLayout'
 
 export interface NodeResizeState {
     node: DeviceNode | null
@@ -32,16 +35,15 @@ export const beginNodeResize = (
 
 export const updateNodeResize = (
     e: PointerEvent,
-    resizeState: NodeResizeState
+    resizeState: NodeResizeState,
+    zoom = 1
 ): boolean => {
     const node = resizeState.node
     if (!node) return false
 
-    const dx = e.clientX - resizeState.start.x
-    const dy = e.clientY - resizeState.start.y
-
-    const minW = 80
-    const minH = 60
+    const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+    const dx = (e.clientX - resizeState.start.x) / scale
+    const dy = (e.clientY - resizeState.start.y) / scale
 
     let newW = resizeState.originSize.w
     let newH = resizeState.originSize.h
@@ -50,24 +52,29 @@ export const updateNodeResize = (
 
     switch (resizeState.dir) {
         case 'br':
-            newW = Math.max(minW, resizeState.originSize.w + dx)
-            newH = Math.max(minH, resizeState.originSize.h + dy)
+            newW = resizeState.originSize.w + dx
+            newH = resizeState.originSize.h + dy
             break
         case 'bl':
-            newW = Math.max(minW, resizeState.originSize.w - dx)
-            newH = Math.max(minH, resizeState.originSize.h + dy)
-            newX = resizeState.originPos.x + (resizeState.originSize.w - newW)
+            newW = resizeState.originSize.w - dx
+            newH = resizeState.originSize.h + dy
             break
         case 'tr':
-            newW = Math.max(minW, resizeState.originSize.w + dx)
-            newH = Math.max(minH, resizeState.originSize.h - dy)
-            newY = resizeState.originPos.y + (resizeState.originSize.h - newH)
+            newW = resizeState.originSize.w + dx
+            newH = resizeState.originSize.h - dy
             break
         case 'tl':
-            newW = Math.max(minW, resizeState.originSize.w - dx)
-            newH = Math.max(minH, resizeState.originSize.h - dy)
-            newX = resizeState.originPos.x + (resizeState.originSize.w - newW)
-            newY = resizeState.originPos.y + (resizeState.originSize.h - newH)
+            newW = resizeState.originSize.w - dx
+            newH = resizeState.originSize.h - dy
+    }
+
+    newW = Math.round(Math.min(NODE_WIDTH_RANGE.max, Math.max(NODE_WIDTH_RANGE.min, newW)))
+    newH = Math.round(Math.min(NODE_HEIGHT_RANGE.max, Math.max(NODE_HEIGHT_RANGE.min, newH)))
+    if (resizeState.dir === 'bl' || resizeState.dir === 'tl') {
+        newX = resizeState.originPos.x + (resizeState.originSize.w - newW)
+    }
+    if (resizeState.dir === 'tr' || resizeState.dir === 'tl') {
+        newY = resizeState.originPos.y + (resizeState.originSize.h - newH)
     }
 
     node.width = newW

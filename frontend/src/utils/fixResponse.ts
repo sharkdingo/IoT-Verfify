@@ -1,0 +1,339 @@
+import type {
+  ConditionAdjustment,
+  FaultLocalizationResult,
+  FaultRule,
+  FixResult,
+  FixStrategyAttempt,
+  FixStrategyAttemptStatus,
+  FixStrategyName,
+  FixSuggestion,
+  ParameterAdjustment,
+  PreferredRangeSelection
+} from '@/types/fix'
+import type { ModelGenerationIssue } from '@/types/verify'
+
+export const FIX_RESPONSE_INCOMPLETE_CODE = 'FIX_RESPONSE_INCOMPLETE'
+
+class FixResponseContractError extends Error {
+  readonly code = FIX_RESPONSE_INCOMPLETE_CODE
+
+  constructor(context: string, detail: string) {
+    super(`${context} returned an incomplete automatic-fix result: ${detail}`)
+    this.name = 'FixResponseContractError'
+  }
+}
+
+const STRATEGIES = new Set<FixStrategyName>(['parameter', 'condition', 'remove'])
+const ATTEMPT_STATUSES = new Set<FixStrategyAttemptStatus>([
+  'VERIFIED',
+  'NOT_VERIFIED',
+  'NO_VERIFIED_SUGGESTION',
+  'TIMED_OUT',
+  'SKIPPED_TIMEOUT',
+  'SKIPPED_NO_SPEC',
+  'SKIPPED_NO_FAULT_RULES',
+  'SKIPPED_INCOMPLETE_SOURCE_MODEL',
+  'SKIPPED_UNSUPPORTED'
+])
+const TEMPLATE_SNAPSHOT_COMPARISONS = new Set([
+  'NOT_CHECKED',
+  'UNCHANGED',
+  'CHANGED',
+  'UNAVAILABLE'
+])
+const TARGET_ID_PATTERN = /^param_[A-Za-z0-9_-]{24}$/
+
+const record = (value: unknown, context: string, field = 'result'): Record<string, any> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new FixResponseContractError(context, `${field} must be an object`)
+  }
+  return value as Record<string, any>
+}
+
+const array = (value: Record<string, any>, field: string, context: string): any[] => {
+  if (!Array.isArray(value[field])) {
+    throw new FixResponseContractError(context, `${field} must be an array`)
+  }
+  return value[field]
+}
+
+const text = (value: Record<string, any>, field: string, context: string): string => {
+  if (typeof value[field] !== 'string' || !value[field].trim()) {
+    throw new FixResponseContractError(context, `${field} must be non-blank text`)
+  }
+  return value[field]
+}
+
+const bool = (value: Record<string, any>, field: string, context: string): boolean => {
+  if (typeof value[field] !== 'boolean') {
+    throw new FixResponseContractError(context, `${field} must be boolean`)
+  }
+  return value[field]
+}
+
+const integer = (value: Record<string, any>, field: string, context: string, min = 0): number => {
+  if (!Number.isSafeInteger(value[field]) || value[field] < min) {
+    throw new FixResponseContractError(context, `${field} must be an integer >= ${min}`)
+  }
+  return value[field]
+}
+
+const stringArray = (value: Record<string, any>, field: string, context: string): string[] => {
+  const values = array(value, field, context)
+  values.forEach((item, index) => {
+    if (typeof item !== 'string' || !item.trim()) {
+      throw new FixResponseContractError(context, `${field}[${index}] must be non-blank text`)
+    }
+  })
+  return values
+}
+
+const validateSourceModel = (value: Record<string, any>, context: string) => {
+  const complete = bool(value, 'sourceModelComplete', context)
+  const disabledRuleCount = integer(value, 'sourceDisabledRuleCount', context)
+  const skippedSpecCount = integer(value, 'sourceSkippedSpecCount', context)
+  const issues = array(value, 'sourceGenerationIssues', context)
+  issues.forEach((issue, index) => {
+    const row = record(issue, context, `sourceGenerationIssues[${index}]`)
+    text(row, 'issueType', context)
+    text(row, 'itemLabel', context)
+    text(row, 'reasonCode', context)
+    text(row, 'reason', context)
+  })
+  const disabledIssues = issues.filter(issue => issue.issueType === 'RULE_DISABLED').length
+  const skippedIssues = issues.filter(issue => issue.issueType === 'SPECIFICATION_SKIPPED').length
+  if (disabledIssues !== disabledRuleCount || skippedIssues !== skippedSpecCount) {
+    throw new FixResponseContractError(context, 'source omission counts must match sourceGenerationIssues')
+  }
+  if (complete && (disabledRuleCount !== 0 || skippedSpecCount !== 0 || issues.length !== 0)) {
+    throw new FixResponseContractError(context, 'sourceModelComplete contradicts source omissions')
+  }
+  return issues as ModelGenerationIssue[]
+}
+
+const validateFaultRule = (value: unknown, context: string, index: number): FaultRule => {
+  const row = record(value, context, `faultRules[${index}]`)
+  text(row, 'ruleString', context)
+  integer(row, 'transitionNumber', context, 1)
+  text(row, 'targetDeviceLabel', context)
+  text(row, 'targetActionLabel', context)
+  const conflicting = bool(row, 'conflicting', context)
+  if (!['TRIGGERED', 'CONFLICTING_END_STATES'].includes(row.reasonCode)) {
+    throw new FixResponseContractError(context, `faultRules[${index}].reasonCode is invalid`)
+  }
+  text(row, 'reason', context)
+  if (conflicting) {
+    text(row, 'conflictingRuleString', context)
+    if (row.reasonCode !== 'CONFLICTING_END_STATES') {
+      throw new FixResponseContractError(context, 'a conflicting rule needs the conflicting reason code')
+    }
+  }
+  return row as FaultRule
+}
+
+const validateFaultRules = (value: Record<string, any>, context: string): FaultRule[] =>
+  array(value, 'faultRules', context).map((rule, index) => validateFaultRule(rule, context, index))
+
+const validatePreferredRangeSelection = (
+  value: unknown,
+  context: string,
+  field: string
+): PreferredRangeSelection => {
+  const row = record(value, context, field)
+  const targetId = text(row, 'targetId', context)
+  if (!TARGET_ID_PATTERN.test(targetId)) {
+    throw new FixResponseContractError(context, `${field}.targetId is invalid`)
+  }
+  const lower = integer(row, 'lower', context, Number.MIN_SAFE_INTEGER)
+  const upper = integer(row, 'upper', context, Number.MIN_SAFE_INTEGER)
+  if (lower > upper) {
+    throw new FixResponseContractError(context, `${field} lower must not exceed upper`)
+  }
+  return row as PreferredRangeSelection
+}
+
+const validateParameterAdjustment = (
+  value: unknown,
+  context: string,
+  index: number
+): ParameterAdjustment => {
+  const row = record(value, context, `parameterAdjustments[${index}]`)
+  if (!TARGET_ID_PATTERN.test(text(row, 'targetId', context))) {
+    throw new FixResponseContractError(context, `parameterAdjustments[${index}].targetId is invalid`)
+  }
+  for (const field of ['attribute', 'relation', 'originalValue', 'newValue', 'description']) {
+    text(row, field, context)
+  }
+  const lower = integer(row, 'lowerBound', context, Number.MIN_SAFE_INTEGER)
+  const upper = integer(row, 'upperBound', context, Number.MIN_SAFE_INTEGER)
+  if (lower > upper) {
+    throw new FixResponseContractError(context, 'parameter adjustment bounds are reversed')
+  }
+  const newValue = Number(row.newValue)
+  if (!Number.isSafeInteger(newValue) || newValue < lower || newValue > upper) {
+    throw new FixResponseContractError(context, 'parameter adjustment newValue is outside its declared range')
+  }
+  return row as ParameterAdjustment
+}
+
+const validateConditionAdjustment = (
+  value: unknown,
+  context: string,
+  index: number
+): ConditionAdjustment => {
+  const row = record(value, context, `conditionAdjustments[${index}]`)
+  if (!['remove', 'keep', 'add'].includes(row.action)) {
+    throw new FixResponseContractError(context, `conditionAdjustments[${index}].action is invalid`)
+  }
+  for (const field of ['attribute', 'description', 'ruleDescription', 'deviceLabel']) {
+    text(row, field, context)
+  }
+  if (row.targetType !== undefined
+      && !['api', 'variable', 'mode', 'state', 'trust', 'privacy'].includes(row.targetType)) {
+    throw new FixResponseContractError(context, `conditionAdjustments[${index}].targetType is invalid`)
+  }
+  return row as ConditionAdjustment
+}
+
+export const validateFixSuggestion = (
+  value: unknown,
+  context: string,
+  expectedStrategy?: FixStrategyName
+): FixSuggestion => {
+  const suggestion = record(value, context, 'suggestion')
+  if (!STRATEGIES.has(suggestion.strategy)) {
+    throw new FixResponseContractError(context, 'suggestion strategy is invalid')
+  }
+  if (expectedStrategy && suggestion.strategy !== expectedStrategy) {
+    throw new FixResponseContractError(context, 'suggestion strategy does not match the request')
+  }
+  text(suggestion, 'description', context)
+  bool(suggestion, 'verified', context)
+  if (suggestion.parameterAdjustments !== undefined && !Array.isArray(suggestion.parameterAdjustments)) {
+    throw new FixResponseContractError(context, 'parameterAdjustments must be an array when present')
+  }
+  if (suggestion.conditionAdjustments !== undefined && !Array.isArray(suggestion.conditionAdjustments)) {
+    throw new FixResponseContractError(context, 'conditionAdjustments must be an array when present')
+  }
+  if (suggestion.removedRuleDescriptions !== undefined
+      && !Array.isArray(suggestion.removedRuleDescriptions)) {
+    throw new FixResponseContractError(context, 'removedRuleDescriptions must be an array when present')
+  }
+  const parameters = (suggestion.parameterAdjustments || []).map(
+    (item: unknown, index: number) => validateParameterAdjustment(item, context, index))
+  const conditions = (suggestion.conditionAdjustments || []).map(
+    (item: unknown, index: number) => validateConditionAdjustment(item, context, index))
+  const removed = suggestion.removedRuleDescriptions === undefined
+    ? []
+    : stringArray(suggestion, 'removedRuleDescriptions', context)
+  const detailCount = suggestion.strategy === 'parameter'
+    ? parameters.length
+    : suggestion.strategy === 'condition'
+      ? conditions.length
+      : removed.length
+  if (detailCount === 0) {
+    throw new FixResponseContractError(context, `${suggestion.strategy} suggestion has no concrete changes`)
+  }
+  return suggestion as FixSuggestion
+}
+
+const validateAttempt = (value: unknown, context: string, index: number): FixStrategyAttempt => {
+  const attempt = record(value, context, `strategyAttempts[${index}]`)
+  if (!STRATEGIES.has(attempt.strategy)) {
+    throw new FixResponseContractError(context, `strategyAttempts[${index}].strategy is invalid`)
+  }
+  if (!ATTEMPT_STATUSES.has(attempt.status)) {
+    throw new FixResponseContractError(context, `strategyAttempts[${index}].status is invalid`)
+  }
+  text(attempt, 'reason', context)
+  return attempt as FixStrategyAttempt
+}
+
+export const validateFaultLocalizationResult = (
+  value: unknown,
+  expectedTraceId: number
+): FaultLocalizationResult => {
+  const context = 'Fault localization'
+  const result = record(value, context)
+  if (integer(result, 'traceId', context, 1) !== expectedTraceId) {
+    throw new FixResponseContractError(context, 'traceId does not match the request')
+  }
+  text(result, 'violatedSpecId', context)
+  validateSourceModel(result, context)
+  validateFaultRules(result, context)
+  text(result, 'summary', context)
+  const warnings = stringArray(result, 'warnings', context)
+  if (!result.sourceModelComplete && warnings.length === 0) {
+    throw new FixResponseContractError(context, 'incomplete source model requires a warning')
+  }
+  return result as FaultLocalizationResult
+}
+
+export const validateFixResult = (
+  value: unknown,
+  expectedTraceId: number,
+  requestedStrategies: FixStrategyName[]
+): FixResult => {
+  const context = 'Automatic fix analysis'
+  const result = record(value, context)
+  if (integer(result, 'traceId', context, 1) !== expectedTraceId) {
+    throw new FixResponseContractError(context, 'traceId does not match the request')
+  }
+  text(result, 'violatedSpecId', context)
+  validateSourceModel(result, context)
+  validateFaultRules(result, context)
+  const suggestions = array(result, 'suggestions', context).map(suggestion =>
+    validateFixSuggestion(suggestion, context))
+  const attempts = array(result, 'strategyAttempts', context).map((attempt, index) =>
+    validateAttempt(attempt, context, index))
+  const expected = requestedStrategies.length > 0
+    ? requestedStrategies
+    : ['parameter', 'condition', 'remove'] as FixStrategyName[]
+  if (new Set(expected).size !== expected.length
+      || attempts.length !== expected.length
+      || expected.some(strategy => attempts.filter(attempt => attempt.strategy === strategy).length !== 1)) {
+    throw new FixResponseContractError(context, 'strategyAttempts must explain every requested strategy exactly once')
+  }
+  const suggestionStrategies = new Set<FixStrategyName>()
+  suggestions.forEach(suggestion => {
+    if (suggestionStrategies.has(suggestion.strategy)) {
+      throw new FixResponseContractError(context, 'suggestions contains duplicate strategies')
+    }
+    suggestionStrategies.add(suggestion.strategy)
+    const attempt = attempts.find(item => item.strategy === suggestion.strategy)
+    const expectedStatus = suggestion.verified ? 'VERIFIED' : 'NOT_VERIFIED'
+    if (!attempt || attempt.status !== expectedStatus) {
+      throw new FixResponseContractError(context, 'suggestion verification contradicts its strategy attempt')
+    }
+  })
+  const fixable = bool(result, 'fixable', context)
+  if (fixable !== suggestions.some(suggestion => suggestion.verified)) {
+    throw new FixResponseContractError(context, 'fixable must match verified suggestions')
+  }
+  if (!result.sourceModelComplete) {
+    if (fixable || suggestions.length !== 0
+        || attempts.some(attempt => attempt.status !== 'SKIPPED_INCOMPLETE_SOURCE_MODEL')) {
+      throw new FixResponseContractError(context, 'an incomplete source model cannot produce an applicable fix')
+    }
+  }
+  if (!TEMPLATE_SNAPSHOT_COMPARISONS.has(result.templateSnapshotComparison)) {
+    throw new FixResponseContractError(context, 'templateSnapshotComparison is invalid')
+  }
+  text(result, 'summary', context)
+  stringArray(result, 'warnings', context)
+  if (result.unusedPreferredRangeSelections !== undefined) {
+    if (!Array.isArray(result.unusedPreferredRangeSelections)) {
+      throw new FixResponseContractError(context, 'unusedPreferredRangeSelections must be an array')
+    }
+    const seen = new Set<string>()
+    result.unusedPreferredRangeSelections.forEach((selection: unknown, index: number) => {
+      const validated = validatePreferredRangeSelection(
+        selection, context, `unusedPreferredRangeSelections[${index}]`)
+      if (seen.has(validated.targetId)) {
+        throw new FixResponseContractError(context, 'unusedPreferredRangeSelections contains duplicate targets')
+      }
+      seen.add(validated.targetId)
+    })
+  }
+  return result as FixResult
+}

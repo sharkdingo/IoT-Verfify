@@ -3,14 +3,15 @@ package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
+import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SimulationExecutionException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
-import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -23,22 +24,20 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
 public class SimulateModelTool extends AbstractAiTool {
 
     private final BoardDataConverter boardDataConverter;
-    private final BoardStorageService boardStorageService;
     private final SimulationService simulationService;
 
     public SimulateModelTool(BoardDataConverter boardDataConverter,
-                             BoardStorageService boardStorageService,
                              SimulationService simulationService,
                              ObjectMapper objectMapper) {
         super(objectMapper);
         this.boardDataConverter = boardDataConverter;
-        this.boardStorageService = boardStorageService;
         this.simulationService = simulationService;
     }
 
@@ -53,19 +52,19 @@ public class SimulateModelTool extends AbstractAiTool {
 
         props.put("steps", Map.of(
                 "type", "integer",
-                "description", "Number of simulation steps (1-100). Default 10."
+                "description", "Number of simulation steps (1-100, rejected if outside range). Default 10."
         ));
         props.put("isAttack", Map.of(
                 "type", "boolean",
-                "description", "Enable attack mode. Default false."
+                "description", "Include compromised device-instance and automation-link behavior. A device instance is a budget point only when it has a declared falsifiable reading or is a TAP command target; each submitted TAP rule's command-delivery link is another point. Inert devices are excluded. Declared falsifiable readings may vary within their domains; once a target or automation link is selected as compromised, that command is dropped. Other device-internal transitions are not frozen. Default false."
         ));
-        props.put("intensity", Map.of(
+        props.put("attackBudget", Map.of(
                 "type", "integer",
-                "description", "Attack intensity (0-50). Only effective when isAttack=true. Default 3."
+                "description", "Maximum compromised behavior-changing device-instance or automation-link points (1-50 when attack modeling is enabled, and no more than the effective attack surface returned by the model). Simulation returns one possible trajectory within this upper bound, not coverage of every combination. Omit it or use 0 when attack modeling is disabled; a positive disabled budget is rejected. Default 1 when enabled."
         ));
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
-                "description", "Enable privacy dimension modeling. Default false."
+                "description", "Track private-data labels through automation chains. This models label propagation, not access control or encryption. Default false."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -73,7 +72,7 @@ public class SimulateModelTool extends AbstractAiTool {
         );
 
         return LlmToolSpec.of(getName(), "Run NuSMV random simulation on the current board. " +
-                "Automatically reads all devices and rules from the board. " +
+                "Atomically snapshots all devices, environment values, rules, and referenced templates from the board. " +
                 "Returns a sequence of states showing how the system evolves over N steps. " +
                 "Requires at least one device on the board.", schema);
     }
@@ -87,42 +86,54 @@ public class SimulateModelTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            int steps = args.path("steps").asInt(10);
-            boolean isAttack = args.path("isAttack").asBoolean(false);
-            int intensity = args.path("intensity").asInt(3);
-            boolean enablePrivacy = args.path("enablePrivacy").asBoolean(false);
+            requireOnlyFields(args, "arguments", Set.of(
+                    "steps", "isAttack", "attackBudget", "enablePrivacy"));
+            int steps = intArgInRange(args, "steps", 10, 1, 100);
+            boolean isAttack = booleanArg(args, "isAttack", false);
+            int attackBudget = attackBudgetArg(args, isAttack);
+            boolean enablePrivacy = booleanArg(args, "enablePrivacy", false);
 
-            // Clamp numeric ranges to avoid extreme execution parameters.
-            steps = Math.max(1, Math.min(100, steps));
-            intensity = Math.max(0, Math.min(50, intensity));
-
-            // Load board data directly from current workspace state.
-            List<DeviceVerificationDto> devices = boardDataConverter.getDevicesForVerification(userId);
-            List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
+            ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
+            List<DeviceVerificationDto> devices = board.devices();
+            List<RuleDto> rules = board.rules();
 
             if (devices.isEmpty()) {
                 return errorJson("No devices found on the board. Please add devices first.",
                         "VALIDATION_ERROR", 400);
             }
 
-            log.info("Executing simulate_model: {} devices, {} rules, {} steps, attack={}, intensity={}, privacy={}",
-                    devices.size(), rules.size(), steps, isAttack, intensity, enablePrivacy);
+            log.info("Executing simulate_model: {} devices, {} rules, {} steps, attack={}, attackBudget={}, privacy={}",
+                    devices.size(), rules.size(), steps, isAttack, attackBudget, enablePrivacy);
 
             SimulationRequestDto request = new SimulationRequestDto();
             request.setDevices(devices);
+            request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSteps(steps);
             request.setAttack(isAttack);
-            request.setIntensity(intensity);
+            request.setAttackBudget(attackBudget);
             request.setEnablePrivacy(enablePrivacy);
 
-            SimulationResultDto result = simulationService.simulate(userId, request);
+            SimulationResultDto result = simulationService.simulateWithTemplateSnapshot(
+                    userId, request, board.templateManifests());
+            if (result == null || result.getStates() == null || result.getStates().isEmpty()) {
+                throw SimulationExecutionException.fromResult(result);
+            }
 
             // Build a compact summary for chat output.
             Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("modelComplete", result.isModelComplete());
+            summary.put("disabledRuleCount", result.getDisabledRuleCount());
+            summary.put("generationIssues", result.getGenerationIssues());
             summary.put("requestedSteps", result.getRequestedSteps());
             summary.put("actualSteps", result.getSteps());
             summary.put("stateCount", result.getStates() != null ? result.getStates().size() : 0);
+            summary.put("isAttack", Boolean.TRUE.equals(result.getIsAttack()));
+            summary.put("attackBudget", result.getAttackBudget());
+            summary.put("enablePrivacy", result.isEnablePrivacy());
+            summary.put("modelSemantics", result.getModelSemantics());
+            summary.put("modelSnapshot", result.getModelSnapshot());
+            summary.put("historyPersistence", result.getHistoryPersistence());
 
             // Include state transition overview (initial/final, and all for short traces).
             if (result.getStates() != null && !result.getStates().isEmpty()) {
@@ -139,7 +150,20 @@ public class SimulateModelTool extends AbstractAiTool {
                 summary.put("logs", result.getLogs());
             }
 
-            return successJson(summary, "Simulation completed.");
+            String message = result.isModelComplete()
+                    ? "Model-trace simulation completed. This is model behavior, not a prediction of the physical home."
+                    : "Model-trace simulation completed with disabled rules; the trace represents an incomplete generated model.";
+            message += " This preview was not added to run history.";
+            summary.put("message", message);
+            return readOnlySuccessJson(summary, message);
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
+        } catch (SimulationExecutionException e) {
+            log.warn("simulate_model produced no trace [{}]: {}", e.getReasonCode(), e.getMessage());
+            return errorJson(e.getMessage(), "SIMULATION_FAILED", e.getCode(), Map.of(
+                    "reasonCode", e.getReasonCode(),
+                    "logs", e.getLogs()
+            ));
         } catch (ServiceUnavailableException e) {
             log.warn("simulate_model busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

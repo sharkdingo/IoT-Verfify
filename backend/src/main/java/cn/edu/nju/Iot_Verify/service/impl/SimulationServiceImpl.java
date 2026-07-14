@@ -3,23 +3,34 @@ package cn.edu.nju.Iot_Verify.service.impl;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SimulationOutput;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.SimulationExecutionException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
@@ -32,6 +43,7 @@ import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -49,10 +61,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final NusmvConfig nusmvConfig;
     private final SimulationTraceRepository simulationTraceRepository;
     private final SimulationTaskRepository simulationTaskRepository;
+    private final UserRepository userRepository;
     private final SimulationTraceMapper simulationTraceMapper;
     private final SimulationTaskMapper simulationTaskMapper;
     private final ThreadPoolTaskExecutor simulationTaskExecutor;
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
+    private final TransactionTemplate transactionTemplate;
 
     public SimulationServiceImpl(SmvGenerator smvGenerator,
                                  SmvTraceParser smvTraceParser,
@@ -60,11 +74,13 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  NusmvConfig nusmvConfig,
                                  SimulationTraceRepository simulationTraceRepository,
                                  SimulationTaskRepository simulationTaskRepository,
+                                 UserRepository userRepository,
                                  SimulationTraceMapper simulationTraceMapper,
                                  SimulationTaskMapper simulationTaskMapper,
                                  ObjectMapper objectMapper,
                                  @Qualifier("simulationTaskExecutor") ThreadPoolTaskExecutor simulationTaskExecutor,
-                                 @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor) {
+                                 @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor,
+                                 TransactionTemplate transactionTemplate) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
@@ -72,10 +88,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.nusmvConfig = nusmvConfig;
         this.simulationTraceRepository = simulationTraceRepository;
         this.simulationTaskRepository = simulationTaskRepository;
+        this.userRepository = userRepository;
         this.simulationTraceMapper = simulationTraceMapper;
         this.simulationTaskMapper = simulationTaskMapper;
         this.simulationTaskExecutor = simulationTaskExecutor;
         this.syncSimulationExecutor = syncSimulationExecutor;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @PostConstruct
@@ -98,50 +116,73 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     public SimulationResultDto simulate(Long userId, SimulationRequestDto request) {
-        SimulationInput input = validateAndNormalize(request);
-        return simulateInput(userId, input);
+        SimulationInput input = validateAndNormalize(userId, request);
+        SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.sync());
+        result.setHistoryPersistence(RunPersistenceDto.notRequested());
+        return result;
     }
 
-    private SimulationResultDto simulateInput(Long userId, SimulationInput input) {
-        log.info("Starting simulation: userId={}, devices={}, steps={}, attack={}, intensity={}",
-                userId, input.devices().size(), input.steps(), input.attack(), input.intensity());
+    @Override
+    public SimulationResultDto simulateWithTemplateSnapshot(
+            Long userId,
+            SimulationRequestDto request,
+            Map<String, DeviceManifest> templateManifests) {
+        SimulationInput input = validateAndNormalize(userId, request, templateManifests);
+        SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.sync());
+        result.setHistoryPersistence(RunPersistenceDto.notRequested());
+        return result;
+    }
+
+    private SimulationResultDto simulateInput(Long userId, SimulationInput input,
+                                              SmvGenerator.TempModelContext tempModelContext) {
+        log.info("Starting simulation: userId={}, devices={}, steps={}, attack={}, attackBudget={}",
+                userId, input.devices().size(), input.steps(), input.attack(), input.attackBudget());
 
         long timeoutMs = nusmvConfig.getTimeoutMs() * 2;
         Future<SimulationResultDto> future;
         try {
             future = syncSimulationExecutor.submit(() ->
                     doSimulate(userId, input.devices(), input.rules(), input.steps(), input.attack(),
-                            input.intensity(), input.enablePrivacy()));
+                            input.attackBudget(), input.enablePrivacy(), input.request(), input.deviceSmvMap(),
+                            input.modelSnapshot(), tempModelContext));
         } catch (RejectedExecutionException e) {
             log.warn("Simulation request rejected: executor is saturated ({})", syncSimulationExecutorSnapshot());
             throw new ServiceUnavailableException("Simulation service is busy, please retry later", e);
         }
 
         try {
-            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            SimulationResultDto result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            if (result == null || result.getStates() == null || result.getStates().isEmpty()) {
+                throw SimulationExecutionException.fromResult(result);
+            }
+            return result;
         } catch (TimeoutException e) {
             future.cancel(true);
             purgeCancelledSyncTasks();
             log.warn("Simulation timed out after {}ms", timeoutMs);
-            return SimulationResultDto.builder()
-                    .states(List.of()).steps(0).requestedSteps(input.steps())
-                    .logs(List.of("Simulation timed out")).build();
+            throw SimulationExecutionException.timedOut();
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof InternalServerException ise) throw ise;
             if (cause instanceof ServiceUnavailableException sue) throw sue;
             if (cause instanceof SmvGenerationException sge) throw sge;
+            if (cause instanceof SimulationExecutionException see) throw see;
             log.error("Simulation failed", cause);
             throw new InternalServerException("Simulation failed: " + cause.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return SimulationResultDto.builder()
-                    .states(List.of()).steps(0).requestedSteps(input.steps())
-                    .logs(List.of("Simulation interrupted")).build();
+            throw SimulationExecutionException.interrupted();
         }
     }
 
-    private SimulationInput validateAndNormalize(SimulationRequestDto request) {
+    private SimulationInput validateAndNormalize(Long userId, SimulationRequestDto request) {
+        return validateAndNormalize(userId, request, null);
+    }
+
+    private SimulationInput validateAndNormalize(
+            Long userId,
+            SimulationRequestDto request,
+            Map<String, DeviceManifest> suppliedTemplateManifests) {
         if (request == null) {
             throw new ValidationException("request", "Simulation request cannot be null");
         }
@@ -149,27 +190,105 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         List<DeviceVerificationDto> devices = copyRequiredList(
                 snapshot.getDevices(), "devices", "Devices list cannot be empty");
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
+        List<BoardEnvironmentVariableDto> environmentVariables = copyOptionalList(
+                snapshot.getEnvironmentVariables(), "environmentVariables");
         int steps = snapshot.getSteps();
         if (steps < 1 || steps > 100) {
             throw new ValidationException("steps", "Steps must be between 1 and 100");
         }
-        int intensity = snapshot.getIntensity();
-        if (intensity < 0 || intensity > 50) {
-            throw new ValidationException("intensity", "Intensity must be between 0 and 50");
+        int attackBudget = snapshot.getAttackBudget();
+        if (attackBudget < 0 || attackBudget > 50) {
+            throw new ValidationException("attackBudget", "Attack budget must be between 0 and 50");
         }
+        if (snapshot.isAttack() && attackBudget < 1) {
+            throw new ValidationException("attackBudget",
+                    "Attack budget must be at least 1 when attack modeling is enabled");
+        }
+        if (!snapshot.isAttack() && attackBudget != 0) {
+            throw new ValidationException("attackBudget",
+                    "Attack budget must be 0 when attack modeling is disabled");
+        }
+        int effectiveAttackBudget = snapshot.isAttack() ? attackBudget : 0;
 
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
+        snapshot.setEnvironmentVariables(environmentVariables);
         snapshot.setSteps(steps);
-        snapshot.setIntensity(intensity);
+        snapshot.setAttackBudget(effectiveAttackBudget);
 
         Map<String, String> errors = NusmvRequestValidator.newErrors();
         NusmvRequestValidator.validateDevices(devices, errors);
-        NusmvRequestValidator.validateRules(rules, errors);
+        NusmvRequestValidator.validateRules(rules, devices, errors);
+        ModelBoundaryInput modelInput = validateModelSemantics(
+                userId, devices, rules, environmentVariables, snapshot.isAttack(),
+                suppliedTemplateManifests, errors);
+        snapshot.setEnvironmentVariables(modelInput.environmentVariables());
         NusmvRequestValidator.throwIfErrors(errors);
 
-        return new SimulationInput(devices, rules, steps, snapshot.isAttack(), intensity,
-                snapshot.isEnablePrivacy(), snapshot);
+        AttackSurface attackSurface = modelInput.attackSurface();
+        if (snapshot.isAttack() && attackBudget > attackSurface.totalCount()) {
+            throw new ValidationException("attackBudget",
+                    "Attack budget cannot exceed the behavior-changing device and automation-link points ("
+                            + attackSurface.totalCount() + ")");
+        }
+
+        return new SimulationInput(modelInput.devices(), rules, steps, snapshot.isAttack(), effectiveAttackBudget,
+                snapshot.isEnablePrivacy(), attackSurface.deviceCount(), attackSurface.automationLinkCount(),
+                attackSurface.falsifiableReadingDeviceCount(), snapshot, modelInput.deviceSmvMap(),
+                modelInput.templateManifests(), modelInput.modelSnapshot());
+    }
+
+    private ModelBoundaryInput validateModelSemantics(Long userId,
+                                                      List<DeviceVerificationDto> devices,
+                                                      List<RuleDto> rules,
+                                                      List<BoardEnvironmentVariableDto> environmentVariables,
+                                                      boolean isAttack,
+                                                      Map<String, DeviceManifest> suppliedTemplateManifests,
+                                                      Map<String, String> errors) {
+        if (!errors.isEmpty()) {
+            return new ModelBoundaryInput(devices, environmentVariables, new AttackSurface(Set.of(), 0, 0),
+                    Map.of(), Map.of(), null);
+        }
+        try {
+            SmvGenerator.CapturedDeviceModel capturedDeviceModel = suppliedTemplateManifests == null
+                    ? smvGenerator.captureDeviceModel(userId, devices)
+                    : smvGenerator.captureDeviceModelFromTemplateSnapshots(
+                            devices, suppliedTemplateManifests);
+            Map<String, DeviceSmvData> deviceSmvMap = capturedDeviceModel.deviceSmvMap();
+            LocalDateTime capturedAt = LocalDateTime.now();
+            NusmvRequestValidator.validateDeviceSemantics(devices, deviceSmvMap, errors);
+            NusmvRequestValidator.validateEnvironmentVariableOverrides(
+                    environmentVariables, deviceSmvMap, errors);
+            List<BoardEnvironmentVariableDto> mergedEnvironmentVariables =
+                    NusmvEnvironmentPool.mergeWithDefaults(environmentVariables, deviceSmvMap);
+            NusmvRequestValidator.validateEnvironmentVariables(mergedEnvironmentVariables, deviceSmvMap, errors);
+            NusmvRequestValidator.validateMainNamespace(devices, rules, deviceSmvMap, isAttack, errors);
+            NusmvRequestValidator.validateRuleSemantics(rules, deviceSmvMap, errors);
+            NusmvRequestValidator.validateAttackHasModeledEffect(isAttack, rules, deviceSmvMap, errors);
+            AttackSurface attackSurface = AttackSurface.analyze(rules, deviceSmvMap);
+            if (!errors.isEmpty()) {
+                return new ModelBoundaryInput(devices, mergedEnvironmentVariables, attackSurface,
+                        Map.of(), capturedDeviceModel.templateManifests(), null);
+            }
+            List<DeviceVerificationDto> expandedDevices = NusmvEnvironmentPool.expandDevices(
+                    devices, mergedEnvironmentVariables, deviceSmvMap);
+            Map<String, DeviceSmvData> expandedDeviceSmvMap =
+                    smvGenerator.buildDeviceSmvMapFromTemplateSnapshots(
+                            expandedDevices, capturedDeviceModel.templateManifests());
+            ModelRunSnapshotDto modelSnapshot = ModelRunSnapshotDto.captured(
+                    capturedAt,
+                    expandedDevices.size(),
+                    rules != null ? rules.size() : 0,
+                    0,
+                    mergedEnvironmentVariables.size(),
+                    capturedDeviceModel.templateManifests().size());
+            return new ModelBoundaryInput(expandedDevices, mergedEnvironmentVariables, attackSurface,
+                    expandedDeviceSmvMap, capturedDeviceModel.templateManifests(), modelSnapshot);
+        } catch (SmvGenerationException e) {
+            errors.putIfAbsent("devices", e.getMessage());
+            return new ModelBoundaryInput(devices, environmentVariables, new AttackSurface(Set.of(), 0, 0),
+                    Map.of(), Map.of(), null);
+        }
     }
 
     private SimulationRequestDto snapshotRequest(SimulationRequestDto request) {
@@ -207,16 +326,30 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     // Service-internal: task creation is only reachable through submitSimulation and
     // the package-private async path below; it is no longer part of the public interface.
     @Transactional
-    Long createTask(Long userId, int requestedSteps) {
-        SimulationTaskPo task = SimulationTaskPo.builder()
-                .userId(userId)
-                .status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(requestedSteps)
-                .createdAt(LocalDateTime.now())
-                .build();
-        SimulationTaskPo saved = simulationTaskRepository.save(Objects.requireNonNull(task));
-        log.info("Created simulation task: {} for user: {}", saved.getId(), userId);
-        return saved.getId();
+    Long createTask(Long userId, int requestedSteps,
+                    boolean isAttack, int attackBudget, boolean enablePrivacy,
+                    int devicePointCount, int linkPointCount,
+                    int falsifiableReadingDeviceCount,
+                    ModelRunSnapshotDto modelSnapshot) {
+        return transactionTemplate.execute(status -> {
+            requireActiveUserForPersistence(userId);
+            SimulationTaskPo task = SimulationTaskPo.builder()
+                    .userId(userId)
+                    .status(SimulationTaskPo.TaskStatus.PENDING)
+                    .requestedSteps(requestedSteps)
+                    .isAttack(isAttack)
+                    .attackBudget(attackBudget)
+                    .modeledDeviceAttackPointCount(devicePointCount)
+                    .modeledFalsifiableReadingDeviceCount(falsifiableReadingDeviceCount)
+                    .modeledAutomationLinkAttackPointCount(linkPointCount)
+                    .enablePrivacy(enablePrivacy)
+                    .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            SimulationTaskPo saved = simulationTaskRepository.save(Objects.requireNonNull(task));
+            log.info("Created simulation task: {} for user: {}", saved.getId(), userId);
+            return saved.getId();
+        });
     }
 
     // Service-internal failure compensation, reachable only from the submit/async paths below.
@@ -233,12 +366,15 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         Long requiredTaskId = requireTaskId(taskId);
         SimulationInput input;
         try {
-            input = validateAndNormalize(request);
+            input = validateAndNormalize(userId, request);
         } catch (ValidationException e) {
             failTaskById(requiredTaskId, e.getMessage());
             throw e;
         }
         try {
+            persistTaskModelContext(requiredTaskId, input.attack(), input.attackBudget(), input.enablePrivacy(),
+                    input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
+                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
             enqueueSimulationTask(userId, requiredTaskId, input);
         } catch (TaskRejectedException e) {
             failTaskById(requiredTaskId, "Server busy, please try again later");
@@ -248,8 +384,22 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     public Long submitSimulation(Long userId, SimulationRequestDto request) {
-        SimulationInput input = validateAndNormalize(request);
-        Long taskId = createTask(userId, input.steps());
+        return submitSimulationInput(userId, validateAndNormalize(userId, request));
+    }
+
+    @Override
+    public Long submitSimulationWithTemplateSnapshot(
+            Long userId,
+            SimulationRequestDto request,
+            Map<String, DeviceManifest> templateManifests) {
+        return submitSimulationInput(userId, validateAndNormalize(userId, request, templateManifests));
+    }
+
+    private Long submitSimulationInput(Long userId, SimulationInput input) {
+        Long taskId = createTask(userId, input.steps(),
+                input.attack(), input.attackBudget(), input.enablePrivacy(),
+                input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
+                input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
         try {
             enqueueSimulationTask(userId, taskId, input);
         } catch (TaskRejectedException e) {
@@ -266,6 +416,20 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         simulationTaskExecutor.execute(() -> runSimulationTask(userId, requiredTaskId, requiredInput));
     }
 
+    private void persistTaskModelContext(Long taskId,
+                                         boolean isAttack,
+                                         int attackBudget,
+                                         boolean enablePrivacy,
+                                         int devicePointCount,
+                                         int linkPointCount,
+                                         int falsifiableReadingDeviceCount,
+                                         ModelRunSnapshotDto modelSnapshot) {
+        simulationTaskRepository.updateModelContext(
+                taskId, isAttack, isAttack ? attackBudget : 0, enablePrivacy,
+                devicePointCount, falsifiableReadingDeviceCount, linkPointCount,
+                JsonUtils.toJson(modelSnapshot));
+    }
+
     private Long requireTaskId(Long taskId) {
         if (taskId == null) {
             throw new ValidationException("taskId", "Task id cannot be null");
@@ -275,6 +439,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     private void runSimulationTask(Long userId, Long taskId, SimulationInput input) {
         String requestJson = buildRequestSnapshot(input.request());
+        String templateSnapshotsJson = JsonUtils.toJson(input.templateManifests());
 
         registerRunningTask(taskId, Thread.currentThread());
         updateTaskProgress(taskId, 0, "Task started");
@@ -310,7 +475,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
             updateTaskProgress(taskId, 20, "Executing simulation");
             SimulationResultDto result = doSimulate(userId, input.devices(), input.rules(), input.steps(),
-                    input.attack(), input.intensity(), input.enablePrivacy());
+                    input.attack(), input.attackBudget(), input.enablePrivacy(), input.request(),
+                    input.deviceSmvMap(), input.modelSnapshot(), SmvGenerator.TempModelContext.task(taskId));
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
@@ -322,13 +488,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             }
 
             updateTaskProgress(taskId, 90, "Persisting simulation trace");
-            SimulationTracePo savedTrace = persistSimulationTrace(
-                    userId,
-                    result,
-                    requestJson);
-
-            updateTaskProgress(taskId, 100, "Simulation completed");
-            completeTask(task, savedTrace.getId(), result.getSteps(), result.getLogs());
+            boolean completed = completeTaskAndSaveTrace(task, userId, result, requestJson, templateSnapshotsJson);
+            if (!completed && !isCompletionCancelled(taskId)) {
+                failTask(task,
+                        "RESULT_PERSISTENCE_FAILED: Simulation finished, but its trajectory could not be saved.",
+                        result.getLogs());
+            }
 
         } catch (Exception e) {
             if (isTaskCancelled(taskId)) {
@@ -350,9 +515,22 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                    List<RuleDto> rules,
                                    int steps,
                                    boolean attack,
-                                   int intensity,
+                                   int attackBudget,
                                    boolean enablePrivacy,
-                                   SimulationRequestDto request) {}
+                                   int modeledDeviceAttackPointCount,
+                                   int modeledAutomationLinkAttackPointCount,
+                                   int modeledFalsifiableReadingDeviceCount,
+                                   SimulationRequestDto request,
+                                   Map<String, DeviceSmvData> deviceSmvMap,
+                                   Map<String, DeviceManifest> templateManifests,
+                                   ModelRunSnapshotDto modelSnapshot) {}
+
+    private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
+                                       List<BoardEnvironmentVariableDto> environmentVariables,
+                                       AttackSurface attackSurface,
+                                       Map<String, DeviceSmvData> deviceSmvMap,
+                                       Map<String, DeviceManifest> templateManifests,
+                                       ModelRunSnapshotDto modelSnapshot) {}
 
     @Override
     @Transactional(readOnly = true)
@@ -368,10 +546,27 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     public List<SimulationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds) {
         List<Long> normalizedExcludedIds = normalizeExcludedTaskIds(excludedTaskIds);
         List<SimulationTaskPo> tasks = normalizedExcludedIds.isEmpty()
-                ? simulationTaskRepository.findByUserIdOrderByCreatedAtDesc(userId)
-                : simulationTaskRepository.findByUserIdAndIdNotInOrderByCreatedAtDesc(userId, normalizedExcludedIds);
+                ? simulationTaskRepository.findByUserIdAndStatusNotOrderByCreatedAtDesc(
+                        userId, SimulationTaskPo.TaskStatus.COMPLETED)
+                : simulationTaskRepository.findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+                        userId, SimulationTaskPo.TaskStatus.COMPLETED, normalizedExcludedIds);
         return simulationTaskMapper.toSummaryDtoList(
                 tasks);
+    }
+
+    @Override
+    @Transactional
+    public void deleteTask(Long userId, Long taskId) {
+        SimulationTaskPo task = simulationTaskRepository.findByIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("SimulationTask", taskId));
+        if (task.getStatus() == SimulationTaskPo.TaskStatus.PENDING
+                || task.getStatus() == SimulationTaskPo.TaskStatus.RUNNING) {
+            throw new BadRequestException("An active simulation task must be cancelled before it can be removed");
+        }
+        if (task.getStatus() == SimulationTaskPo.TaskStatus.COMPLETED) {
+            throw new BadRequestException("Completed simulation results must be removed from run history");
+        }
+        simulationTaskRepository.delete(Objects.requireNonNull(task));
     }
 
     private static List<Long> normalizeExcludedTaskIds(List<Long> excludedTaskIds) {
@@ -392,23 +587,57 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     @Transactional
-    public boolean cancelTask(Long userId, Long taskId) {
+    public TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
         return super.cancelTask(userId, taskId);
     }
 
     @Override
-    @Transactional
     public SimulationTraceDto simulateAndSave(Long userId, SimulationRequestDto request) {
-        SimulationInput input = validateAndNormalize(request);
-        SimulationResultDto result = simulateInput(userId, input);
+        SimulationInput input = validateAndNormalize(userId, request);
+        SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.savedTrace());
 
         if (result.getStates() == null || result.getStates().isEmpty()) {
             throw new InternalServerException("Simulation produced no states, nothing to save");
         }
 
-        SimulationTracePo saved = persistSimulationTrace(userId, result, buildRequestSnapshot(input.request()));
+        SimulationTracePo saved;
+        try {
+            saved = transactionTemplate.execute(status -> persistSimulationTrace(
+                    userId, result, buildRequestSnapshot(input.request()),
+                    JsonUtils.toJson(input.templateManifests())));
+        } catch (RuntimeException e) {
+            log.error("Simulation completed but its history persistence outcome is unknown for user {}", userId, e);
+            return unsavedSimulationTrace(result, RunPersistenceDto.outcomeUnknown(
+                    "RUN_HISTORY_SAVE_OUTCOME_UNKNOWN"));
+        }
+        if (saved == null || saved.getId() == null) {
+            return unsavedSimulationTrace(result, RunPersistenceDto.failed("RUN_HISTORY_SAVE_FAILED"));
+        }
         log.info("Saved simulation trace: id={}, userId={}, steps={}", saved.getId(), userId, saved.getSteps());
-        return simulationTraceMapper.toDto(saved);
+        SimulationTraceDto dto = simulationTraceMapper.toDto(saved);
+        dto.setHistoryPersistence(RunPersistenceDto.saved(saved.getId()));
+        return dto;
+    }
+
+    private SimulationTraceDto unsavedSimulationTrace(
+            SimulationResultDto result, RunPersistenceDto persistence) {
+        return SimulationTraceDto.builder()
+                .requestedSteps(result.getRequestedSteps())
+                .steps(result.getSteps())
+                .modelComplete(result.isModelComplete())
+                .disabledRuleCount(result.getDisabledRuleCount())
+                .generationIssues(result.getGenerationIssues())
+                .states(result.getStates())
+                .logs(result.getLogs())
+                .nusmvOutput(result.getNusmvOutput())
+                .attack(result.getIsAttack())
+                .attackBudget(result.getAttackBudget())
+                .enablePrivacy(result.isEnablePrivacy())
+                .modelSemantics(result.getModelSemantics())
+                .modelSnapshot(result.getModelSnapshot())
+                .historyPersistence(persistence)
+                .createdAt(LocalDateTime.now())
+                .build();
     }
 
     @Override
@@ -431,6 +660,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     public void deleteSimulation(Long userId, Long id) {
         SimulationTracePo po = simulationTraceRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTrace", id));
+        simulationTaskRepository.deleteByUserIdAndSimulationTraceId(userId, id);
         simulationTraceRepository.delete(Objects.requireNonNull(po));
     }
 
@@ -439,19 +669,36 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                            List<RuleDto> rules,
                                            int steps,
                                            boolean isAttack,
-                                           int intensity,
-                                           boolean enablePrivacy) {
+                                           int attackBudget,
+                                           boolean enablePrivacy,
+                                           SimulationRequestDto request,
+                                           Map<String, DeviceSmvData> resolvedDeviceSmvMap,
+                                           ModelRunSnapshotDto modelSnapshot,
+                                           SmvGenerator.TempModelContext tempModelContext) {
         List<String> logs = new ArrayList<>();
         File smvFile = null;
         SimulationResultDto finalResult = null;
-        String requestJson = buildRequestSnapshot(devices, rules, steps, isAttack, intensity, enablePrivacy);
+        AttackSurface attackSurface = new AttackSurface(Set.of(), rules != null ? rules.size() : 0, 0);
+        int disabledRuleCount = 0;
+        List<ModelGenerationIssueDto> generationIssues = List.of();
+        boolean generationCompleted = false;
+        String requestJson = buildRequestSnapshot(request);
 
         try {
             logs.add("Generating NuSMV model (simulation mode)...");
-            SmvGenerator.GenerateResult genResult = smvGenerator.generate(
-                    userId, devices, rules, List.of(), isAttack, intensity, enablePrivacy, SmvGenerator.GeneratePurpose.SIMULATION);
+            SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
+                    userId, devices, request.getEnvironmentVariables(), rules, List.of(),
+                    isAttack, attackBudget, enablePrivacy, SmvGenerator.GeneratePurpose.SIMULATION,
+                    tempModelContext, resolvedDeviceSmvMap);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
+            attackSurface = AttackSurface.analyze(rules, deviceSmvMap);
+            disabledRuleCount = genResult.disabledRuleCount();
+            generationIssues = genResult.generationIssues() != null ? genResult.generationIssues() : List.of();
+            generationCompleted = true;
+            if (genResult.generationWarnings() != null) {
+                logs.addAll(genResult.generationWarnings());
+            }
 
             if (smvFile == null || !smvFile.exists()) {
                 logs.add("Failed to generate NuSMV model file");
@@ -459,7 +706,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                         .states(List.of()).steps(0).requestedSteps(steps).logs(logs).build();
                 return finalResult;
             }
-            logs.add("Model generated: " + smvFile.getAbsolutePath());
+            logs.add("Model generated: " + smvFile.getName());
             saveRequestJson(smvFile, requestJson);
 
             logs.add("Executing NuSMV interactive simulation (" + steps + " steps)...");
@@ -482,7 +729,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             logs.add("Simulation completed.");
 
             List<TraceStateDto> states = smvTraceParser.parseCounterexampleStates(
-                    simOutput.getTraceText(), deviceSmvMap);
+                    simOutput.getTraceText(), deviceSmvMap, rules);
             logs.add("Parsed " + states.size() + " states from simulation trace.");
 
             if (states.isEmpty()) {
@@ -537,30 +784,46 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             throw new InternalServerException("Simulation failed: " + e.getMessage());
         } finally {
             if (finalResult != null) {
+                finalResult.setIsAttack(isAttack);
+                finalResult.setAttackBudget(isAttack ? attackBudget : 0);
+                finalResult.setEnablePrivacy(enablePrivacy);
+                finalResult.setModelSemantics(ModelSemanticsDto.forRun(
+                        isAttack, enablePrivacy,
+                        attackSurface.deviceCount(), attackSurface.automationLinkCount(),
+                        attackSurface.falsifiableReadingDeviceCount()));
+                finalResult.setModelSnapshot(modelSnapshot);
+                finalResult.setDisabledRuleCount(disabledRuleCount);
+                finalResult.setModelComplete(generationCompleted && disabledRuleCount == 0);
+                finalResult.setGenerationIssues(generationIssues);
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
         }
     }
 
-    private void completeTask(SimulationTaskPo task, Long simulationTraceId, int steps, List<String> logs) {
-        if (task == null) return;
+    private boolean completeTask(SimulationTaskPo task, Long simulationTraceId, int steps, List<String> logs,
+                                 List<ModelGenerationIssueDto> generationIssues) {
+        if (task == null) return false;
         try {
             LocalDateTime completedAt = LocalDateTime.now();
             Long processingTimeMs = task.getStartedAt() != null
                     ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
             String checkLogsJson = serializeCheckLogs(logs);
-            int updated = simulationTaskRepository.completeTaskIfNotCancelled(
+            String generationIssuesJson = JsonUtils.toJsonOrEmpty(generationIssues);
+            int updated = simulationTaskRepository.completeTaskIfRunning(
                     task.getId(),
                     SimulationTaskPo.TaskStatus.COMPLETED,
                     completedAt, steps, simulationTraceId,
-                    null, checkLogsJson, processingTimeMs,
-                    SimulationTaskPo.TaskStatus.CANCELLED);
+                    null, checkLogsJson, generationIssuesJson, processingTimeMs,
+                    SimulationTaskPo.TaskStatus.RUNNING);
             if (updated == 0) {
-                log.info("Simulation task {} was already cancelled, skipping completion", task.getId());
+                log.info("Simulation task {} was not RUNNING or was already terminal, skipping completion", task.getId());
+                return false;
             }
+            return true;
         } catch (Exception e) {
             log.error("Failed to complete simulation task: {}", task.getId(), e);
+            return false;
         }
     }
 
@@ -571,45 +834,117 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             Long processingTimeMs = task.getStartedAt() != null
                     ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
             String checkLogsJson = serializeCheckLogs(logs == null || logs.isEmpty() ? List.of(errorMessage) : logs);
-            int updated = simulationTaskRepository.failTaskIfNotCancelled(
+            int updated = simulationTaskRepository.failTaskIfActive(
                     task.getId(),
                     SimulationTaskPo.TaskStatus.FAILED,
                     completedAt, errorMessage,
                     checkLogsJson, processingTimeMs,
-                    SimulationTaskPo.TaskStatus.CANCELLED);
+                    List.of(SimulationTaskPo.TaskStatus.PENDING,
+                            SimulationTaskPo.TaskStatus.RUNNING));
             if (updated == 0) {
-                log.info("Simulation task {} was already cancelled, skipping fail", task.getId());
+                log.info("Simulation task {} was no longer active, skipping fail", task.getId());
             }
         } catch (Exception e) {
             log.error("Failed to mark simulation task as failed: {}", task.getId(), e);
         }
     }
 
-    private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result, String requestJson) {
+    private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result,
+                                                     String requestJson, String templateSnapshotsJson) {
+        requireActiveUserForPersistence(userId);
+        ModelSemanticsDto semantics = result.getModelSemantics();
         SimulationTracePo po = SimulationTracePo.builder()
                 .userId(userId)
                 .requestedSteps(result.getRequestedSteps())
                 .steps(result.getSteps())
                 .statesJson(JsonUtils.toJson(result.getStates()))
                 .logsJson(JsonUtils.toJsonOrEmpty(result.getLogs()))
+                .generationIssuesJson(JsonUtils.toJsonOrEmpty(result.getGenerationIssues()))
                 .nusmvOutput(result.getNusmvOutput())
                 .requestJson(requestJson)
+                .templateSnapshotsJson(templateSnapshotsJson)
+                .modelSnapshotJson(JsonUtils.toJson(result.getModelSnapshot()))
+                .isAttack(result.getIsAttack())
+                .attackBudget(Boolean.TRUE.equals(result.getIsAttack()) ? result.getAttackBudget() : 0)
+                .enablePrivacy(result.isEnablePrivacy())
+                .modeledDeviceAttackPointCount(semantics != null
+                        ? semantics.getModeledDeviceAttackPointCount() : null)
+                .modeledFalsifiableReadingDeviceCount(semantics != null
+                        ? semantics.getModeledFalsifiableReadingDeviceCount() : null)
+                .modeledAutomationLinkAttackPointCount(semantics != null
+                        ? semantics.getModeledAutomationLinkAttackPointCount() : null)
                 .build();
         return simulationTraceRepository.save(Objects.requireNonNull(po));
+    }
+
+    private boolean completeTaskAndSaveTrace(SimulationTaskPo task,
+                                             Long userId,
+                                             SimulationResultDto result,
+                                             String requestJson,
+                                             String templateSnapshotsJson) {
+        if (!userRepository.existsById(userId)) {
+            log.info("User {} no longer exists, skipping simulation task completion/persistence", userId);
+            return false;
+        }
+        if (isCompletionCancelled(task.getId())) {
+            log.info("Simulation task {} was cancelled before trace persistence", task.getId());
+            return false;
+        }
+        if (transactionTemplate == null) {
+            throw new IllegalStateException("transactionTemplate is required to complete simulation with a trace");
+        }
+        return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+            if (!userRepository.existsById(userId)) {
+                log.info("User {} was deleted before simulation trace persistence, skipping simulation result", userId);
+                status.setRollbackOnly();
+                return false;
+            }
+            if (isCompletionCancelled(task.getId())) {
+                log.info("Simulation task {} was cancelled before trace persistence", task.getId());
+                status.setRollbackOnly();
+                return false;
+            }
+            SimulationTracePo savedTrace = persistSimulationTrace(
+                    userId, result, requestJson, templateSnapshotsJson);
+            if (isCompletionCancelled(task.getId())) {
+                log.info("Simulation task {} was cancelled after trace persistence but before completion; rolling back trace", task.getId());
+                status.setRollbackOnly();
+                return false;
+            }
+            boolean completed = completeTask(task, savedTrace.getId(), result.getSteps(), result.getLogs(),
+                    result.getGenerationIssues());
+            if (!completed) {
+                status.setRollbackOnly();
+            }
+            return completed;
+        }));
+    }
+
+    private boolean isCompletionCancelled(Long taskId) {
+        return taskId != null && (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted());
+    }
+
+    private void requireActiveUserForPersistence(Long userId) {
+        if (userId == null) {
+            throw new ValidationException("userId", "User id cannot be null");
+        }
+        if (userRepository.findByIdForUpdate(userId).isEmpty()) {
+            throw ResourceNotFoundException.user(userId);
+        }
     }
 
     private String buildRequestSnapshot(List<DeviceVerificationDto> devices,
                                         List<RuleDto> rules,
                                         int steps,
                                         boolean isAttack,
-                                        int intensity,
+                                        int attackBudget,
                                         boolean enablePrivacy) {
         SimulationRequestDto request = new SimulationRequestDto();
         request.setDevices(devices);
         request.setRules(rules != null ? rules : List.of());
         request.setSteps(steps);
         request.setAttack(isAttack);
-        request.setIntensity(intensity);
+        request.setAttackBudget(attackBudget);
         request.setEnablePrivacy(enablePrivacy);
         return JsonUtils.toJson(request);
     }
@@ -634,8 +969,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         try {
             File jsonFile = new File(smvFile.getParentFile(), "result.json");
             Result<SimulationResultDto> wrapped = wrapResultForDebugFile(simulationResult);
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(jsonFile, wrapped);
-            log.info("Simulation result JSON saved to: {}", jsonFile.getAbsolutePath());
+            byte[] payload = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(wrapped);
+            java.nio.file.Files.write(jsonFile.toPath(), payload);
+            log.debug("Simulation result JSON saved to: {}", jsonFile.getAbsolutePath());
         } catch (IOException e) {
             log.warn("Failed to save simulation result JSON: {}", e.getMessage());
         }
@@ -647,7 +983,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             File jsonFile = new File(smvFile.getParentFile(), "request.json");
             objectMapper.writerWithDefaultPrettyPrinter()
                     .writeValue(jsonFile, objectMapper.readTree(requestJson));
-            log.info("Simulation request JSON saved to: {}", jsonFile.getAbsolutePath());
+            log.debug("Simulation request JSON saved to: {}", jsonFile.getAbsolutePath());
         } catch (IOException e) {
             log.warn("Failed to save simulation request JSON: {}", e.getMessage());
         }

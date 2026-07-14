@@ -6,7 +6,7 @@
 			"Name": "weather",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["sunny", "rainy", "snowy", "cloudy", "windy", "foggy", "stormy"]

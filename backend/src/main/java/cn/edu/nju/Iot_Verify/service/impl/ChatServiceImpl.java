@@ -11,8 +11,10 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
+import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
@@ -43,6 +45,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 @Slf4j
 @Service
@@ -61,6 +65,8 @@ public class ChatServiceImpl implements ChatService {
     private final ObjectMapper objectMapper;
     private final ChatMapper chatMapper;
     private final TransactionTemplate transactionTemplate;
+    private final ConcurrentMap<String, Long> activeStreamRequests = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
 
     @Override
     @Transactional(readOnly = true)
@@ -74,7 +80,7 @@ public class ChatServiceImpl implements ChatService {
         ChatSessionPo session = new ChatSessionPo();
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
-        session.setTitle("New Chat");
+        session.setTitle(null);
         session.setUpdatedAt(LocalDateTime.now());
         return chatMapper.toChatSessionDto(sessionRepo.save(session));
     }
@@ -93,17 +99,63 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public void deleteSession(Long userId, String sessionId) {
-        sessionRepo.findByIdAndUserId(sessionId, userId)
-                .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-        messageRepo.deleteBySessionId(sessionId);
-        sessionRepo.deleteById(Objects.requireNonNull(sessionId, "sessionId must not be null"));
+        synchronized (sessionLock(sessionId)) {
+            sessionRepo.findByIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+            if (activeStreamRequests.containsKey(sessionId)) {
+                throw new ChatSessionBusyException(sessionId);
+            }
+            messageRepo.deleteBySessionId(sessionId);
+            sessionRepo.deleteById(Objects.requireNonNull(sessionId, "sessionId must not be null"));
+        }
+    }
+
+    @Override
+    public void beginStreamRequest(Long userId, String sessionId) {
+        synchronized (sessionLock(sessionId)) {
+            sessionRepo.findByIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+            Long existingUser = activeStreamRequests.putIfAbsent(sessionId, userId);
+            if (existingUser != null) {
+                throw new ChatSessionBusyException(sessionId);
+            }
+        }
+    }
+
+    @Override
+    public void endStreamRequest(Long userId, String sessionId) {
+        if (sessionId != null) {
+            activeStreamRequests.remove(sessionId, userId);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ChatSessionActivityDto getSessionActivity(Long userId, String sessionId) {
+        synchronized (sessionLock(sessionId)) {
+            sessionRepo.findByIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+            return ChatSessionActivityDto.builder()
+                    .sessionId(sessionId)
+                    .active(activeStreamRequests.containsKey(sessionId))
+                    .build();
+        }
+    }
+
+    private Object sessionLock(String sessionId) {
+        return sessionLocks.computeIfAbsent(
+                Objects.requireNonNull(sessionId, "sessionId must not be null"), ignored -> new Object());
     }
 
     @Override
     public void processStreamChat(Long userId, String sessionId, String content, SseEmitter emitter) {
         UserContextHolder.setUserId(userId);
+        UserContextHolder.setDestructiveActionConfirmed(chatIntentRouter.isExplicitConfirmation(content));
+        boolean preferChinese = prefersChinese(content);
         StringBuilder finalAnswer = new StringBuilder();
         AtomicBoolean isDisconnect = new AtomicBoolean(false);
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        ToolLoopResult loopResult = ToolLoopResult.empty();
         emitter.onCompletion(() -> isDisconnect.set(true));
         emitter.onTimeout(() -> isDisconnect.set(true));
         emitter.onError(ex -> isDisconnect.set(true));
@@ -117,8 +169,6 @@ public class ChatServiceImpl implements ChatService {
                 touchSessionTitle(sessionId, userId, content);
             });
 
-            Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
-            ToolLoopResult loopResult = new ToolLoopResult(false, false);
             ChatIntentRouter.Decision routeDecision = chatIntentRouter.route(content);
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
             List<LlmMessage> messages = new ArrayList<>();
@@ -145,19 +195,26 @@ public class ChatServiceImpl implements ChatService {
                 }
             }
 
-            if (loopResult.reachedMaxRounds()) {
-                String fallbackText = "The operation required too many steps and may be incomplete. Please check the current board state.";
-                if (sendSseChunk(emitter, fallbackText)) {
-                    finalAnswer.append(fallbackText);
-                }
-            } else {
-                streamAssistantReply(withVisibleReplyPrompt(messages, loopResult.hadToolCalls()), finalAnswer, emitter, isDisconnect);
+            String executionNotice = toolExecutionNotice(loopResult, preferChinese);
+            if (!executionNotice.isBlank() && sendSseChunk(emitter, executionNotice)) {
+                finalAnswer.append(executionNotice);
             }
 
-            if (finalAnswer.isEmpty() && !isDisconnect.get()) {
-                String fallbackText = loopResult.hadToolCalls()
-                        ? "The operation completed, but I could not generate a final response. Please check the current board state."
-                        : "I could not generate a response. Please try again.";
+            boolean finalResponseProduced = false;
+            if (loopResult.reachedMaxRounds()) {
+                String fallbackText = maxRoundsFallback(loopResult, preferChinese);
+                if (sendSseChunk(emitter, fallbackText)) {
+                    finalAnswer.append(fallbackText);
+                    finalResponseProduced = true;
+                }
+            } else {
+                int replyStart = finalAnswer.length();
+                streamAssistantReply(withVisibleReplyPrompt(messages, loopResult.hadToolCalls()), finalAnswer, emitter, isDisconnect);
+                finalResponseProduced = finalAnswer.length() > replyStart;
+            }
+
+            if (!finalResponseProduced && !isDisconnect.get()) {
+                String fallbackText = missingFinalResponseFallback(loopResult, preferChinese);
                 if (sendSseChunk(emitter, fallbackText)) {
                     finalAnswer.append(fallbackText);
                 }
@@ -174,7 +231,15 @@ public class ChatServiceImpl implements ChatService {
                 return;
             }
             log.error("Chat Error", e);
-            sendSseErrorMessage(emitter, errorMessageFor(e));
+            String errorMessage = errorMessageFor(e, preferChinese);
+            if (!commandSet.isEmpty()) {
+                sendFrontendCommands(emitter, commandSet);
+                errorMessage += preferChinese
+                        ? " 一个或多个较早的工具写入可能已经完成；客户端已请求刷新受影响数据。重试前请检查当前状态。"
+                        : " One or more earlier tool mutations may already have completed; "
+                            + "the client was asked to refresh affected data. Review current state before retrying.";
+            }
+            sendSseErrorMessage(emitter, errorMessage);
         } finally {
             UserContextHolder.clear();
         }
@@ -183,7 +248,7 @@ public class ChatServiceImpl implements ChatService {
     private void touchSessionTitle(String sessionId, Long userId, String content) {
         sessionRepo.findByIdAndUserId(Objects.requireNonNull(sessionId, "sessionId must not be null"), userId).ifPresent(s -> {
             s.setUpdatedAt(LocalDateTime.now());
-            if ("New Chat".equals(s.getTitle()) || s.getTitle().startsWith("Chat ")) {
+            if (isUntitledSessionTitle(s.getTitle())) {
                 String newTitle = content.length() > 12 ? content.substring(0, 12) + "..." : content;
                 newTitle = newTitle.replace("\n", " ").trim();
                 s.setTitle(newTitle);
@@ -204,17 +269,38 @@ public class ChatServiceImpl implements ChatService {
         3. Explain verification/simulation in user-friendly language.
         4. Avoid exposing internal IDs unless user asks.
         5. For casual non-IoT questions, answer directly.
+        6. Treat resultAvailable=false or resultStatus=RESULT_UNAVAILABLE as an unconfirmed outcome,
+           never as success. Do not retry a possibly committed mutation until refreshed state is inspected.
+        7. If any tool result has requiresUserConfirmation=true, stop tool planning for this user turn.
+           Never accept a proposed alternative, rename, deletion, or other pending action on the user's behalf.
+
+        Recommendation Guidelines:
+        - A recommendation is a reviewed candidate, not an applied change and not a formal-verification result.
+        - If the user asks only to recommend or explore, return the candidates and ask what to apply. Do not call
+          add_device, manage_rule, or manage_spec in the same turn on the user's behalf.
+        - If a recommendation result reports filteredItems, truncatedCount, or adjustedItems, preserve those
+          distinctions: rejected candidates have itemized reasons; truncated candidates were never inspected;
+          deterministic defaults/normalizations are adjustments, not AI-authored values.
+        - Applying one device/rule/specification recommendation is a targeted append. recommend_scenario is instead
+          a complete scene-replacement draft and cannot be described as a local addition or as already applied.
 
         Rule Recommendation Guidelines:
         - When users want to create rules or ask for rule suggestions, use recommend_rules tool first
-        - analyze the device capabilities (APIs, variables, states) from the recommendation result
-        - Only recommend rules using APIs and variables that actually exist in the device templates
+        - analyze the device capabilities (APIs, variables, modes, states) from the recommendation result
+        - Only recommend rules using APIs, variables, modes, or states that actually exist in the device templates
         - Present recommended rules in a clear format and ask user to confirm before creating
-        - Set confidence level based on how well the rule matches device capabilities
+        - Explain why each suggestion matches the user's goal and the available device capabilities; do not invent a numeric confidence score
+
+        Destructive Action Guidelines:
+        - Device, template, rule, specification, and saved-trace deletion is always a two-turn operation.
+        - On the first turn, call the delete tool with confirmed=false and summarize the returned target and impact.
+        - Stop and ask the user for explicit confirmation. Never set confirmed=true in the same user turn as the preview.
+        - Set confirmed=true only when the latest user message explicitly confirms the previously previewed deletion.
+        - If dependencies or target data changed after preview, explain the conflict and request a new preview.
 
         Available tools:
         - Device: add_device, delete_device, search_devices
-        - Rule: list_rules, manage_rule, check_duplicate_rule, recommend_rules, recommend_related_devices
+        - Rule: list_rules, manage_rule, check_duplicate_rule, check_rule_similarity, recommend_rules, recommend_related_devices
         - Spec: list_specs, manage_spec, recommend_specifications
         - Template: list_templates, add_template, delete_template
         - Verification sync: verify_model
@@ -246,8 +332,31 @@ public class ChatServiceImpl implements ChatService {
 
         Visible response rules:
         - Stream only user-visible natural language or Markdown.
+        - Reply in the language used by the user's latest message. Preserve literal device, template, rule,
+          and specification labels even when those labels use another language.
         - Do not emit tool-call JSON, XML tags, pseudo-tags, function names, or internal control formats.
         - Do not claim that a platform operation has been performed unless a tool result in the conversation proves it.
+        - If a tool result has requiresUserConfirmation=true, state that no change was made, explain the exact reason and any proposed alternative or collateral impact, and ask the user to choose or confirm it.
+        - If a tool result contains error/errorCode or operation=notCreated, never describe that step as completed. Explain the user-facing reason and preserve any suggested next choice.
+        - If a tool result has resultAvailable=false or resultStatus=RESULT_UNAVAILABLE, state that the outcome is unconfirmed. If mutationMayHaveCommitted=true, explain that current state must be checked before retrying.
+        - If a mutation result has verificationStatus=NOT_VERIFIED, say that the item was created but has not been formally verified.
+        - For every recommendation result, report rawCandidateCount, inspectedCount, validatedCount/count,
+          filteredCount, and truncatedCount in user language. Explain every filteredItems reason with its candidate
+          label/type. Explain adjustedItems separately. Never invent a reason for truncated candidates because they
+          were not inspected, and never describe a kept candidate as applied unless a later mutation result proves it.
+        - A recommend_scenario result is an unverified full-replacement draft. State that applying it would replace
+          devices, the shared environment pool, rules, and specifications after a separate impact confirmation.
+        - For verification, only outcome=SATISFIED with modelComplete=true supports a complete checked-scope pass.
+          SATISFIED with modelComplete=false means only emitted properties passed; VIOLATED proves at least one
+          checked property failed but does not restore omitted scope; INCONCLUSIVE is never a safety conclusion.
+          Always disclose disabledRuleCount, skippedSpecCount, and generationIssues when present.
+        - Simulation is one possible formal-model trajectory, not a prediction of the physical home. If
+          modelComplete=false, say which modeled rules were omitted before interpreting the trajectory.
+        - Automatic-fix output is a proposal. fixable=false or an empty suggestions list must include the returned
+          summary, strategy-attempt reasons, and warnings. A verified suggestion still is not applied; Board drift
+          and the repaired property are checked again by the separate apply action.
+        - Do not expose device node ids, rule/spec/task/trace ids, generated NuSMV names, raw formulas, or zero-based positions unless the user explicitly asks for technical details. Prefer the returned display labels and descriptions.
+        - formulaPreview is descriptive preview text. Only checkedExpression is the expression actually sent to the model checker for that run.
         - For casual non-IoT questions, answer directly.
         - Explain verification, simulation, rules, and specifications in user-friendly language.
 
@@ -273,16 +382,25 @@ public class ChatServiceImpl implements ChatService {
                                            SseEmitter emitter,
                                            AtomicBoolean isDisconnect) {
         boolean hadToolCalls = false;
+        int successfulToolCalls = 0;
+        int failedToolCalls = 0;
+        int resultUnavailableToolCalls = 0;
+        int uncertainMutationCalls = 0;
+        boolean confirmationPending = false;
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
             if (isDisconnect.get()) {
                 log.info("Client disconnected, stopping tool loop");
-                return new ToolLoopResult(hadToolCalls, false);
+                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                        confirmationPending);
             }
             LlmChatResponse response = llmChatService.chatWithTools(messages, tools);
             if (response == null) {
                 log.warn("LLM provider returned null tool-planning response");
-                return new ToolLoopResult(hadToolCalls, false);
+                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                        confirmationPending);
             }
 
             List<LlmToolCall> toolCalls = response.toolCalls();
@@ -291,7 +409,9 @@ public class ChatServiceImpl implements ChatService {
                 if (!aiText.isBlank()) {
                     log.debug("Tool planning completed with final text; regenerating visible answer through streaming.");
                 }
-                return new ToolLoopResult(hadToolCalls, false);
+                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                        confirmationPending);
             }
 
             hadToolCalls = true;
@@ -302,7 +422,9 @@ public class ChatServiceImpl implements ChatService {
             for (LlmToolCall toolCall : toolCalls) {
                 if (isDisconnect.get()) {
                     log.info("Client disconnected, stopping remaining tool calls");
-                    return new ToolLoopResult(hadToolCalls, false);
+                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                            failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                            confirmationPending);
                 }
                 String toolCallId = toolCall.id();
                 String functionName = safeString(toolCall.name());
@@ -312,24 +434,53 @@ public class ChatServiceImpl implements ChatService {
                 }
 
                 String toolResult;
+                ToolExecutionOutcome executionOutcome;
                 if (functionName.isBlank()) {
                     toolResult = jsonError("Invalid tool call: missing function name.", "VALIDATION_ERROR", 400);
+                    executionOutcome = ToolExecutionOutcome.FAILED;
                 } else {
                     toolResult = aiToolManager.execute(functionName, argsJson);
-                    if (isToolExecutionSuccessful(toolResult)) {
+                    executionOutcome = classifyToolExecution(toolResult);
+                    if (executionOutcome == ToolExecutionOutcome.USABLE
+                            || (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
+                                && mutationMayHaveCommitted(toolResult))) {
                         collectRefreshCommand(functionName, commandSet);
                     }
+                }
+
+                boolean requiresConfirmation = requiresUserConfirmation(toolResult);
+                if (requiresConfirmation) {
+                    confirmationPending = true;
+                } else if (executionOutcome == ToolExecutionOutcome.USABLE) {
+                    successfulToolCalls++;
+                } else if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
+                    resultUnavailableToolCalls++;
+                    if (mutationMayHaveCommitted(toolResult)) {
+                        uncertainMutationCalls++;
+                    }
+                } else {
+                    failedToolCalls++;
                 }
 
                 final String finalToolResult = toolResult;
                 transactionTemplate.executeWithoutResult(status ->
                         saveToolExecutionResult(sessionId, toolCallId, finalToolResult));
                 messages.add(LlmMessage.tool(toolCallId, toolResult));
+                if (requiresConfirmation) {
+                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                            failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, true);
+                }
+                if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
+                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                            failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, false);
+                }
             }
         }
 
         log.warn("Tool call loop reached max rounds: {}", MAX_TOOL_ROUNDS);
-        return new ToolLoopResult(hadToolCalls, true);
+        return new ToolLoopResult(hadToolCalls, true, successfulToolCalls,
+                failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                confirmationPending);
     }
 
     private void streamAssistantReply(List<LlmMessage> messages,
@@ -353,17 +504,39 @@ public class ChatServiceImpl implements ChatService {
         }, isDisconnect::get);
     }
 
-    private boolean isToolExecutionSuccessful(String toolResult) {
+    private ToolExecutionOutcome classifyToolExecution(String toolResult) {
+        if (toolResult == null || toolResult.isBlank()) {
+            return ToolExecutionOutcome.FAILED;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(toolResult);
+            if (!root.isObject()) {
+                return ToolExecutionOutcome.FAILED;
+            }
+            if (root.path("requiresUserConfirmation").asBoolean(false)) {
+                return ToolExecutionOutcome.FAILED;
+            }
+            String error = root.path("error").asText("");
+            if (error != null && !error.isBlank()) {
+                return ToolExecutionOutcome.FAILED;
+            }
+            if ((root.has("resultAvailable") && !root.path("resultAvailable").asBoolean(true))
+                    || "RESULT_UNAVAILABLE".equals(root.path("resultStatus").asText())) {
+                return ToolExecutionOutcome.RESULT_UNAVAILABLE;
+            }
+            return ToolExecutionOutcome.USABLE;
+        } catch (Exception ignore) {
+            return ToolExecutionOutcome.FAILED;
+        }
+    }
+
+    private boolean mutationMayHaveCommitted(String toolResult) {
         if (toolResult == null || toolResult.isBlank()) {
             return false;
         }
         try {
             JsonNode root = objectMapper.readTree(toolResult);
-            if (!root.isObject()) {
-                return false;
-            }
-            String error = root.path("error").asText("");
-            return error == null || error.isBlank();
+            return root.isObject() && root.path("mutationMayHaveCommitted").asBoolean(false);
         } catch (Exception ignore) {
             return false;
         }
@@ -385,12 +558,17 @@ public class ChatServiceImpl implements ChatService {
 
     private void collectRefreshCommand(String functionName, Set<StreamResponseDto.CommandDto> commandSet) {
         switch (functionName) {
-            case "add_device" ->
+            case "add_device" -> {
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "device_list")));
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "environment_list")));
+            }
             case "delete_device" -> {
                 commandSet.add(new StreamResponseDto.CommandDto(
                         "REFRESH_DATA", Map.of("target", "device_list")));
+                commandSet.add(new StreamResponseDto.CommandDto(
+                        "REFRESH_DATA", Map.of("target", "environment_list")));
                 commandSet.add(new StreamResponseDto.CommandDto(
                         "REFRESH_DATA", Map.of("target", "rule_list")));
                 commandSet.add(new StreamResponseDto.CommandDto(
@@ -402,12 +580,95 @@ public class ChatServiceImpl implements ChatService {
             case "manage_spec" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "spec_list")));
+            case "manage_environment" ->
+                    commandSet.add(new StreamResponseDto.CommandDto(
+                            "REFRESH_DATA", Map.of("target", "environment_list")));
             case "add_template", "delete_template" ->
                     commandSet.add(new StreamResponseDto.CommandDto(
                             "REFRESH_DATA", Map.of("target", "template_list")));
+            case "verify_model", "verify_model_async", "simulate_model_async",
+                    "cancel_verify_task", "cancel_simulate_task",
+                    "delete_trace", "delete_simulation_trace" ->
+                    commandSet.add(new StreamResponseDto.CommandDto(
+                            "REFRESH_DATA", Map.of("target", "run_history")));
             default -> {
             }
         }
+    }
+
+    private String toolExecutionNotice(ToolLoopResult result, boolean preferChinese) {
+        if (result == null || !result.hadToolCalls()) {
+            return "";
+        }
+        List<String> notices = new ArrayList<>();
+        if (result.failedToolCalls() > 0) {
+            notices.add(preferChinese
+                    ? "工具执行状态：" + result.successfulToolCalls() + " 个步骤返回了可用结果，"
+                        + result.failedToolCalls() + " 个步骤失败。失败步骤未被视为已完成。"
+                    : "Tool status: " + result.successfulToolCalls() + " step(s) returned a usable result; "
+                        + result.failedToolCalls() + " step(s) failed. Failed steps were not treated as completed.");
+        }
+        if (result.resultUnavailableToolCalls() > 0) {
+            String mutationNotice;
+            if (preferChinese) {
+                mutationNotice = result.uncertainMutationCalls() > 0
+                        ? "其中 " + result.uncertainMutationCalls()
+                            + " 个步骤可能已经修改了已保存状态；系统已请求刷新受影响数据。重试前请检查当前状态。"
+                        : "这些未返回明细的步骤没有报告任何写入。";
+                notices.add("工具执行状态：" + result.resultUnavailableToolCalls()
+                        + " 个步骤没有返回可用的结果明细，因此未计为成功。" + mutationNotice);
+            } else {
+                mutationNotice = result.uncertainMutationCalls() > 0
+                        ? " " + result.uncertainMutationCalls() + " step(s) may already have changed saved state; affected data was requested to refresh. Inspect current state before retrying."
+                        : " No mutation was reported for those unavailable results.";
+                notices.add("Tool status: " + result.resultUnavailableToolCalls()
+                        + " step(s) returned no usable result details and were not counted as successful."
+                        + mutationNotice);
+            }
+        }
+        if (result.confirmationPending()) {
+            notices.add(preferChinese
+                    ? "提示：当前只是未写入的影响预览或备选方案，尚未应用；请明确确认后再继续。"
+                    : "A no-write preview or proposed alternative still requires explicit confirmation. "
+                        + "The pending action was not applied.");
+        }
+        return notices.isEmpty() ? "" : String.join(" ", notices) + "\n\n";
+    }
+
+    private String maxRoundsFallback(ToolLoopResult result, boolean preferChinese) {
+        if (preferChinese) {
+            return "助手已达到 " + MAX_TOOL_ROUNDS + " 轮规划上限：已获得 "
+                    + result.successfulToolCalls() + " 个可用工具结果、"
+                    + result.failedToolCalls() + " 个失败步骤和 "
+                    + result.resultUnavailableToolCalls() + " 个结果未确认步骤。后续步骤未再尝试。"
+                    + "请求可能只完成了一部分；继续前请检查刷新后的当前状态。";
+        }
+        return "The assistant reached its " + MAX_TOOL_ROUNDS + "-round planning limit after "
+                + result.successfulToolCalls() + " usable tool result(s) and "
+                + result.failedToolCalls() + " failed tool step(s), with "
+                + result.resultUnavailableToolCalls() + " unconfirmed result(s). No further steps were attempted. "
+                + "Some requested work may therefore be incomplete; review the refreshed current state "
+                + "before continuing.";
+    }
+
+    private String missingFinalResponseFallback(ToolLoopResult result, boolean preferChinese) {
+        if (result != null && result.hadToolCalls()) {
+            if (preferChinese) {
+                return "工具处理已结束，但未生成最终 AI 说明。期间获得 "
+                        + result.successfulToolCalls() + " 个可用结果、"
+                        + result.failedToolCalls() + " 个失败步骤和 "
+                        + result.resultUnavailableToolCalls() + " 个未确认结果。"
+                        + "不要假定整个请求已经完成；请检查刷新后的当前状态及上方的确认提示。";
+            }
+            return "Tool processing ended without a final AI explanation. It produced "
+                    + result.successfulToolCalls() + " usable result(s) and "
+                    + result.failedToolCalls() + " failed step(s), with "
+                    + result.resultUnavailableToolCalls() + " unconfirmed result(s). Do not assume the whole request completed; "
+                    + "review the refreshed current state and any confirmation notice above.";
+        }
+        return preferChinese
+                ? "暂时无法生成回复，请重试。"
+                : "I could not generate a response. Please try again.";
     }
 
     private void saveSimpleMsg(String sid, String role, String content) {
@@ -416,6 +677,11 @@ public class ChatServiceImpl implements ChatService {
         po.setRole(role);
         po.setContent(content);
         messageRepo.saveAndFlush(po);
+    }
+
+    private boolean isUntitledSessionTitle(String title) {
+        return title == null || title.isBlank() || "New Chat".equals(title)
+                || title.matches("Chat \\d+");
     }
 
     private void saveAiToolCallRequest(String sid, List<LlmToolCall> toolCalls) {
@@ -579,6 +845,18 @@ public class ChatServiceImpl implements ChatService {
         }
     }
 
+    private boolean requiresUserConfirmation(String toolResult) {
+        if (toolResult == null || toolResult.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(toolResult);
+            return root.isObject() && root.path("requiresUserConfirmation").asBoolean(false);
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
     private void completeEmitter(SseEmitter emitter, AtomicBoolean isDisconnect) {
         if (isDisconnect.get()) {
             return;
@@ -591,14 +869,25 @@ public class ChatServiceImpl implements ChatService {
         }
     }
 
-    private String errorMessageFor(Exception e) {
+    private String errorMessageFor(Exception e, boolean preferChinese) {
         if (e instanceof ServiceUnavailableException) {
-            return "AI service is temporarily unavailable. Please check the model endpoint and try again.";
+            return preferChinese
+                    ? "AI 服务暂时不可用，请检查模型服务地址后重试。"
+                    : "AI service is temporarily unavailable. Please check the model endpoint and try again.";
         }
         if (e instanceof ResourceNotFoundException) {
-            return "Chat session was not found or is no longer accessible.";
+            return preferChinese
+                    ? "会话不存在或已无权访问。"
+                    : "Chat session was not found or is no longer accessible.";
         }
-        return "System error, please try again later.";
+        return preferChinese
+                ? "系统异常，请稍后重试。"
+                : "System error, please try again later.";
+    }
+
+    private boolean prefersChinese(String content) {
+        return content != null && content.codePoints().anyMatch(codePoint ->
+                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
     private boolean isClientDisconnect(Throwable e) {
@@ -622,6 +911,21 @@ public class ChatServiceImpl implements ChatService {
         return value != null && value.toLowerCase(java.util.Locale.ROOT).contains(needle);
     }
 
-    private record ToolLoopResult(boolean hadToolCalls, boolean reachedMaxRounds) {
+    private enum ToolExecutionOutcome {
+        USABLE,
+        FAILED,
+        RESULT_UNAVAILABLE
+    }
+
+    private record ToolLoopResult(boolean hadToolCalls,
+                                  boolean reachedMaxRounds,
+                                  int successfulToolCalls,
+                                  int failedToolCalls,
+                                  int resultUnavailableToolCalls,
+                                  int uncertainMutationCalls,
+                                  boolean confirmationPending) {
+        private static ToolLoopResult empty() {
+            return new ToolLoopResult(false, false, 0, 0, 0, 0, false);
+        }
     }
 }

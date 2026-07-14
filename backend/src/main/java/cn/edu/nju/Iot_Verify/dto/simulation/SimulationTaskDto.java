@@ -1,6 +1,10 @@
 package cn.edu.nju.Iot_Verify.dto.simulation;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -22,8 +26,17 @@ public class SimulationTaskDto {
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
     private Long processingTimeMs;
+    @JsonProperty("isAttack")
+    private Boolean isAttack;
+    private Integer attackBudget;
+    private Boolean enablePrivacy;
+    private ModelSemanticsDto modelSemantics;
+    private ModelRunSnapshotDto modelSnapshot;
     private Integer requestedSteps;
     private Integer steps;
+    private Boolean modelComplete;
+    private Integer disabledRuleCount;
+    private List<ModelGenerationIssueDto> generationIssues;
     private Long simulationTraceId;
     private List<String> checkLogs;
     private String errorMessage;

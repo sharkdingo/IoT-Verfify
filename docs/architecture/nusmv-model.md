@@ -1,695 +1,470 @@
 # NuSMV Model Generation
 
-How a verification request becomes a `.smv` model that NuSMV can check. This document
-owns the **modeling logic**: the generation pipeline, identifier handling, and how
-user input maps onto SMV constructs.
+This document owns the architecture-level contract for converting an IoT-Verify
+scenario into NuSMV. Request and response field tables live in
+[../api/verification.md](../api/verification.md); specification formulas live in
+[spec-templates.md](spec-templates.md); identity rules live in
+[device-identity.md](device-identity.md).
 
-Scope boundaries:
-- Request/response **field contracts** → [../api/verification.md](../api/verification.md).
-- **Spec templates ↔ CTL/LTL** and the **P1–P5 validation rules** →
-  [spec-templates.md](spec-templates.md).
-- **Auto-fix** algorithm → [auto-fix.md](auto-fix.md).
+Verified against code on 2026-07-12. Primary sources:
+`SmvGenerator`, `DeviceSmvDataFactory`, `SmvModelValidator`,
+`SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`, `SmvSpecificationBuilder`, and
+`SmvTraceParser`.
 
-> **NuSMV version**: NuSMV 2.6–2.7 only. Output parsing depends on NuSMV's standard
-> English output (`-- specification ... is true/false`, `Trace Type`, `NuSMV >`
-> prompt). nuXmv and other variants are not supported.
+## What the model means
 
-Verified against code on 2026-07-04. Source:
-`component/nusmv/generator/`.
+The generated model is a finite abstraction of the submitted device templates,
+instance starting values, shared environment pool, automation rules, and formal
+specifications. A successful check establishes a property only for that generated
+model and the assumptions returned in `modelSemantics`. It does not prove firmware,
+network, authentication, encryption, physical installation, or real-world timing.
 
----
+Simulation returns one NuSMV trajectory. It is model exploration, not a forecast.
+Verification explores all modeled branches, but a `SATISFIED` result is complete only
+when `modelComplete=true`; see [verification-flow.md](verification-flow.md).
 
 ## Generation pipeline
 
-`SmvGenerator.generate(...)` orchestrates the following, producing a `model.smv`
-file (with `request.json` written alongside for post-mortem debugging):
+```text
+VerificationRequestDto / SimulationRequestDto
+  -> DeviceSmvDataFactory (capture referenced manifests once and resolve canonical ids)
+  -> NusmvRequestValidator (request semantics against that captured set)
+  -> DeviceSmvDataFactory (rebuild normalized runtime data from the same manifests)
+  -> SmvModelValidator (template/model invariants)
+  -> SmvDeviceModuleBuilder (one module per distinct device-module shape)
+  -> SmvMainModuleBuilder (instances, environment, rules, labels, attack budget)
+  -> SmvSpecificationBuilder (CTL/LTL generated from structured conditions)
+  -> model.smv
+  -> NuSMV 2.6-2.7
+  -> structured result, generation issues, and optional trace
+```
 
-| Step | Class | Role |
+Every generator entry treats `attackBudget` as exact rather than clamping it. Values
+outside `0..50` fail; attack modeling requires `1..50`, while a non-attack run requires
+`0`. User-facing services additionally validate non-empty devices and
+`attackBudget <= behavior-changing device points + submitted rule links` when attack
+modeling is enabled. The value `50` is a per-run checker input cap, not an attack-surface
+count. For larger scenes, clients must show both the full
+`modelSemantics.modeledAttackPointCount` and the 50-point run cap; a run at the cap does
+not cover branches with more than 50 simultaneous compromises.
+
+Template resolution is a model-boundary snapshot, not a late repository lookup.
+Synchronous and asynchronous services capture every distinct referenced manifest before
+accepting the run, return that scope as `modelSnapshot`, and pass the resolved device
+model into generation. A queued task therefore cannot validate against one template
+version and execute against another. Verification counterexamples and simulation traces
+persist the exact manifests internally; automatic-fix replay uses that saved set. Raw
+manifests remain server-side implementation/audit context, while users see counts,
+capture time, and explicit current-Board comparison status.
+
+## Data and identity boundaries
+
+### Device templates and instances
+
+`DeviceTemplateDto.manifest` defines possible behavior. `DeviceNodeDto` defines one
+instance and its starting overrides. A template name is not an instance identity.
+Rules and specifications are converted to canonical model ids (`devices[].varName`)
+before generation; labels remain display metadata.
+
+`backend/device-template-schema.json` is the structural authority for default,
+REST-imported, and AI-created templates. Persistence also runs semantic validation and
+a NuSMV probe generation. Invalid templates are rejected, not partially imported.
+
+### Variable scope
+
+| Manifest declaration | Model meaning |
+| :--- | :--- |
+| `InternalVariables[].IsInside=true` | Device-local variable, emitted as `device.variable` |
+| `InternalVariables[].IsInside=false` | Shared environment reading, stored once in the board environment pool and emitted internally as `a_<name>` |
+| `EnvironmentDomains[]` | Domain/default metadata for an impact-only shared value; no device read mirror or rule/spec read permission |
+| `ImpactedVariables[]` | Shared environment value the device may change; this grants write impact, not read permission |
+| `FalsifiableWhenCompromised=true` | The compromise model may replace this reported value with any value in its declared domain and marks its trust label untrusted |
+
+`IsInside` and `FalsifiableWhenCompromised` are required on every template variable.
+`IsInside` explicitly chooses ownership: `true` is instance-local and `false` is
+scene-shared. Omission is rejected because defaulting it to shared would change rule,
+scene-import, and attack semantics. `FalsifiableWhenCompromised` is explicit
+because API presence cannot classify a composite device as a pure sensor or actuator.
+Use `true` for sensor readings or received data that compromise can falsify. Use
+`false` for actuator progress, setpoints, and other values that the selected threat
+model does not falsify.
+
+Variable domains are semantic, not UI hints. Numeric ranges are ascending and use
+`ChangeRate` for `WorkingStates[].Dynamics`; enum/boolean domains use an explicit
+in-domain `Value`. A Dynamic may target only a local variable or a shared variable listed
+in `ImpactedVariables`, once per working state. Domain/type mismatches, normalized enum
+duplicates, malformed natural rates, and unknown targets fail template validation instead
+of being omitted or converted to an arbitrary fallback rate. Numeric impact rate variables
+are generated only for numeric domains; boolean impacts remain boolean.
+
+WorkingState behavior is structured. The manifest does not accept a raw `Invariant`
+NuSMV expression: that legacy-looking field never participated in generation and would
+also force users to author internal identifiers. State-dependent effects belong in
+`Dynamics`, autonomous behavior in `Transitions`, and properties to check in structured
+specifications.
+
+A stateful template's `InitState` is deterministic and must match one complete
+`WorkingState` tuple. Partial tuples and `_` are reserved for API/Transition endpoints
+that intentionally change only selected modes; they cannot be used to hide an
+unspecified model starting state.
+
+The attack model never widens `Values` or `LowerBound..UpperBound`. Every variable must
+choose one domain form explicitly; boolean readings use
+`Values: ["TRUE", "FALSE"]`. An omitted domain is rejected instead of silently becoming
+boolean.
+
+Evolution is scope-sensitive. A device-local variable follows its declared Transition
+assignment, WorkingState Dynamic, or numeric `NaturalChangeRate`; if none applies, it
+retains its current value. The generator does not invent arbitrary local device changes.
+A shared numeric environment value follows its declared natural rate and active device
+effects within the declared domain. A shared enum/boolean environment value is an
+uncontrolled model input and may otherwise choose any value in its declared domain on
+each step. These assumptions are returned, rather than merely documented, through
+`modelSemantics.environmentEvolutionEffects` and `localVariableFallbackPolicy`.
+
+### Environment authority
+
+The board environment pool is the scenario-level source of initial value, trust, and
+privacy for shared variables. Shared template declarations must label trust/privacy
+explicitly. Per-device copies in model requests express which
+templates may read that value; they are not independent values. Conflicting domains
+for the same shared name are rejected, including conflicts in enum ordering, natural
+change rate, default trust/privacy, or name casing. Every impact resolves from the same
+manifest; the generator loads only templates referenced by submitted devices, so an
+unused account template cannot change the current model.
+
+Explicit shared initial values are exact model inputs after whitespace normalization.
+Invalid enum or numeric values, unknown or duplicate environment entries, undeclared
+domains, and malformed natural-change rates fail generation; the generator never
+clamps a value, replaces it with the first enum member, assumes `0..100`, or silently
+omits it. When a valid value is omitted, the documented template default or
+nondeterministic initialization may apply according to the model contract.
+
+Generated identifiers such as `a_temperature`, `trust_temperature`, and module names
+are internal NuSMV details. API traces convert shared variables back to their literal
+board names and place runtime-only globals in `globalVariables`.
+
+## MEDIC-aligned security dimensions
+
+IoT-Verify follows the threat and label-propagation model in *Security Checking of
+Trigger-Action-Programming Smart Home Integrations* (MEDIC, ISSTA 2023), especially
+Sections 3.3, 3.4, and 4.3:
+
+- compromised sensor data may be falsified and becomes untrusted;
+- a TAP command may fail to reach a compromised actuator target;
+- a compromised automation delivery link independently drops its rule command;
+- a target becomes untrusted only when all trigger sources are untrusted; one trusted
+  source means the user retains a trusted control path under MEDIC Definition 3.3;
+- private data propagates when any trigger source is private;
+- the attack threshold is an upper bound, not an exact number of compromised points.
+
+A device instance is one budget point only when compromise can change this generated
+model: it has a template-declared falsifiable reading and/or is the target of at least
+one submitted automation command. Each submitted automation rule's command-delivery
+link is another point. Inert canvas devices are excluded instead of consuming budget
+without an effect. This is a user-visible abstraction of MEDIC's node/link threat model:
+the rule link is countable, but it is not a claim that IoT-Verify knows the home's
+physical Wi-Fi, Zigbee, or routing topology. One rule is one delivery link, rather than
+separate sensor-to-handler and handler-to-actuator segments. A multi-condition rule can
+render several trigger edges on the canvas, but those visual edges do not create extra
+attack-budget points.
+
+### Attack selection and budget
+
+When `isAttack=true`, every behavior-changing device point receives an internal frozen
+`is_attack` choice and every submitted rule receives a frozen automation-link choice.
+Device modules with no modeled compromise effect receive no attack flag. The main module
+derives the total selected in that branch and constrains it:
+
+```smv
+FROZENVAR
+    iot_verify_compromised_point_count: 0..(EFFECTFUL_DEVICE_COUNT + RULE_COUNT);
+    iot_verify_automation_link_compromised_0: boolean;
+INVAR iot_verify_compromised_point_count <= ATTACK_BUDGET;
+
+ASSIGN
+    init(iot_verify_automation_link_compromised_0) := {TRUE, FALSE};
+    init(iot_verify_compromised_point_count) :=
+        0 + toint(device_1.is_attack) + toint(device_2.is_attack)
+          + toint(iot_verify_automation_link_compromised_0);
+```
+
+These names are diagnostics, not API input. Because each `is_attack` is
+nondeterministic and the invariant uses `<=`, a budget of `N` represents every modeled
+selection from zero through `N` compromised points. Service, AI, and direct generator
+requests all require `N >= 1` when attack modeling is enabled; the contradictory
+`isAttack=true, attackBudget=0` combination is rejected instead of generating inert
+attack machinery.
+One verification call does not search for or report the smallest budget that can cause
+a violation. Users comparing minimum compromise resistance must rerun verification with
+different upper bounds and compare the first violating complete result.
+
+The response makes this machine-readable:
+
+```text
+attackPointUnit = BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK
+attackSelectionPolicy = UP_TO_ATTACK_BUDGET_NONDETERMINISTIC
+attackEffects = [
+  ...only effects present in this scene...
+]
+modeledDeviceAttackPointCount = EFFECTFUL_DEVICE_COUNT
+modeledFalsifiableReadingDeviceCount = FALSIFIABLE_READING_DEVICE_COUNT
+modeledAutomationLinkAttackPointCount = RULE_COUNT
+modeledAttackPointCount = EFFECTFUL_DEVICE_COUNT + RULE_COUNT
+```
+
+`attackEffects` includes reading falsification only when the falsifiable-reading count is
+nonzero, and includes target/link command loss only when the rule count is nonzero. It
+therefore describes the generated scene rather than advertising every mechanism the
+platform can support. The falsifiable-reading count is a subset of the distinct effectful
+device count and is not added again to the attack-point total.
+
+The four counts are computed from canonical device instance semantics, then persisted with both
+asynchronous task context and saved verification/simulation traces. Historical results
+therefore remain interpretable after the board changes and are not reconstructed from raw
+request collection lengths or template aliases. With
+`isAttack=false`, `attackSelectionPolicy=NOT_MODELED` and `attackEffects=[]`; the snapshot
+counts still describe the run's potential behavior-changing attack surface while the
+effective budget is zero.
+
+The service rejects `isAttack=true` when the scene has no automation rule and none of its
+template variables is marked `FalsifiableWhenCompromised=true`. Every attack flag would
+otherwise be behaviorally inert, so accepting the request would present a no-op run as
+attack analysis. In a larger valid run, those inert device instances are likewise
+excluded from the generated attack choices and snapshot denominator.
+
+### Reading falsification
+
+For a variable marked `FalsifiableWhenCompromised=true`:
+
+- a shared/environment reading is selected from its declared domain whenever that
+  instance is attacked;
+- a device-local reading uses the declared domain in both its initial and next-state
+  attacked branches;
+- its trust label is `untrusted` while attacked.
+
+Variables marked `false` keep their ordinary initialization and dynamics. This is true
+even on a template that also has APIs. Conversely, a local reading marked `true` is
+falsifiable even when the same composite template has APIs.
+
+### TAP command loss
+
+Rule-driven commands require both `target.is_attack=FALSE` and the corresponding
+automation-link choice to be `FALSE`. A compromised target or compromised delivery
+link therefore drops the matching command. The same guard prevents a dropped command from
+updating target trust/privacy labels. Template internal transitions and unrelated
+dynamics are not frozen, and the attacker is not given an arbitrary actuator-state
+hijack branch.
+
+The automation link is a logical delivery path derived from one TAP rule. Physical
+network routes, packet timing, encryption, and multiple network segments are not
+modeled.
+
+### Trust and privacy labels
+
+Trust is always modeled. Privacy propagation is modeled only when
+`enablePrivacy=true`; a privacy specification forces the effective flag on at both the
+UI and service boundaries. Results return that effective value, so a caller that submits
+`false` cannot mistake the run for one that omitted privacy propagation.
+
+Default source labels follow MEDIC's origin semantics rather than a generic sensor
+reliability score. Built-in schedule/date values, inbound email, car/mobile location,
+step counts, exterior RFID events, and door/window contact readings start as
+`untrusted`: each can initiate an automation without an in-house user action retaining
+control of that trigger. An in-house action source such as the built-in Motion Detector
+may start as `trusted`. This distinction does not claim that motion sensing is inherently
+more accurate or authenticated; it states only the modeled origin assumption. Compromise
+can still falsify any value whose template explicitly sets
+`FalsifiableWhenCompromised=true` and then forces that value's source label to
+`untrusted`. Users may override initial labels when their deployment assumptions differ;
+the label is neither authentication nor an attack probability.
+
+| Dimension | Rule propagation policy | What it does not mean |
 | :--- | :--- | :--- |
-| 1 | `DeviceSmvDataFactory.buildDeviceSmvMap()` | User input + template → `DeviceSmvData` |
-| 2 | `SmvModelValidator.validate()` | P1–P5 pre-generation validation (see spec-templates.md) |
-| 3 | `SmvRuleCommentWriter.build()` | Rules → SMV comments |
-| 4 | `SmvDeviceModuleBuilder.build()` | Each device → a `MODULE` definition |
-| 5 | `SmvMainModuleBuilder.build()` | `main MODULE` + `ASSIGN` block |
-| 6 | `SmvSpecificationBuilder.build()` | Specs → `CTLSPEC` / `LTLSPEC` |
+| Trust | MEDIC retained-control label: target is untrusted only if every resolved trigger source is untrusted; one trusted source keeps it trusted | Authentication, data-integrity taint, exploit probability, or device ownership |
+| Privacy | Target is private if any resolved trigger source or the rule's explicitly selected content item is private | Access control, encryption, copying payload bytes, or blocking transmission |
 
-The generated model is then handed to `NusmvExecutor` (semaphore-bounded process
-execution, timeout protection) and the output to `SmvTraceParser`. That end-to-end
-flow is documented in [verification-flow.md](verification-flow.md).
+The exact policies are returned as
+`TARGET_UNTRUSTED_IF_ALL_TRIGGER_SOURCES_UNTRUSTED` and
+`TARGET_PRIVATE_IF_ANY_TRIGGER_OR_SELECTED_CONTENT_PRIVATE`. When privacy is disabled, the latter is
+`NOT_MODELED`. The response also returns
+`labelPropagationScope=AUTOMATION_RULE_COMMANDS_ONLY`, matching MEDIC Definition 3.3:
+the reset assignments are attached to synchronized TAP command transitions. Template
+internal Transitions, WorkingState Dynamics, and natural evolution may change a state or
+value but do not copy their trigger's label into that result. Their declared/previous
+labels remain in force unless an automation command or modeled attack branch updates
+them. This is a deliberate model boundary, not evidence that those internal behaviors
+preserve real-world trust or confidentiality.
 
-Supporting utilities in the same package: `SmvBoundsUtils` (numeric bounds),
-`SmvRelationUtils` (relation normalization), `PropertyDimension` (trust/privacy
-dimension modeling).
+Template security labels are explicit inputs, not permissive defaults. Every
+WorkingState and InternalVariable declares both trust and privacy, every shared
+EnvironmentDomain declares both, and every Content declares privacy. Template import
+rejects a missing label rather than silently interpreting unknown provenance as trusted
+or unknown sensitivity as public.
 
-`SmvGenerator.GenerateResult` also carries generation warnings. Each generation creates a
-request-scoped `SmvGenerationContext`, passed down the builder chain instead of using
-global/static state. Its package-private warning collector records every rule that had to
-fail closed and every specification that was skipped or degraded, then exposes them as
-verification `checkLogs` plus
-`disabledRuleCount` / `skippedSpecCount`. Treat a `safe=true` result with non-zero
-counts as "the emitted model was safe, but part of the requested model did not generate."
-If no specification is emitted, verification fails closed with `safe=false` because there
-is no checked model property to certify.
+Every model run revalidates the stored raw template manifest against the canonical JSON
+schema before DTO conversion. An old or externally modified database row therefore
+cannot drop an unknown behavior field or default a missing content label to public behind
+a successful verification result; the run fails before model generation instead.
 
----
+A content item is a template-authored sensitivity label used as one propagation input.
+It is not a modeled payload or access-control object. A rule may select it only when the
+target API explicitly declares `AcceptsContent=true`; this prevents unrelated commands
+such as opening a light from being presented as content transfers. Specifications
+therefore check the resulting target state/variable label; directly checking the static
+content declaration would be a trivial classification assertion rather than a leakage
+property.
 
-## Template resolution (important)
+For a full-state rule condition on a multi-mode device, only modes referenced by the
+condition's state tuple participate in label propagation. Current labels within one mode
+are selected by that mode's actual state. Referenced modes are combined with OR over
+`trusted` predicates (one trusted source retains control) and OR over `private`
+predicates (one private source propagates sensitivity). A signal API that changes several
+modes combines every changed state in the same way. Template validation requires complete working-state tuples and
+rejects conflicting labels for a reused mode-state component rather than allowing JSON
+order to choose the generated label.
 
-- At runtime, templates come from the **current user's template table (DB)**, not
-  directly from `resources/deviceTemplate`.
-- Default templates are seeded from `resources/deviceTemplate/*.json` into the DB
-  (auto-imported on registration). `POST /api/board/templates/reload` is a **reset**:
-  it deletes the user's existing templates, then re-imports defaults.
-- If a request's `templateName` does not exist in the current user's templates, SMV
-  generation fails with `SmvGenerationException`.
-- Device references in rules/specs are resolved through `DeviceReferenceResolver`
-  (`generator/data/`), which owns the fallback order so the generator, fixer, and
-  drift checks never disagree. For each reference it tries, in order: the raw value,
-  then its digit-leading-normalized form (`DeviceNameNormalizer` prefixes a leading
-  digit with `d_`, mirroring the frontend), first as an exact `varName` hit in the
-  device map and then via a `templateName` fallback that is allowed only when it
-  matches a **unique** instance — multiple matches raise `AMBIGUOUS_DEVICE_REFERENCE`.
-  Callers pass a primary reference (e.g. `deviceId`/current label) plus an optional
-  secondary (e.g. legacy label), and the resolver tries the primary's candidates
-  before the secondary's.
+State overrides use literal `currentStateTrust` and `currentStatePrivacy` values.
+Variable overrides use literal template variable names. Generated keys such as
+`mode_state`, `trust_*`, and `privacy_*` are not user-authoring concepts.
 
----
+Whether state labels exist depends on the template having modes, not on it having a
+command API. A stateful sensor with no APIs therefore exposes its WorkingState trust and
+privacy labels as read-only model data when its state is used by a rule or specification.
+Compromising that sensor still affects only readings explicitly marked
+`FalsifiableWhenCompromised`; it does not grant arbitrary state-machine control.
+
+For a multi-mode state or signal API that contributes several mode states, a safety
+specification references every contributing trust label. A protected compound state is
+treated as unsafe when any of its participating state labels is untrusted, so those
+untrusted predicates are disjoined. This safety check is distinct from rule propagation,
+where MEDIC marks a target untrusted only when all trigger sources are untrusted. If a safety condition
+cannot resolve its trust source, generation fails
+closed; it is never degraded to an unconditional prohibition.
+
+## Rule semantics
+
+A rule reads all IF conditions in the current state and changes the command target in
+the next state. `targetType` is explicit (`api`, `variable`, `mode`, or `state`); the
+generator does not infer it from a name.
+
+- signal API conditions represent an event pulse and require an explicit `Signal=true`;
+  every API must explicitly choose `Signal=true` (observable trigger) or `false`
+  (command-only), because omission cannot safely decide rule/spec capability;
+- autonomous `Transitions` do not expose event signals. A Transition always has a
+  structured trigger and one modeled state/variable effect; only a state-changing API
+  may expose a user-referenceable one-step pulse with `Signal=true`. Template validation
+  rejects an observable API whose state-change route overlaps another API or Transition;
+- state/mode conditions use enum equality, inequality, inclusion, or exclusion;
+- bounded numeric variables additionally support ordering comparisons;
+- command actions must exist in the target template;
+- command loss under attack applies at the target guard as described above.
+
+An API pulse is true for one step only when at least one affected mode actually changes
+from the API's complete `StartState` tuple into its complete `EndState` tuple. Merely
+remaining in the end state does not satisfy an API condition. Template validation rejects
+stateless APIs, no-effect APIs, API variable assignments, and duplicate signal APIs with
+indistinguishable state transitions. Triggered `Transition.Assignments` are validated
+against declared target domains so accepted template behavior is never silently ignored.
+An accepted autonomous Transition has one modeled effect only: one concrete mode update
+or one variable assignment. Combined/multi-mode/multi-assignment effects are rejected at
+template and generation boundaries because independently generated `next(...)` branches
+could otherwise apply only part of the declared action. Environment-variable triggers
+read the shared `a_<name>` value; impact-only environment declarations remain write-only.
+Enum/mode/boolean trigger values use equality/inequality and numeric thresholds must lie
+inside the declared range, preventing an accepted transition from silently becoming
+impossible or tautological.
+
+Rule order resolves overlapping actions atomically. If a higher-priority matching API
+shares any affected mode with a lower API, the lower API is blocked as a whole; APIs with
+disjoint affected modes may execute together. State updates, execution probes, and
+trust/privacy propagation all use that same selected action and the API's full start-state
+guard.
+
+Request validation rejects known semantic mismatches before execution. A residual
+generation-time condition failure disables that rule with guard `FALSE`, increments
+`disabledRuleCount`, and adds an item-level `generationIssues` reason. It is not silently
+treated as a working rule.
+
+Internal `iot_verify_rule_fired_<index>` probes record which generated rule guards were
+true in a trace. The parser returns stable rule ids and user-facing rule snapshots; the
+probe names and indexes are not user concepts. Fault localization consumes this execution
+evidence when present, so a lower-priority rule that merely looked applicable is not
+reported as if it actually executed; reconstruction is only a fallback for traces without
+probe metadata.
+
+## Specification semantics
+
+The persisted `SpecificationDto.formula` is a display preview/cache. Verification does
+not parse it. `SmvSpecificationBuilder` reconstructs the CTL/LTL expression from
+`templateId` plus structured conditions. Results expose the actual
+`SpecResultDto.expression`, and saved counterexamples expose `checkedExpression`.
+
+If a specification cannot be emitted, the generator increments `skippedSpecCount` and
+adds an item-level `generationIssues` entry. It does not replace the property with a
+constant or call the reduced run complete. Formula details and all seven templates are
+owned by [spec-templates.md](spec-templates.md).
+
+## Model shape
+
+Each distinct device module declares its modes, local/shared-variable mirrors, event
+signals, trust/privacy labels, optional content labels, and optional attack flag. The
+`main` module instantiates devices and owns:
+
+1. shared environment domains and initial values;
+2. device and automation-link attack choices plus the compromised-point upper-bound invariant;
+3. state transitions from rules and template transitions;
+4. environment and local-variable dynamics;
+5. API/transition event pulses;
+6. trust and optional privacy propagation;
+7. rule-execution probes used only for structured trace explanation.
+
+Rules are evaluated in the persisted `rules[]` order independently for each target mode.
+The first enabled command branch for one target mode wins, while branches for different
+modes may be selected together. A rule command branch appears before autonomous template
+transitions for the same mode in that step. State transitions, rule-execution probes, and
+trust/privacy updates all use the same selected branch, including the command API's
+`StartState` constraint and attack delivery guards. A lower-priority rule cannot update
+labels when an earlier competing rule won that mode.
+
+NuSMV properties follow the main module. Auto-fix parameter search may additionally
+emit internal `param_*`/`lambda_*` frozen variables. Public fix requests use stable
+`targetId`/`adjustmentId`; users and AI tools do not submit those generated names or
+rule/condition indexes.
+
+## Completeness and result interpretation
+
+Generation returns:
+
+- `disabledRuleCount` and `skippedSpecCount`;
+- item-level `generationIssues` with type, display label, stable localization
+  `reasonCode`, and an English technical diagnostic `reason`;
+- emitted-spec identity and actual expression;
+- `modelComplete`, computed from omissions and reliable result parsing;
+- `modelSemantics`, describing attack/trust/privacy assumptions.
+
+Only `outcome=SATISFIED` together with `modelComplete=true` supports the ordinary
+"checked model satisfies all submitted specifications" conclusion. `SATISFIED` with an
+incomplete model must be presented as reduced-model evidence. `INCONCLUSIVE` is neither
+safe nor violated.
 
 ## Identifier handling
 
-Two different mechanisms apply to two different classes of identifier. This split is
-deliberate — see the rationale below.
-
-### Sanitized at generation time — `sanitizeSmvToken()`
-
-Applies to **mode names and state names**
-(`DeviceSmvDataFactory.sanitizeSmvToken()`). Transformations:
-
-1. Remove spaces.
-2. Replace non-alphanumeric characters with `_`.
-3. Prefix a leading digit with `_`.
-4. Escape NuSMV reserved words case-insensitively (including `W`).
-
-Device IDs get a parallel defense via `toVarName()`.
-
-After normalization, identifiers of different kinds (Mode vs InternalVariable vs
-ImpactedVariable) must not collide. InternalVariable and ImpactedVariable **are**
-allowed to share a name (a common pattern: a device's internal variable drives an
-identically named environment variable).
-
-### Rejected at persistence time — schema + `validateTemplateManifestForNuSmv()`
-
-`backend/device-template-schema.json` is the authoritative structural contract for
-device template manifests. Custom template REST imports, AI `add_template`, and default
-template initialization validate raw manifest JSON against that schema before DTO
-mapping. This catches unknown fields, wrong casing, API triggers, and basic
-shape/type/required-field errors at the boundary.
-
-`validateTemplateManifestForNuSmv()` then applies semantic checks that JSON Schema is
-not well-suited to express. It applies to **InternalVariable and ImpactedVariable names**.
-These are **not**
-sanitized at generation time, because they are cross-referenced in many places and
-partial sanitization would break `.equals()` matching. Instead they must be legal
-NuSMV identifiers (`[a-zA-Z_][a-zA-Z0-9_]*`) and not reserved words, and this is
-enforced strictly when a template is saved
-(`BoardStorageServiceImpl.validateTemplateManifestForNuSmv()`). Illegal values are
-rejected at insert time (probe-generate pre-check on custom template creation returns
-400/500).
-
----
-
-## Attack and privacy dimensions
-
-Two optional modeling dimensions, both off by default (they enlarge the state space):
-
-- **Attack mode** (`isAttack`, `intensity`): generates an `is_attack` frozen variable
-  and expands sensor value ranges. `intensity` (0–50) constrains the global attack
-  budget via `INVAR intensity <= N` and scales range expansion; `intensity = 0`
-  forces all `is_attack` to FALSE.
-- **Privacy** (`enablePrivacy`): generates `privacy_*` variables for states,
-  variables, and content. Recommended only when specs contain privacy conditions.
-
----
-
-## SMV file structure
-
-_Migrated from the former `NuSMV_Module_Documentation.md` §4._
-
-A complete SMV file is composed of the following parts:
-
-```smv
--- Rule comments (SmvRuleCommentWriter)
---IF thermostat_1.temperature>30 THEN fan_1.fanAuto
-
--- Device module definitions (SmvDeviceModuleBuilder) — one per device template
-MODULE Thermostat_thermostat1
-  FROZENVAR                          -- frozen variables (constant during verification)
-    is_attack: boolean;              -- generated only when isAttack=true
-  VAR                                -- state variables
-    ThermostatMode: {cool, heat, off};         -- mode state
-    temperature: 15..35;                        -- external variable (mapped from main's a_temperature)
-    setCool_a: boolean;                         -- API signal
-    trust_ThermostatMode_cool: {untrusted, trusted};  -- state trust
-    trust_temperature: {untrusted, trusted};          -- variable trust
-    privacy_ThermostatMode_cool: {private, public};   -- only when enablePrivacy
-    privacy_temperature: {private, public};           -- variable privacy
-  ASSIGN
-    init(ThermostatMode) := cool;    -- initial state
-    init(setCool_a) := FALSE;
-    init(trust_ThermostatMode_cool) := trusted;
-    init(trust_temperature) := trusted;
-    init(privacy_ThermostatMode_cool) := public;
-    init(privacy_temperature) := public;
-
--- Main module (SmvMainModuleBuilder)
-MODULE main
-  FROZENVAR
-    intensity: 0..50;                -- generated only when isAttack=true
-  INVAR intensity <= 3;              -- global attack-budget constraint
-  VAR
-    thermostat_1: Thermostat_thermostat1;      -- device instantiation
-    fan_1: Fan_fan1;
-    a_temperature: 15..35;              -- environment variable (a_ prefix)
-  ASSIGN
-    -- state transitions (attack hijack takes priority, then template Transitions)
-    next(thermostat_1.ThermostatMode) := case
-      thermostat_1.is_attack=TRUE: {cool, heat, off};
-      thermostat_1.ThermostatMode = cool & thermostat_1.temperature > 30 & thermostat_1.is_attack=FALSE : heat;
-      TRUE : thermostat_1.ThermostatMode;      -- default: self-hold
-    esac;
-    -- API signal (based on state-change detection)
-    next(fan_1.fanAuto_a) := case
-      fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
-      TRUE: FALSE;
-    esac;
-    -- trust propagation (PropertyDimension.TRUST)
-    next(fan_1.trust_FanMode_auto) := case
-      fan_1.is_attack=TRUE: untrusted;
-      thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
-      thermostat_1.temperature > 30: untrusted;
-      TRUE: fan_1.trust_FanMode_auto;         -- self-hold
-    esac;
-
--- Specifications (SmvSpecificationBuilder)
-  CTLSPEC AG(thermostat_1.ThermostatMode != off)
-  CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
-  LTLSPEC G((thermostat_1.temperature > 25) -> F G(fan_1.FanMode = auto))
-```
-
-### NuSMV syntax cheat-sheet
-
-| Syntax | Meaning | Example |
-| :--- | :--- | :--- |
-| `MODULE name` | Module definition | `MODULE Thermostat_t1` |
-| `FROZENVAR` | Frozen variable (constant after init) | `is_attack: boolean;` |
-| `VAR` | State variable | `mode: {on, off};` |
-| `ASSIGN` | Assignment block | `init(x) := 0; next(x) := ...` |
-| `init(v) := expr` | Initial value | `init(mode) := off;` |
-| `next(v) := case ... esac` | State transition | see example above |
-| `CTLSPEC` | CTL temporal-logic spec | `CTLSPEC AG(p)` |
-| `LTLSPEC` | LTL temporal-logic spec | `LTLSPEC G(p -> F q)` |
-| `AG(p)` | Holds globally on all paths | safety property |
-| `EF(p)` | Eventually holds on some path | reachability property |
-| `G(p -> F q)` | Globally: p implies eventually q | liveness property |
-
----
-
-## How user input maps to the model
-
-_Migrated from the former `NuSMV_Module_Documentation.md` §5._
-
-### isAttack (attack mode)
-
-When `isAttack=true`, the SMV model changes as follows.
-
-Device module (`SmvDeviceModuleBuilder`):
-
-```smv
-FROZENVAR
-    is_attack: boolean;    -- a frozen attack flag added per device
-```
-
-Main module (`SmvMainModuleBuilder`):
-
-```smv
-FROZENVAR
-    intensity: 0..50;      -- global attack-budget variable
-INVAR intensity <= 3;      -- global budget constraint (example N=3)
-
--- environment-variable ranges expand in proportion to intensity (upper bound only)
--- the formula is centralized in SmvBoundsUtils.resolveEffectiveUpperBound()
--- expansion = (upper-lower)/5 * intensity/50
--- e.g. temperature originally 15..35 becomes 15..39 when intensity=50
-VAR
-    a_temperature: 15..39;
-```
-
-Specification (`SmvSpecificationBuilder`):
-
-```smv
--- current behavior: specs no longer auto-inject intensity<=N
--- the budget constraint lives solely in main's INVAR
-CTLSPEC AG(!(fan.state = auto & fan.trust_FanMode_auto = untrusted))
-```
-
-### intensity (attack strength)
-
-`intensity` (0–50) has two roles in the current implementation:
-
-1. **Global budget constraint**: generates `INVAR intensity <= N` in the `main` module.
-2. **Range-expansion ratio**: under attack mode, scales the expansion by `intensity/50`.
-
-```smv
--- example: range = upper - lower = 20
--- intensity = 0   => expansion = 0
--- intensity = 25  => expansion = 2
--- intensity = 50  => expansion = 4
-```
-
-### enablePrivacy (privacy dimension)
-
-When `enablePrivacy=true`:
-
-Device module — sensor variable privacy:
-
-```smv
-FROZENVAR
-    privacy_temperature: {public, private};   -- per sensor variable
-```
-
-Device module — state privacy:
-
-```smv
-VAR
-    privacy_ThermostatMode_cool: {private, public};   -- per (mode, state) combination
-```
-
-Device module — content privacy:
-
-```smv
--- content with IsChangeable=false → FROZENVAR (privacy immutable)
-FROZENVAR
-    privacy_photo: {public, private};
-
--- content with IsChangeable=true → VAR (privacy mutable)
-VAR
-    privacy_photo: {public, private};
-```
-
-Main module — privacy propagation rules:
-
-```smv
--- when a rule fires, privacy propagates from source device to target device
--- the guard uses the full rule condition (appendRuleConditions), not the simplified API signal
--- e.g. rule "IF condition THEN camera.takePhoto(MobilePhone.photo)"
-next(camera_1.privacy_photo) := case
-    <rule conditions>: private;              -- set to private when the rule fires
-    TRUE : camera_1.privacy_photo;           -- self-hold
-esac;
-```
-
-**Note:** when `enablePrivacy=false`, if the specs contain a condition with
-`targetType="privacy"`, the upstream `SmvGenerator.validateNoPrivacySpecs()` throws
-`SmvGenerationException` (the primary guard). As defense-in-depth, when
-`enablePrivacy=false` the `SmvSpecificationBuilder` also skips any spec with a privacy
-condition and emits a `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false`
-placeholder.
-
-### devices (device instances)
-
-| User input field | SMV effect |
-| :--- | :--- |
-| `varName` | Determines the SMV instance variable name (e.g. `thermostat_1`) and the module-name suffix |
-| `templateName` | Loads the DeviceManifest from the DB — defines the full set of modes/states/variables/transitions |
-| `state` | Determines the initial value of `init(ModeVar)` |
-| `currentStateTrust` | Overrides the template default state-trust initial value |
-| `variables[].value` | Determines the initial value of `init(varName)` |
-| `variables[].trust` | Overrides the variable-trust initial value |
-| `privacies[].privacy` | Overrides the privacy initial value (only effective when enablePrivacy=true) |
-
-Environment-variable initial values (`IsInside=false`):
-
-- A shared environment variable is declared only once in `main` (`a_varName`); its
-  `init(a_varName)` is aggregated across devices' user input via
-  `resolveEnvVarInitValues()` (each device's initial value is first range/enum-checked by
-  `validateEnvVarInitValue()`).
-- If multiple devices give conflicting initial values for the same environment variable
-  (inconsistent after validation/normalization), `resolveEnvVarInitValues()` throws
-  `envVarConflict`.
-- For an environment variable with no enum and no declared bounds, `main` declares it as
-  `0..100` by default; user initial values accept integers only, out-of-range values are
-  clamped to `0`/`100`, and non-numeric values are ignored.
-
-Internal-variable initial values (`IsInside=true`):
-
-- `SmvDeviceModuleBuilder.validateInternalInitValue()` checks the user-supplied `init()`
-  value: enum variables check membership (fall back to the first value with a warning if
-  out of enum); numeric variables check the `[lower..upper]` range (clamp with a warning
-  if out of range); a variable with neither enum nor range gets no `init()`, preserving
-  NuSMV's non-deterministic initialization.
-
-### rules (IFTTT rules)
-
-Rules manifest in SMV as several groups of `next()` assignments:
-
-```
-user rule: IF thermostat_1.temperature > 30 THEN fan_1.fanAuto
-```
-
-Generated SMV (assuming the fanAuto API has startState=off, endState=auto, signal=true;
-the example below assumes `isAttack=false` — under attack mode an extra
-`& fan_1.is_attack=FALSE` term is appended):
-
-```smv
--- 1. state transition (driven directly by the rule condition; the API's EndState determines the target state)
---    guard = rule condition + API startState constraint
-next(fan_1.FanMode) := case
-    thermostat_1.temperature > 30 & fan_1.FanMode=off : auto;
-    TRUE : fan_1.FanMode;
-esac;
-
--- 2. API signal (based on state-change detection, not driven directly by the rule condition)
---    with startState:    guard = current state=startState & next(state)=endState
---    without startState: guard = current state!=endState & next(state)=endState
-next(fan_1.fanAuto_a) := case
-    fan_1.FanMode=off & next(fan_1.FanMode)=auto: TRUE;     -- startState=off
-    TRUE: FALSE;
-esac;
-
--- 3. trust propagation (TRUST dimension)
---    guard = rule condition & all source variables' trust are trusted (AND semantics)
---    under attack mode, an extra is_attack=TRUE → untrusted priority branch is added
-next(fan_1.trust_FanMode_auto) := case
-    fan_1.is_attack=TRUE: untrusted;                          -- only when isAttack=true
-    thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
-    thermostat_1.temperature > 30: untrusted;                 -- condition met but source untrusted
-    TRUE: fan_1.trust_FanMode_auto;                           -- self-hold
-esac;
-
--- 4. privacy propagation (only when enablePrivacy=true, PRIVACY dimension)
---    guard = rule condition & all source variables' privacy are private
-next(fan_1.privacy_FanMode_auto) := case
-    thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
-    TRUE: fan_1.privacy_FanMode_auto;                         -- self-hold
-esac;
-```
-
-Note: trust propagation generates two lines — set to `trusted` when the condition holds
-and the source is trusted, set to `untrusted` when the condition holds but the source is
-untrusted. Privacy propagation generates only one line (set to `private` when the
-condition holds and the source is private).
-
-**Rule-condition parse failure (fail-closed):** when one of a rule's IF conditions cannot
-be parsed (e.g. the device does not exist, `attribute` is empty, with `relation!=null` the
-attribute matches no mode/internal variable/API signal, the relation is unsupported, the
-relation is non-null but the value is empty, the `IN/NOT_IN` value list is empty, or an API
-signal's relation/value is invalid), `appendRuleConditions` sets the whole rule's guard to
-`FALSE`, so the rule never fires. Empty condition lists also fail closed to `FALSE`; they
-are never interpreted as `TRUE`. The warning collector records a `[rule-disabled]`
-check-log entry and increments `disabledRuleCount`.
-
-**`useNext` recursion avoidance (key to state modeling):** when building a rule guard for
-`next(target.mode)`, if the condition references the same target device, the generator
-rewrites it to read the current state (`effectiveUseNext=false`), avoiding a
-`next(x)`-depends-on-`next(x)` recursive definition (NuSMV `recursively defined` error).
-
-### `SmvMainModuleBuilder` transition types
-
-The `ASSIGN` block of `MODULE main` generates the various `next()` transitions in this
-order:
-
-| # | Method | Generates | Notes |
-| :--- | :--- | :--- | :--- |
-| 1 | `appendStateTransitions()` | `next(device.ModeVar)` | Rule-driven state transitions + template-Transition-driven state transitions. In attack mode, non-sensor devices get a highest-priority branch `is_attack=TRUE: {all legal states}` — the actuator is hijacked |
-| 2 | `appendEnvTransitions()` | `next(a_varName)` | `next()` for environment variables, including NaturalChangeRate, device impact rate, boundary checks. A Transition trigger referencing an environment variable uses `a_<attr>` (checks only the current device's env var, avoiding cross-device same-name collisions) |
-| 3 | `appendApiSignalTransitions()` | `next(device.apiName_a)` | API signal variables, based on state-change detection (`current!=end & next(mode)=end`) |
-| 4 | `appendTransitionSignalTransitions()` | `next(device.transName_t)` | Template Transition signal variables, based on state-change detection |
-| 5 | `appendPropertyTransitions()` (TRUST) | `next(device.trust_Mode_State)` | State-level trust propagation (includes the is_attack priority branch) |
-| 6 | `appendPropertyTransitions()` (PRIVACY) | `next(device.privacy_Mode_State)` | State-level privacy propagation (only when enablePrivacy=true) |
-| 7 | `appendVariablePropertyTransitions()` (TRUST) | `next(device.trust_varName)` | Variable-level trust self-hold (an actuator's VAR variables must have a next) |
-| 8 | `appendVariablePropertyTransitions()` (PRIVACY) | `next(device.privacy_varName)` | Variable-level privacy self-hold (only when enablePrivacy=true) |
-| 9 | `appendContentPrivacyTransitions()` | `next(device.privacy_contentName)` | Privacy transition for content with IsChangeable=true: when a rule command references the content (e.g. `THEN Facebook.post(MobilePhone.photo)`), the rule firing sets the content privacy to `private`; otherwise self-hold |
-| 10 | `appendVariableRateTransitions()` | `next(device.varName_rate)` | Change rate for affected variables, determined by the device's WorkingState.Dynamics. The `_rate` range is computed dynamically from the actual ChangeRate values in the template (fallback `-10..10` when there is no Dynamics) |
-| 11 | `appendExternalVariableAssignments()` | `device.varName := a_varName` | External variables (IsInside=false) mirror the environment variable (a plain assignment, not next). Note: in code this method is called after `appendVariableRateTransitions` |
-| 12 | `appendInternalVariableTransitions()` | `next(device.varName)` | `next()` for internal variables (IsInside=true); in attack mode generates an `is_attack=TRUE: lower..upper` branch (upper bound expanded via `SmvBoundsUtils.resolveEffectiveUpperBound()`). Transition trigger references also use the current device's env var check |
-
-Environment-variable `next()` transition example (numeric, with device impact rate):
-
-```smv
-next(a_temperature) :=
-case
-    -- when there is a device impact rate (e.g. airconditioner.temperature_rate)
-    a_temperature=35-(airconditioner.temperature_rate): {max(15, min(35, toint(a_temperature)-1+airconditioner.temperature_rate)), max(15, min(35, a_temperature+airconditioner.temperature_rate))};
-    a_temperature>35-(airconditioner.temperature_rate): {35};
-    a_temperature=15-(airconditioner.temperature_rate): {max(15, min(35, a_temperature+airconditioner.temperature_rate)), max(15, min(35, a_temperature+1+airconditioner.temperature_rate))};
-    a_temperature<15-(airconditioner.temperature_rate): {15};
-    TRUE: {max(15, min(35, a_temperature-1+airconditioner.temperature_rate)), max(15, min(35, a_temperature+airconditioner.temperature_rate)), max(15, min(35, a_temperature+1+airconditioner.temperature_rate))};
-esac;
-```
-
-Internal-variable attack expansion takes effect in three places:
-
-1. **VAR declaration range expansion** (`SmvDeviceModuleBuilder.appendInternalVariables`):
-   only for numeric internal variables of sensor devices; the formula matches environment
-   variables — `expansion = range/5 * intensity/50` — and expands the upper bound only.
-2. **next() attack branch** (`SmvMainModuleBuilder.appendInternalVariableTransitions`):
-   when `isAttack=true` and the device is a sensor, generates a
-   `device.is_attack=TRUE: lower..upper` branch, with the upper bound expanded via
-   `SmvBoundsUtils.resolveEffectiveUpperBound()` (consistent with the VAR declaration),
-   letting the attacker set the variable to any value in the expanded range.
-3. **Actuator state hijack** (`SmvMainModuleBuilder.appendStateTransitions`): when
-   `isAttack=true` and the device is a non-sensor (actuator), the case for
-   `next(device.ModeVar)` gets a highest-priority branch
-   `device.is_attack=TRUE: {all legal states}`, letting the attacker hijack the actuator to
-   any legal state. This branch takes priority over rules and template Transitions, so a
-   compromised actuator bypasses the normal transition logic. The resulting state jump also
-   triggers an API-signal pulse (`appendApiSignalTransitions` detects
-   `next(mode)=endState`) — this is expected behavior; a hijacked device can produce
-   arbitrary signals.
-
----
-
-## Complete SMV example
-
-_Migrated from the former `NuSMV_Module_Documentation.md` §6._
-
-A complete SMV file for a thermostat + fan scenario, generated with attack mode and the
-privacy dimension enabled.
-
-**Scenario:** when the thermostat temperature > 30, the fan turns on automatically; verify
-the fan never runs in an untrusted state.
-
-**Request parameters:** `isAttack=true, intensity=50, enablePrivacy=true`
-
-```smv
---IF thermostat_1.temperature>30 THEN fan_1.fanAuto
-
-MODULE Thermostat_thermostat1
-FROZENVAR
-	is_attack: boolean;
-VAR
-	ThermostatMode: {cool, heat, off};
-	temperature: 15..35;
-	setCool_a: boolean;
-	trust_ThermostatMode_cool: {untrusted, trusted};
-	trust_ThermostatMode_heat: {untrusted, trusted};
-	trust_ThermostatMode_off: {untrusted, trusted};
-	trust_temperature: {untrusted, trusted};
-	privacy_ThermostatMode_cool: {private, public};
-	privacy_ThermostatMode_heat: {private, public};
-	privacy_ThermostatMode_off: {private, public};
-	privacy_temperature: {private, public};
-ASSIGN
-	init(is_attack) := {TRUE, FALSE};
-	init(ThermostatMode) := cool;
-	init(setCool_a) := FALSE;
-	init(trust_ThermostatMode_cool) := trusted;
-	init(trust_ThermostatMode_heat) := trusted;
-	init(trust_ThermostatMode_off) := trusted;
-	init(trust_temperature) := trusted;
-	init(privacy_ThermostatMode_cool) := public;
-	init(privacy_ThermostatMode_heat) := public;
-	init(privacy_ThermostatMode_off) := public;
-	init(privacy_temperature) := public;
-
-MODULE Fan_fan1
-FROZENVAR
-	is_attack: boolean;
-VAR
-	FanMode: {auto, manual, off};
-	fanAuto_a: boolean;
-	trust_FanMode_auto: {untrusted, trusted};
-	trust_FanMode_manual: {untrusted, trusted};
-	trust_FanMode_off: {untrusted, trusted};
-	privacy_FanMode_auto: {private, public};
-	privacy_FanMode_manual: {private, public};
-	privacy_FanMode_off: {private, public};
-ASSIGN
-	init(is_attack) := {TRUE, FALSE};
-	init(FanMode) := off;
-	init(fanAuto_a) := FALSE;
-	init(trust_FanMode_auto) := trusted;
-	init(trust_FanMode_manual) := trusted;
-	init(trust_FanMode_off) := trusted;
-	init(privacy_FanMode_auto) := public;
-	init(privacy_FanMode_manual) := public;
-	init(privacy_FanMode_off) := public;
-
-MODULE main
-FROZENVAR
-	intensity: 0..50;
-INVAR intensity <= 50;
-VAR
-	thermostat_1: Thermostat_thermostat1;
-	fan_1: Fan_fan1;
-	a_temperature: 15..39;
-ASSIGN
-	init(intensity) := 0 + toint(thermostat_1.is_attack) + toint(fan_1.is_attack);
-	-- State transitions: attack override first, then rule guards and API start-state constraints
-	next(thermostat_1.ThermostatMode) := case
-		thermostat_1.is_attack=TRUE: {cool, heat, off};
-		TRUE: thermostat_1.ThermostatMode;
-	esac;
-	next(fan_1.FanMode) := case
-		fan_1.is_attack=TRUE: {auto, manual, off};
-		thermostat_1.temperature > 30 & fan_1.is_attack=FALSE & fan_1.FanMode=off : auto;
-		TRUE : fan_1.FanMode;
-	esac;
-	-- API signals derived from state changes
-	next(fan_1.fanAuto_a) := case
-		fan_1.FanMode!=auto & next(fan_1.FanMode)=auto: TRUE;
-		TRUE: FALSE;
-	esac;
-	next(thermostat_1.setCool_a) := case
-		thermostat_1.ThermostatMode!=cool & next(thermostat_1.ThermostatMode)=cool: TRUE;
-		TRUE: FALSE;
-	esac;
-	-- Environment-variable next() transition with NaturalChangeRate boundary checks and clamping
-	next(a_temperature) :=
-	case
-		a_temperature>=39: {max(15, min(39, a_temperature - 1)), a_temperature};   -- Upper bound: clamp candidates to the declared range
-		a_temperature<=15: {a_temperature, max(15, min(39, a_temperature + 1))};   -- Lower bound: clamp candidates to the declared range
-		TRUE: {max(15, min(39, a_temperature - 1)), max(15, min(39, a_temperature)), max(15, min(39, a_temperature + 1))};
-	esac;
-	-- Trust propagation
-	next(fan_1.trust_FanMode_auto) := case
-		fan_1.is_attack=TRUE: untrusted;
-		thermostat_1.temperature > 30 & (thermostat_1.trust_temperature=trusted): trusted;
-		thermostat_1.temperature > 30: untrusted;
-		TRUE: fan_1.trust_FanMode_auto;
-	esac;
-	next(fan_1.trust_FanMode_manual) := case
-		fan_1.is_attack=TRUE: untrusted;
-		TRUE: fan_1.trust_FanMode_manual;
-	esac;
-	next(fan_1.trust_FanMode_off) := case
-		fan_1.is_attack=TRUE: untrusted;
-		TRUE: fan_1.trust_FanMode_off;
-	esac;
-	-- thermostat_1 state-level trust: attack first, otherwise self-hold
-	next(thermostat_1.trust_ThermostatMode_cool) := case
-		thermostat_1.is_attack=TRUE: untrusted;
-		TRUE: thermostat_1.trust_ThermostatMode_cool;
-	esac;
-	next(thermostat_1.trust_ThermostatMode_heat) := case
-		thermostat_1.is_attack=TRUE: untrusted;
-		TRUE: thermostat_1.trust_ThermostatMode_heat;
-	esac;
-	next(thermostat_1.trust_ThermostatMode_off) := case
-		thermostat_1.is_attack=TRUE: untrusted;
-		TRUE: thermostat_1.trust_ThermostatMode_off;
-	esac;
-	-- Variable-level trust self-hold
-	next(thermostat_1.trust_temperature) := thermostat_1.trust_temperature;
-	-- Privacy propagation
-	next(fan_1.privacy_FanMode_auto) := case
-		thermostat_1.temperature > 30 & (thermostat_1.privacy_temperature=private): private;
-		TRUE: fan_1.privacy_FanMode_auto;
-	esac;
-	next(fan_1.privacy_FanMode_manual) := fan_1.privacy_FanMode_manual;
-	next(fan_1.privacy_FanMode_off) := fan_1.privacy_FanMode_off;
-	-- thermostat_1 state-level privacy self-hold
-	next(thermostat_1.privacy_ThermostatMode_cool) := thermostat_1.privacy_ThermostatMode_cool;
-	next(thermostat_1.privacy_ThermostatMode_heat) := thermostat_1.privacy_ThermostatMode_heat;
-	next(thermostat_1.privacy_ThermostatMode_off) := thermostat_1.privacy_ThermostatMode_off;
-	-- Variable-level privacy self-hold
-	next(thermostat_1.privacy_temperature) := thermostat_1.privacy_temperature;
-	-- External-variable assignment: direct assignment, not next()
-	thermostat_1.temperature := a_temperature;
--- Specifications
-	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.trust_FanMode_auto = untrusted))
-	CTLSPEC AG(!(fan_1.FanMode = auto & fan_1.privacy_FanMode_auto = private))
-	LTLSPEC G((thermostat_1.temperature > 30) -> F G(fan_1.FanMode = auto))
-```
-
-### Parameter-combination examples
-
-Example A — `isAttack=true, intensity=0, enablePrivacy=false`:
-
-```smv
-MODULE main
-FROZENVAR
-    intensity: 0..50;
-INVAR intensity <= 0;
-VAR
-    ts_1: Sensor_ts1;
-ASSIGN
-    init(intensity) := 0 + toint(ts_1.is_attack);
-```
-
-Meaning: the budget is 0, forcing every device's `is_attack=FALSE`.
-
-Example B — `isAttack=true, intensity=25, enablePrivacy=false`:
-
-```smv
-MODULE Sensor_ts1
-FROZENVAR
-    is_attack: boolean;
-VAR
-    temperature: 0..110;   -- Original 0..100, range=100, expansion=100/5*25/50=10
-ASSIGN
-    init(is_attack) := {TRUE, FALSE};
-
-MODULE main
-FROZENVAR
-    intensity: 0..50;
-INVAR intensity <= 25;
-```
-
-Example C — `isAttack=true, intensity=50, enablePrivacy=true`:
-
-```smv
-MODULE Camera_c1
-FROZENVAR
-    is_attack: boolean;
-    privacy_photo: {public, private};
-VAR
-    trust_Mode_on: {untrusted, trusted};
-    privacy_Mode_on: {private, public};
-ASSIGN
-    init(is_attack) := {TRUE, FALSE};
-
-MODULE main
-FROZENVAR
-    intensity: 0..50;
-INVAR intensity <= 50;
-```
-
-Example D — specs no longer inject `intensity<=N`:
-
-```smv
--- current behavior
-CTLSPEC AG(!(door_1.LockState = unlocked & door_1.trust_LockState_unlocked = untrusted))
-
--- budget constraint lives in main
-INVAR intensity <= 3;
-```
-
----
+Mode/state/module identifiers are normalized through the generator's canonical helper.
+Template variable and impacted-variable names are cross-referenced structurally and are
+therefore rejected at persistence time if they are illegal rather than silently renamed.
+The validator also rejects case-insensitive collisions with generated identifiers such
+as environment aliases, trust/privacy labels, event signals, attack fields, and auto-fix
+parameters.
+
+Trace parsing reverses only known generated namespaces. A real user variable whose
+literal name begins with `a_`, `trust_`, or `privacy_` remains that literal variable; it
+is not guessed from its prefix.
 
 ## Related
 
-- API field contract: [../api/verification.md](../api/verification.md)
-- Config keys (`NUSMV_*`): [../getting-started/configuration.md](../getting-started/configuration.md)
-- Change history (identifier sanitization, boundary centralization, atomic cancel
-  safety, user isolation): [../../CHANGELOG.md](../../CHANGELOG.md)
+- [Verification flow](verification-flow.md)
+- [Specification templates](spec-templates.md)
+- [Data authority model](data-authority-model.md)
+- [Verification, simulation, and fix API](../api/verification.md)
+- [Board storage API](../api/board.md)

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -33,13 +35,13 @@ public class SmvSpecificationBuilder {
      * @param specs              full spec list
      * @param negatedSpecIndex   index of the spec to negate (¬ρ)
      * @param isAttack           attack mode
-     * @param intensity          attack intensity
+     * @param attackBudget          attack budget
      * @param deviceSmvMap       device SMV data
      * @param enablePrivacy      privacy flag
      * @return SMV specification section containing only the negated spec
      */
     public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
-                               boolean isAttack, int intensity,
+                               boolean isAttack, int attackBudget,
                                Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
         if (specs == null || specs.isEmpty() || negatedSpecIndex < 0 || negatedSpecIndex >= specs.size()) {
             log.warn("buildNegated: invalid negatedSpecIndex={} for specs size={}", negatedSpecIndex,
@@ -54,7 +56,7 @@ public class SmvSpecificationBuilder {
         content.append("\n-- Negated specification (index ").append(negatedSpecIndex).append(")");
 
         try {
-            String negatedSpec = generateNegatedSpec(spec, isAttack, intensity, deviceSmvMap);
+            String negatedSpec = generateNegatedSpec(spec, isAttack, attackBudget, deviceSmvMap);
             content.append("\n\t").append(negatedSpec);
         } catch (InvalidConditionException e) {
             log.warn("Failed to negate spec at index {}: {}", negatedSpecIndex, e.getMessage());
@@ -70,7 +72,6 @@ public class SmvSpecificationBuilder {
      * Negation mapping (from Salus paper §5):
      * <ul>
      *   <li>Template 1 (always):      AG(p)           → CTLSPEC EF(!(p))</li>
-     *   <li>Template 1' (always-imply): AG(a→b)        → CTLSPEC EF((a) & !(b))</li>
      *   <li>Template 2 (eventually):   AF(p)           → CTLSPEC EG(!(p))</li>
      *   <li>Template 3 (never):        AG(!(p))        → CTLSPEC EF(p)</li>
      *   <li>Template 4 (immediate):    AG(a→AX(b))     → CTLSPEC EF((a) & EX(!(b)))</li>
@@ -79,16 +80,17 @@ public class SmvSpecificationBuilder {
      *   <li>Template 7 (safety):       AG !(body)      → CTLSPEC EF(body)  (body includes trust/attack expressions)</li>
      * </ul>
      */
-    String generateNegatedSpec(SpecificationDto spec, boolean isAttack, int intensity,
+    String generateNegatedSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
                                        Map<String, DeviceSmvData> deviceSmvMap) {
+        validateTemplateShape(spec);
         String templateId = spec.getTemplateId();
         if (PERSISTENCE_TEMPLATE_ID.equals(templateId)) {
             return generateNegatedLtlSpec(spec, deviceSmvMap);
         }
-        return generateNegatedCtlSpec(spec, isAttack, intensity, deviceSmvMap);
+        return generateNegatedCtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
     }
 
-    private String generateNegatedCtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
+    private String generateNegatedCtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
                                           Map<String, DeviceSmvData> deviceSmvMap) {
         String templateId = spec.getTemplateId();
         String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
@@ -96,11 +98,7 @@ public class SmvSpecificationBuilder {
         String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
 
         switch (templateId) {
-            case "1": // always: AG(A) → EF(!A); or AG(IF→THEN) → EF(IF & !THEN)
-                if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
-                    // Always-imply form: AG(IF→THEN) → EF(IF & !THEN)
-                    return "CTLSPEC EF((" + ifPart + ") & !(" + thenPart + "))";
-                }
+            case "1": // always: AG(A) → EF(!A)
                 return "CTLSPEC EF(!(" + aPart + "))";
             case "2": // eventually: AF(A) → EG(!A)
                 return "CTLSPEC EG(!(" + aPart + "))";
@@ -111,7 +109,7 @@ public class SmvSpecificationBuilder {
             case "5": // response: AG(IF→AF(THEN)) → EF(IF & EG(!THEN))
                 return "CTLSPEC EF((" + ifPart + ") & EG(!(" + thenPart + ")))";
             case "7": // safety: AG !(body) → EF(body), where body includes trust/attack expressions
-                return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, intensity) + ")";
+                return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, attackBudget) + ")";
             default:
                 // Symmetric with generateCtlSpec: fail closed & visible instead of silently
                 // treating an unknown template as AG(A). buildNegated() catches this and emits
@@ -129,12 +127,12 @@ public class SmvSpecificationBuilder {
         return "LTLSPEC F((" + ifPart + ") & G F(!(" + thenPart + ")))";
     }
 
-    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
+    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int attackBudget,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
-        return build(specs, isAttack, intensity, deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
+        return build(specs, isAttack, attackBudget, deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
     }
 
-    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int intensity,
+    public String build(java.util.List<SpecificationDto> specs, boolean isAttack, int attackBudget,
                        Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy,
                        SmvGenerationContext context) {
         StringBuilder content = new StringBuilder();
@@ -151,36 +149,34 @@ public class SmvSpecificationBuilder {
             if (spec == null) continue;
             if ((spec.getAConditions() == null || spec.getAConditions().isEmpty()) &&
                 (spec.getIfConditions() == null || spec.getIfConditions().isEmpty())) {
-                recordSkippedSpec(context, spec, "Specification has no A/IF conditions and was not emitted");
+                recordSkippedSpec(context, spec,
+                        ModelGenerationIssueReasonCode.SPEC_NO_CHECKABLE_CONDITIONS,
+                        "The specification has no checkable conditions.");
                 continue;
             }
 
             // Defense-in-depth: privacy specs should have been caught upstream by SmvGenerator.validateNoPrivacySpecs
             if (!enablePrivacy && hasAnyPrivacyCondition(spec)) {
                 log.warn("Privacy spec '{}' encountered with enablePrivacy=false — should have been caught upstream, skipping", spec.getId());
-                recordSkippedSpec(context, spec, "Privacy specification skipped because enablePrivacy=false");
-                String placeholder = "CTLSPEC FALSE";
-                content.append("\n\t").append(placeholder).append(" -- privacy spec skipped: enablePrivacy=false");
-                recordEmittedSpec(context, spec, placeholder);
-                generatedSpecs++;
+                recordSkippedSpec(context, spec,
+                        ModelGenerationIssueReasonCode.SPEC_PRIVACY_MODELING_DISABLED,
+                        "Privacy-state modeling was not enabled for this run.");
+                content.append("\n\t-- specification skipped: privacy-state modeling disabled");
                 continue;
             }
 
             try {
-                String specString = generateSpecString(spec, isAttack, intensity, deviceSmvMap);
+                String specString = generateSpecString(spec, isAttack, attackBudget, deviceSmvMap);
                 content.append("\n\t").append(specString);
                 recordEmittedSpec(context, spec, specString);
                 generatedSpecs++;
             } catch (InvalidConditionException e) {
                 // Invalid condition makes this spec invalid; skip and log warning.
                 log.warn("Skipping spec '{}': {}", spec.getId(), e.getMessage());
-                recordSkippedSpec(context, spec, e.getMessage());
-                // Emit a guaranteed-false placeholder to keep spec count aligned with effectiveSpecs.
+                TranslationFailure failure = userFacingTranslationFailure(e);
+                recordSkippedSpec(context, spec, failure.reasonCode(), failure.reason());
                 String safeMsg = e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown";
-                String placeholder = "CTLSPEC FALSE";
-                content.append("\n\t").append(placeholder).append(" -- invalid spec: ").append(safeMsg);
-                recordEmittedSpec(context, spec, placeholder);
-                generatedSpecs++;
+                content.append("\n\t-- specification skipped: ").append(safeMsg);
             }
         }
 
@@ -188,10 +184,61 @@ public class SmvSpecificationBuilder {
         return content.toString();
     }
 
-    private void recordSkippedSpec(SmvGenerationContext context, SpecificationDto spec, String reason) {
-        if (context != null) {
-            context.skippedSpec(spec, reason);
+    private TranslationFailure userFacingTranslationFailure(InvalidConditionException exception) {
+        String detail = exception != null && exception.getMessage() != null
+                ? exception.getMessage().toLowerCase(Locale.ROOT)
+                : "";
+        if (detail.contains("unsupported relation") || detail.contains("only supports")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_UNSUPPORTED_RELATION,
+                    "A condition uses a comparison that is not supported for the selected field.");
         }
+        if (detail.contains("ambiguous across modes") || detail.contains("multiple candidates")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_AMBIGUOUS_STATE,
+                    "A selected state matches more than one device mode; choose an unambiguous mode and state.");
+        }
+        if (detail.contains("property") || detail.contains("state-label")
+                || detail.contains("trust") || detail.contains("privacy")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_UNDECLARED_SECURITY_PROPERTY,
+                    "A trust or privacy condition references a property that the device type does not define.");
+        }
+        if (detail.contains("not found") && detail.contains("device")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_UNKNOWN_DEVICE,
+                    "A referenced device is missing or no longer matches this specification.");
+        }
+        if (detail.contains("template")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_TEMPLATE_SHAPE_MISMATCH,
+                    "The selected specification template does not match its configured condition groups.");
+        }
+        if (detail.contains("value") || detail.contains("candidate")) {
+            return translationFailure(
+                    ModelGenerationIssueReasonCode.SPEC_INVALID_VALUE,
+                    "A condition contains a value that is not valid for the selected device field.");
+        }
+        return translationFailure(
+                ModelGenerationIssueReasonCode.SPEC_UNSUPPORTED_CONDITION,
+                "One or more conditions are not supported by the selected device types.");
+    }
+
+    private TranslationFailure translationFailure(ModelGenerationIssueReasonCode reasonCode,
+                                                  String reason) {
+        return new TranslationFailure(reasonCode, reason);
+    }
+
+    private void recordSkippedSpec(SmvGenerationContext context,
+                                   SpecificationDto spec,
+                                   ModelGenerationIssueReasonCode reasonCode,
+                                   String reason) {
+        if (context != null) {
+            context.skippedSpec(spec, reasonCode, reason);
+        }
+    }
+
+    private record TranslationFailure(ModelGenerationIssueReasonCode reasonCode, String reason) {
     }
 
     private void recordEmittedSpec(SmvGenerationContext context, SpecificationDto spec, String expression) {
@@ -216,16 +263,17 @@ public class SmvSpecificationBuilder {
     /**
      * Generate one specification string (deviceSmvMap is required to resolve trust/privacy variables).
      */
-    public String generateSpecString(SpecificationDto spec, boolean isAttack, int intensity,
+    public String generateSpecString(SpecificationDto spec, boolean isAttack, int attackBudget,
                                      Map<String, DeviceSmvData> deviceSmvMap) {
+        validateTemplateShape(spec);
         String templateId = spec.getTemplateId();
         if (PERSISTENCE_TEMPLATE_ID.equals(templateId)) {
-            return generateLtlSpec(spec, isAttack, intensity, deviceSmvMap);
+            return generateLtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
         }
-        return generateCtlSpec(spec, isAttack, intensity, deviceSmvMap);
+        return generateCtlSpec(spec, isAttack, attackBudget, deviceSmvMap);
     }
 
-    private String generateLtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
+    private String generateLtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
                                   Map<String, DeviceSmvData> deviceSmvMap) {
         String ifPart = buildConditionGroup(spec.getIfConditions(), deviceSmvMap);
         String thenPart = buildConditionGroup(spec.getThenConditions(), deviceSmvMap);
@@ -233,7 +281,7 @@ public class SmvSpecificationBuilder {
         return "LTLSPEC G((" + ifPart + ") -> F G(" + thenPart + "))";
     }
 
-    private String generateCtlSpec(SpecificationDto spec, boolean isAttack, int intensity,
+    private String generateCtlSpec(SpecificationDto spec, boolean isAttack, int attackBudget,
                                   Map<String, DeviceSmvData> deviceSmvMap) {
         String templateId = spec.getTemplateId();
         String aPart = buildConditionGroup(spec.getAConditions(), deviceSmvMap);
@@ -242,13 +290,6 @@ public class SmvSpecificationBuilder {
 
         switch (templateId) {
             case "1": // always: AG(A)
-                // Special case: when aConditions is empty but ifConditions/thenConditions exist,
-                // this template is repurposed as an implication: AG(IF -> THEN).
-                // This allows the "always" template to express invariant implications without
-                // requiring a separate template ID.
-                if (isTrueLiteral(aPart) && !isTrueLiteral(ifPart) && !isTrueLiteral(thenPart)) {
-                    return "CTLSPEC AG((" + ifPart + ") -> (" + thenPart + "))";
-                }
                 return "CTLSPEC AG(" + aPart + ")";
             case "2": // eventually
                 return "CTLSPEC AF(" + aPart + ")";
@@ -259,7 +300,7 @@ public class SmvSpecificationBuilder {
             case "5": // response
                 return "CTLSPEC AG((" + ifPart + ") -> AF(" + thenPart + "))";
             case "7": // safety: untrusted -> !A
-                return buildSafetySpec(spec, deviceSmvMap, isAttack, intensity);
+                return buildSafetySpec(spec, deviceSmvMap, isAttack, attackBudget);
             default:
                 throw new InvalidConditionException("unsupported templateId '" + templateId
                         + "'; allowed values are 1, 2, 3, 4, 5, 6, 7");
@@ -268,7 +309,7 @@ public class SmvSpecificationBuilder {
 
     private String genConditionSpec(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
         if (cond == null || !hasDeviceRef(cond)) {
-            throw new InvalidConditionException("condition deviceId/deviceLabel is null");
+            throw new InvalidConditionException("condition deviceId is null");
         }
 
         DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
@@ -297,23 +338,25 @@ public class SmvSpecificationBuilder {
             return buildStateCondition(varName, smv, cond);
         }
 
+        if ("mode".equals(targetType)) {
+            return buildModeCondition(varName, smv, cond);
+        }
+
         if ("variable".equals(targetType)) {
             return buildVariableCondition(varName, smv, cond);
         }
 
         if ("trust".equals(targetType)) {
-            String resolved = resolvePropertyKey(smv, cond.getKey(), "trust_", cond.getDeviceId());
-            return buildSimpleCondition(varName + "." + resolved, cond);
+            return buildPropertyCondition(varName, smv, cond, "trust_");
         }
 
         if ("privacy".equals(targetType)) {
-            String resolved = resolvePropertyKey(smv, cond.getKey(), "privacy_", cond.getDeviceId());
-            return buildSimpleCondition(varName + "." + resolved, cond);
+            return buildPropertyCondition(varName, smv, cond, "privacy_");
         }
 
         // Unknown targetType: fail-closed, do not guess concatenation.
         throw new InvalidConditionException("unsupported targetType '" + targetType
-                + "' for device " + cond.getDeviceId() + "; allowed: state, variable, api, trust, privacy");
+                + "' for device " + cond.getDeviceId() + "; allowed: state, mode, variable, api, trust, privacy");
     }
     
     private String buildConditionGroup(List<SpecConditionDto> conditions, Map<String, DeviceSmvData> deviceSmvMap) {
@@ -332,7 +375,7 @@ public class SmvSpecificationBuilder {
             return null;
         }
         try {
-            return DeviceReferenceResolver.resolve(cond.getDeviceId(), cond.getDeviceLabel(), deviceSmvMap);
+            return DeviceReferenceResolver.resolve(cond.getDeviceId(), deviceSmvMap);
         } catch (SmvGenerationException e) {
             if (SmvGenerationException.ErrorCategories.AMBIGUOUS_DEVICE_REFERENCE.equals(e.getErrorCategory())) {
                 throw e;
@@ -341,16 +384,78 @@ public class SmvSpecificationBuilder {
         }
     }
 
+    private void validateTemplateShape(SpecificationDto spec) {
+        if (spec == null) {
+            throw new InvalidConditionException("specification is null");
+        }
+        String templateId = spec.getTemplateId();
+        int aCount = sizeOf(spec.getAConditions());
+        int ifCount = sizeOf(spec.getIfConditions());
+        int thenCount = sizeOf(spec.getThenConditions());
+        if ("1".equals(templateId) || "2".equals(templateId) || "3".equals(templateId) || "7".equals(templateId)) {
+            if (aCount == 0) {
+                throw new InvalidConditionException("template " + templateId
+                        + " requires at least one A condition");
+            }
+            if (ifCount > 0 || thenCount > 0) {
+                throw new InvalidConditionException("template " + templateId
+                        + " uses A conditions only");
+            }
+            if ("7".equals(templateId)) {
+                validateSafetyConditions(spec.getAConditions());
+            }
+            return;
+        }
+        if ("4".equals(templateId) || "5".equals(templateId) || "6".equals(templateId)) {
+            if (aCount > 0) {
+                throw new InvalidConditionException("template " + templateId
+                        + " uses IF/THEN conditions only");
+            }
+            if (ifCount == 0 || thenCount == 0) {
+                throw new InvalidConditionException("template " + templateId
+                        + " requires both IF and THEN conditions");
+            }
+        }
+    }
+
+    private void validateSafetyConditions(List<SpecConditionDto> conditions) {
+        if (conditions == null) {
+            return;
+        }
+        for (SpecConditionDto condition : conditions) {
+            if (condition == null) {
+                continue;
+            }
+            String targetType = condition.getTargetType() != null
+                    ? condition.getTargetType().trim().toLowerCase(Locale.ROOT)
+                    : "";
+            if ("trust".equals(targetType) || "privacy".equals(targetType)) {
+                throw new InvalidConditionException(
+                        "safety conditions must describe a protected event or value, not an explicit trust/privacy predicate");
+            }
+            String relation = normalizeRelation(condition.getRelation());
+            if (("state".equals(targetType) || "mode".equals(targetType)) && !"=".equals(relation)) {
+                throw new InvalidConditionException(
+                        "safety state and mode conditions require '=' so the matching source label is unambiguous");
+            }
+            if ("api".equals(targetType)
+                    && (!"=".equals(relation) || !"TRUE".equalsIgnoreCase(condition.getValue()))) {
+                throw new InvalidConditionException("safety API conditions must use '= TRUE'");
+            }
+        }
+    }
+
+    private int sizeOf(List<?> list) {
+        return list == null ? 0 : list.size();
+    }
+
     private String describeDeviceRef(SpecConditionDto cond) {
         if (cond == null) return "";
-        if (cond.getDeviceId() != null && !cond.getDeviceId().isBlank()) return cond.getDeviceId();
-        return cond.getDeviceLabel() != null ? cond.getDeviceLabel() : "";
+        return cond.getDeviceId() != null ? cond.getDeviceId() : "";
     }
 
     private boolean hasDeviceRef(SpecConditionDto cond) {
-        return cond != null
-                && ((cond.getDeviceId() != null && !cond.getDeviceId().isBlank())
-                || (cond.getDeviceLabel() != null && !cond.getDeviceLabel().isBlank()));
+        return cond != null && cond.getDeviceId() != null && !cond.getDeviceId().isBlank();
     }
 
     private String buildStateCondition(String varName, DeviceSmvData smv, SpecConditionDto cond) {
@@ -511,6 +616,80 @@ public class SmvSpecificationBuilder {
         return parts.size() == 1 ? parts.get(0) : "(" + String.join(" & ", parts) + ")";
     }
 
+    private String buildModeCondition(String varName, DeviceSmvData smv, SpecConditionDto cond) {
+        String mode = resolveModeName(smv, cond.getKey(), cond.getDeviceId());
+        String relation = normalizeRelation(cond.getRelation());
+        String value = cond.getValue();
+        if (relation == null) {
+            throw new InvalidConditionException("mode condition relation is null for device " + cond.getDeviceId());
+        }
+        if (!"=".equals(relation)
+                && !"!=".equals(relation)
+                && !"in".equals(relation)
+                && !"not in".equals(relation)) {
+            throw new InvalidConditionException("mode condition only supports =, !=, IN, NOT_IN relations, got '"
+                    + cond.getRelation() + "' for device " + cond.getDeviceId());
+        }
+        if (value == null || value.isBlank()) {
+            throw new InvalidConditionException("mode condition value is null/blank for device " + cond.getDeviceId());
+        }
+
+        List<String> cleanedValues = splitModeConditionCandidates(value, relation).stream()
+                .map(DeviceSmvDataFactory::cleanStateName)
+                .filter(v -> v != null && !v.isBlank())
+                .collect(Collectors.toList());
+        if (cleanedValues.isEmpty()) {
+            throw new InvalidConditionException("mode condition has empty candidate list for device " + cond.getDeviceId());
+        }
+        List<String> legalValues = smv.getModeStates() != null ? smv.getModeStates().get(mode) : null;
+        if (legalValues == null || legalValues.isEmpty()) {
+            throw new InvalidConditionException("mode '" + mode + "' has no legal values on device " + cond.getDeviceId());
+        }
+        for (String cleanedValue : cleanedValues) {
+            if (!legalValues.contains(cleanedValue)) {
+                throw new InvalidConditionException("mode value '" + cleanedValue + "' is not legal for mode '" + mode
+                        + "' on device " + cond.getDeviceId());
+            }
+        }
+        if (("=".equals(relation) || "!=".equals(relation)) && cleanedValues.size() != 1) {
+            throw new InvalidConditionException("mode relation '" + relation + "' requires exactly one value on device "
+                    + cond.getDeviceId());
+        }
+
+        return buildRelationExpr(varName + "." + mode, relation, String.join(",", cleanedValues));
+    }
+
+    private List<String> splitModeConditionCandidates(String value, String relation) {
+        if (value == null) {
+            return List.of();
+        }
+        if ("in".equals(relation) || "not in".equals(relation)) {
+            return Arrays.stream(value.split("[,;|]"))
+                    .map(String::trim)
+                    .filter(v -> !v.isEmpty())
+                    .collect(Collectors.toList());
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? List.of() : List.of(trimmed);
+    }
+
+    private String resolveModeName(DeviceSmvData smv, String key, String deviceId) {
+        if (smv == null || smv.getModes() == null || smv.getModes().isEmpty()) {
+            throw new InvalidConditionException("device '" + deviceId + "' has no modes, cannot generate mode condition");
+        }
+        if (key == null || key.isBlank()) {
+            throw new InvalidConditionException("mode condition key is null/blank for device " + deviceId);
+        }
+        String trimmed = key.trim();
+        for (String mode : smv.getModes()) {
+            if (mode.equals(trimmed) || mode.equalsIgnoreCase(trimmed)
+                    || mode.equals(DeviceSmvDataFactory.cleanStateName(trimmed))) {
+                return mode;
+            }
+        }
+        throw new InvalidConditionException("mode key '" + key + "' not found on device " + deviceId);
+    }
+
     private String buildSimpleCondition(String left, SpecConditionDto cond) {
         if (left == null || left.isBlank()) {
             throw new InvalidConditionException("invalid left-hand side: " + left);
@@ -520,12 +699,20 @@ public class SmvSpecificationBuilder {
         if (relation == null) {
             throw new InvalidConditionException("simple condition relation is null for device " + cond.getDeviceId());
         }
+        return buildSimpleCondition(left, relation, value, cond.getDeviceId(), cond.getRelation());
+    }
+
+    private String buildSimpleCondition(String left,
+                                        String relation,
+                                        String value,
+                                        String deviceId,
+                                        String rawRelation) {
         if (!isSupportedRelation(relation)) {
-            throw new InvalidConditionException("unsupported relation '" + cond.getRelation()
-                    + "' for device " + cond.getDeviceId());
+            throw new InvalidConditionException("unsupported relation '" + rawRelation
+                    + "' for device " + deviceId);
         }
         if (value == null || value.isBlank()) {
-            throw new InvalidConditionException("simple condition value is null/blank for device " + cond.getDeviceId());
+            throw new InvalidConditionException("simple condition value is null/blank for device " + deviceId);
         }
         return buildRelationExpr(left, relation, value);
     }
@@ -537,70 +724,89 @@ public class SmvSpecificationBuilder {
         }
         String normalizedKey = key.trim();
 
-        if (normalizedKey.startsWith("a_")) {
-            String envName = normalizedKey.substring(2);
-            if (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(envName)) {
-                return buildSimpleCondition("a_" + envName, cond);
-            }
-            throw new InvalidConditionException("env variable '" + normalizedKey + "' not found on device " + cond.getDeviceId());
+        DeviceManifest.InternalVariable envVariable = smv.getEnvVariables() != null
+                ? smv.getEnvVariables().get(normalizedKey)
+                : null;
+        if (envVariable != null) {
+            return buildVariableConditionExpr("a_" + normalizedKey, cond, envVariable);
         }
 
-        if (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(normalizedKey)) {
-            return buildSimpleCondition("a_" + normalizedKey, cond);
-        }
-
-        if (hasInternalVariable(smv, normalizedKey)) {
-            return buildSimpleCondition(varName + "." + normalizedKey, cond);
+        DeviceManifest.InternalVariable internalVariable = internalVariable(smv, normalizedKey);
+        if (internalVariable != null) {
+            return buildVariableConditionExpr(varName + "." + normalizedKey, cond, internalVariable);
         }
 
         throw new InvalidConditionException("variable key '" + normalizedKey + "' not found as internal/env variable on device "
                 + cond.getDeviceId());
     }
 
+    private String buildVariableConditionExpr(String left, SpecConditionDto cond, DeviceManifest.InternalVariable variable) {
+        String relation = normalizeRelation(cond.getRelation());
+        String value = cond.getValue();
+        if (variable != null && variable.getValues() != null && !variable.getValues().isEmpty()) {
+            value = cleanEnumValueByRelation(relation, value);
+        }
+        return buildSimpleCondition(left, relation, value, cond.getDeviceId(), cond.getRelation());
+    }
+
     private boolean hasInternalVariable(DeviceSmvData smv, String name) {
-        if (smv == null || smv.getVariables() == null || name == null) return false;
+        return internalVariable(smv, name) != null;
+    }
+
+    private DeviceManifest.InternalVariable internalVariable(DeviceSmvData smv, String name) {
+        if (smv == null || smv.getVariables() == null || name == null) return null;
         for (DeviceManifest.InternalVariable var : smv.getVariables()) {
             if (var != null && name.equals(var.getName())) {
-                return true;
+                return var;
             }
         }
-        return false;
+        return null;
     }
 
     private String buildSafetySpec(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
-                                   boolean isAttack, int intensity) {
-        String body = buildSafetyBody(spec, deviceSmvMap, isAttack, intensity);
+                                   boolean isAttack, int attackBudget) {
+        String body = buildSafetyBody(spec, deviceSmvMap, isAttack, attackBudget);
         return "CTLSPEC AG !(" + body + ")";
     }
 
     private String buildSafetyBody(SpecificationDto spec, Map<String, DeviceSmvData> deviceSmvMap,
-                                   boolean isAttack, int intensity) {
-        List<String> parts = new ArrayList<>();
+                                   boolean isAttack, int attackBudget) {
+        List<String> conditionParts = new ArrayList<>();
+        List<String> untrustedSourceParts = new ArrayList<>();
         if (spec.getAConditions() != null) {
             for (SpecConditionDto cond : spec.getAConditions()) {
                 String aExpr = genConditionSpec(cond, deviceSmvMap);
-                String trustExpr = buildTrustForCondition(cond, deviceSmvMap);
+                String untrustedSourceExpr = buildUntrustedSourceForCondition(cond, deviceSmvMap);
                 if (!isTrueLiteral(aExpr)) {
-                    parts.add(aExpr);
+                    conditionParts.add(aExpr);
                 }
-                if (trustExpr != null) {
-                    parts.add(trustExpr + "=untrusted");
+                if (untrustedSourceExpr == null || untrustedSourceExpr.isBlank()) {
+                    throw new InvalidConditionException("cannot resolve the MEDIC control-source label for safety condition on device "
+                            + describeDeviceRef(cond) + " (targetType=" + cond.getTargetType()
+                            + ", key=" + cond.getKey() + ")");
                 }
-                if (isAttack) {
-                    String attackExpr = buildAttackFalseForCondition(cond, deviceSmvMap);
-                    if (attackExpr != null) {
-                        parts.add(attackExpr);
-                    }
-                }
+                untrustedSourceParts.add(untrustedSourceExpr);
             }
         }
 
-        // intensity is constrained globally by main module INVAR; do not inject it into safety spec.
+        // Attack budget is constrained globally by the main-module invariant. Do not
+        // exclude attacked target devices here: those paths are part of the requested check.
 
-        return parts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, parts);
+        if (untrustedSourceParts.isEmpty()) {
+            return conditionParts.isEmpty() ? "TRUE" : String.join(CONDITION_SEPARATOR, conditionParts);
+        }
+        String untrustedSources = untrustedSourceParts.size() == 1
+                ? untrustedSourceParts.get(0)
+                : "(" + String.join(" | ", untrustedSourceParts) + ")";
+        if (conditionParts.isEmpty()) {
+            return untrustedSources;
+        }
+        return String.join(CONDITION_SEPARATOR, conditionParts)
+                + CONDITION_SEPARATOR + untrustedSources;
     }
 
-    private String buildTrustForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
+    private String buildUntrustedSourceForCondition(SpecConditionDto cond,
+                                                    Map<String, DeviceSmvData> deviceSmvMap) {
         if (!hasDeviceRef(cond)) return null;
         DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
         String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(describeDeviceRef(cond));
@@ -611,9 +817,6 @@ public class SmvSpecificationBuilder {
                 return null;
             }
             String normalizedKey = cond.getKey().trim();
-            if (normalizedKey.startsWith("a_")) {
-                normalizedKey = normalizedKey.substring(2);
-            }
             if (smv != null) {
                 boolean exists = (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(normalizedKey))
                         || hasInternalVariable(smv, normalizedKey);
@@ -621,155 +824,180 @@ public class SmvSpecificationBuilder {
                     return null;
                 }
             }
-            return varName + ".trust_" + normalizedKey;
+            return varName + ".trust_" + normalizedKey + "=untrusted";
         }
 
         if ("state".equals(targetType)) {
-            return resolveStateTrust(varName, smv, cond);
+            return resolveStateUntrustedSource(varName, smv, cond);
+        }
+
+        if ("mode".equals(targetType)) {
+            return resolveModeUntrustedSource(varName, smv, cond);
         }
 
         if ("api".equals(targetType)) {
-            return resolveApiTrust(varName, smv, cond);
+            return resolveApiUntrustedSource(varName, smv, cond);
         }
 
         return null;
     }
 
-    private String resolveStateTrust(String varName, DeviceSmvData smv, SpecConditionDto cond) {
-        if (smv == null || smv.getModes() == null || smv.getModes().isEmpty()) {
-            String stateVal = cond.getValue() != null ? cond.getValue() : cond.getKey();
-            return varName + ".trust_" + DeviceSmvDataFactory.cleanStateName(stateVal);
+    private String resolveModeUntrustedSource(String varName, DeviceSmvData smv, SpecConditionDto cond) {
+        if (smv == null) {
+            return null;
         }
-
-        if (smv.getModes().size() == 1) {
-            String mode = smv.getModes().get(0);
-            String stateVal = cond.getValue() != null ? cond.getValue() : cond.getKey();
-            return varName + ".trust_" + mode + "_" + DeviceSmvDataFactory.cleanStateName(stateVal);
+        String relation = normalizeRelation(cond.getRelation());
+        if (!"=".equals(relation)) {
+            return null;
         }
+        String mode = resolveModeName(smv, cond.getKey(), cond.getDeviceId());
+        String value = cond.getValue() != null ? DeviceSmvDataFactory.cleanStateName(cond.getValue()) : null;
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        List<String> legalValues = smv.getModeStates() != null ? smv.getModeStates().get(mode) : null;
+        if (legalValues == null || !legalValues.contains(value)) {
+            return null;
+        }
+        return varName + ".trust_" + mode + "_" + value + "=untrusted";
+    }
 
+    private String resolveStateUntrustedSource(String varName, DeviceSmvData smv, SpecConditionDto cond) {
+        if (smv == null || smv.getModes() == null || smv.getModes().isEmpty()
+                || !"=".equals(normalizeRelation(cond.getRelation()))) {
+            return null;
+        }
         String value = cond.getValue();
-        String cleanValue = (value != null) ? DeviceSmvDataFactory.cleanStateName(value) : null;
-        if (cleanValue != null) {
-            for (String mode : smv.getModes()) {
-                List<String> modeStates = smv.getModeStates().get(mode);
-                if (modeStates != null && modeStates.contains(cleanValue)) {
-                    return varName + ".trust_" + mode + "_" + cleanValue;
-                }
-            }
+        if (value == null || value.isBlank()) {
+            return null;
         }
-
-        String key = cond.getKey();
-        if (key != null && smv.getModes().contains(key)) {
-            if (cleanValue != null) {
-                return varName + ".trust_" + key + "_" + cleanValue;
-            }
-            return varName + ".trust_" + key;
-        }
-
-        return null;
+        Map<String, String> tuple = resolveStateConditionTuple(smv, value, cond.getDeviceId());
+        return buildUntrustedStateTuple(varName, smv, tuple);
     }
 
-    private String resolveApiTrust(String varName, DeviceSmvData smv, SpecConditionDto cond) {
+    private String resolveApiUntrustedSource(String varName, DeviceSmvData smv, SpecConditionDto cond) {
         if (smv == null || smv.getManifest() == null || smv.getManifest().getApis() == null) {
             return null;
         }
         for (DeviceManifest.API api : smv.getManifest().getApis()) {
-            if (api.getSignal() != null && api.getSignal() && api.getName().equals(cond.getKey())) {
+            if (api != null && Boolean.TRUE.equals(api.getSignal())
+                    && api.getName() != null && api.getName().equals(cond.getKey())) {
                 String endState = api.getEndState();
-                if (endState == null) return null;
-                if (smv.getModes() != null && !smv.getModes().isEmpty()) {
-                    int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(smv, endState);
-                    if (modeIdx >= 0 && modeIdx < smv.getModes().size()) {
-                        String mode = smv.getModes().get(modeIdx);
-                        String[] endParts = endState.split(";");
-                        String cleanEndState = (modeIdx < endParts.length)
-                                ? DeviceSmvDataFactory.cleanStateName(endParts[modeIdx].trim())
-                                : DeviceSmvDataFactory.cleanStateName(endState);
-                        return varName + ".trust_" + mode + "_" + cleanEndState;
-                    }
+                if (endState == null || endState.isBlank()
+                        || smv.getModes() == null || smv.getModes().isEmpty()) {
+                    return null;
                 }
-                String cleanEndState = DeviceSmvDataFactory.cleanStateName(endState);
-                return varName + ".trust_" + cleanEndState;
+                Map<String, String> tuple = resolveStateConditionTuple(smv, endState, cond.getDeviceId());
+                return buildUntrustedStateTuple(varName, smv, tuple);
             }
         }
         return null;
     }
 
-    /**
-     * Resolve the trust/privacy key into a full SMV variable suffix.
-     * key can be:
-     * 1) Full mode_state name (for example, "LockState_unlocked") -> use directly.
-     * 2) Variable name (for example, "temperature") -> use directly.
-     * 3) Bare state value (for example, "unlocked") -> resolve to "Mode_value".
-     */
-    private String resolvePropertyKey(DeviceSmvData smv, String key, String prefix, String deviceId) {
-        if (smv == null) {
-            throw new InvalidConditionException("device '" + deviceId + "' not found when resolving property key");
-        }
-        if (key == null || key.isBlank()) {
-            throw new InvalidConditionException("property key is null/blank for device " + deviceId);
-        }
-
-        String normalizedKey = key.trim();
-        if (normalizedKey.startsWith(prefix)) {
-            normalizedKey = normalizedKey.substring(prefix.length());
-        }
-        String cleanKey = DeviceSmvDataFactory.cleanStateName(normalizedKey);
-
-        // 1) 完整 mode_state
-        if (smv.getModes() != null && smv.getModeStates() != null) {
-            for (String mode : smv.getModes()) {
-                String modePrefix = mode + "_";
-                if (cleanKey.startsWith(modePrefix)) {
-                    String stateName = cleanKey.substring(modePrefix.length());
-                    List<String> states = smv.getModeStates().get(mode);
-                    if (states != null && states.contains(stateName)) {
-                        return prefix + mode + "_" + stateName;
-                    }
-                    throw new InvalidConditionException("property key '" + key + "' references unknown state '" + stateName
-                            + "' in mode '" + mode + "' for device " + deviceId);
-                }
+    private String buildUntrustedStateTuple(String varName,
+                                            DeviceSmvData smv,
+                                            Map<String, String> tuple) {
+        List<String> labels = new ArrayList<>();
+        for (String mode : smv.getModes()) {
+            String state = tuple.get(mode);
+            if (state != null && !state.isBlank()) {
+                labels.add(varName + ".trust_" + mode + "_" + state + "=untrusted");
             }
         }
-
-        // 2) Variable name.
-        if (hasInternalVariable(smv, cleanKey)) {
-            return prefix + cleanKey;
+        if (labels.isEmpty()) {
+            return null;
         }
-
-        // 3) Bare state value -> resolve to mode_state.
-        if (smv.getModes() != null && smv.getModeStates() != null) {
-            List<String> matchedModes = new ArrayList<>();
-            for (String mode : smv.getModes()) {
-                List<String> states = smv.getModeStates().get(mode);
-                if (states != null && states.contains(cleanKey)) {
-                    matchedModes.add(mode);
-                }
-            }
-            if (matchedModes.size() == 1) {
-                return prefix + matchedModes.get(0) + "_" + cleanKey;
-            }
-            if (matchedModes.size() > 1) {
-                throw new InvalidConditionException("property key '" + key + "' is ambiguous across modes "
-                        + matchedModes + " on device " + deviceId);
-            }
-            if (smv.getModes().size() == 1) {
-                String onlyMode = smv.getModes().get(0);
-                List<String> states = smv.getModeStates().get(onlyMode);
-                if (states != null && states.contains(cleanKey)) {
-                    return prefix + onlyMode + "_" + cleanKey;
-                }
-            }
-        }
-
-        throw new InvalidConditionException("cannot resolve property key '" + key + "' for device " + deviceId);
+        // A composite state is tainted when any participating mode-state label is untrusted.
+        return labels.size() == 1 ? labels.get(0) : "(" + String.join(" | ", labels) + ")";
     }
 
-    private String buildAttackFalseForCondition(SpecConditionDto cond, Map<String, DeviceSmvData> deviceSmvMap) {
-        if (!hasDeviceRef(cond)) return null;
-        DeviceSmvData smv = findDeviceSmvDataForSpec(cond, deviceSmvMap);
-        String varName = smv != null ? smv.getVarName() : DeviceSmvDataFactory.toVarName(describeDeviceRef(cond));
-        return varName + ".is_attack=FALSE";
+    private String buildPropertyCondition(String varName,
+                                          DeviceSmvData smv,
+                                          SpecConditionDto cond,
+                                          String prefix) {
+        String scope = cond.getPropertyScope() == null
+                ? null
+                : cond.getPropertyScope().trim().toLowerCase(Locale.ROOT);
+        String key = cond.getKey() == null ? null : cond.getKey().trim();
+        if (scope == null || scope.isBlank()) {
+            throw new InvalidConditionException("propertyScope is required for " + cond.getTargetType()
+                    + " condition on device " + cond.getDeviceId());
+        }
+        if (key == null || key.isBlank()) {
+            throw new InvalidConditionException("property key is null/blank for device " + cond.getDeviceId());
+        }
+
+        String relation = normalizeRelation(cond.getRelation());
+        if (!API_ALLOWED_NORMALIZED_RELATIONS.contains(relation)) {
+            throw new InvalidConditionException(cond.getTargetType()
+                    + " condition only supports =, !=, IN, NOT_IN relations, got '"
+                    + cond.getRelation() + "' for device " + cond.getDeviceId());
+        }
+        String normalizedValue = cleanPropertyValue(relation, cond.getValue());
+        if (normalizedValue == null || normalizedValue.isBlank()) {
+            throw new InvalidConditionException("property value is null/blank for device " + cond.getDeviceId());
+        }
+
+        if ("variable".equals(scope)) {
+            DeviceManifest.InternalVariable variable = internalVariable(smv, key);
+            if (variable == null) {
+                throw new InvalidConditionException("property variable '" + key
+                        + "' not found on device " + cond.getDeviceId());
+            }
+            return buildSimpleCondition(varName + "." + prefix + variable.getName(), relation,
+                    normalizedValue, cond.getDeviceId(), cond.getRelation());
+        }
+        if (!"state".equals(scope)) {
+            throw new InvalidConditionException("unsupported propertyScope '" + cond.getPropertyScope()
+                    + "' for device " + cond.getDeviceId());
+        }
+
+        String mode = resolveModeName(smv, key, cond.getDeviceId());
+        List<String> values = ("in".equals(relation) || "not in".equals(relation))
+                ? splitValues(normalizedValue)
+                : List.of(normalizedValue);
+        if (values.isEmpty()) {
+            throw new InvalidConditionException("empty property value list for device " + cond.getDeviceId());
+        }
+        List<String> predicates = values.stream()
+                .map(value -> currentModePropertyPredicate(varName, smv, mode, prefix, value))
+                .toList();
+        String matched = predicates.size() == 1
+                ? predicates.get(0)
+                : "(" + String.join(" | ", predicates) + ")";
+        return ("!=".equals(relation) || "not in".equals(relation))
+                ? "!(" + matched + ")"
+                : matched;
+    }
+
+    private String currentModePropertyPredicate(String varName,
+                                                DeviceSmvData smv,
+                                                String mode,
+                                                String prefix,
+                                                String value) {
+        List<String> states = smv.getModeStates().get(mode);
+        if (states == null || states.isEmpty()) {
+            throw new InvalidConditionException("mode '" + mode + "' has no states on device " + varName);
+        }
+        List<String> activeStateLabels = states.stream()
+                .map(state -> "(" + varName + "." + mode + "=" + state
+                        + " & " + varName + "." + prefix + mode + "_" + state + "=" + value + ")")
+                .toList();
+        return activeStateLabels.size() == 1
+                ? activeStateLabels.get(0)
+                : "(" + String.join(" | ", activeStateLabels) + ")";
+    }
+
+    private String cleanPropertyValue(String relation, String value) {
+        if (value == null) {
+            return null;
+        }
+        if ("in".equals(relation) || "not in".equals(relation)) {
+            return splitValues(value).stream()
+                    .map(item -> item.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.joining(","));
+        }
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     private void validateApiSignalExists(DeviceSmvData smv, String apiKey, String deviceId) {
@@ -832,6 +1060,20 @@ public class SmvSpecificationBuilder {
                 .map(String::trim)
                 .filter(v -> !v.isEmpty())
                 .collect(Collectors.toList());
+    }
+
+    private String cleanEnumValueByRelation(String normalizedRelation, String value) {
+        if (value == null) return null;
+        if ("in".equals(normalizedRelation) || "not in".equals(normalizedRelation)) {
+            return splitValues(value).stream()
+                    .map(this::cleanEnumLiteral)
+                    .collect(Collectors.joining(","));
+        }
+        return cleanEnumLiteral(value);
+    }
+
+    private String cleanEnumLiteral(String value) {
+        return value == null ? "" : value.trim().replace(" ", "");
     }
 
 

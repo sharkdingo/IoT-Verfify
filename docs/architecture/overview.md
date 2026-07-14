@@ -3,8 +3,17 @@
 System topology, the front/back boundary, and the backend package layout. Deep dives
 link out to the focused architecture documents.
 
-Verified against code on 2026-07-05. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
+Verified against code on 2026-07-09. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
 `frontend/src/`.
+
+---
+
+## Focused Contracts
+
+- [Device identity authority](device-identity.md): canonical device ids, display labels,
+  rule/spec/AI references, NuSMV varName normalization, and the no-fallback policy.
+- [Data authority model](data-authority-model.md): field-level ownership and downstream
+  consumption for devices, rules, specs, edges, model requests, traces, tasks, and fix.
 
 ---
 
@@ -46,8 +55,8 @@ component/
     generator/       SMV model generation (device modules + main + specs)
     executor/        NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/          SmvTraceParser — counterexample parsing
-    fixer/           FaultLocalizer + parameter/condition/disable fix strategies
-  aitool/            the 30 AI tools (board/node/rule/spec/template/simulation/verification)
+    fixer/           FaultLocalizer + parameter/condition/permanent-removal fix strategies
+  aitool/            the 33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/                LLM abstraction: domain model + LlmProvider (OpenAiLlmProvider adapter)
                      + LlmChatService / PromptCompletionService / LlmMessageCodec facades
 dto/                 request/response DTOs
@@ -78,12 +87,17 @@ frontend/src/
   types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, …)
   stores/    reactive state (auth, chat)
   router/    routes + auth guard
-  views/     Landing / Login / Register / Board / TemplateCreate / NotFound
+  views/     Landing / Board / NotFound
   components/ CanvasBoard, ChatView, ControlCenter, SystemInspector,
-              TraceVisualization, SimulationTimeline, FixResultDialog,
+              TraceHistoryPanel, SimulationTimeline, FixResultDialog,
               RuleBuilderDialog, DeviceDialog, …
   assets/    static assets + i18n (zh-CN / en)
 ```
+
+The public landing page owns the integrated login/register panel via query modes such
+as `/?mode=login` and `/?mode=register`. Standalone `Login`, `Register`, and
+`TemplateCreate` routes/views are intentionally absent in the current development
+surface.
 
 ---
 

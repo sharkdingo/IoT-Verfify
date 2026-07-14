@@ -6,7 +6,7 @@
 			"Name": "washerJobState",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": false,
+			"FalsifiableWhenCompromised": false,
 			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["airWash", "cooling", "delayWash", "drying", "finish", "none", "preWash", "rinse", "spin", "wash", "weightSensing", "wrinklePrevent"]
@@ -18,7 +18,6 @@
 		{
 			"Name": "regular;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -26,7 +25,6 @@
 		{
 			"Name": "regular;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -34,7 +32,6 @@
 		{
 			"Name": "regular;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -42,7 +39,6 @@
 		{
 			"Name": "heavy;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -50,7 +46,6 @@
 		{
 			"Name": "heavy;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -58,7 +53,6 @@
 		{
 			"Name": "heavy;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -66,7 +60,6 @@
 		{
 			"Name": "rinse;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -74,7 +67,6 @@
 		{
 			"Name": "rinse;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -82,7 +74,6 @@
 		{
 			"Name": "rinse;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -90,7 +81,6 @@
 		{
 			"Name": "spinDry;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -98,7 +88,6 @@
 		{
 			"Name": "spinDry;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -106,7 +95,6 @@
 		{
 			"Name": "spinDry;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

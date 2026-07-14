@@ -3,12 +3,14 @@ package cn.edu.nju.Iot_Verify.util.mapper;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.po.SpecificationPo;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class SpecificationMapperTest {
 
@@ -45,6 +47,39 @@ class SpecificationMapperTest {
         assertEquals("a", dto.getAConditions().get(0).getSide());
         assertEquals("if", dto.getIfConditions().get(0).getSide());
         assertEquals("then", dto.getThenConditions().get(0).getSide());
+    }
+
+    @Test
+    void statePropertyScope_roundTripsWithoutGeneratedStateKey() {
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setTargetType("privacy");
+        condition.setPropertyScope("state");
+        condition.setKey("SwitchState");
+        condition.setValue("private");
+        spec.setAConditions(List.of(condition));
+
+        SpecificationPo po = mapper.toEntity(spec, 1L);
+        SpecificationDto restored = mapper.toDto(po);
+
+        SpecConditionDto restoredCondition = restored.getAConditions().get(0);
+        assertEquals("state", restoredCondition.getPropertyScope());
+        assertEquals("SwitchState", restoredCondition.getKey());
+    }
+
+    @Test
+    void blankPersistedConditionColumnFailsClosedInsteadOfBecomingEmpty() {
+        SpecificationPo po = new SpecificationPo();
+        po.setId("spec_bad");
+        po.setAConditionsJson(" ");
+        po.setIfConditionsJson("[]");
+        po.setThenConditionsJson("[]");
+        po.setDevicesJson("[]");
+
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class, () -> mapper.toDto(po));
+
+        assertEquals("aConditionsJson", error.getField());
     }
 
     private SpecificationDto validSpec() {

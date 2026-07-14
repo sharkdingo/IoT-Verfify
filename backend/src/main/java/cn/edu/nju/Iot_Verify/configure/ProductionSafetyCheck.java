@@ -58,7 +58,7 @@ public class ProductionSafetyCheck {
         }
 
         if (llmApiKey == null || llmApiKey.isBlank() || PLACEHOLDER_LLM_API_KEY.equals(llmApiKey)) {
-            violations.add("llm.api-key (OPENAI_API_KEY) is still the placeholder default or empty");
+            violations.add("llm.api-key (IOT_VERIFY_OPENAI_API_KEY) is still the placeholder default or empty");
         }
 
         if (!violations.isEmpty()) {

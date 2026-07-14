@@ -20,10 +20,9 @@ import java.util.*;
  * along a counterexample trace.
  *
  * Mirrors the NuSMV transition semantics from SmvMainModuleBuilder:
- * - Cross-device conditions (condition.deviceName != command.deviceName) are evaluated on Si+1 (next-state)
- * - Same-device conditions are evaluated on Si (current-state)
+ * - User-authored IF conditions are evaluated on Si (current-state)
  * - startState constraints from the API definition are checked on Si
- * - API signal conditions (relation=null) are inferred from state transitions
+ * - API signal conditions (relation=null) are event pulses inferred from Si-1 -> Si
  */
 @Slf4j
 @Component
@@ -50,6 +49,7 @@ public class FaultLocalizer {
         Set<String> seenRuleSteps = new HashSet<>(); // avoid duplicates: "ruleIdx:step"
 
         for (int step = 0; step < states.size() - 1; step++) {
+            TraceStateDto previousState = step > 0 ? states.get(step - 1) : null;
             TraceStateDto currentState = states.get(step);
             TraceStateDto nextState = states.get(step + 1);
 
@@ -70,19 +70,18 @@ public class FaultLocalizer {
                 DeviceManifest.API matchedApi = DeviceSmvDataFactory.findApi(targetSmv.getManifest(), action);
                 if (matchedApi == null) continue;
 
-                // Check startState constraint
-                if (!checkStartState(matchedApi, targetSmv, currentState)) {
-                    continue;
-                }
-
-                // Check command effect: the target device must transition to the API's endState
-                if (!checkCommandEffect(matchedApi, targetSmv, currentState, nextState)) {
-                    continue;
-                }
-
-                // Evaluate rule conditions using NuSMV semantics
-                if (!evaluateConditions(rule, targetSmv, currentState, nextState, deviceSmvMap)) {
-                    continue;
+                boolean hasExecutionEvidence = nextState.getTriggeredRules() != null;
+                if (hasExecutionEvidence) {
+                    if (!isRecordedAsTriggered(nextState, rule)) {
+                        continue;
+                    }
+                } else {
+                    // Legacy/manual traces lack rule probes. Reconstruct conservatively.
+                    if (!checkStartState(matchedApi, targetSmv, currentState)
+                            || !checkCommandEffect(matchedApi, targetSmv, currentState, nextState)
+                            || !evaluateConditions(rule, previousState, currentState, deviceSmvMap)) {
+                        continue;
+                    }
                 }
 
                 String dedupKey = ruleIdx + ":" + step;
@@ -92,9 +91,13 @@ public class FaultLocalizer {
                         .ruleIndex(ruleIdx)
                         .ruleId(rule.getId())
                         .ruleString(rule.getRuleString())
-                        .triggerStep(step)
-                        .targetDevice(targetDeviceName)
-                        .targetAction(action)
+                        .transitionNumber(step + 1)
+                        .targetDeviceId(targetDeviceName)
+                        .targetDeviceLabel(displayDeviceLabel(targetSmv, targetDeviceName))
+                        .targetActionId(action)
+                        .targetActionLabel(displayActionLabel(matchedApi, action))
+                        .targetEndState(matchedApi.getEndState())
+                        .reasonCode("TRIGGERED")
                         .build();
                 stepTriggered.add(fault);
             }
@@ -107,10 +110,31 @@ public class FaultLocalizer {
         return faultRules;
     }
 
+    private boolean isRecordedAsTriggered(TraceStateDto state, RuleDto rule) {
+        if (state.getTriggeredRules() == null) {
+            return false;
+        }
+        String ruleId = rule.getId() != null ? String.valueOf(rule.getId()) : null;
+        String ruleLabel = rule.getRuleString() != null && !rule.getRuleString().isBlank()
+                ? rule.getRuleString().trim()
+                : null;
+        return state.getTriggeredRules().stream().anyMatch(triggered -> {
+            if (triggered == null) {
+                return false;
+            }
+            if (ruleId != null && triggered.getRuleId() != null) {
+                return ruleId.equals(triggered.getRuleId());
+            }
+            return ruleLabel != null && triggered.getRuleLabel() != null
+                    && ruleLabel.equals(triggered.getRuleLabel().trim());
+        });
+    }
+
     // ===== Condition evaluation =====
 
-    private boolean evaluateConditions(RuleDto rule, DeviceSmvData targetSmv,
-                                       TraceStateDto currentState, TraceStateDto nextState,
+    private boolean evaluateConditions(RuleDto rule,
+                                       TraceStateDto previousState,
+                                       TraceStateDto currentState,
                                        Map<String, DeviceSmvData> deviceSmvMap) {
         if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
             // Fail-closed, matching SMV generation: SmvMainModuleBuilder emits FALSE for a rule with no
@@ -125,17 +149,10 @@ public class FaultLocalizer {
             if (cond == null) return false;
 
             String condDeviceName = cond.getDeviceName();
-            String targetVarName = targetSmv.getVarName();
             DeviceSmvData condSmv = findDevice(condDeviceName, deviceSmvMap);
             if (condSmv == null) return false;
 
-            // Mirror SmvMainModuleBuilder semantics:
-            // Cross-device conditions → evaluate on next state (Si+1)
-            // Same-device conditions → evaluate on current state (Si)
-            boolean isSameDevice = targetVarName != null && targetVarName.equals(condSmv.getVarName());
-            TraceStateDto evalState = isSameDevice ? currentState : nextState;
-
-            if (!evaluateSingleCondition(cond, condSmv, evalState)) {
+            if (!evaluateSingleCondition(cond, condSmv, previousState, currentState)) {
                 return false;
             }
         }
@@ -143,6 +160,7 @@ public class FaultLocalizer {
     }
 
     private boolean evaluateSingleCondition(RuleDto.Condition cond, DeviceSmvData condSmv,
+                                            TraceStateDto previousState,
                                             TraceStateDto evalState) {
         String attr = cond.getAttribute();
         if (attr == null || attr.isBlank()) return false;
@@ -150,9 +168,12 @@ public class FaultLocalizer {
         TraceDeviceDto devTrace = findDeviceInState(evalState, condSmv);
         if (devTrace == null) return false;
 
-        // API signal condition (relation=null, value=null): check if the API's end state is reached
+        // API signal condition (relation=null, value=null): require the event into this state.
         if (cond.getRelation() == null && cond.getValue() == null) {
-            return evaluateApiSignalCondition(cond, condSmv, devTrace);
+            TraceDeviceDto previousDevice = previousState != null
+                    ? findDeviceInState(previousState, condSmv)
+                    : null;
+            return evaluateApiSignalCondition(cond, condSmv, previousDevice, devTrace);
         }
 
         String relation = SmvRelationUtils.normalizeRelation(cond.getRelation());
@@ -180,50 +201,47 @@ public class FaultLocalizer {
         return false;
     }
 
-    private boolean evaluateApiSignalCondition(RuleDto.Condition cond, DeviceSmvData condSmv,
-                                               TraceDeviceDto devTrace) {
-        // Find the API by name; it must be a signal API (matching SmvMainModuleBuilder:536)
+    private boolean evaluateApiSignalCondition(RuleDto.Condition cond,
+                                               DeviceSmvData condSmv,
+                                               TraceDeviceDto previousTrace,
+                                               TraceDeviceDto currentTrace) {
         DeviceManifest.API api = findSignalApi(condSmv.getManifest(), cond.getAttribute());
-        if (api == null) return false;
-
-        String endState = api.getEndState();
-
-        if (endState == null) {
-            // NuSMV guard is just api_signal=TRUE (no state fallback).
-            // api_signal variables are filtered from traces (_a suffix → isInternalControlVariable),
-            // so we cannot check directly. Be permissive to avoid false negatives in fault localization.
-            return devTrace != null;
-        }
-
-        if (devTrace == null) return false;
-        String deviceState = devTrace.getState();
-        if (deviceState == null) return false;
-
-        // Multi-mode: resolve endState to specific mode and compare per-mode
-        // (mirrors SmvMainModuleBuilder:551-567)
-        if (condSmv.getModes() != null && !condSmv.getModes().isEmpty()) {
-            int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(condSmv, endState);
-            if (modeIdx >= 0 && modeIdx < condSmv.getModes().size()) {
-                String mode = condSmv.getModes().get(modeIdx);
-                String modeState = getDeviceModeState(devTrace, condSmv, mode);
-                if (modeState == null) return false;
-                String perModeEnd = extractModeState(endState, modeIdx);
-                if (perModeEnd == null) return false;
-                String cleanEnd = DeviceSmvDataFactory.cleanStateName(perModeEnd);
-                String cleanModeState = DeviceSmvDataFactory.cleanStateName(modeState);
-                return Objects.equals(cleanEnd, cleanModeState);
-            }
-            // endState exists but cannot be mapped to any mode.
-            // Generator would emit api_signal=TRUE as the guard, but the ASSIGN section
-            // cannot produce a valid transition for this signal → api_signal is always FALSE
-            // (SmvMainModuleBuilder:960,998). Fail-closed: condition never satisfied.
+        if (api == null || previousTrace == null || currentTrace == null
+                || condSmv.getModes() == null || condSmv.getModes().isEmpty()) {
             return false;
         }
 
-        // No modes: direct comparison (single-state device)
-        String cleanEnd = DeviceSmvDataFactory.cleanStateName(endState);
-        String cleanDeviceState = DeviceSmvDataFactory.cleanStateName(deviceState);
-        return cleanEnd.equals(cleanDeviceState) || endState.equals(deviceState);
+        boolean hasEffect = false;
+        boolean changed = false;
+        for (int modeIndex = 0; modeIndex < condSmv.getModes().size(); modeIndex++) {
+            String mode = condSmv.getModes().get(modeIndex);
+            String previousValue = getDeviceModeState(previousTrace, condSmv, mode);
+            String currentValue = getDeviceModeState(currentTrace, condSmv, mode);
+
+            String startPart = extractModeState(api.getStartState(), modeIndex);
+            if (startPart != null && !startPart.isBlank() && !"_".equals(startPart.trim())) {
+                if (!Objects.equals(DeviceSmvDataFactory.cleanStateName(startPart),
+                        DeviceSmvDataFactory.cleanStateName(previousValue))) {
+                    return false;
+                }
+            }
+
+            String endPart = extractModeState(api.getEndState(), modeIndex);
+            if (endPart == null || endPart.isBlank()) {
+                continue;
+            }
+            hasEffect = true;
+            String cleanEnd = DeviceSmvDataFactory.cleanStateName(endPart);
+            String cleanCurrent = DeviceSmvDataFactory.cleanStateName(currentValue);
+            String cleanPrevious = DeviceSmvDataFactory.cleanStateName(previousValue);
+            if (!Objects.equals(cleanEnd, cleanCurrent)) {
+                return false;
+            }
+            if (!Objects.equals(cleanPrevious, cleanCurrent)) {
+                changed = true;
+            }
+        }
+        return hasEffect && changed;
     }
 
     /**
@@ -542,35 +560,21 @@ public class FaultLocalizer {
 
         TraceDeviceDto devTrace = findDeviceInState(currentState, targetSmv);
         if (devTrace == null) return false;
-
-        String deviceState = devTrace.getState();
-        if (deviceState == null) return true; // can't determine, be permissive
-
-        String cleanStart = DeviceSmvDataFactory.cleanStateName(startState);
-        String cleanDevice = DeviceSmvDataFactory.cleanStateName(deviceState);
-
-        // Direct match
-        if (cleanStart.equals(cleanDevice) || startState.equals(deviceState)) {
-            return true;
+        if (targetSmv.getModes() == null || targetSmv.getModes().isEmpty()) {
+            return false;
         }
-
-        // Multi-mode: startState may be for a specific mode (e.g. "HvacMode_cool")
-        if (targetSmv.getModes() != null) {
-            int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(targetSmv, startState);
-            if (modeIdx >= 0 && modeIdx < targetSmv.getModes().size()) {
-                String mode = targetSmv.getModes().get(modeIdx);
-                String currentModeState = getDeviceModeState(devTrace, targetSmv, mode);
-                if (currentModeState != null) {
-                    String perModeStart = extractModeState(startState, modeIdx);
-                    if (perModeStart != null) {
-                        String cleanPerMode = DeviceSmvDataFactory.cleanStateName(perModeStart);
-                        String cleanCurrentMode = DeviceSmvDataFactory.cleanStateName(currentModeState);
-                        return cleanPerMode.equals(cleanCurrentMode);
-                    }
-                }
+        for (int modeIndex = 0; modeIndex < targetSmv.getModes().size(); modeIndex++) {
+            String expected = extractModeState(startState, modeIndex);
+            if (expected == null || expected.isBlank() || "_".equals(expected.trim())) {
+                continue;
+            }
+            String actual = getDeviceModeState(devTrace, targetSmv, targetSmv.getModes().get(modeIndex));
+            if (!Objects.equals(DeviceSmvDataFactory.cleanStateName(expected),
+                    DeviceSmvDataFactory.cleanStateName(actual))) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
 
     private boolean checkCommandEffect(DeviceManifest.API api, DeviceSmvData targetSmv,
@@ -581,36 +585,23 @@ public class FaultLocalizer {
         TraceDeviceDto nextDevTrace = findDeviceInState(nextState, targetSmv);
         if (nextDevTrace == null) return false;
 
-        String nextDeviceState = nextDevTrace.getState();
-        if (nextDeviceState == null) return false;
-
-        String cleanEnd = DeviceSmvDataFactory.cleanStateName(endState);
-        String cleanNext = DeviceSmvDataFactory.cleanStateName(nextDeviceState);
-
-        // Direct match
-        if (cleanEnd.equals(cleanNext) || endState.equals(nextDeviceState)) {
-            return true;
+        if (targetSmv.getModes() == null || targetSmv.getModes().isEmpty()) {
+            return false;
         }
-
-        // For multi-mode: endState may be for a specific mode; check if that mode changed
-        if (targetSmv.getModes() != null) {
-            int modeIdx = DeviceSmvDataFactory.getModeIndexOfState(targetSmv, endState);
-            if (modeIdx >= 0 && modeIdx < targetSmv.getModes().size()) {
-                String mode = targetSmv.getModes().get(modeIdx);
-                String nextModeState = getDeviceModeState(nextDevTrace, targetSmv, mode);
-                if (nextModeState != null) {
-                    String perModeEnd = extractModeState(endState, modeIdx);
-                    if (perModeEnd != null) {
-                        String cleanPerMode = DeviceSmvDataFactory.cleanStateName(perModeEnd);
-                        String cleanNextMode = DeviceSmvDataFactory.cleanStateName(nextModeState);
-                        if (cleanPerMode.equals(cleanNextMode)) {
-                            return true;
-                        }
-                    }
-                }
+        boolean hasEffect = false;
+        for (int modeIndex = 0; modeIndex < targetSmv.getModes().size(); modeIndex++) {
+            String expected = extractModeState(endState, modeIndex);
+            if (expected == null || expected.isBlank()) {
+                continue;
+            }
+            hasEffect = true;
+            String actual = getDeviceModeState(nextDevTrace, targetSmv, targetSmv.getModes().get(modeIndex));
+            if (!Objects.equals(DeviceSmvDataFactory.cleanStateName(expected),
+                    DeviceSmvDataFactory.cleanStateName(actual))) {
+                return false;
             }
         }
-        return false;
+        return hasEffect;
     }
 
     // ===== Conflict detection =====
@@ -621,12 +612,12 @@ public class FaultLocalizer {
             FaultRuleDto a = stepTriggered.get(i);
             for (int j = i + 1; j < stepTriggered.size(); j++) {
                 FaultRuleDto b = stepTriggered.get(j);
-                if (!a.getTargetDevice().equals(b.getTargetDevice())) continue;
+                if (!a.getTargetDeviceId().equals(b.getTargetDeviceId())) continue;
 
                 // Same device, check if actions lead to different end states
                 RuleDto ruleA = rules.get(a.getRuleIndex());
                 RuleDto ruleB = rules.get(b.getRuleIndex());
-                DeviceSmvData smv = findDevice(a.getTargetDevice(), deviceSmvMap);
+                DeviceSmvData smv = findDevice(a.getTargetDeviceId(), deviceSmvMap);
                 if (smv == null) continue;
 
                 DeviceManifest.API apiA = DeviceSmvDataFactory.findApi(smv.getManifest(), ruleA.getCommand().getAction());
@@ -636,17 +627,25 @@ public class FaultLocalizer {
                 String endA = apiA.getEndState();
                 String endB = apiB.getEndState();
                 if (endA != null && endB != null && !endA.equals(endB)) {
+                    String ruleBDescription = describeRule(rules, b.getRuleIndex());
+                    String ruleADescription = describeRule(rules, a.getRuleIndex());
                     a.setConflicting(true);
                     a.setConflictWithRuleIndex(b.getRuleIndex());
-                    a.setReason("Conflicts with rule " + b.getRuleIndex()
-                            + ": both target " + a.getTargetDevice()
-                            + " but with different end states (" + endA + " vs " + endB + ")");
+                    a.setConflictingRuleString(ruleBDescription);
+                    a.setConflictingEndState(endB);
+                    a.setReasonCode("CONFLICTING_END_STATES");
+                    a.setReason("Conflicts with " + ruleBDescription
+                            + ": both change " + a.getTargetDeviceLabel()
+                            + " to different states (" + endA + " and " + endB + ").");
 
                     b.setConflicting(true);
                     b.setConflictWithRuleIndex(a.getRuleIndex());
-                    b.setReason("Conflicts with rule " + a.getRuleIndex()
-                            + ": both target " + b.getTargetDevice()
-                            + " but with different end states (" + endB + " vs " + endA + ")");
+                    b.setConflictingRuleString(ruleADescription);
+                    b.setConflictingEndState(endA);
+                    b.setReasonCode("CONFLICTING_END_STATES");
+                    b.setReason("Conflicts with " + ruleADescription
+                            + ": both change " + b.getTargetDeviceLabel()
+                            + " to different states (" + endB + " and " + endA + ").");
                 }
             }
         }
@@ -654,18 +653,43 @@ public class FaultLocalizer {
         // Set default reason for non-conflicting triggered rules
         for (FaultRuleDto fault : stepTriggered) {
             if (fault.getReason() == null) {
-                fault.setReason("Triggered at step " + fault.getTriggerStep()
-                        + ": action " + fault.getTargetAction() + " on " + fault.getTargetDevice());
+                fault.setReason("Rule fired during transition " + fault.getTransitionNumber()
+                        + ": " + fault.getTargetActionLabel() + " on "
+                        + fault.getTargetDeviceLabel() + ".");
             }
         }
     }
 
     // ===== Helpers =====
 
+    private String describeRule(List<RuleDto> rules, int ruleIndex) {
+        if (rules != null && ruleIndex >= 0 && ruleIndex < rules.size()) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+                return "'" + rule.getRuleString() + "'";
+            }
+        }
+        return "another localized rule";
+    }
+
+    private String displayDeviceLabel(DeviceSmvData smv, String fallback) {
+        if (smv != null && smv.getDeviceLabel() != null && !smv.getDeviceLabel().isBlank()) {
+            return smv.getDeviceLabel();
+        }
+        return fallback;
+    }
+
+    private String displayActionLabel(DeviceManifest.API api, String fallback) {
+        if (api != null && api.getDescription() != null && !api.getDescription().isBlank()) {
+            return api.getDescription().trim();
+        }
+        return fallback;
+    }
+
     private DeviceSmvData findDevice(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
         if (deviceName == null || deviceSmvMap == null) return null;
         try {
-            return DeviceReferenceResolver.resolve(deviceName, null, deviceSmvMap);
+            return DeviceReferenceResolver.resolve(deviceName, deviceSmvMap);
         } catch (Exception e) {
             log.debug("Device lookup failed for '{}': {}", deviceName, e.getMessage());
             return null;
@@ -675,11 +699,9 @@ public class FaultLocalizer {
     private TraceDeviceDto findDeviceInState(TraceStateDto state, DeviceSmvData smv) {
         if (state == null || state.getDevices() == null || smv == null) return null;
         String varName = smv.getVarName();
-        String templateName = smv.getTemplateName();
         for (TraceDeviceDto dev : state.getDevices()) {
             if (dev.getDeviceId() == null) continue;
-            if ((varName != null && dev.getDeviceId().equals(varName))
-                    || (templateName != null && dev.getDeviceId().equals(templateName))) {
+            if (varName != null && dev.getDeviceId().equals(varName)) {
                 return dev;
             }
         }
@@ -712,9 +734,9 @@ public class FaultLocalizer {
 
     private String extractModeState(String multiModeState, int modeIdx) {
         if (multiModeState == null) return null;
-        String[] parts = multiModeState.split(";");
+        String[] parts = multiModeState.split(";", -1);
         if (parts.length == 1) {
-            return multiModeState.trim(); // single-mode: return as-is
+            return modeIdx == 0 ? multiModeState.trim() : null;
         }
         if (modeIdx >= 0 && modeIdx < parts.length) {
             return parts[modeIdx].trim();

@@ -28,10 +28,10 @@ src/
   types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, fix, …)
   stores/    reactive state (auth, chat)
   router/    routes + auth guard
-  views/     Landing / Login / Register / Board / TemplateCreate / NotFound
+  views/     Landing / Board / NotFound
   components/ CanvasBoard, ChatView, ControlCenter, SystemInspector,
-              TraceVisualization, SimulationTimeline, FixResultDialog,
-              RuleBuilderDialog, DeviceDialog, …
+              TraceHistoryPanel, SimulationTimeline, FixResultDialog,
+              RuleBuilderDialog, DeviceDialog, AccountDeleteDialog, …
   assets/    static assets + i18n (zh-CN / en)
 ```
 

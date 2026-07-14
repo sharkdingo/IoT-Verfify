@@ -18,10 +18,20 @@ public class SpecResultDto {
      */
     private String specId;
 
-    /**
-     * Whether NuSMV reported the emitted specification as satisfied.
-     */
-    private boolean passed;
+    /** Template semantics captured from the submitted specification. */
+    private String templateId;
+
+    /** User-facing template label captured for result interpretation. */
+    private String specificationLabel;
+
+    /** Descriptive formula rebuilt from submitted structured conditions and device labels. */
+    private String formulaPreview;
+
+    /** Actual emitted property language: CTL or LTL. */
+    private String formulaKind;
+
+    /** Explicit per-spec conclusion; missing or unreliable parser output is INCONCLUSIVE. */
+    private VerificationOutcome outcome;
 
     /**
      * NuSMV expression that was checked for this specification.

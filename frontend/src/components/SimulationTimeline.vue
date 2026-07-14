@@ -2,18 +2,48 @@
 import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SimulationState } from '../types/simulation'
+import type { ModelRunSnapshot, ModelSemantics, RunBoardComparison } from '../types/modelSemantics'
+import type { TraceTriggeredRule } from '../types/verify'
+import { isModelSemanticsConsistent } from '../utils/modelSemantics'
+import {
+  isPlaybackDeviceAttacked,
+  normalizePlaybackDeviceId,
+  playbackDeviceChanged,
+  playbackDeviceSecurityFacts,
+  playbackDeviceSummaryParts
+} from '../utils/traceView'
 
 const props = defineProps<{
   states: SimulationState[]
   visible: boolean
+  actualSteps?: number
+  requestedSteps?: number
+  modelComplete?: boolean
+  disabledRuleCount?: number
+  isAttack?: boolean
+  attackBudget?: number
+  enablePrivacy?: boolean
+  modelSemantics?: ModelSemantics
+  modelSnapshot?: ModelRunSnapshot
+  boardComparison?: RunBoardComparison
+  currentRuleIds?: string[]
+  currentDeviceIds?: string[]
 }>()
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   'highlight-state': [data: { states: SimulationState[]; selectedStateIndex: number } | null]
+  'open-run-details': []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+
+const formatRunTimestamp = (value?: string): string => {
+  if (!value) return t('app.unknown')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
+}
 
 // 当前选中的状态索引
 const selectedStateIndex = ref(0)
@@ -23,17 +53,116 @@ const currentState = computed(() => {
   return props.states[selectedStateIndex.value] || null
 })
 
+const previousState = computed(() => {
+  if (selectedStateIndex.value <= 0) return null
+  return props.states[selectedStateIndex.value - 1] || null
+})
+
 // 所有状态数量
 const totalStates = computed(() => {
   return props.states?.length || 0
 })
 
-// 获取攻击强度
-const intensity = computed(() => {
-  if (!currentState.value?.envVariables) return null
-  const intensityVar = currentState.value.envVariables.find(v => v.name === 'intensity')
-  if (intensityVar) {
-    return parseInt(intensityVar.value, 10)
+const selectedStateNumber = computed({
+  get: () => selectedStateIndex.value + 1,
+  set: (value: number) => {
+    if (!Number.isFinite(value)) return
+    selectState(Math.trunc(value) - 1)
+  }
+})
+
+const selectedStateRangeIndex = computed({
+  get: () => selectedStateIndex.value,
+  set: (value: number) => {
+    if (!Number.isFinite(value)) return
+    selectState(Math.trunc(value))
+  }
+})
+
+const currentEnvironmentVariables = computed(() => currentState.value?.envVariables || [])
+const currentTriggeredRules = computed(() => currentState.value?.triggeredRules || [])
+const currentCompromisedAutomationLinks = computed(() => currentState.value?.compromisedAutomationLinks || [])
+const currentDevices = computed(() => currentState.value?.devices || [])
+const currentRuleIdSet = computed(() => new Set((props.currentRuleIds || []).map(String)))
+const currentDeviceIdSet = computed(() => new Set(
+  (props.currentDeviceIds || []).map(normalizePlaybackDeviceId)
+))
+
+const triggeredRuleLabel = (rule: TraceTriggeredRule, index: number) =>
+  rule.ruleLabel?.trim() || t('app.ruleNumber', { number: index + 1 })
+
+const triggeredRuleExistsOnCurrentBoard = (rule: TraceTriggeredRule) =>
+  rule.ruleId != null && currentRuleIdSet.value.has(String(rule.ruleId))
+
+const previousDevice = (deviceId: string) => previousState.value?.devices?.find(device =>
+  normalizePlaybackDeviceId(device.deviceId) === normalizePlaybackDeviceId(deviceId)
+)
+
+const deviceChanged = (device: SimulationState['devices'][number]) =>
+  selectedStateIndex.value > 0 && playbackDeviceChanged(device, previousDevice(device.deviceId))
+
+const deviceExistsOnCurrentBoard = (deviceId: string) =>
+  currentDeviceIdSet.value.has(normalizePlaybackDeviceId(deviceId))
+
+const deviceSummary = (device: SimulationState['devices'][number]) => {
+  const parts = playbackDeviceSummaryParts(device)
+  return parts.length > 0 ? parts.join(' · ') : t('app.unknown')
+}
+
+const deviceChangeSummary = (device: SimulationState['devices'][number]) => {
+  const previous = previousDevice(device.deviceId)
+  if (!previous) return t('app.traceVisualization.changed')
+  const changes: string[] = []
+  if ((previous.state || '') !== (device.state || '')) {
+    changes.push(`${t('app.state')}: ${previous.state || t('app.unknown')} -> ${device.state || t('app.unknown')}`)
+  }
+  if ((previous.mode || '') !== (device.mode || '')) {
+    changes.push(`${t('app.mode')}: ${previous.mode || t('app.unknown')} -> ${device.mode || t('app.unknown')}`)
+  }
+  const previousVariables = new Map((previous.variables || []).map(variable => [variable.name, variable.value]))
+  ;(device.variables || []).forEach(variable => {
+    const previousValue = previousVariables.get(variable.name)
+    if (previousValue !== undefined && previousValue !== variable.value) {
+      changes.push(`${variable.name}: ${previousValue} -> ${variable.value}`)
+    }
+  })
+  if (previous.compromised !== device.compromised) {
+    changes.push(device.compromised
+      ? t('app.traceVisualization.deviceBecameCompromised')
+      : t('app.traceVisualization.deviceNoLongerCompromised'))
+  }
+  return changes.join(' · ') || t('app.traceVisualization.changed')
+}
+
+const modelSemanticsConsistent = computed(() => isModelSemanticsConsistent(
+  props.modelSemantics,
+  { isAttack: props.isAttack, attackBudget: props.attackBudget, enablePrivacy: props.enablePrivacy }
+))
+
+const deviceSecurityFacts = (device: SimulationState['devices'][number]) =>
+  playbackDeviceSecurityFacts(device)
+
+const getPreviousEnvValue = (name: string) =>
+  previousState.value?.envVariables?.find(variable => variable.name === name)?.value
+
+const environmentVariableChanged = (name: string, value: string) =>
+  selectedStateIndex.value > 0 && getPreviousEnvValue(name) !== value
+
+const environmentVariableTitle = (name: string, value: string) => {
+  const previous = getPreviousEnvValue(name)
+  if (previous === undefined || previous === value) {
+    return `${name}: ${value}`
+  }
+  return `${name}: ${previous} -> ${value}`
+}
+
+// Runtime compromised-point count from NuSMV globals, not the configured attack budget.
+const runtimeCompromisedPointCount = computed(() => {
+  if (!currentState.value?.globalVariables) return null
+  const pointCount = currentState.value.globalVariables.find(v => v.name === 'compromisedPointCount')
+  if (pointCount) {
+    const parsed = Number.parseInt(pointCount.value, 10)
+    return Number.isFinite(parsed) ? parsed : null
   }
   return null
 })
@@ -41,9 +170,7 @@ const intensity = computed(() => {
 // 检查当前状态是否有被攻击的设备
 const hasAttackedDevices = computed(() => {
   if (!currentState.value?.devices) return false
-  return currentState.value.devices.some(device =>
-    device.variables?.some(v => v.name === 'is_attack' && v.value.toUpperCase() === 'TRUE')
-  )
+  return currentState.value.devices.some(device => device.compromised === true)
 })
 
 // 关闭
@@ -63,11 +190,30 @@ const selectState = (index: number) => {
   highlightState()
 }
 
-const focusStateButton = (index: number) => {
+const selectPreviousState = () => selectState(selectedStateIndex.value - 1)
+const selectNextState = () => selectState(selectedStateIndex.value + 1)
+
+const revealStateButton = (index: number, focus = false) => {
   void nextTick(() => {
     const button = document.querySelector<HTMLButtonElement>(`[data-testid="simulation-timeline-state-${index}"]`)
-    button?.focus()
+    button?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+    if (focus) {
+      button?.focus()
+    }
   })
+}
+
+const selectStateFromTimelinePointer = (event: PointerEvent) => {
+  if (totalStates.value <= 1) return
+  if (event.target instanceof Element && event.target.closest('button')) return
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const trackLeft = rect.left + 8
+  const trackWidth = Math.max(1, rect.width - 16)
+  const ratio = Math.min(1, Math.max(0, (event.clientX - trackLeft) / trackWidth))
+  const nextIndex = Math.round(ratio * (totalStates.value - 1))
+  selectState(nextIndex)
+  revealStateButton(nextIndex, true)
 }
 
 const handleStateKeydown = (event: KeyboardEvent, index: number) => {
@@ -84,7 +230,7 @@ const handleStateKeydown = (event: KeyboardEvent, index: number) => {
   const lastIndex = Math.max(totalStates.value - 1, 0)
   const nextIndex = Math.min(Math.max(keyToIndex[event.key], 0), lastIndex)
   selectState(nextIndex)
-  focusStateButton(nextIndex)
+  revealStateButton(nextIndex, true)
 }
 
 const getStateAriaLabel = (index: number) => {
@@ -103,11 +249,19 @@ const play = () => {
   if (totalStates.value <= 1) {
     return
   }
+
+  if (selectedStateIndex.value >= totalStates.value - 1) {
+    goToState(0)
+    highlightState()
+  }
   
   isPlaying.value = true
   playInterval = setInterval(() => {
     if (selectedStateIndex.value < totalStates.value - 1) {
       selectedStateIndex.value++
+      if (selectedStateIndex.value >= totalStates.value - 1) {
+        stop()
+      }
     } else {
       // 到达最后一个状态，停止播放
       stop()
@@ -139,7 +293,7 @@ watch(() => props.visible, (newVal) => {
     stop()
     emit('highlight-state', null)
   } else if (props.states.length > 0) {
-    goToState(Math.min(selectedStateIndex.value, props.states.length - 1))
+    goToState(0)
     highlightState()
   }
 })
@@ -159,6 +313,15 @@ watch(() => props.states.length, (length) => {
   }
 })
 
+watch(() => props.states, (states, previousStates) => {
+  if (states === previousStates) return
+  stop()
+  selectedStateIndex.value = 0
+  if (props.visible && states.length > 0) {
+    highlightState()
+  }
+})
+
 onBeforeUnmount(() => {
   stop()
 })
@@ -167,13 +330,13 @@ onBeforeUnmount(() => {
 watch(selectedStateIndex, () => {
   if (props.visible) {
     highlightState()
+    revealStateButton(selectedStateIndex.value)
   }
 })
 </script>
 
 <template>
-  <!-- 底部时间轴控制栏 -->
-  <div 
+  <div
     v-if="visible"
     class="board-timeline-host board-timeline-host--simulation"
     data-testid="simulation-timeline-host"
@@ -185,103 +348,392 @@ watch(selectedStateIndex, () => {
       data-testid="simulation-timeline"
       :data-selected-state-index="selectedStateIndex"
     >
-      <!-- Timeline -->
-      <div>
-        <div class="flex items-center justify-between mb-3 flex-shrink-0">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.stateSequence') }}</span>
-            <span class="px-2 py-0.5 bg-indigo-100 text-indigo-600 text-xs rounded-full" aria-live="polite">
+      <header class="board-timeline__sticky-header mb-2 flex items-start justify-between gap-3 border-b border-slate-200 pb-2">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-sm font-bold text-slate-800">{{ t('app.traceVisualization.modelTracePlayback') }}</h2>
+            <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700" aria-live="polite">
               {{ totalStates > 0 ? selectedStateIndex + 1 : 0 }} / {{ totalStates }}
             </span>
-            <!-- 显示攻击强度 -->
-            <span v-if="intensity !== null" class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full flex items-center gap-1">
+            <span v-if="runtimeCompromisedPointCount !== null" class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
               <span class="material-symbols-outlined text-xs" aria-hidden="true">warning</span>
-              {{ t('app.traceVisualization.intensity') }}: {{ intensity }}
+              {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ runtimeCompromisedPointCount }}
             </span>
-            <!-- 显示被攻击设备数量 -->
-            <span v-if="hasAttackedDevices" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1 animate-pulse">
+            <span v-if="isAttack" class="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+              {{ t('app.traceVisualization.attackScenario') }} · {{ t('app.traceVisualization.attackBudget') }} {{ attackBudget ?? 0 }}
+            </span>
+            <span v-if="enablePrivacy && modelSemanticsConsistent" class="rounded-full bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700">
+              {{ t('app.traceVisualization.privacyPropagationEnabled') }}
+            </span>
+            <span v-if="hasAttackedDevices" class="inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">
               <span class="material-symbols-outlined text-xs" aria-hidden="true">security</span>
               {{ t('app.traceVisualization.attackedBang') }}
             </span>
           </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
+          <p class="mt-0.5 text-[10px] leading-4 text-slate-500">{{ t('app.traceVisualization.modelTraceNotPrediction') }}</p>
+        </div>
+
+        <div class="flex flex-shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            data-testid="simulation-timeline-run-details"
+            class="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+            :title="t('app.viewSimulationRunDetails')"
+            :aria-label="t('app.viewSimulationRunDetails')"
+            @click="emit('open-run-details')"
+          >
+            <span class="material-symbols-outlined text-base" aria-hidden="true">description</span>
+            <span class="hidden sm:inline">{{ t('app.runDetails') }}</span>
+          </button>
+          <button
+            type="button"
+            data-testid="simulation-timeline-play"
+            :disabled="totalStates <= 1"
+            :aria-label="isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play')"
+            class="inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold transition-colors"
+            :class="isPlaying
+              ? 'bg-indigo-600 text-white'
+              : totalStates <= 1
+                ? 'cursor-not-allowed bg-slate-100 text-slate-400'
+                : 'bg-indigo-600 text-white hover:bg-indigo-700'"
+            @click="play"
+          >
+            <span class="material-symbols-outlined text-base" aria-hidden="true">{{ isPlaying ? 'pause' : 'play_arrow' }}</span>
+            {{ isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
+          </button>
+          <button
+            type="button"
+            data-testid="simulation-timeline-close"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+            :aria-label="t('app.close')"
+            @click="close"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
+          </button>
+        </div>
+      </header>
+
+      <div
+        v-if="modelComplete === false"
+        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
+        data-testid="simulation-timeline-incomplete-warning"
+      >
+        {{ t('app.traceVisualization.modelIncompletePlayback', { rules: disabledRuleCount || 0 }) }}
+      </div>
+
+      <div
+        v-if="actualSteps !== undefined && requestedSteps !== undefined && actualSteps < requestedSteps"
+        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
+        data-testid="simulation-timeline-short-horizon-warning"
+      >
+        {{ t('app.simulationStoppedBeforeRequestedSteps', { actual: actualSteps, requested: requestedSteps }) }}
+      </div>
+
+      <div
+        v-if="!modelSemanticsConsistent"
+        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-4 text-amber-800"
+      >
+        {{ t('app.modelSemanticsUnavailable') }}
+      </div>
+
+      <div
+        v-if="boardComparison === 'CHANGED'"
+        class="mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-900"
+        data-testid="simulation-board-drift-warning"
+      >
+        {{ t('app.runBoardInputChanged') }}
+      </div>
+
+      <section class="border-b border-slate-200 pb-2" :aria-label="t('app.traceVisualization.stateSequence')">
+        <div class="grid items-center gap-2 sm:grid-cols-[auto_minmax(8rem,1fr)_auto]">
+          <div class="flex items-center gap-1">
             <button
               type="button"
-              @click="play"
-              data-testid="simulation-timeline-play"
-              :disabled="totalStates <= 1"
-              :aria-label="isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play')"
-              class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
-              :class="isPlaying 
-                ? 'bg-indigo-500 text-white' 
-                : totalStates <= 1
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              :disabled="selectedStateIndex <= 0"
+              :aria-label="t('app.traceVisualization.previousState')"
+              @click="selectPreviousState"
             >
-              <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ isPlaying ? 'stop' : 'play_arrow' }}</span>
-              {{ isPlaying ? t('app.traceVisualization.stop') : t('app.traceVisualization.play') }}
+              <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_left</span>
             </button>
+            <label class="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600">
+              <span>{{ t('app.traceVisualization.stateLabel') }}</span>
+              <input
+                v-model.number="selectedStateNumber"
+                data-testid="simulation-timeline-step-input"
+                type="number"
+                :min="1"
+                :max="Math.max(totalStates, 1)"
+                :disabled="totalStates <= 0"
+                class="w-10 bg-transparent text-center font-bold text-slate-800 outline-none"
+                :aria-label="t('app.traceVisualization.jumpToState')"
+              >
+              <span class="text-slate-400">/ {{ totalStates }}</span>
+            </label>
             <button
               type="button"
-              @click="close"
-              data-testid="simulation-timeline-close"
-              class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
-              :aria-label="t('app.close')"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              :disabled="selectedStateIndex >= totalStates - 1"
+              :aria-label="t('app.traceVisualization.nextState')"
+              @click="selectNextState"
             >
-              <span class="material-symbols-outlined text-slate-500" aria-hidden="true">close</span>
+              <span class="material-symbols-outlined text-lg" aria-hidden="true">chevron_right</span>
             </button>
           </div>
-        </div>
-        
-        <!-- 时间轴容器：支持横向滚动 -->
-        <div data-testid="simulation-timeline-scroll" class="overflow-x-auto scrollbar-thin py-2">
-          <!-- 内部容器：根据状态数量动态调整宽度 -->
-          <div 
-            class="relative h-14"
-            :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 32, 500)}px` : '100%' }"
+          <input
+            v-model.number="selectedStateRangeIndex"
+            data-testid="simulation-timeline-range"
+            type="range"
+            :min="0"
+            :max="Math.max(totalStates - 1, 0)"
+            :disabled="totalStates <= 1"
+            class="min-w-0 flex-1 accent-indigo-600"
+            :aria-label="t('app.traceVisualization.jumpToState')"
           >
-            <!-- 进度线背景 -->
-            <div class="absolute top-1/2 left-2 right-2 h-3 bg-slate-200 rounded -translate-y-1/2"></div>
-            
-            <!-- 进度条 -->
-            <div 
+          <span class="text-right text-[10px] font-semibold text-slate-500">
+            {{ selectedStateIndex === 0
+              ? t('app.traceVisualization.initialModelState')
+              : t('app.traceVisualization.transitionNumber', { index: selectedStateIndex }) }}
+          </span>
+        </div>
+
+        <div data-testid="simulation-timeline-scroll" class="mt-1 overflow-x-auto scrollbar-thin py-1">
+          <div
+            class="relative h-12"
+            data-testid="simulation-timeline-track"
+            :style="{ width: states.length > 15 ? 'max-content' : '100%', minWidth: states.length > 15 ? `${Math.max(states.length * 32, 500)}px` : '100%' }"
+            @pointerdown="selectStateFromTimelinePointer"
+          >
+            <div class="absolute left-2 right-2 top-1/2 h-2 -translate-y-1/2 rounded bg-slate-200"></div>
+            <div
               v-if="selectedStateIndex > 0 && totalStates > 1"
-              class="absolute top-1/2 h-3 bg-indigo-500 rounded transition-all duration-300 -translate-y-1/2"
-              :style="{ 
+              class="absolute top-1/2 h-2 -translate-y-1/2 rounded bg-indigo-600 transition-all duration-300"
+              :style="{
                 left: '8px',
                 width: `calc((100% - 16px) * ${selectedStateIndex / (totalStates - 1)})`
               }"
             ></div>
-            
-            <!-- 状态节点 -->
-            <div class="absolute top-1/2 left-2 right-2 flex justify-between items-center -translate-y-1/2">
+            <div class="absolute left-2 right-2 top-1/2 flex -translate-y-1/2 items-center justify-between">
               <button
                 v-for="(_, index) in states"
                 :key="index"
                 type="button"
-                @click="selectState(index)"
-                @keydown="handleStateKeydown($event, index)"
                 :tabindex="index === selectedStateIndex ? 0 : -1"
                 :aria-label="getStateAriaLabel(index)"
                 :aria-current="index === selectedStateIndex ? 'step' : undefined"
                 :data-testid="`simulation-timeline-state-${index}`"
-                class="w-6 h-6 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-                :class="index === selectedStateIndex 
-                  ? 'bg-indigo-500 border-indigo-500 scale-125 shadow-lg' 
-                  : index < selectedStateIndex 
-                    ? 'bg-green-500 border-green-500' 
-                    : 'bg-white border-slate-300 hover:border-indigo-300'"
+                class="relative z-10 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                :class="index === selectedStateIndex
+                  ? 'scale-125 border-indigo-600 bg-indigo-600 shadow-md'
+                  : index < selectedStateIndex
+                    ? 'border-indigo-300 bg-indigo-200'
+                    : 'border-slate-300 bg-white hover:border-indigo-400'"
+                @click="selectState(index)"
+                @keydown="handleStateKeydown($event, index)"
               >
-                <span 
-                  v-if="index === selectedStateIndex" 
-                  class="text-white text-[8px] font-bold"
-                >★</span>
-                <span v-else class="text-slate-500 text-[6px] font-medium">{{ index + 1 }}</span>
+                <span v-if="index === selectedStateIndex" class="text-[8px] font-bold text-white">{{ index + 1 }}</span>
+                <span v-else class="text-[7px] font-semibold text-slate-500">{{ index + 1 }}</span>
               </button>
             </div>
           </div>
         </div>
-      </div>
+      </section>
+
+      <details class="group pt-2" data-testid="simulation-timeline-state-details">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
+            {{ t('app.traceVisualization.stateDetails') }}
+          </span>
+          <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+        </summary>
+        <div class="mt-1.5 border-t border-slate-200">
+      <section class="border-b border-slate-200 py-2" data-testid="simulation-timeline-triggered-rules">
+        <div class="text-[10px] font-bold uppercase text-slate-500">
+          {{ selectedStateIndex === 0
+            ? t('app.traceVisualization.initialModelState')
+            : t('app.traceVisualization.rulesAppliedToReachState') }}
+        </div>
+        <div v-if="selectedStateIndex > 0 && currentTriggeredRules.length > 0" class="mt-1.5 flex flex-wrap gap-1.5">
+          <span
+            v-for="(rule, index) in currentTriggeredRules"
+            :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
+            :class="triggeredRuleExistsOnCurrentBoard(rule)
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : 'border-amber-300 bg-amber-50 text-amber-800'"
+            :title="triggeredRuleExistsOnCurrentBoard(rule) ? undefined : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
+          >
+            <span class="max-w-[14rem] truncate">{{ triggeredRuleLabel(rule, index) }}</span>
+            <span v-if="!triggeredRuleExistsOnCurrentBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
+          </span>
+        </div>
+        <p v-else-if="selectedStateIndex > 0" class="mt-1 text-[11px] text-slate-500">
+          {{ t('app.traceVisualization.noRulesApplied') }}
+        </p>
+      </section>
+
+      <section
+        v-if="currentCompromisedAutomationLinks.length > 0"
+        class="border-b border-red-200 bg-red-50 px-2 py-2"
+        data-testid="simulation-timeline-compromised-links"
+      >
+        <div class="text-[10px] font-bold uppercase text-red-700">
+          {{ t('app.traceVisualization.compromisedAutomationLinks') }}
+        </div>
+        <div class="mt-1.5 flex flex-wrap gap-1.5">
+          <span
+            v-for="(rule, index) in currentCompromisedAutomationLinks"
+            :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-1 text-[10px] font-semibold text-red-700"
+            :title="triggeredRuleExistsOnCurrentBoard(rule) ? t('app.traceVisualization.compromisedAutomationLinkHint') : t('app.traceVisualization.historicalRuleNotOnCurrentBoard')"
+          >
+            <span class="material-symbols-outlined text-[12px]" aria-hidden="true">link_off</span>
+            <span class="max-w-[14rem] truncate">{{ triggeredRuleLabel(rule, index) }}</span>
+            <span v-if="!triggeredRuleExistsOnCurrentBoard(rule)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
+          </span>
+        </div>
+      </section>
+
+      <section v-if="currentDevices.length > 0" class="border-b border-slate-200 py-2" data-testid="simulation-timeline-devices">
+        <div class="mb-1.5 inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-500">
+          <span class="material-symbols-outlined text-[13px]" aria-hidden="true">devices</span>
+          {{ t('app.traceVisualization.devicesInCurrentState') }}
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <span
+            v-for="device in currentDevices"
+            :key="device.deviceId"
+            class="inline-flex max-w-full flex-wrap items-center gap-1 rounded border px-2 py-1 text-[10px] font-semibold"
+            :class="!deviceExistsOnCurrentBoard(device.deviceId)
+              ? 'border-amber-300 bg-amber-50 text-amber-800'
+              : deviceChanged(device)
+                ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                : 'border-slate-200 bg-slate-50 text-slate-700'"
+            :title="deviceExistsOnCurrentBoard(device.deviceId) ? undefined : t('app.traceVisualization.historicalDeviceNotOnCurrentBoard')"
+          >
+            <span class="font-bold">{{ device.deviceLabel || device.deviceId }}</span>
+            <span class="max-w-[20rem] break-words font-mono font-normal">{{ deviceSummary(device) }}</span>
+            <span
+              v-if="deviceChanged(device)"
+              class="max-w-[24rem] truncate rounded bg-indigo-200 px-1 text-[9px] text-indigo-800"
+              :title="deviceChangeSummary(device)"
+            >
+              {{ deviceChangeSummary(device) }}
+            </span>
+            <span v-if="isPlaybackDeviceAttacked(device)" class="rounded bg-red-100 px-1 text-[9px] text-red-700">{{ t('app.traceVisualization.attacked') }}</span>
+            <span
+              v-if="deviceSecurityFacts(device).untrustedLabels.length > 0"
+              class="rounded bg-amber-100 px-1 text-[9px] text-amber-800"
+              :title="t('app.traceVisualization.untrustedLabelDetails', { labels: deviceSecurityFacts(device).untrustedLabels.join(', ') })"
+            >
+              {{ t('app.traceVisualization.includesUntrustedSource') }}
+            </span>
+            <span
+              v-if="deviceSecurityFacts(device).privateLabels.length > 0"
+              class="rounded bg-fuchsia-100 px-1 text-[9px] text-fuchsia-800"
+              :title="t('app.traceVisualization.privateLabelDetails', { labels: deviceSecurityFacts(device).privateLabels.join(', ') })"
+            >
+              {{ t('app.traceVisualization.includesPrivateData') }}
+            </span>
+            <span v-if="!deviceExistsOnCurrentBoard(device.deviceId)" class="material-symbols-outlined text-[12px]" aria-hidden="true">history</span>
+          </span>
+        </div>
+      </section>
+
+      <section v-if="currentEnvironmentVariables.length > 0" class="border-b border-slate-200 py-2" data-testid="simulation-timeline-env">
+        <div class="mb-1.5 inline-flex items-center gap-1 text-[10px] font-bold uppercase text-slate-500">
+          <span class="material-symbols-outlined text-[13px]" aria-hidden="true">terrain</span>
+          {{ t('app.traceVisualization.environmentVariables') }}
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <span
+            v-for="envVar in currentEnvironmentVariables"
+            :key="envVar.name"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold"
+            :class="environmentVariableChanged(envVar.name, envVar.value)
+              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              : 'border-slate-200 bg-slate-50 text-slate-600'"
+            :title="environmentVariableTitle(envVar.name, envVar.value)"
+          >
+            <span class="max-w-[7rem] truncate">{{ envVar.name }}</span>
+            <span class="font-mono">{{ envVar.value }}</span>
+            <span v-if="environmentVariableChanged(envVar.name, envVar.value)" class="rounded-full bg-amber-200 px-1 text-[9px] text-amber-800">{{ t('app.traceVisualization.changed') }}</span>
+          </span>
+        </div>
+      </section>
+
+      <details class="group pt-2 text-[11px] text-slate-600" data-testid="simulation-timeline-snapshot-notice">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 font-semibold text-slate-700 hover:bg-slate-100">
+          <span class="inline-flex min-w-0 items-center gap-1.5">
+            <span class="material-symbols-outlined text-base text-sky-700" aria-hidden="true">inventory_2</span>
+            <span>{{ t('app.runScopeAndSnapshot') }}</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <span
+              class="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              :class="boardComparison === 'UNCHANGED'
+                ? 'bg-emerald-100 text-emerald-700'
+                : boardComparison === 'CHANGED'
+                  ? 'bg-amber-100 text-amber-800'
+                  : 'bg-slate-100 text-slate-600'"
+              data-testid="simulation-board-comparison"
+            >
+              {{ boardComparison === 'UNCHANGED'
+                ? t('app.runBoardInputUnchangedShort')
+                : boardComparison === 'CHANGED'
+                  ? t('app.runBoardInputChangedShort')
+                  : boardComparison === 'UNAVAILABLE'
+                    ? t('app.runBoardComparisonUnavailableShort')
+                    : t('app.runBoardNotComparedShort') }}
+            </span>
+            <span class="material-symbols-outlined text-base transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
+          </span>
+        </summary>
+        <div class="mt-1.5 space-y-1.5 border-l-2 border-sky-200 pl-3 leading-5">
+          <p class="font-bold text-slate-700">{{ t('app.modelRunSnapshotTitle') }}</p>
+          <p v-if="modelSnapshot">
+            {{ t('app.modelRunSnapshotSummary', {
+              time: formatRunTimestamp(modelSnapshot.capturedAt),
+              devices: modelSnapshot.deviceCount,
+              rules: modelSnapshot.ruleCount,
+              specs: modelSnapshot.specificationCount,
+              variables: modelSnapshot.environmentVariableCount,
+              templates: modelSnapshot.deviceTemplateCount
+            }) }}
+          </p>
+          <p>{{ t('app.traceVisualization.playbackSnapshotReadOnly') }}</p>
+          <p v-if="modelSemanticsConsistent">
+            {{ isAttack
+              ? t('app.traceVisualization.simulationAttackContext', {
+                  count: attackBudget ?? 0,
+                  total: modelSemantics?.modeledAttackPointCount ?? 0,
+                  devices: modelSemantics?.modeledDeviceAttackPointCount ?? 0,
+                  falsifiable: modelSemantics?.modeledFalsifiableReadingDeviceCount ?? 0,
+                  links: modelSemantics?.modeledAutomationLinkAttackPointCount ?? 0
+                })
+              : t('app.traceVisualization.simulationNoAttackContext') }}
+          </p>
+          <p v-if="modelSemanticsConsistent">
+            {{ enablePrivacy
+              ? t('app.traceVisualization.privacyPropagationEnabled')
+              : t('app.traceVisualization.privacyPropagationNotModeled') }}
+          </p>
+          <p v-if="modelSemanticsConsistent">{{ t('app.environmentEvolutionIncluded') }}</p>
+          <p v-if="modelSemanticsConsistent">{{ t('app.labelPropagationScopeSummary') }}</p>
+          <p>
+            {{ boardComparison === 'UNCHANGED'
+              ? t('app.runBoardInputUnchanged')
+              : boardComparison === 'CHANGED'
+                ? t('app.runBoardInputChanged')
+                : boardComparison === 'UNAVAILABLE'
+                  ? t('app.runBoardComparisonUnavailable')
+                  : t('app.runBoardNotCompared') }}
+          </p>
+        </div>
+      </details>
+        </div>
+      </details>
     </div>
   </div>
 </template>

@@ -9,7 +9,6 @@
 		{
 			"Name": "on",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -17,7 +16,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -25,7 +23,6 @@
 		{
 			"Name": "taking photo",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -42,7 +39,6 @@
 				"Value": "taking photo"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],

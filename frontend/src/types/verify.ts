@@ -1,51 +1,119 @@
 // src/types/verify.ts
 
+import type { ModelDevice, ModelEnvironmentVariable, ModelRule, ModelSpecification } from './model'
+import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
+import type { Specification } from './spec'
+import type { AsyncTaskStatus } from './task'
+import type { RunPersistence } from './runPersistence'
+
 export interface VerificationRequest {
-  devices: any[];
-  rules: any[];
-  specs: any[];
+  devices: ModelDevice[];
+  environmentVariables: ModelEnvironmentVariable[];
+  rules: ModelRule[];
+  specs: ModelSpecification[];
   isAttack: boolean;
-  intensity: number;
+  attackBudget: number;
   enablePrivacy: boolean;
 }
 
 export interface SpecResult {
   specId: string;
-  passed: boolean;
+  templateId: string;
+  specificationLabel: string;
+  formulaPreview: string;
+  formulaKind: 'CTL' | 'LTL';
+  outcome: VerificationOutcome;
   expression: string;
 }
 
+export type VerificationOutcome = 'SATISFIED' | 'VIOLATED' | 'INCONCLUSIVE';
+
+export type ModelGenerationIssueReasonCode =
+  | 'RULE_NO_TRIGGER_CONDITIONS'
+  | 'RULE_NULL_TRIGGER_CONDITION'
+  | 'RULE_UNRESOLVABLE_TRIGGER_CONDITION'
+  | 'RULE_NO_RESOLVABLE_TRIGGER_CONDITIONS'
+  | 'RULE_PROPERTY_PROPAGATION_UNAVAILABLE'
+  | 'SPEC_NO_CHECKABLE_CONDITIONS'
+  | 'SPEC_PRIVACY_MODELING_DISABLED'
+  | 'SPEC_UNSUPPORTED_RELATION'
+  | 'SPEC_AMBIGUOUS_STATE'
+  | 'SPEC_UNDECLARED_SECURITY_PROPERTY'
+  | 'SPEC_UNKNOWN_DEVICE'
+  | 'SPEC_TEMPLATE_SHAPE_MISMATCH'
+  | 'SPEC_INVALID_VALUE'
+  | 'SPEC_UNSUPPORTED_CONDITION'
+  | 'UNCLASSIFIED_GENERATION_ISSUE';
+
+export interface ModelGenerationIssue {
+  issueType: 'RULE_DISABLED' | 'SPECIFICATION_SKIPPED' | string;
+  itemLabel: string;
+  reasonCode: ModelGenerationIssueReasonCode;
+  reason: string;
+}
+
 export interface VerificationResult {
-  safe: boolean;
+  isAttack: boolean;
+  attackBudget: number;
+  enablePrivacy: boolean;
+  modelSemantics: ModelSemantics;
+  modelSnapshot: ModelRunSnapshot;
+  historyPersistence: RunPersistence;
+  outcome: VerificationOutcome;
+  modelComplete: boolean;
   traces: Trace[];
   specResults: SpecResult[];
   checkLogs: string[];
   nusmvOutput: string;
-  disabledRuleCount?: number;
-  skippedSpecCount?: number;
+  disabledRuleCount: number;
+  skippedSpecCount: number;
+  generationIssues: ModelGenerationIssue[];
 }
 
 export interface Trace {
   id: number;
-  userId: number;
-  verificationTaskId?: number;   // backend TraceDto.verificationTaskId (Long, null for sync verifications)
+  verificationTaskId?: number;   // owning completed verification-run id; absent only for legacy orphan traces
   violatedSpecId: string;
-  violatedSpecJson: string;
+  violatedSpec?: Specification;
+  checkedExpression: string;
+  modelComplete: boolean;
+  disabledRuleCount: number;
+  skippedSpecCount: number;
+  generationIssues: ModelGenerationIssue[];
   states: TraceState[];
   // Verification-context flags derived from the trace's stored request snapshot (backend TraceDto).
-  // Null/undefined for legacy traces recorded before the snapshot was saved.
   isAttack?: boolean;
-  intensity?: number;
+  attackBudget?: number;
   enablePrivacy?: boolean;
+  modelSemantics?: ModelSemantics;
+  modelSnapshot: ModelRunSnapshot;
   createdAt: string;
+}
+
+export interface TraceSummary {
+  id: number
+  verificationTaskId: number
+  violatedSpecId?: string
+  violatedSpec?: Specification
+  stateCount?: number
+  createdAt?: string
+  dataAvailable: boolean
+  unavailableReasonCode?: 'PERSISTED_SEMANTIC_DATA_INVALID' | string
 }
 
 export interface TraceState {
   stateIndex: number;
   devices: TraceDevice[];
-  rules?: number[];                     // indices of rules triggered in this state (backend List<Integer>)
+  triggeredRules: TraceTriggeredRule[]; // rule snapshots that drove the transition into this state
+  compromisedAutomationLinks: TraceTriggeredRule[]; // rule delivery links selected as compromised
   trustPrivacies?: TraceTrustPrivacy[]; // state-level trust/privacy entries (backend List<TraceTrustPrivacyDto>)
-  envVariables?: TraceVariable[];       // environment variables (e.g. a_temperature, a_airQuality)
+  envVariables?: TraceVariable[];       // board environment variables using user-facing names (e.g. temperature)
+  globalVariables?: TraceVariable[];    // NuSMV runtime/global variables, e.g. attack count
+}
+
+export interface TraceTriggeredRule {
+  ruleId?: string | null;
+  ruleLabel?: string | null;
 }
 
 export interface TraceDevice {
@@ -54,7 +122,7 @@ export interface TraceDevice {
   templateName: string;
   state?: string;
   mode?: string;                       // 新增：状态机名称
-  newState?: string;                   // 保留：旧数据兼容，多处组件仍在 fallback 读取
+  compromised?: boolean;
   variables: TraceVariable[];
   trustPrivacy?: TraceTrustPrivacy[];   // 改为可选
   privacies?: TraceTrustPrivacy[];      // 改为可选
@@ -68,24 +136,33 @@ export interface TraceVariable {
 
 export interface TraceTrustPrivacy {
   name: string;
+  propertyScope: 'state' | 'variable' | 'content';
+  mode?: string;
   trust?: boolean | null;   // 后端 Boolean 包装类型，支持 true/false/null
-  privacy: string;
+  privacy?: string;
 }
 
 export interface VerificationTask {
   id: number;
   // userId 已删除 — 后端不返回，前端无使用处
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  status: AsyncTaskStatus;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
   processingTimeMs?: number;
   progress?: number;       // 新增：0-100 进度
-  isSafe?: boolean;
+  isAttack: boolean;
+  attackBudget: number;
+  enablePrivacy: boolean;
+  modelSemantics: ModelSemantics;
+  modelSnapshot: ModelRunSnapshot;
+  outcome?: VerificationOutcome;
+  modelComplete?: boolean;
   violatedSpecCount?: number;
   checkLogs?: string[];
   disabledRuleCount?: number;
   skippedSpecCount?: number;
+  generationIssues?: ModelGenerationIssue[];
   specResults?: SpecResult[];
   nusmvOutput?: string;
   errorMessage?: string;
@@ -100,9 +177,58 @@ export type VerificationTaskSummary = Pick<
   | 'completedAt'
   | 'processingTimeMs'
   | 'progress'
-  | 'isSafe'
+  | 'isAttack'
+  | 'attackBudget'
+  | 'enablePrivacy'
+  | 'modelSemantics'
+  | 'modelSnapshot'
+  | 'outcome'
+  | 'modelComplete'
   | 'violatedSpecCount'
   | 'disabledRuleCount'
   | 'skippedSpecCount'
+  | 'generationIssues'
   | 'errorMessage'
 >
+
+export interface AvailableVerificationRunSummary {
+  id: number
+  createdAt: string
+  startedAt: string
+  completedAt: string
+  processingTimeMs?: number
+  isAttack: boolean
+  attackBudget: number
+  enablePrivacy: boolean
+  modelSemantics: ModelSemantics
+  modelSnapshot: ModelRunSnapshot
+  outcome: VerificationOutcome
+  modelComplete: boolean
+  violatedSpecCount: number
+  counterexampleCount: number
+  disabledRuleCount: number
+  skippedSpecCount: number
+  generationIssues: ModelGenerationIssue[]
+  counterexamples: TraceSummary[]
+  dataAvailable: true
+}
+
+export interface UnavailableVerificationRunSummary {
+  id: number
+  createdAt?: string
+  startedAt?: string
+  completedAt?: string
+  processingTimeMs?: number
+  counterexampleCount: number
+  counterexamples: TraceSummary[]
+  dataAvailable: false
+  unavailableReasonCode: 'PERSISTED_SEMANTIC_DATA_INVALID' | string
+}
+
+export type VerificationRunSummary = AvailableVerificationRunSummary | UnavailableVerificationRunSummary
+
+export interface VerificationRun extends Omit<AvailableVerificationRunSummary, 'dataAvailable' | 'counterexamples'> {
+  specResults: SpecResult[]
+  checkLogs: string[]
+  nusmvOutput: string
+}

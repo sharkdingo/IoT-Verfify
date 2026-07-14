@@ -18,6 +18,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import lombok.RequiredArgsConstructor;
@@ -103,11 +104,12 @@ public class ParameterAdjustStrategy implements FixStrategy {
                 if (bounds == null) continue;
 
                 String key = "r" + ruleIdx + "_c" + condIdx;
+                String targetId = PreferredRangeSelection.targetIdFor(ctx.getTraceId(), ruleIdx, condIdx);
                 String frozenVarName = "param_" + key;
 
                 // Apply preferred range intersection if specified
                 PreferredRange preferred = (ctx.getPreferredRanges() != null)
-                        ? ctx.getPreferredRanges().get(key) : null;
+                        ? ctx.getPreferredRanges().get(targetId) : null;
                 if (preferred != null) {
                     int prefLower = Math.max(bounds[0], preferred.getLower());
                     int prefUpper = Math.min(bounds[1], preferred.getUpper());
@@ -127,6 +129,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
                         .build());
 
                 adjustmentTemplate.add(ParameterAdjustment.builder()
+                        .targetId(targetId)
                         .ruleIndex(ruleIdx)
                         .conditionIndex(condIdx)
                         .attribute(cond.getAttribute())
@@ -165,16 +168,19 @@ public class ParameterAdjustStrategy implements FixStrategy {
             // Step 2a: Generate parameterized model with ¬ρ
             File smvFile = null;
             try {
-                SmvGenerator.GenerateResult genResult = smvGenerator.generateParameterized(
-                        ctx.getUserId(), ctx.getDevices(), allRules, ctx.getSpecs(),
-                        ctx.isAttack(), ctx.getIntensity(), ctx.isEnablePrivacy(), config);
+                SmvGenerator.GenerateResult genResult =
+                        smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
+                                allRules, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
+                                ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
+                                ctx.getDeviceSmvMap());
                 if (genResult == null) {
                     log.warn("ParameterAdjust attempt {}: SMV generation returned null", attempt + 1);
                     continue;
                 }
                 smvFile = genResult.smvFile();
 
-                NusmvResult result = nusmvExecutor.execute(smvFile);
+                NusmvResult result = FixStrategyUtils.executeWithinDeadline(nusmvExecutor, smvFile, ctx);
                 if (!result.isSuccess()) {
                     log.warn("ParameterAdjust attempt {}: NuSMV execution failed: {}",
                             attempt + 1, result.getErrorMessage());
@@ -218,6 +224,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
                     }
 
                     candidateAdjustments.add(ParameterAdjustment.builder()
+                            .targetId(template.getTargetId())
                             .ruleIndex(template.getRuleIndex())
                             .conditionIndex(template.getConditionIndex())
                             .attribute(template.getAttribute())
@@ -243,19 +250,10 @@ public class ParameterAdjustStrategy implements FixStrategy {
                     // §5.3: Refine to closest original values
                     refineToClosest(candidateAdjustments, thresholds, extractedValues, allRules, ctx);
 
+                    candidateAdjustments.forEach(adjustment ->
+                            adjustment.setDescription(describeParameterAdjustment(adjustment, allRules)));
                     String description = candidateAdjustments.stream()
-                            .map(a -> {
-                                String base = "Rule " + a.getRuleIndex() + " cond " + a.getConditionIndex()
-                                        + ": " + a.getAttribute() + a.getRelation()
-                                        + a.getOriginalValue() + " → " + a.getAttribute()
-                                        + a.getRelation() + a.getNewValue();
-                                // Add clarification when threshold hits the variable boundary
-                                Integer newVal = safeParseInt(a.getNewValue());
-                                if (newVal != null && (newVal == a.getUpperBound() || newVal == a.getLowerBound())) {
-                                    base += " (boundary value — rule effectively disabled)";
-                                }
-                                return base;
-                            })
+                            .map(ParameterAdjustment::getDescription)
                             .collect(Collectors.joining("; "));
 
                     return FixSuggestionDto.builder()
@@ -290,6 +288,28 @@ public class ParameterAdjustStrategy implements FixStrategy {
     }
 
     // ======================== §5.3: Refine to closest original ========================
+
+    private static String describeParameterAdjustment(ParameterAdjustment adjustment, List<RuleDto> allRules) {
+        String base = describeRule(allRules, adjustment.getRuleIndex())
+                + ": adjust parameter condition " + (adjustment.getConditionIndex() + 1)
+                + " (" + adjustment.getAttribute() + " " + adjustment.getRelation() + " "
+                + adjustment.getOriginalValue() + " -> " + adjustment.getNewValue() + ")";
+        Integer newVal = safeParseInt(adjustment.getNewValue());
+        if (newVal != null && (newVal == adjustment.getUpperBound() || newVal == adjustment.getLowerBound())) {
+            base += " (boundary value - rule effectively disabled)";
+        }
+        return base;
+    }
+
+    private static String describeRule(List<RuleDto> rules, int ruleIndex) {
+        if (rules != null && ruleIndex >= 0 && ruleIndex < rules.size()) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+                return "'" + rule.getRuleString() + "'";
+            }
+        }
+        return "Rule #" + (ruleIndex + 1);
+    }
 
     /**
      * §5.3 NuSMV-guided branch-and-bound refinement (heuristic extension of paper §5.1/§5.3).
@@ -486,13 +506,16 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         File smvFile = null;
         try {
-            SmvGenerator.GenerateResult genResult = smvGenerator.generateParameterized(
-                    ctx.getUserId(), ctx.getDevices(), rulesWithOtherParamsApplied, ctx.getSpecs(),
-                    ctx.isAttack(), ctx.getIntensity(), ctx.isEnablePrivacy(), config);
+            SmvGenerator.GenerateResult genResult =
+                    smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                            ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
+                            rulesWithOtherParamsApplied, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
+                            ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
+                            ctx.getDeviceSmvMap());
             if (genResult == null) return RefineResult.error();
             smvFile = genResult.smvFile();
 
-            NusmvResult result = nusmvExecutor.execute(smvFile);
+            NusmvResult result = FixStrategyUtils.executeWithinDeadline(nusmvExecutor, smvFile, ctx);
             if (!result.isSuccess()) {
                 log.warn("nusmvSolveForRefine: execution failed: {}", result.getErrorMessage());
                 return RefineResult.error();
@@ -566,7 +589,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         DeviceSmvData smv;
         try {
-            smv = DeviceReferenceResolver.resolve(deviceId, null, deviceSmvMap);
+            smv = DeviceReferenceResolver.resolve(deviceId, deviceSmvMap);
         } catch (Exception e) {
             return null;
         }
@@ -587,8 +610,7 @@ public class ParameterAdjustStrategy implements FixStrategy {
 
         // Check env variables
         if (smv.getEnvVariables() != null) {
-            String envKey = attr.startsWith("a_") ? attr.substring(2) : attr;
-            DeviceManifest.InternalVariable envVar = smv.getEnvVariables().get(envKey);
+            DeviceManifest.InternalVariable envVar = smv.getEnvVariables().get(attr);
             if (envVar != null && envVar.getLowerBound() != null && envVar.getUpperBound() != null) {
                 return new int[]{envVar.getLowerBound(), envVar.getUpperBound()};
             }

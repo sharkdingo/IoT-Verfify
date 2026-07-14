@@ -3,6 +3,8 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
+import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,23 +52,78 @@ class FixViolationToolTest {
     }
 
     @Test
-    void execute_preferredRanges_nonIntegerValue_returns400() throws Exception {
-        assertValidationError("{\"traceId\":1,\"preferredRanges\":{\"r0_c0\":{\"lower\":\"abc\",\"upper\":10}}}");
+    void execute_legacyPreferredRanges_returns400() throws Exception {
+        assertValidationError("{\"traceId\":1,\"preferredRanges\":{\"r0_c0\":{\"lower\":1,\"upper\":10}}}");
     }
 
     @Test
-    void execute_preferredRanges_decimalValue_returns400() throws Exception {
-        assertValidationError("{\"traceId\":1,\"preferredRanges\":{\"r0_c0\":{\"lower\":1.5,\"upper\":10}}}");
+    void execute_preferredRangeSelections_nonIntegerValue_returns400() throws Exception {
+        String targetId = PreferredRangeSelection.targetIdFor(0, 0);
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":[{\"targetId\":\""
+                + targetId + "\",\"lower\":\"abc\",\"upper\":10}]}");
     }
 
     @Test
-    void execute_preferredRanges_missingField_returns400() throws Exception {
-        assertValidationError("{\"traceId\":1,\"preferredRanges\":{\"r0_c0\":{\"lower\":10}}}");
+    void execute_preferredRangeSelections_decimalValue_returns400() throws Exception {
+        String targetId = PreferredRangeSelection.targetIdFor(0, 0);
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":[{\"targetId\":\""
+                + targetId + "\",\"lower\":1.5,\"upper\":10}]}");
     }
 
     @Test
-    void execute_preferredRanges_wrongType_returns400() throws Exception {
-        assertValidationError("{\"traceId\":1,\"preferredRanges\":\"abc\"}");
+    void execute_preferredRangeSelections_outOfIntRange_returns400() throws Exception {
+        String targetId = PreferredRangeSelection.targetIdFor(0, 0);
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":[{\"targetId\":\""
+                + targetId + "\",\"lower\":4294967299,\"upper\":10}]}");
+    }
+
+    @Test
+    void execute_preferredRangeSelections_invalidTargetId_returns400() throws Exception {
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":[{\"targetId\":\"not-a-target\",\"lower\":1,\"upper\":10}]}");
+    }
+
+    @Test
+    void execute_preferredRangeSelections_missingField_returns400() throws Exception {
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":[{\"lower\":10,\"upper\":20}]}");
+    }
+
+    @Test
+    void execute_preferredRangeSelections_wrongType_returns400() throws Exception {
+        assertValidationError("{\"traceId\":1,\"preferredRangeSelections\":\"abc\"}");
+    }
+
+    @Test
+    void execute_strategiesWrongType_doesNotFallBackToDefaultOrder() throws Exception {
+        assertValidationError("{\"traceId\":1,\"strategies\":\"remove\"}");
+    }
+
+    @Test
+    void execute_emptyStrategies_doesNotFallBackToDefaultOrder() throws Exception {
+        assertValidationError("{\"traceId\":1,\"strategies\":[]}");
+    }
+
+    @Test
+    void execute_unsupportedStrategy_returns400() throws Exception {
+        assertValidationError("{\"traceId\":1,\"strategies\":[\"unknown\"]}");
+    }
+
+    @Test
+    void execute_successOmitsInternalSpecIdAndExplainsThatNothingWasApplied() throws Exception {
+        when(fixService.fix(anyLong(), anyLong(), any(), any())).thenReturn(FixResultDto.builder()
+                .traceId(1L)
+                .violatedSpecId("internal-spec-id")
+                .fixable(false)
+                .faultRules(java.util.List.of())
+                .suggestions(java.util.List.of())
+                .strategyAttempts(java.util.List.of())
+                .warnings(java.util.List.of())
+                .summary("No forward-verified suggestion was found; no Board change was applied.")
+                .build());
+
+        JsonNode node = objectMapper.readTree(tool.execute("{\"traceId\":1}"));
+
+        assertFalse(node.has("violatedSpecId"));
+        assertTrue(node.path("message").asText().contains("no Board change was applied"));
     }
 
     @Test

@@ -8,7 +8,14 @@ import java.util.Map;
 public final class AiToolResponseHelper {
 
     private static final String SUCCESS_FALLBACK_WARNING =
-            "Response serialization degraded after successful operation.";
+            "Response serialization failed after the operation reached its response stage.";
+    private static final String SUCCESS_FALLBACK_MESSAGE =
+            "Result details are unavailable. A mutation may already have been committed; "
+                    + "refresh current state before retrying. Do not infer a verification or "
+                    + "simulation conclusion from this response.";
+    private static final String READ_ONLY_FALLBACK_MESSAGE =
+            "Result details are unavailable because response serialization failed. "
+                    + "No mutation was requested by this operation; retrying will not duplicate a change.";
 
     private AiToolResponseHelper() {
     }
@@ -41,10 +48,21 @@ public final class AiToolResponseHelper {
     public static String success(ObjectMapper objectMapper,
                                  Map<String, Object> body,
                                  String fallbackMessage) {
+        return success(objectMapper, body, fallbackMessage, true);
+    }
+
+    public static String success(ObjectMapper objectMapper,
+                                 Map<String, Object> body,
+                                 String fallbackMessage,
+                                 boolean mutationMayHaveCommitted) {
         try {
             return objectMapper.writeValueAsString(body);
         } catch (Exception ex) {
-            return "{\"message\":\"" + escapeJson(defaultSuccessMessage(fallbackMessage))
+            return "{\"resultStatus\":\"RESULT_UNAVAILABLE\","
+                    + "\"resultAvailable\":false,\"mutationMayHaveCommitted\":"
+                    + mutationMayHaveCommitted + ","
+                    + "\"message\":\"" + escapeJson(mutationMayHaveCommitted
+                    ? SUCCESS_FALLBACK_MESSAGE : READ_ONLY_FALLBACK_MESSAGE)
                     + "\",\"warning\":\"" + escapeJson(SUCCESS_FALLBACK_WARNING) + "\"}";
         }
     }

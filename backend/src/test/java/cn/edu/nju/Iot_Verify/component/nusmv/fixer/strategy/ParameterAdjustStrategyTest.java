@@ -14,6 +14,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,10 +43,33 @@ class ParameterAdjustStrategyTest {
     private ParameterAdjustStrategy strategy;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         FixConfig fixConfig = new FixConfig();
         fixConfig.setMaxRefineAttempts(10);
         strategy = new ParameterAdjustStrategy(smvGenerator, nusmvExecutor, fixConfig);
+
+        // Keep the strategy tests focused on solver behavior while routing their existing
+        // generator fixtures through the production snapshot-aware entry points.
+        lenient().when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                        anyLong(), anyList(), anyList(), anyList(), anyList(),
+                        anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                        any(SmvGenerator.TempModelContext.class), anyMap()))
+                .thenAnswer(invocation -> smvGenerator.generateParameterized(
+                        invocation.getArgument(0), invocation.getArgument(1),
+                        invocation.getArgument(3), invocation.getArgument(4),
+                        invocation.getArgument(5), invocation.getArgument(6),
+                        invocation.getArgument(7), invocation.getArgument(8),
+                        invocation.getArgument(9)));
+        lenient().when(smvGenerator.generateWithResolvedDeviceModel(
+                        anyLong(), anyList(), anyList(), anyList(), anyList(),
+                        anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                        any(SmvGenerator.TempModelContext.class), anyMap()))
+                .thenAnswer(invocation -> smvGenerator.generate(
+                        invocation.getArgument(0), invocation.getArgument(1),
+                        invocation.getArgument(3), invocation.getArgument(4),
+                        invocation.getArgument(5), invocation.getArgument(6),
+                        invocation.getArgument(7), invocation.getArgument(8),
+                        invocation.getArgument(9)));
     }
 
     private SmvGenerator.GenerateResult createGenResult() throws IOException {
@@ -65,6 +89,21 @@ class ParameterAdjustStrategyTest {
                 .upperBound(50)
                 .build();
         smv.setVariables(List.of(tempVar));
+        return Map.of("sensor_1", smv);
+    }
+
+    private Map<String, DeviceSmvData> buildEnvironmentDeviceMap(String environmentName) {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setModuleName("SensorModule");
+        DeviceManifest.InternalVariable envVar = DeviceManifest.InternalVariable.builder()
+                .name(environmentName)
+                .isInside(false)
+                .lowerBound(0)
+                .upperBound(50)
+                .build();
+        smv.setVariables(List.of(envVar));
+        smv.getEnvVariables().put(environmentName, envVar);
         return Map.of("sensor_1", smv);
     }
 
@@ -92,7 +131,7 @@ class ParameterAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(20)
                 .build();
@@ -106,6 +145,33 @@ class ParameterAdjustStrategyTest {
     @Test
     void tryFix_emptyFaultRules_returnsNull() {
         assertNull(strategy.tryFix(ctx(List.of(), List.of(), List.of(), Map.of())));
+    }
+
+    @Test
+    void resolveBounds_environmentVariableNamesAreLiteral() throws Exception {
+        java.lang.reflect.Method method = ParameterAdjustStrategy.class
+                .getDeclaredMethod("resolveBounds", RuleDto.Condition.class, Map.class);
+        method.setAccessible(true);
+
+        RuleDto.Condition actualAPrefixedName = RuleDto.Condition.builder()
+                .deviceName("sensor_1")
+                .targetType("variable")
+                .attribute("a_temperature")
+                .relation(">")
+                .value("30")
+                .build();
+
+        int[] literalBounds = (int[]) method.invoke(
+                strategy,
+                actualAPrefixedName,
+                buildEnvironmentDeviceMap("a_temperature"));
+        assertArrayEquals(new int[]{0, 50}, literalBounds);
+
+        int[] aliasBounds = (int[]) method.invoke(
+                strategy,
+                actualAPrefixedName,
+                buildEnvironmentDeviceMap("temperature"));
+        assertNull(aliasBounds, "a_temperature must not resolve as an alias for temperature");
     }
 
     @Test
@@ -138,7 +204,7 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         // Negated spec passes (universally true) → no fix possible
@@ -166,12 +232,12 @@ class ParameterAdjustStrategyTest {
 
         // generateParameterized: called for initial discovery AND refinement NuSMV solves
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         // generate: called for forward-verify (initial, try-original, candidate verify)
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         // NuSMV counterexample outputs
@@ -238,7 +304,8 @@ class ParameterAdjustStrategyTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("1Sensor").attribute("temperature").relation(">").value("30").build()))
+                        .deviceName("d_1Sensor").targetType("variable")
+                        .attribute("temperature").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
                 .build();
         FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
@@ -247,10 +314,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -291,10 +358,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -340,10 +407,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -405,10 +472,10 @@ class ParameterAdjustStrategyTest {
         ArgumentCaptor<ParameterizationConfig> configCaptor =
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture()))
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -487,10 +554,10 @@ class ParameterAdjustStrategyTest {
         ArgumentCaptor<ParameterizationConfig> configCaptor =
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture()))
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -564,10 +631,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -629,10 +696,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -701,10 +768,10 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -763,7 +830,7 @@ class ParameterAdjustStrategyTest {
         // generate() = forward-verify calls: initial + try-original + candidate 28 (once) = 3
         // If dedup failed, would be 4 (candidate 28 verified twice)
         verify(smvGenerator, times(3)).generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean());
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class));
     }
 
     @Test
@@ -779,7 +846,7 @@ class ParameterAdjustStrategyTest {
         spec.setTemplateId("1");
 
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         NusmvResult failedResult = mock(NusmvResult.class);
@@ -797,7 +864,7 @@ class ParameterAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(3)
                 .build();
@@ -832,7 +899,7 @@ class ParameterAdjustStrategyTest {
         ArgumentCaptor<ParameterizationConfig> configCaptor =
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
         when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture()))
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(createGenResult());
 
         SpecCheckResult failing = mock(SpecCheckResult.class);
@@ -845,7 +912,7 @@ class ParameterAdjustStrategyTest {
 
         SmvGenerator.GenerateResult verifyGenResult = createGenResult();
         when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class), any(SmvGenerator.TempModelContext.class)))
                 .thenReturn(verifyGenResult);
 
         SpecCheckResult allPass = mock(SpecCheckResult.class);
@@ -867,10 +934,10 @@ class ParameterAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(20)
-                .preferredRanges(Map.of("r0_c0", new PreferredRange(20, 30)))
+                .preferredRanges(Map.of(PreferredRangeSelection.targetIdFor(0, 0), new PreferredRange(20, 30)))
                 .build();
 
         FixSuggestionDto suggestion = noRefineStrategy.tryFix(context);
@@ -912,10 +979,10 @@ class ParameterAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(20)
-                .preferredRanges(Map.of("r0_c0", new PreferredRange(60, 70)))
+                .preferredRanges(Map.of(PreferredRangeSelection.targetIdFor(0, 0), new PreferredRange(60, 70)))
                 .build();
 
         // Should return null because the only parameterizable condition was skipped

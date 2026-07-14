@@ -6,8 +6,8 @@
 			"Name": "receiveKey",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["Key", "others"]
 		},
@@ -15,8 +15,8 @@
 			"Name": "receiveMail",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["idle", "receive"]
 		}
@@ -27,7 +27,6 @@
 		{
 			"Name": "idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -35,7 +34,6 @@
 		{
 			"Name": "sending",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -52,7 +50,6 @@
 				"Value": "sending"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],
@@ -64,6 +61,7 @@
 			"Trigger": null,
 			"Assignments": [],
 			"Signal": true,
+			"AcceptsContent": true,
 			"Description": ""
 		}
 	]

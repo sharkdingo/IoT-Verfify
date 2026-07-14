@@ -6,7 +6,7 @@
 			"Name": "water",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["dry", "wet"]

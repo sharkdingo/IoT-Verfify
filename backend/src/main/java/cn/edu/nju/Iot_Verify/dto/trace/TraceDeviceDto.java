@@ -1,11 +1,11 @@
 package cn.edu.nju.Iot_Verify.dto.trace;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -13,15 +13,14 @@ import java.util.List;
  */
 @Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class TraceDeviceDto {
     /**
-     * 设备编号
+     * Model-boundary device identity: NuSMV-safe varName derived from DeviceNode.id.
      */
     private String deviceId;
 
     /**
-     * 设备标签
+     * Display label snapshot. Never used for identity resolution.
      */
     private String deviceLabel;
 
@@ -31,9 +30,8 @@ public class TraceDeviceDto {
     private String templateName;
 
     /**
-     * 当前状态值（反序列化时兼容历史 JSON 中的 "newState" 字段）
+     * 当前状态值。权威 JSON 字段为 "state"。
      */
-    @JsonAlias("newState")
     private String state;
 
     /**
@@ -41,11 +39,15 @@ public class TraceDeviceDto {
      */
     private String mode;
 
+    /** User-facing compromise state for this model snapshot; internal is_attack is not serialized as a variable. */
+    private Boolean compromised;
+
     /**
      * 变量变化列表
      */
     @Valid
-    private List<TraceVariableDto> variables;
+    @NotNull
+    private List<TraceVariableDto> variables = new ArrayList<>();
 
     /**
      * 状态信任变化列表

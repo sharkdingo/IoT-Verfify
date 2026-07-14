@@ -120,6 +120,26 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void assistantPrompts_requireRecommendationAccountingAndIncompleteModelDisclosure() throws Exception {
+        Method planningMethod = ChatServiceImpl.class.getDeclaredMethod("buildToolPlanningSystemPrompt");
+        planningMethod.setAccessible(true);
+        Method visibleMethod = ChatServiceImpl.class.getDeclaredMethod(
+                "buildVisibleReplySystemPrompt", boolean.class);
+        visibleMethod.setAccessible(true);
+
+        String planning = ((LlmMessage) planningMethod.invoke(service)).content();
+        String visible = ((LlmMessage) visibleMethod.invoke(service, true)).content();
+
+        assertTrue(planning.contains("truncated candidates were never inspected"));
+        assertTrue(planning.contains("Do not call"));
+        assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));
+        assertTrue(visible.contains("report rawCandidateCount"));
+        assertTrue(visible.contains("SATISFIED with modelComplete=false"));
+        assertTrue(visible.contains("one possible formal-model trajectory"));
+        assertTrue(visible.contains("A verified suggestion still is not applied"));
+    }
+
+    @Test
     void executeToolLoop_whenToolReturnsError_shouldNotCollectRefreshCommand() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("manage_rule", "{}"))
@@ -151,6 +171,78 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void executeToolLoop_whenMutationResultIsUnavailable_shouldRefreshStopAndNotCountSuccess() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_rule", "{}"));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
+                        + "\"mutationMayHaveCommitted\":true,\"message\":\"Refresh before retrying.\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertEquals(1, commandSet.size());
+        assertEquals("rule_list", commandSet.iterator().next().getPayload().get("target"));
+        assertEquals(0, recordInt(loopResult, "successfulToolCalls"));
+        assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
+        assertEquals(1, recordInt(loopResult, "uncertainMutationCalls"));
+        verify(llmChatService).chatWithTools(anyList(), anyList());
+    }
+
+    @Test
+    void executeToolLoop_whenReadOnlyResultIsUnavailable_shouldStopWithoutRefresh() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"));
+        when(aiToolManager.execute("list_rules", "{}"))
+                .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
+                        + "\"mutationMayHaveCommitted\":false}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertTrue(commandSet.isEmpty());
+        assertEquals(0, recordInt(loopResult, "successfulToolCalls"));
+        assertEquals(1, recordInt(loopResult, "resultUnavailableToolCalls"));
+        assertEquals(0, recordInt(loopResult, "uncertainMutationCalls"));
+        verify(llmChatService).chatWithTools(anyList(), anyList());
+    }
+
+    @Test
+    void executeToolLoop_whenDeletionNeedsConfirmation_shouldStopWithoutRefreshOrSecondPlanningRound() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("delete_device", "{\"id\":\"light_1\",\"confirmed\":false}"));
+        when(aiToolManager.execute("delete_device", "{\"id\":\"light_1\",\"confirmed\":false}"))
+                .thenReturn("{\"operation\":\"preview\",\"requiresUserConfirmation\":true,\"message\":\"No changes were made.\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertTrue(commandSet.isEmpty());
+        verify(llmChatService).chatWithTools(anyList(), anyList());
+        verify(aiToolManager).execute("delete_device", "{\"id\":\"light_1\",\"confirmed\":false}");
+    }
+
+    @Test
+    void executeToolLoop_whenAddDeviceOffersAlternativeName_shouldNotAcceptItForTheUser() throws Exception {
+        String args = "{\"templateName\":\"Light\",\"label\":\"Hall Light\"}";
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("add_device", args));
+        when(aiToolManager.execute("add_device", args))
+                .thenReturn("{\"error\":\"Display name is already in use. No device was created.\","
+                        + "\"errorCode\":\"DEVICE_LABEL_CONFLICT\",\"operation\":\"notCreated\","
+                        + "\"suggestedLabel\":\"Hall Light_1\",\"requiresUserConfirmation\":true}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        Object loopResult = invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertTrue(commandSet.isEmpty());
+        assertTrue(recordBoolean(loopResult, "confirmationPending"));
+        assertEquals(0, recordInt(loopResult, "successfulToolCalls"));
+        verify(llmChatService).chatWithTools(anyList(), anyList());
+        verify(aiToolManager).execute("add_device", args);
+    }
+
+    @Test
     void executeToolLoop_whenDeleteDeviceSucceeds_shouldRefreshDependentBoardLists() throws Exception {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("delete_device", "{\"identifier\":\"light_1\"}"))
@@ -164,7 +256,61 @@ class ChatServiceImplToolLoopControlTest {
         List<String> targets = commandSet.stream()
                 .map(cmd -> String.valueOf(cmd.getPayload().get("target")))
                 .toList();
-        assertEquals(List.of("device_list", "rule_list", "spec_list"), targets);
+        assertEquals(List.of("device_list", "environment_list", "rule_list", "spec_list"), targets);
+    }
+
+    @Test
+    void executeToolLoop_whenAddDeviceSucceeds_shouldRefreshDeviceAndEnvironmentLists() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("add_device", "{\"templateName\":\"Sensor\"}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("add_device", "{\"templateName\":\"Sensor\"}"))
+                .thenReturn("{\"message\":\"ok\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        List<String> targets = commandSet.stream()
+                .map(cmd -> String.valueOf(cmd.getPayload().get("target")))
+                .toList();
+        assertEquals(List.of("device_list", "environment_list"), targets);
+    }
+
+    @Test
+    void executeToolLoop_whenEnvironmentToolSucceeds_shouldRefreshEnvironmentList() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("manage_environment", "{\"action\":\"set\",\"name\":\"temperature\",\"value\":\"21\"}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("manage_environment", "{\"action\":\"set\",\"name\":\"temperature\",\"value\":\"21\"}"))
+                .thenReturn("{\"message\":\"ok\",\"changesApplied\":true}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        StreamResponseDto.CommandDto command = commandSet.iterator().next();
+        assertEquals("environment_list", command.getPayload().get("target"));
+    }
+
+    @Test
+    void executeToolLoop_whenRunHistoryChanges_shouldRefreshRunHistory() throws Exception {
+        for (String toolName : List.of(
+                "verify_model", "verify_model_async", "simulate_model_async",
+                "cancel_verify_task", "cancel_simulate_task",
+                "delete_trace", "delete_simulation_trace")) {
+            org.mockito.Mockito.reset(llmChatService, aiToolManager, messageRepo);
+            when(llmChatService.chatWithTools(anyList(), anyList()))
+                    .thenReturn(toolCallResult(toolName, "{}"))
+                    .thenReturn(textResult("done"));
+            when(aiToolManager.execute(toolName, "{}"))
+                    .thenReturn("{\"message\":\"ok\"}");
+
+            Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+            invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+            assertEquals(1, commandSet.size(), toolName);
+            StreamResponseDto.CommandDto command = commandSet.iterator().next();
+            assertEquals("run_history", command.getPayload().get("target"), toolName);
+        }
     }
 
     @Test
@@ -318,7 +464,47 @@ class ChatServiceImplToolLoopControlTest {
         String systemPrompt = streamedMessages.get().get(0).content();
         assertTrue(systemPrompt.contains("Tool executions may already be present"));
         assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));
+        assertTrue(systemPrompt.contains("resultAvailable=false"));
+        assertTrue(systemPrompt.contains("Do not expose device node ids"));
+        assertTrue(systemPrompt.contains("verificationStatus=NOT_VERIFIED"));
+        assertTrue(systemPrompt.contains("Reply in the language used by the user's latest message"));
         assertFalse(systemPrompt.contains("Available tools:"));
+        verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenChineseDeletionPreview_shouldLocalizeSafetyNotice() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        String arguments = "{\"id\":\"air_conditioner\",\"confirmed\":false}";
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("delete_device", arguments));
+        when(aiToolManager.execute("delete_device", arguments))
+                .thenReturn("{\"operation\":\"preview\",\"requiresUserConfirmation\":true}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("尚未删除，请确认是否继续。");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "删除设备 Air Conditioner", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent() != null
+                        && msg.getContent().startsWith("提示：当前只是未写入的影响预览或备选方案")
+                        && msg.getContent().contains("尚未删除，请确认是否继续。")
+                        && !msg.getContent().contains("A no-write preview")));
         verify(emitter).complete();
     }
 
@@ -356,6 +542,36 @@ class ChatServiceImplToolLoopControlTest {
         verify(emitter).complete();
     }
 
+    @Test
+    void processStreamChat_whenToolLoopReachesLimit_reportsPartialExecutionWithoutClaimingCompletion() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"));
+        when(aiToolManager.execute("list_rules", "{}")).thenReturn("{\"rules\":[]}");
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verify(llmChatService, never()).streamReply(anyList(), any(), any());
+        verify(aiToolManager, org.mockito.Mockito.times(5)).execute("list_rules", "{}");
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent() != null
+                        && msg.getContent().contains("reached its 5-round planning limit")
+                        && msg.getContent().contains("Some requested work may therefore be incomplete")
+                        && !msg.getContent().contains("operation completed")));
+        verify(emitter).complete();
+    }
+
     private Object invokeToolLoop(AtomicBoolean disconnected, Set<StreamResponseDto.CommandDto> commandSet) throws Exception {
         return invokeToolLoop(disconnected, commandSet, mock(SseEmitter.class));
     }
@@ -380,6 +596,18 @@ class ChatServiceImplToolLoopControlTest {
 
     private LlmChatResponse textResult(String text) {
         return LlmChatResponse.ofText(text);
+    }
+
+    private int recordInt(Object record, String accessor) throws Exception {
+        Method method = record.getClass().getDeclaredMethod(accessor);
+        method.setAccessible(true);
+        return (Integer) method.invoke(record);
+    }
+
+    private boolean recordBoolean(Object record, String accessor) throws Exception {
+        Method method = record.getClass().getDeclaredMethod(accessor);
+        method.setAccessible(true);
+        return (Boolean) method.invoke(record);
     }
 
 }

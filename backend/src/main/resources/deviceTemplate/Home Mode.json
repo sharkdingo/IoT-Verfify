@@ -9,7 +9,6 @@
 		{
 			"Name": "home;idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -17,7 +16,6 @@
 		{
 			"Name": "home;sendingAlertMessage",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -25,7 +23,6 @@
 		{
 			"Name": "home;sendingPhoto",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -33,7 +30,6 @@
 		{
 			"Name": "away;idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -41,7 +37,6 @@
 		{
 			"Name": "away;sendingAlertMessage",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -49,7 +44,6 @@
 		{
 			"Name": "away;sendingPhoto",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -57,7 +51,6 @@
 		{
 			"Name": "sleep;idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -65,7 +58,6 @@
 		{
 			"Name": "sleep;sendingAlertMessage",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -73,7 +65,6 @@
 		{
 			"Name": "sleep;sendingPhoto",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -90,7 +81,6 @@
 				"Value": "sendingAlertMessage"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		},
 		{
@@ -103,7 +93,6 @@
 				"Value": "sendingPhoto"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],
@@ -151,6 +140,7 @@
 			"Trigger": null,
 			"Assignments": [],
 			"Signal": true,
+			"AcceptsContent": true,
 			"Description": ""
 		}
 	]

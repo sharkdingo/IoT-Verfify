@@ -17,13 +17,18 @@ public class DeviceTemplateMapper {
         DeviceTemplateDto dto = new DeviceTemplateDto();
         dto.setId(po.getId());
         dto.setName(po.getName());
+        dto.setDefaultTemplate(po.getDefaultTemplate() == null || Boolean.TRUE.equals(po.getDefaultTemplate()));
 
-        DeviceManifest manifest = JsonUtils.fromJsonOrDefault(
-                po.getManifestJson(),
-                new TypeReference<DeviceManifest>() {},
-                new DeviceManifest()
-        );
-        manifest.setName(dto.getName());
+        DeviceManifest manifest = JsonUtils.readPersistedJsonRequired(
+                "device template", po.getId(), "manifestJson", po.getManifestJson(),
+                () -> JsonUtils.fromJson(
+                        po.getManifestJson(), new TypeReference<DeviceManifest>() {}));
+        if (po.getName() == null || manifest.getName() == null
+                || !po.getName().equals(manifest.getName())) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "device template", po.getId(), "manifestJson",
+                    "database name and manifest.Name must be exactly equal");
+        }
         dto.setManifest(manifest);
         return dto;
     }
@@ -36,6 +41,7 @@ public class DeviceTemplateMapper {
                 .userId(userId)
                 .name(dto.getName())
                 .manifestJson(JsonUtils.toJson(dto.getManifest()))
+                .defaultTemplate(Boolean.TRUE.equals(dto.getDefaultTemplate()))
                 .build();
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DeviceNode } from '../types/node'
@@ -13,7 +13,22 @@ import {
 
 import { getLinkPoints } from '../utils/rule'
 
-import { getDeviceIconPath, getVariableIconPath } from '../utils/device'
+import {
+  findTraceVariableAtOrBefore,
+  isEdgeActiveInTrace,
+  isEdgeCompromisedInTrace,
+  normalizeTraceComparable,
+  shouldAnimateEdgeFlow,
+  toTraceDeviceId,
+  traceDeviceMatchesId,
+  traceVariableMatchesName,
+  type TraceDeviceLike
+} from '../utils/traceEdgePlayback'
+import {
+  isDeviceRepresentedInPlayback,
+  playbackDeviceChanged,
+  playbackDeviceSecurityFacts
+} from '../utils/traceView'
 
 const { t } = useI18n()
 
@@ -65,10 +80,7 @@ const getParticleSize = (index: number): number => {
   return sizes[index % sizes.length]
 }
 
-const getParticleDuration = (index: number): string => {
-  const durations = ['3s', '5s', '4s']
-  return durations[index % durations.length]
-}
+const TRACE_FLOW_DURATION = '1.1s'
 
 // Node color utilities (matching Canvas Map colors)
 // Use node ID to generate stable color assignment
@@ -148,25 +160,9 @@ const getNodeBorderColor = (nodeId: string): string => {
   return borderColors[colorIndex] || borderColors[0]
 }
 
-// 获取变量节点的边框颜色（使用父设备的颜色）
-const getVariableNodeBorderColor = (node: DeviceNode): string => {
-  if (!node.templateName.startsWith('variable_')) {
-    return getNodeBorderColor(node.id)
-  }
-  // 从变量节点ID提取父设备ID（格式：deviceId_variableName，使用lastIndexOf处理deviceId中可能存在的下划线）
-  const parentDeviceId = node.id.substring(0, node.id.lastIndexOf('_'))
-  return getNodeBorderColor(parentDeviceId)
-}
+const getVariableNodeBorderColor = (node: DeviceNode): string => getNodeBorderColor(node.id)
 
-// 获取变量节点的背景颜色（使用父设备的颜色）
-const getVariableNodeBgColor = (node: DeviceNode): string => {
-  if (!node.templateName.startsWith('variable_')) {
-    return getNodeBgColor(node.id)
-  }
-  // 从变量节点ID提取父设备ID
-  const parentDeviceId = node.id.substring(0, node.id.lastIndexOf('_'))
-  return getNodeBgColor(parentDeviceId)
-}
+const getVariableNodeBgColor = (node: DeviceNode): string => getNodeBgColor(node.id)
 
 // Get arrow marker ID based on source device color
 const getArrowMarker = (edge: DeviceEdge): string => {
@@ -209,47 +205,22 @@ const svgDataUri = (svg: string): string =>
   `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
 
 // Handle image loading errors by showing a stable inline SVG fallback.
-const handleImageError = (event: Event, node: DeviceNode) => {
+const handleImageError = (event: Event) => {
   const img = event.target as HTMLImageElement
   img.onerror = null
-  // 如果是变量节点，使用变量默认图标
-  if (node.templateName.startsWith('variable_')) {
-    const variableName = node.templateName.replace('variable_', '')
-    const iconPath = getVariableIconPath(variableName)
-    if (iconPath) {
-      img.src = iconPath
-      return
-    }
-  }
   img.src = svgDataUri(fallbackDeviceSvg)
 }
 
-// 获取设备在轨迹中的最新状态（从之前的轨迹状态中查找）
-const getLatestTraceState = (nodeId: string, nodeLabel: string): string | null => {
-  if (!props.highlightedTrace?.states) return null
-  
-  const nodeIdLower = nodeId.toLowerCase()
-  const nodeLabelLower = nodeLabel.toLowerCase()
-  
-  // 从当前选中状态向前查找，找到设备最近的状态
-  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
-  for (let i = currentIndex; i >= 0; i--) {
-    const state = props.highlightedTrace.states[i]
-    if (!state?.devices) continue
-    
-    const device = state.devices.find(d => 
-      d.deviceId.toLowerCase() === nodeIdLower || 
-      d.deviceLabel.toLowerCase() === nodeLabelLower ||
-      d.deviceId.toLowerCase() === nodeLabelLower ||
-      d.deviceLabel.toLowerCase() === nodeIdLower
-    )
-    
-    if (device) {
-      return (device as any).state || (device as any).newState || null
-    }
+const getVariableNodeParts = (node: DeviceNode): { parentId: string; variableName: string } | null => {
+  if (!isVariableNode(node)) return null
+  const parent = props.nodes
+    .filter(candidate => !isVariableNode(candidate) && node.id.startsWith(`${candidate.id}_`))
+    .sort((a, b) => b.id.length - a.id.length)[0]
+  if (!parent) return null
+  return {
+    parentId: parent.id,
+    variableName: node.id.slice(parent.id.length + 1)
   }
-  
-  return null
 }
 
 // 获取节点的前一个状态（用于动画判断）
@@ -263,29 +234,21 @@ const getPreviousState = (node: DeviceNode): string | null => {
     const state = props.highlightedTrace.states[i]
     if (!state?.devices) continue
 
-    const device = state.devices.find(d =>
-      d.deviceId.toLowerCase() === node.id.toLowerCase() ||
-      d.deviceLabel.toLowerCase() === node.label.toLowerCase() ||
-      d.deviceId.toLowerCase() === node.label.toLowerCase() ||
-      d.deviceLabel.toLowerCase() === node.id.toLowerCase()
-    )
+    const device = state.devices.find(d => traceDeviceMatchesId(d, node.id))
 
     if (device) {
-      const prev = (device as any).state || (device as any).newState || null
+      const prev = device.state || null
       return prev
     }
   }
   return null
 }
 
-// 检查设备是否被攻击（is_attack = TRUE）
-const isDeviceAttacked = (nodeId: string, nodeLabel: string): boolean => {
+// Check the user-facing compromise state returned by the trace API.
+const isDeviceAttacked = (nodeId: string): boolean => {
   if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
     return false
   }
-
-  const nodeIdLower = nodeId.toLowerCase()
-  const nodeLabelLower = nodeLabel.toLowerCase()
 
   // 从当前选中状态向前查找，找到设备最近的状态
   const currentIndex = props.highlightedTrace.selectedStateIndex
@@ -293,20 +256,9 @@ const isDeviceAttacked = (nodeId: string, nodeLabel: string): boolean => {
     const state = props.highlightedTrace.states[i]
     if (!state?.devices) continue
 
-    const device = state.devices.find(d =>
-      d.deviceId.toLowerCase() === nodeIdLower ||
-      d.deviceLabel.toLowerCase() === nodeLabelLower ||
-      d.deviceId.toLowerCase() === nodeLabelLower ||
-      d.deviceLabel.toLowerCase() === nodeIdLower
-    )
+    const device = state.devices.find(d => traceDeviceMatchesId(d, nodeId))
 
-    if (device?.variables) {
-      // 检查 variables 中是否有 is_attack = TRUE
-      const isAttackVar = device.variables.find(v => v.name === 'is_attack')
-      if (isAttackVar && isAttackVar.value.toUpperCase() === 'TRUE') {
-        return true
-      }
-    }
+    if (device?.compromised === true) return true
   }
 
   return false
@@ -314,33 +266,19 @@ const isDeviceAttacked = (nodeId: string, nodeLabel: string): boolean => {
 
 // 获取节点的当前状态
 const getNodeState = (node: DeviceNode): string => {
-  // 如果有高亮轨迹且当前选中了某个状态，显示轨迹中的状态
   if (props.highlightedTrace && props.highlightedTrace.selectedStateIndex !== undefined) {
-    // 先尝试从当前状态中获取设备状态
-    const traceDevice = getTraceDeviceForNode(node.id, node.label)
-    if (traceDevice) {
-      // 优先使用 state 字段，兼容历史 JSON 中的 newState 字段
-      return (traceDevice as any).state || (traceDevice as any).newState || node.state || 'Working'
+    const traceDevice = getLatestTraceDeviceForNode(node.id)
+    if (!traceDevice) {
+      return t('app.traceVisualization.notRepresentedInTrace')
     }
-    
-    // 如果当前状态中没有该设备，从之前的轨迹状态中获取最新状态
-    const latestState = getLatestTraceState(node.id, node.label)
-    if (latestState) {
-      return latestState
-    }
-    
-    // 如果轨迹中没有记录，保持当前节点状态不变
-    return node.state || 'Working'
+    return traceDevice.state?.trim() || t('app.traceVisualization.stateUnavailableInTrace')
   }
-  // 否则显示节点的初始状态
   return node.state || 'Working'
 }
 
 // 获取状态显示的样式类
 const getStateDisplayClass = (node: DeviceNode): string => {
-  // 翻转动画时使用旧状态
-  const flippingState = getFlippingState(node)
-  const state = flippingState || getNodeState(node) || 'Working'
+  const state = getNodeState(node) || 'Working'
   // 根据状态返回不同的样式类
   const stateLower = state.toLowerCase()
   if (stateLower === 'off' || stateLower === 'closed' || stateLower === 'locked' || stateLower === 'stop' || stateLower === 'pause') {
@@ -355,47 +293,20 @@ const getStateDisplayClass = (node: DeviceNode): string => {
   return 'state-default'
 }
 
-// 判断是否为变量节点
-const isVariableNode = (node: DeviceNode): boolean => {
-  return node.templateName.startsWith('variable_')
-}
+const isVariableNode = (_node: DeviceNode): boolean => false
 
 // 获取节点当前状态对应的图标
 const getCurrentNodeIcon = (node: DeviceNode): string => {
-  // 如果是变量节点（templateName 以 variable_ 开头），从 variables 文件夹获取图标
-  if (node.templateName.startsWith('variable_')) {
-    const variableName = node.templateName.replace('variable_', '')
-    return getVariableIconPath(variableName)
+  if (isTraceActive.value && !getLatestTraceDeviceForNode(node.id)) {
+    return props.getNodeIcon(node) || svgDataUri(fallbackDeviceSvg)
   }
+  const currentState = getNodeState(node) || 'Working'
 
-  const folder = node.templateName.replace(/ /g, '_')
-  
-  // 如果正在翻转动画中，使用旧状态
-  const flippingState = getFlippingState(node)
-  const currentState = flippingState || getNodeState(node) || 'Working'
-
-  // 尝试不同的状态名称变体
-  const possibleStates = [
-    currentState,
-    currentState.toLowerCase(),
-    currentState.charAt(0).toUpperCase() + currentState.slice(1).toLowerCase(),
-    'Working',
-    'On',
-    'Off'
-  ]
-
-  for (const stateName of possibleStates) {
-    try {
-      const path = getDeviceIconPath(folder, stateName)
-      if (path) return path
-    } catch (e) {
-      continue
-    }
-  }
-
-  // 如果所有尝试都失败，返回内联 SVG 占位图
-  return svgDataUri(fallbackDeviceSvg)
+  return props.getNodeIcon(node, currentState) || svgDataUri(fallbackDeviceSvg)
 }
+
+const getNodeVisualStateKey = (node: DeviceNode): string =>
+  `${toTraceDeviceId(node.id)}:${getNodeState(node)}`
 
 const props = defineProps<{
   /** 所有设备节点（Board.vue 的 nodes.value） */
@@ -407,23 +318,22 @@ const props = defineProps<{
   /** 画布缩放（Board.vue 的 canvasZoom.value） */
   zoom: number
   /** 获取节点图标路径（Board.vue 传入 getNodeIcon） */
-  getNodeIcon: (node: DeviceNode) => string
+  getNodeIcon: (node: DeviceNode, stateOverride?: string) => string
   /** 获取节点标签样式（Board.vue 传入 getNodeLabelStyle） */
   getNodeLabelStyle: (node: DeviceNode) => Record<string, string | number>
   /** 高亮显示的反例路径 */
   highlightedTrace?: {
     states: Array<{
-      devices: Array<{
-        deviceId: string
-        deviceLabel: string
-        state?: string  // 新字段
-        newState?: string  // 兼容旧数据
-        variables?: Array<{ name: string; value: string }>
-      }>
+      devices: TraceDeviceLike[]
       envVariables?: Array<{ name: string; value: string; trust?: string }>
+      rules?: number[]
     }>
     selectedStateIndex?: number
   } | null
+  focusedNodeId?: string | null
+  focusedRuleId?: string | null
+  /** Model playback is a saved snapshot; prevent canvas mutations while it is visible. */
+  interactionLocked?: boolean
 }>()
 
 const GRID_SIZE_PX = 32
@@ -439,147 +349,133 @@ const canvasGridStyle = computed(() => {
   }
 })
 
-// 获取当前选中状态的设备信息
-const currentTraceDevices = computed(() => {
-  if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) {
-    return []
-  }
-  return props.highlightedTrace.states[props.highlightedTrace.selectedStateIndex]?.devices || []
-})
-
-// 判断是否有反例路径动画在进行
-const isTraceActive = computed(() => {
-  return props.highlightedTrace?.states && 
-         props.highlightedTrace.selectedStateIndex !== undefined &&
-         props.highlightedTrace.selectedStateIndex >= 0
-})
-
-// 跟踪每个节点是否需要触发动画（使用节点ID作为key）
-const nodeAnimationTrigger = ref<Record<string, number>>({})
-
-// 跟踪每个节点的旧状态（用于翻转动画显示）
-const nodePreviousState = ref<Record<string, string>>({})
-
-// 监听状态索引变化，触发节点状态变化动画
-watch(() => props.highlightedTrace?.selectedStateIndex, (newIndex, oldIndex) => {
-  if (newIndex === undefined || newIndex === oldIndex) return
-  
-  // 当状态变化时，比较每个节点的状态变化
-  const currentState = props.highlightedTrace?.states?.[newIndex]
-  const prevState = oldIndex !== undefined ? props.highlightedTrace?.states?.[oldIndex] : null
-  
-  if (!currentState?.devices) return
-  
-  for (const device of currentState.devices) {
-    const deviceIdLower = device.deviceId.toLowerCase()
-    const deviceLabelLower = device.deviceLabel.toLowerCase()
-    const currentDeviceState = device.state || device.newState || null
-    
-    // 获取前一个状态
-    let prevDeviceState: string | null = null
-    if (prevState?.devices) {
-      const prevDevice = prevState.devices.find((d: any) => 
-        d.deviceId.toLowerCase() === deviceIdLower || 
-        d.deviceLabel.toLowerCase() === deviceLabelLower
-      )
-      if (prevDevice) {
-        prevDeviceState = prevDevice.state || prevDevice.newState || null
-      }
-    }
-    
-    // 如果状态不同，触发动画（通过增加trigger值来强制重新渲染）
-    if (currentDeviceState && prevDeviceState && currentDeviceState !== prevDeviceState) {
-      const nodeId = deviceIdLower === deviceLabelLower ? deviceIdLower : deviceIdLower + '_' + deviceLabelLower
-      nodeAnimationTrigger.value[nodeId] = (nodeAnimationTrigger.value[nodeId] || 0) + 1
-      // 保存旧状态，用于翻转过程中显示
-      nodePreviousState.value[nodeId] = prevDeviceState
-    }
-  }
-  
-  // 动画完成后清除旧状态（延迟清除，给翻转动画时间完成）
-  setTimeout(() => {
-    nodePreviousState.value = {}
-    // 清除触发器，确保只有状态真正变化时才再次触发
-    nodeAnimationTrigger.value = {}
-  }, 650)
-})
-
-// 判断节点是否应该播放翻转动画
-const shouldAnimateFlip = (node: DeviceNode): boolean => {
-  const nodeIdLower = node.id.toLowerCase()
-  const nodeLabelLower = node.label.toLowerCase()
-  const triggerKey = nodeIdLower === nodeLabelLower ? nodeIdLower : nodeIdLower + '_' + nodeLabelLower
-  
-  // 检查是否有动画触发
-  return !!nodeAnimationTrigger.value[triggerKey]
+const getLatestTraceVariableValueForNode = (nodeId: string, variableName: string): string | null => {
+  if (!props.highlightedTrace?.states) return null
+  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
+  const variable = findTraceVariableAtOrBefore(props.highlightedTrace, nodeId, variableName, currentIndex)
+  return variable ? normalizeTraceComparable(variable.value) : null
 }
 
-// 用于模板中的翻转状态（计算属性）
-const getFlippingStateForNode = (node: DeviceNode): string | null => {
-  return getFlippingState(node)
+const getLatestTraceVariableForNode = (nodeId: string, variableName: string) => {
+  if (!props.highlightedTrace?.states) return null
+  return findTraceVariableAtOrBefore(
+    props.highlightedTrace,
+    nodeId,
+    variableName,
+    props.highlightedTrace.selectedStateIndex || 0
+  )
 }
 
-// 获取节点在翻转动画中应该显示的状态（旧状态）
-const getFlippingState = (node: DeviceNode): string | null => {
-  const nodeIdLower = node.id.toLowerCase()
-  const nodeLabelLower = node.label.toLowerCase()
-  const triggerKey = nodeIdLower === nodeLabelLower ? nodeIdLower : nodeIdLower + '_' + nodeLabelLower
-  
-  // 如果正在动画，返回旧状态
-  if (shouldAnimateFlip(node) && nodePreviousState.value[triggerKey]) {
-    return nodePreviousState.value[triggerKey]
+const getPreviousTraceVariableValueForNode = (nodeId: string, variableName: string): string | null => {
+  if (!props.highlightedTrace?.states || props.highlightedTrace.selectedStateIndex === undefined) return null
+  if (props.highlightedTrace.selectedStateIndex <= 0) return null
+  const variable = findTraceVariableAtOrBefore(props.highlightedTrace, nodeId, variableName, props.highlightedTrace.selectedStateIndex - 1)
+  return variable ? normalizeTraceComparable(variable.value) : null
+}
+
+const getLatestTraceDeviceForNodeAtOrBefore = (nodeId: string, endIndex: number): TraceDeviceLike | null => {
+  if (!props.highlightedTrace?.states) return null
+  const boundedIndex = Math.min(Math.max(endIndex, 0), props.highlightedTrace.states.length - 1)
+  for (let i = boundedIndex; i >= 0; i--) {
+    const state = props.highlightedTrace.states[i]
+    if (!state?.devices) continue
+    const device = state.devices.find(d => traceDeviceMatchesId(d, nodeId))
+    if (device) return device
   }
   return null
 }
 
-// 判断节点是否在当前反例路径中
-const isNodeInTrace = (node: DeviceNode): boolean => {
-  if (!isTraceActive.value || !props.highlightedTrace?.states) return false
-  
-  const nodeIdLower = node.id.toLowerCase()
-  const nodeLabelLower = node.label.toLowerCase()
-  
-  // 检查当前选中状态
-  if (currentTraceDevices.value.some(d => 
-    d.deviceId.toLowerCase() === nodeIdLower || 
-    d.deviceLabel.toLowerCase() === nodeLabelLower ||
-    d.deviceId.toLowerCase() === nodeLabelLower ||
-    d.deviceLabel.toLowerCase() === nodeIdLower
-  )) {
-    return true
-  }
-  
-  // 检查之前的轨迹状态
-  const currentIndex = props.highlightedTrace.selectedStateIndex || 0
-  for (let i = 0; i < currentIndex; i++) {
-    const state = props.highlightedTrace.states[i]
-    if (!state?.devices) continue
-    
-    if (state.devices.some(d => 
-      d.deviceId.toLowerCase() === nodeIdLower || 
-      d.deviceLabel.toLowerCase() === nodeLabelLower ||
-      d.deviceId.toLowerCase() === nodeLabelLower ||
-      d.deviceLabel.toLowerCase() === nodeIdLower
-    )) {
-      return true
-    }
-  }
-  
-  return false
+const getLatestTraceDeviceForNode = (nodeId: string): TraceDeviceLike | null =>
+  getLatestTraceDeviceForNodeAtOrBefore(nodeId, props.highlightedTrace?.selectedStateIndex || 0)
+
+const getPreviousTraceDeviceForNode = (nodeId: string): TraceDeviceLike | null => {
+  const selectedIndex = props.highlightedTrace?.selectedStateIndex
+  if (selectedIndex === undefined || selectedIndex <= 0) return null
+  return getLatestTraceDeviceForNodeAtOrBefore(nodeId, selectedIndex - 1)
 }
 
-// 获取变量节点在反例路径中的值
+const getEdgePlaybackClass = (edge: DeviceEdge) => {
+  const traceActive = isEdgeActiveInTrace(edge, props.edges, props.highlightedTrace)
+  const linkCompromised = isEdgeCompromisedInTrace(edge, props.highlightedTrace)
+  const ruleFocused = Boolean(props.focusedRuleId && edge.ruleId === props.focusedRuleId)
+  return {
+    'edge-line--active': traceActive,
+    'edge-line--compromised': linkCompromised,
+    'edge-line--focused': ruleFocused,
+    'edge-line--dimmed': isTraceActive.value && !traceActive && !linkCompromised && !ruleFocused
+  }
+}
+
+// 判断是否有反例路径动画在进行
+const isTraceActive = computed(() => {
+  return Boolean(
+    props.highlightedTrace?.states &&
+    props.highlightedTrace.selectedStateIndex !== undefined &&
+    props.highlightedTrace.selectedStateIndex >= 0
+  )
+})
+
+// Each selected transition gets a fresh CSS animation mount, including rapid manual jumps.
+const nodeAnimationTrigger = ref<Record<string, number>>({})
+let nodeAnimationResetTimer: ReturnType<typeof setTimeout> | null = null
+let nodeAnimationSequence = 0
+
+// Animate only the delta that produced the selected model state. A manual jump to
+// state N still compares N with N-1, rather than with whichever state the user last viewed.
+watch(() => props.highlightedTrace?.selectedStateIndex, async (newIndex, oldIndex) => {
+  if (newIndex === undefined) {
+    nodeAnimationSequence++
+    nodeAnimationTrigger.value = {}
+    if (nodeAnimationResetTimer) {
+      clearTimeout(nodeAnimationResetTimer)
+      nodeAnimationResetTimer = null
+    }
+    return
+  }
+  if (newIndex === oldIndex) return
+
+  const sequence = ++nodeAnimationSequence
+  nodeAnimationTrigger.value = {}
+  await nextTick()
+  if (sequence !== nodeAnimationSequence || props.highlightedTrace?.selectedStateIndex !== newIndex) return
+
+  const nextTriggers: Record<string, number> = {}
+  for (const node of props.nodes) {
+    if (!isNodeTraceChanged(node)) continue
+    const triggerKey = toTraceDeviceId(node.id)
+    nextTriggers[triggerKey] = sequence
+  }
+  nodeAnimationTrigger.value = nextTriggers
+
+  if (nodeAnimationResetTimer) {
+    clearTimeout(nodeAnimationResetTimer)
+  }
+  nodeAnimationResetTimer = setTimeout(() => {
+    nodeAnimationTrigger.value = {}
+    nodeAnimationResetTimer = null
+  }, 760)
+})
+
+const shouldAnimateTraceChange = (node: DeviceNode): boolean =>
+  !!nodeAnimationTrigger.value[toTraceDeviceId(node.id)]
+
+const isNodeRepresentedInTrace = (node: DeviceNode): boolean =>
+  isTraceActive.value && isDeviceRepresentedInPlayback(props.highlightedTrace?.states, node.id)
+
+// Whether the selected state (or a prior sparse state) has authoritative data for the node.
+const isNodeInTrace = (node: DeviceNode): boolean => {
+  return isTraceActive.value && getLatestTraceDeviceForNode(node.id) !== null
+}
+
+// Trace fallback for non-authoritative variable rows.
 const getTraceVariableValue = (node: DeviceNode): { value: string; state: string } | null => {
   if (!isTraceActive.value || !props.highlightedTrace?.states) return null
   
-  // 从节点ID提取父设备ID和变量名（格式：parentDeviceId_variableName）
-  const parts = node.id.split('_')
-  if (parts.length < 2) return null
-  
-  const parentDeviceId = parts[0]
-  const variableName = parts.slice(1).join('_')
-  const parentIdLower = parentDeviceId.toLowerCase()
-  const varNameLower = variableName.toLowerCase()
+  const variableParts = getVariableNodeParts(node)
+  if (!variableParts) return null
+
+  const parentDeviceId = variableParts.parentId
+  const variableName = variableParts.variableName
   
   // 从当前选中状态向前查找，找到设备最近的变量值和状态
   const currentIndex = props.highlightedTrace.selectedStateIndex || 0
@@ -587,24 +483,18 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
     const state = props.highlightedTrace.states[i]
     if (!state?.devices) continue
     
-    const deviceState = state.devices.find(d => 
-      d.deviceId.toLowerCase() === parentIdLower || 
-      d.deviceLabel.toLowerCase() === parentIdLower ||
-      d.deviceId.toLowerCase() === parentIdLower ||
-      d.deviceLabel.toLowerCase() === parentIdLower
-    )
+    const deviceState = state.devices.find(d => traceDeviceMatchesId(d, parentDeviceId))
     
     if (deviceState) {
       // 查找对应的变量值（大小写不敏感匹配）
-      const variable = deviceState.variables?.find(v => 
-        v.name.toLowerCase() === varNameLower || 
-        v.name.toLowerCase() === `d_${varNameLower}`
-      )
+      const variable = deviceState.variables?.find(v => traceVariableMatchesName(v, variableName))
       
       if (variable) {
         return {
-          value: variable.value || 'Unknown',
-          state: (deviceState as any).state || (deviceState as any).newState || 'Working'
+          value: variable.value === null || variable.value === undefined || variable.value === ''
+            ? 'Unknown'
+            : String(variable.value),
+          state: deviceState.state || 'Working'
         }
       }
       // 如果当前状态没有该变量，继续向前查找（使用上一个时间点的值）
@@ -612,18 +502,6 @@ const getTraceVariableValue = (node: DeviceNode): { value: string; state: string
   }
   
   return null
-}
-
-// 根据节点ID或标签查找对应的trace设备
-const getTraceDeviceForNode = (nodeId: string, nodeLabel: string) => {
-  const nodeIdLower = nodeId.toLowerCase()
-  const nodeLabelLower = nodeLabel.toLowerCase()
-  return currentTraceDevices.value.find(d => 
-    d.deviceId.toLowerCase() === nodeIdLower || 
-    d.deviceLabel.toLowerCase() === nodeLabelLower ||
-    d.deviceId.toLowerCase() === nodeLabelLower ||
-    d.deviceLabel.toLowerCase() === nodeIdLower
-  )
 }
 
 const emit = defineEmits<{
@@ -638,12 +516,10 @@ const emit = defineEmits<{
   (e: 'canvas-leave'): void
   /** wheel 事件仍交给 Board.vue 控制缩放 */
   (e: 'canvas-wheel', evt: WheelEvent): void
-  /** 节点右键（设备弹窗） */
-  (e: 'node-context', node: DeviceNode, evt: MouseEvent): void
   /** 键盘或辅助技术打开节点详情 */
   (e: 'node-open', node: DeviceNode): void
-  /** 键盘打开节点上下文菜单 */
-  (e: 'node-keyboard-context', node: DeviceNode, position: { x: number; y: number }): void
+  /** 鼠标、键盘或辅助技术打开节点上下文菜单 */
+  (e: 'node-context', node: DeviceNode, position: { x: number; y: number }): void
   /** 键盘删除节点 */
   (e: 'node-delete', nodeId: string): void
   /** 节点拖拽或缩放结束，通知 Board.vue 持久化 nodes/edges */
@@ -656,6 +532,12 @@ const dragState = createNodeDragState()
 
 const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
   e.preventDefault()
+  if (e.button !== 0 || !e.isPrimary) {
+    return
+  }
+  if (props.interactionLocked) {
+    return
+  }
   // 只处理节点自身拖拽，不影响画布平移（事件在模板里用了 .stop）
   beginNodeDrag(e, node, dragState)
   window.addEventListener('pointermove', onNodePointerMove)
@@ -663,7 +545,7 @@ const onNodePointerDown = (e: PointerEvent, node: DeviceNode) => {
 }
 
 const onNodePointerMove = (e: PointerEvent) => {
-  const changed = updateNodeDrag(e, dragState)
+  const changed = updateNodeDrag(e, dragState, props.zoom)
   if (!changed || !dragState.node) return
 
   // 节点位置变了，更新相关边几何
@@ -671,9 +553,20 @@ const onNodePointerMove = (e: PointerEvent) => {
 }
 
 const onNodePointerUp = () => {
+  const node = dragState.node
+  const movedEnough = node
+    ? Math.hypot(
+      node.position.x - dragState.origin.x,
+      node.position.y - dragState.origin.y
+    ) > 1
+    : false
   const moved = endNodeDrag(dragState)
   if (moved) {
-    emit('node-moved-or-resized', moved.id)
+    if (movedEnough) {
+      emit('node-moved-or-resized', moved.id)
+    } else if (!isVariableNode(moved)) {
+      emit('node-open', moved)
+    }
   }
   window.removeEventListener('pointermove', onNodePointerMove)
   window.removeEventListener('pointerup', onNodePointerUp)
@@ -690,13 +583,14 @@ const onPointerDownResize = (
 ) => {
   e.stopPropagation()
   e.preventDefault()
+  if (props.interactionLocked) return
   beginNodeResize(e, node, dir, resizeState)
   window.addEventListener('pointermove', onPointerMoveResize)
   window.addEventListener('pointerup', onPointerUpResize)
 }
 
 const onPointerMoveResize = (e: PointerEvent) => {
-  const changed = updateNodeResize(e, resizeState)
+  const changed = updateNodeResize(e, resizeState, props.zoom)
   if (!changed || !resizeState.node) return
 
   updateEdgesForNode(resizeState.node.id, props.nodes, props.edges)
@@ -760,15 +654,216 @@ const getAdjustedLinkPoints = (fromNode: DeviceNode | undefined, toNode: DeviceN
   return { fromPoint, toPoint }
 }
 
-/* ====== 右键节点：交给 Board.vue 处理弹窗 ====== */
+type NodeVisualTier = 'compact' | 'expanded'
+
+const relationSymbols: Record<string, string> = {
+  EQ: '=',
+  NEQ: '!=',
+  GT: '>',
+  GTE: '>=',
+  LT: '<',
+  LTE: '<=',
+  in: 'in',
+  not_in: 'not in',
+  'not in': 'not in'
+}
+
+const getRelationSymbol = (relation?: string) =>
+  relation ? (relationSymbols[relation] || relation) : ''
+
+const hasValue = (value: unknown) =>
+  value !== null && value !== undefined && String(value).trim() !== ''
+
+const truncateCanvasText = (value: string, maxLength = 46) => {
+  const normalized = String(value || '').trim()
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
+const getNodeVisualTier = (node: DeviceNode): NodeVisualTier => {
+  const screenWidth = node.width * props.zoom
+  const screenHeight = node.height * props.zoom
+  if (screenWidth < 128 || screenHeight < 98) return 'compact'
+  return 'expanded'
+}
+
+const getNodeVisualTierClass = (node: DeviceNode) =>
+  `device-node--${getNodeVisualTier(node)}`
+
+const getNodeRuntimeBadges = (node: DeviceNode) => {
+  const traceDevice = isTraceActive.value ? getLatestTraceDeviceForNode(node.id) : null
+  const configuredVariables = node.variables || []
+  const traceOnlyVariables = (traceDevice?.variables || [])
+    .map(variable => ({
+      name: variable.name,
+      value: normalizeTraceComparable(variable.value),
+      trust: variable.trust
+    }))
+  const candidates = isTraceActive.value ? traceOnlyVariables : configuredVariables
+
+  return candidates
+    .filter(variable =>
+      hasValue(variable.value) ||
+      (isTraceActive.value && getLatestTraceVariableValueForNode(node.id, variable.name) !== null)
+    )
+    .slice(0, 3)
+    .map(variable => {
+      const traceVariable = isTraceActive.value
+        ? getLatestTraceVariableForNode(node.id, variable.name)
+        : null
+      const traceValue = isTraceActive.value
+        ? (traceVariable ? normalizeTraceComparable(traceVariable.value) : null)
+        : null
+      const previousTraceValue = isTraceActive.value
+        ? getPreviousTraceVariableValueForNode(node.id, variable.name)
+        : null
+      const value = traceValue ?? String(variable.value)
+      const trust = traceVariable?.trust || variable.trust
+      const trustLabel = trust === 'trusted' || trust === 'untrusted'
+        ? t(`app.${trust}`)
+        : ''
+      const changed = traceValue !== null &&
+        previousTraceValue !== null &&
+        previousTraceValue !== traceValue
+      return {
+        label: variable.name,
+        value,
+        previousValue: changed ? previousTraceValue : null,
+        trust,
+        changed,
+        title: `${variable.name}: ${value}${trustLabel ? ` (${trustLabel})` : ''}`
+      }
+    })
+}
+
+const getNodeSecurityBadges = (node: DeviceNode) => {
+  if (isTraceActive.value) {
+    const traceDevice = getLatestTraceDeviceForNode(node.id)
+    if (!traceDevice) return []
+    const facts = playbackDeviceSecurityFacts(traceDevice as Parameters<typeof playbackDeviceSecurityFacts>[0])
+    const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
+    if (facts.untrustedLabels.length > 0) {
+      badges.push({
+        kind: 'trust',
+        label: t('app.traceVisualization.includesUntrustedSource'),
+        title: t('app.traceVisualization.untrustedLabelDetails', { labels: facts.untrustedLabels.join(', ') })
+      })
+    } else if (facts.hasTrustLabels) {
+      badges.push({
+        kind: 'trust',
+        label: t('app.traceVisualization.shownSourcesTrusted'),
+        title: t('app.traceVisualization.shownSourcesTrustedDetails')
+      })
+    }
+    if (facts.privateLabels.length > 0) {
+      badges.push({
+        kind: 'privacy',
+        label: t('app.traceVisualization.includesPrivateData'),
+        title: t('app.traceVisualization.privateLabelDetails', { labels: facts.privateLabels.join(', ') })
+      })
+    }
+    return badges
+  }
+
+  const badges: Array<{ kind: 'trust' | 'privacy'; label: string; title: string }> = []
+  if (node.currentStateTrust) {
+    badges.push({
+      kind: 'trust',
+      label: t(`app.${node.currentStateTrust}`),
+      title: t('app.stateTrust')
+    })
+  }
+  const privateLabels = (node.privacies || [])
+    .filter(entry => entry.privacy === 'private')
+    .map(entry => entry.name)
+  if (node.currentStatePrivacy === 'private') {
+    privateLabels.unshift(t('app.currentStateProperty'))
+  }
+  if (privateLabels.length > 0) {
+    badges.push({
+      kind: 'privacy',
+      label: t('app.traceVisualization.includesPrivateData'),
+      title: t('app.traceVisualization.configuredPrivateLabelDetails', { labels: privateLabels.join(', ') })
+    })
+  }
+  return badges
+}
+
+const isNodeTraceChanged = (node: DeviceNode) => {
+  if (!isTraceActive.value) return false
+  const current = getLatestTraceDeviceForNode(node.id)
+  const previous = getPreviousTraceDeviceForNode(node.id)
+  return Boolean(current && playbackDeviceChanged(current, previous))
+}
+
+const getNodeStateTitle = (node: DeviceNode) => {
+  const current = getNodeState(node)
+  const previous = getPreviousState(node)
+  if (previous && previous !== getNodeState(node)) {
+    return `${previous} -> ${getNodeState(node)}`
+  }
+  return current
+}
+
+const getFullEdgeLabel = (edge: DeviceEdge) => {
+  const sourceName = edge.fromLabel || edge.from
+  const targetName = edge.toLabel || edge.to
+  const relation = getRelationSymbol(edge.relation)
+  const sourceSignal = edge.fromApi || edge.itemType || t('app.condition')
+  const condition = relation && hasValue(edge.value)
+    ? `${sourceName}.${sourceSignal} ${relation} ${edge.value}`
+    : `${sourceName}.${sourceSignal}`
+  const action = edge.toApi ? `${targetName}.${edge.toApi}` : targetName
+  return `${condition} -> ${action}`
+}
+
+const getEdgeLabelText = (edge: DeviceEdge) =>
+  truncateCanvasText(getFullEdgeLabel(edge))
+
+const getEdgeLabelWidth = (edge: DeviceEdge) => {
+  const length = getEdgeLabelText(edge).length
+  return Math.min(240, Math.max(76, length * 6 + 18))
+}
+
+const hoveredEdgeId = ref<string | null>(null)
+const focusedEdgeId = ref<string | null>(null)
+
+const shouldShowEdgeLabel = (edge: DeviceEdge) =>
+  !isInternalVariableEdge(edge) &&
+  (hoveredEdgeId.value === edge.id || focusedEdgeId.value === edge.id)
+
+const setHoveredEdge = (edgeId: string | null) => {
+  hoveredEdgeId.value = edgeId
+}
+
+const getEdgeLabelPoint = (edge: DeviceEdge) => {
+  const fromNode = props.nodes.find(n => n.id === edge.from)
+  const toNode = props.nodes.find(n => n.id === edge.to)
+  if (edge.from === edge.to && fromNode) {
+    return {
+      x: fromNode.position.x + fromNode.width / 2,
+      y: fromNode.position.y - 16
+    }
+  }
+  const { fromPoint, toPoint } = getAdjustedLinkPoints(fromNode, toNode, edge)
+  return {
+    x: (fromPoint.x + toPoint.x) / 2,
+    y: (fromPoint.y + toPoint.y) / 2 - 10
+  }
+}
 
 const onNodeContextInternal = (node: DeviceNode, e: MouseEvent) => {
   e.preventDefault()
-  emit('node-context', node, e)
+  e.stopPropagation()
+  if (props.interactionLocked || isVariableNode(node)) return
+  emit('node-context', node, { x: e.clientX, y: e.clientY })
 }
 
 const getNodeAriaLabel = (node: DeviceNode) => {
-  return `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeState(node)}`
+  const base = `${node.label}, ${node.templateName}, ${t('app.state')}: ${getNodeState(node)}`
+  return isTraceActive.value && !isNodeRepresentedInTrace(node)
+    ? `${base}. ${t('app.traceVisualization.currentBoardDeviceNotRepresented')}`
+    : base
 }
 
 const moveNodeByKeyboard = (node: DeviceNode, dx: number, dy: number) => {
@@ -781,12 +876,14 @@ const moveNodeByKeyboard = (node: DeviceNode, dx: number, dy: number) => {
 const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
+    if (props.interactionLocked) return
     emit('node-open', node)
     return
   }
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault()
+    if (props.interactionLocked) return
     if (isVariableNode(node)) return
     emit('node-delete', node.id)
     return
@@ -794,9 +891,10 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
 
   if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
     event.preventDefault()
+    if (props.interactionLocked) return
     const element = event.currentTarget as HTMLElement | null
     const rect = element?.getBoundingClientRect()
-    emit('node-keyboard-context', node, {
+    emit('node-context', node, {
       x: rect ? rect.left + rect.width / 2 : 0,
       y: rect ? rect.top + rect.height / 2 : 0
     })
@@ -813,6 +911,7 @@ const onNodeKeydown = (event: KeyboardEvent, node: DeviceNode) => {
   const delta = movement[event.key]
   if (!delta || event.repeat) return
   event.preventDefault()
+  if (props.interactionLocked) return
   moveNodeByKeyboard(node, delta.dx, delta.dy)
 }
 
@@ -824,6 +923,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (nodeAnimationResetTimer) clearTimeout(nodeAnimationResetTimer)
   window.removeEventListener('pointermove', onNodePointerMove)
   window.removeEventListener('pointerup', onNodePointerUp)
   window.removeEventListener('pointermove', onPointerMoveResize)
@@ -939,14 +1039,106 @@ onBeforeUnmount(() => {
           </marker>
         </defs>
 
-        <g v-for="(edge, index) in edges" :key="edge.id">
+        <g
+            v-for="(edge, index) in edges"
+            :key="edge.id"
+            @pointerenter="setHoveredEdge(edge.id)"
+            @pointerleave="setHoveredEdge(null)"
+        >
           <!-- Base lines removed - only showing particle effects -->
-
-          <!-- Particle lines (gradient animation) -->
           <path
               v-if="edge.from === edge.to"
+              class="edge-base-line"
+              :class="getEdgePlaybackClass(edge)"
+              :d="getSelfLoopPathD(edge)"
+              fill="none"
+              :stroke="getParticleColorByEdge(edge)"
+              :stroke-dasharray="isInternalVariableEdge(edge) ? '6,6' : ''"
+              :marker-end="getArrowMarker(edge)"
+          />
+          <line
+              v-else
+              class="edge-base-line"
+              :class="getEdgePlaybackClass(edge)"
+              :x1="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).fromPoint.x"
+              :y1="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).fromPoint.y"
+              :x2="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).toPoint.x"
+              :y2="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).toPoint.y"
+              fill="none"
+              :stroke="getParticleColorByEdge(edge)"
+              :stroke-dasharray="isInternalVariableEdge(edge) ? '6,6' : ''"
+              :marker-end="getArrowMarker(edge)"
+          />
+
+          <path
+              v-if="edge.from === edge.to"
+              class="edge-hitarea"
+              :data-rule-id="edge.ruleId || undefined"
+              :d="getSelfLoopPathD(edge)"
+              role="img"
+              tabindex="0"
+              :aria-label="getFullEdgeLabel(edge)"
+              @pointerenter="setHoveredEdge(edge.id)"
+              @pointerleave="setHoveredEdge(null)"
+              @focus="focusedEdgeId = edge.id"
+              @blur="focusedEdgeId = null"
+          />
+          <line
+              v-else
+              class="edge-hitarea"
+              :data-rule-id="edge.ruleId || undefined"
+              role="img"
+              tabindex="0"
+              :aria-label="getFullEdgeLabel(edge)"
+              :x1="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).fromPoint.x"
+              :y1="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).fromPoint.y"
+              :x2="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).toPoint.x"
+              :y2="getAdjustedLinkPoints(
+                props.nodes.find(n => n.id === edge.from),
+                props.nodes.find(n => n.id === edge.to),
+                edge
+              ).toPoint.y"
+              @pointerenter="setHoveredEdge(edge.id)"
+              @pointerleave="setHoveredEdge(null)"
+              @focus="focusedEdgeId = edge.id"
+              @blur="focusedEdgeId = null"
+          />
+
+          <!-- During model playback, motion represents a backend-reported delivered automation. -->
+          <path
+              v-if="edge.from === edge.to && shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              :key="`edge-flow-loop-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
-              :class="getParticleOpacity(index)"
+              :data-playback-state="props.highlightedTrace?.selectedStateIndex"
+              :class="[getParticleOpacity(index), getEdgePlaybackClass(edge)]"
               :d="getSelfLoopPathD(edge)"
               fill="none"
               filter="url(#glow)"
@@ -956,9 +1148,11 @@ onBeforeUnmount(() => {
               :marker-end="getArrowMarker(edge)"
           />
           <line
-              v-else
+              v-else-if="shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              :key="`edge-flow-line-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
               class="edge-line particle-line"
-              :class="getParticleOpacity(index)"
+              :data-playback-state="props.highlightedTrace?.selectedStateIndex"
+              :class="[getParticleOpacity(index), getEdgePlaybackClass(edge)]"
               :x1="getAdjustedLinkPoints(
                 props.nodes.find(n => n.id === edge.from),
                 props.nodes.find(n => n.id === edge.to),
@@ -987,15 +1181,18 @@ onBeforeUnmount(() => {
               :marker-end="getArrowMarker(edge)"
           />
 
-          <!-- Animated particle for each edge -->
+          <!-- A compromised or idle automation remains visible as a static edge. -->
           <circle
-              v-if="edge.from !== edge.to"
+              v-if="edge.from !== edge.to && shouldAnimateEdgeFlow(edge, props.highlightedTrace)"
+              :key="`edge-flow-particle-${edge.id}-${props.highlightedTrace?.selectedStateIndex ?? -1}`"
+              class="trace-flow-particle"
+              :data-playback-state="props.highlightedTrace?.selectedStateIndex"
               :fill="getParticleFillColor(edge)"
               filter="url(#glow)"
               :r="getParticleSize(index)"
           >
             <animateMotion
-                :dur="getParticleDuration(index)"
+                :dur="TRACE_FLOW_DURATION"
                 :path="`M ${getAdjustedLinkPoints(
                   props.nodes.find(n => n.id === edge.from),
                   props.nodes.find(n => n.id === edge.to),
@@ -1013,9 +1210,36 @@ onBeforeUnmount(() => {
                   props.nodes.find(n => n.id === edge.to),
                   edge
                 ).toPoint.y}`"
-                repeatCount="indefinite"
+                repeatCount="1"
+                fill="freeze"
+            />
+            <animate
+                attributeName="opacity"
+                values="0;1;1;0"
+                keyTimes="0;0.12;0.8;1"
+                :dur="TRACE_FLOW_DURATION"
+                repeatCount="1"
+                fill="freeze"
             />
           </circle>
+          <g
+              v-if="shouldShowEdgeLabel(edge)"
+              class="edge-label"
+              :transform="`translate(${getEdgeLabelPoint(edge).x} ${getEdgeLabelPoint(edge).y})`"
+          >
+            <title>{{ getFullEdgeLabel(edge) }}</title>
+            <rect
+                class="edge-label__bg"
+                :x="-getEdgeLabelWidth(edge) / 2"
+                y="-10"
+                :width="getEdgeLabelWidth(edge)"
+                height="20"
+                rx="10"
+            />
+            <text class="edge-label__text" text-anchor="middle" dominant-baseline="middle">
+              {{ getEdgeLabelText(edge) }}
+            </text>
+          </g>
           <!-- For self-loops, we could add a different animation -->
         </g>
       </svg>
@@ -1023,27 +1247,29 @@ onBeforeUnmount(() => {
       <!-- 设备节点 -->
       <div
           v-for="node in nodes"
-          :key="node.id + (highlightedTrace?.selectedStateIndex ?? '')"
+          :key="node.id"
           :data-node-id="node.id"
           class="device-node"
           tabindex="0"
           role="button"
+          :aria-disabled="interactionLocked ? 'true' : undefined"
           :aria-label="getNodeAriaLabel(node)"
-          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'node-flip': (getPreviousState(node) && getPreviousState(node) !== getNodeState(node)) || shouldAnimateFlip(node) }, { 'device-attacked': isDeviceAttacked(node.id, node.label) }]"
+          :title="isTraceActive && !isNodeRepresentedInTrace(node) ? t('app.traceVisualization.currentBoardDeviceNotRepresented') : undefined"
+          :class="[getNodeBgColorClass(node.id), getNodeColorClass(node.id), getNodeVisualTierClass(node), { 'variable-node': isVariableNode(node) }, { 'trace-active': isNodeInTrace(node) }, { 'trace-not-represented': isTraceActive && !isNodeRepresentedInTrace(node) }, { 'trace-changed': isNodeTraceChanged(node) }, { 'trace-change-pulse': shouldAnimateTraceChange(node) }, { 'device-attacked': isDeviceAttacked(node.id) }, { 'node-focused': props.focusedNodeId === node.id }, { 'cursor-default': interactionLocked }]"
           :style="{
           left: node.position.x + 'px',
           top: node.position.y + 'px',
           width: node.width + 'px',
           height: node.height + 'px',
           backgroundColor: isVariableNode(node) ? getVariableNodeBgColor(node) : getNodeBgColor(node.id),
-          borderColor: isDeviceAttacked(node.id, node.label) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)),
-          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id, node.label) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)) } : {})
+          borderColor: isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)),
+          ...(isNodeInTrace(node) ? { '--trace-glow-color': isDeviceAttacked(node.id) ? '#EF4444' : (isVariableNode(node) ? getVariableNodeBorderColor(node) : getNodeBorderColor(node.id)) } : {})
         }"
           @pointerdown.stop="onNodePointerDown($event, node)"
-          @contextmenu.prevent="onNodeContextInternal(node, $event)"
+          @contextmenu.stop.prevent="onNodeContextInternal(node, $event)"
           @keydown="onNodeKeydown($event, node)"
       >
-        <!-- 变量节点：只显示图标（圆形） -->
+        <!-- Non-authoritative variable row fallback: icon-only circle -->
         <div v-if="isVariableNode(node)" class="variable-node-wrapper">
           <div class="variable-node-content">
             <img
@@ -1051,7 +1277,7 @@ onBeforeUnmount(() => {
                 :src="getCurrentNodeIcon(node)"
                 :alt="node.label"
                 draggable="false"
-                @error="handleImageError($event, node)"
+                @error="handleImageError($event)"
                 :class="{ 'variable-changed': isTraceActive && getTraceVariableValue(node) }"
             />
           </div>
@@ -1064,7 +1290,7 @@ onBeforeUnmount(() => {
               <img
                   :src="getCurrentNodeIcon(node)"
                   :alt="node.label"
-                  @error="handleImageError($event, node)"
+                  @error="handleImageError($event)"
               />
             </div>
             <div class="variable-tooltip-info">
@@ -1080,7 +1306,7 @@ onBeforeUnmount(() => {
         <div v-else class="device-node-content">
           <!-- Attack indicator arrow -->
           <div 
-            v-if="isDeviceAttacked(node.id, node.label)"
+            v-if="isDeviceAttacked(node.id)"
             class="attack-indicator"
             :title="t('app.deviceUnderAttack')"
           >
@@ -1089,17 +1315,16 @@ onBeforeUnmount(() => {
           </div>
           <!-- 上部分：图标 -->
           <div class="device-top-row">
-            <img
-                class="device-img"
-                :src="getCurrentNodeIcon(node)"
-                :alt="node.label"
-                draggable="false"
-                :style="{
-                width: node.width * 0.45 + 'px',
-                height: node.height * 0.4 + 'px'
-              }"
-                @error="handleImageError($event, node)"
-            />
+            <Transition name="trace-device-icon">
+              <img
+                  :key="getNodeVisualStateKey(node)"
+                  class="device-img"
+                  :src="getCurrentNodeIcon(node)"
+                  :alt="node.label"
+                  draggable="false"
+                  @error="handleImageError($event)"
+              />
+            </Transition>
           </div>
           <!-- 名字 -->
           <div class="device-label-wrapper">
@@ -1108,26 +1333,55 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <!-- 下部分：设备状态显示 -->
-          <div class="device-state" :class="getStateDisplayClass(node)">
+          <div class="device-state" :class="getStateDisplayClass(node)" :title="getNodeStateTitle(node)">
             <span class="device-state-dot"></span>
-            <span class="device-state-value">{{ getFlippingStateForNode(node) || getNodeState(node) }}</span>
+            <Transition name="trace-device-state" mode="out-in">
+              <span :key="getNodeVisualStateKey(node)" class="device-state-value">{{ getNodeState(node) }}</span>
+            </Transition>
+          </div>
+          <div v-if="getNodeRuntimeBadges(node).length > 0" class="device-runtime-strip">
+            <span
+                v-for="badge in getNodeRuntimeBadges(node)"
+                :key="badge.label"
+                class="device-runtime-chip"
+                :class="{ 'device-runtime-chip--changed': badge.changed }"
+                :title="badge.title"
+            >
+              <span class="device-runtime-chip__label">{{ badge.label }}</span>
+              <span class="device-runtime-chip__value">{{ badge.value }}</span>
+            </span>
+          </div>
+          <div v-if="getNodeSecurityBadges(node).length > 0" class="device-node-actions">
+            <span
+              v-for="badge in getNodeSecurityBadges(node)"
+              :key="badge.kind"
+              class="device-node-trust"
+              :class="`device-node-trust--${badge.kind}`"
+              :title="badge.title"
+            >
+              {{ badge.label }}
+            </span>
           </div>
         </div>
 
         <!-- 四角缩放手柄 -->
         <div
+            v-if="!interactionLocked"
             class="resize-handle tl"
             @pointerdown.stop="onPointerDownResize($event, node, 'tl')"
         ></div>
         <div
+            v-if="!interactionLocked"
             class="resize-handle tr"
             @pointerdown.stop="onPointerDownResize($event, node, 'tr')"
         ></div>
         <div
+            v-if="!interactionLocked"
             class="resize-handle bl"
             @pointerdown.stop="onPointerDownResize($event, node, 'bl')"
         ></div>
         <div
+            v-if="!interactionLocked"
             class="resize-handle br"
             @pointerdown.stop="onPointerDownResize($event, node, 'br')"
         ></div>
@@ -1137,6 +1391,44 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.edge-hitarea {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  stroke-linecap: round;
+  pointer-events: stroke;
+  cursor: help;
+}
+
+.edge-hitarea:focus-visible {
+  outline: none;
+  stroke: color-mix(in srgb, var(--iot-color-accent, #2563eb) 18%, transparent);
+}
+
+.edge-base-line,
+.edge-line,
+.edge-layer circle {
+  pointer-events: none;
+}
+
+.edge-label {
+  pointer-events: none;
+  filter: drop-shadow(0 3px 8px rgba(15, 23, 42, 0.18));
+}
+
+.edge-label__bg {
+  fill: color-mix(in srgb, var(--surface-elevated, #ffffff) 92%, transparent);
+  stroke: color-mix(in srgb, var(--border, #cbd5e1) 88%, transparent);
+  stroke-width: 1;
+}
+
+.edge-label__text {
+  fill: var(--text, #0f172a);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 /* Attack indicator - longer arrow with text */
 .attack-indicator {
   position: absolute;
@@ -1180,18 +1472,28 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 18px;
-  padding: 3px 7px;
+  justify-self: center;
+  min-width: 0;
+  min-height: 1.25rem;
+  width: min(78%, 9rem);
+  padding: 3px clamp(6px, 6%, 10px);
   border-radius: 12px;
   font-size: 10px;
   font-weight: 600;
   z-index: 5;
-  width: 100%;
-  max-width: 100%;
   box-sizing: border-box;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   line-height: 1;
   overflow: hidden;
+}
+
+.device-node--expanded .device-state {
+  grid-area: state;
+  justify-self: start;
+  width: min(100%, 9.5rem);
+  min-height: 1.35rem;
+  padding: 4px 8px;
+  border-radius: 999px;
 }
 
 .device-state-dot {
@@ -1247,6 +1549,11 @@ onBeforeUnmount(() => {
   animation: pulse-blue 1.5s infinite;
 }
 
+/* Playback motion identifies a transition, not a device that merely remains on. */
+.device-node.trace-active .device-state-dot {
+  animation: none;
+}
+
 .state-default {
   background: linear-gradient(135deg, rgba(148, 163, 184, 0.15) 0%, rgba(100, 116, 139, 0.1) 100%);
   color: #64748B;
@@ -1265,6 +1572,12 @@ onBeforeUnmount(() => {
 @keyframes pulse-blue {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-state-dot {
+    animation: none !important;
+  }
 }
 
 .trace-info-card {
@@ -1375,74 +1688,66 @@ onBeforeUnmount(() => {
   font-size: 10px;
 }
 
-/* 3D 翻转动画 - 设备内容区域 */
+/* Device content keeps a stable footprint while trace values cross-fade. */
 .device-node-content {
   display: grid;
-  grid-template-rows: minmax(1.75rem, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   align-items: center;
+  justify-items: center;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   gap: clamp(0.15rem, 3%, 0.35rem);
-  transition: transform 0.3s ease-in-out;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.node-flip .device-node-content {
-  animation: flip-animation 0.6s ease-in-out;
-  transform-style: preserve-3d;
-}
-
-.node-flip .device-img {
-  animation: flip-inner 0.6s ease-in-out forwards;
-  transform-style: preserve-3d;
-}
-
-/* 节点整体轻微震动效果作为补充 */
-.node-flip {
+.device-top-row {
   position: relative;
 }
 
-/* 前30%时间展示旧图标，之后切换为新图标 */
-@keyframes flip-animation {
-  0% {
-    transform: perspective(600px) rotateY(0deg);
-  }
-  30% {
-    transform: perspective(600px) rotateY(0deg);
-  }
-  60% {
-    transform: perspective(600px) rotateY(90deg);
-  }
-  100% {
-    transform: perspective(600px) rotateY(0deg);
-  }
+.trace-device-icon-enter-active,
+.trace-device-icon-leave-active {
+  position: absolute;
+  transition:
+    opacity 0.24s ease,
+    transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.3s ease;
 }
 
-@keyframes flip-inner {
-  0% {
-    transform: perspective(200px) rotateY(0deg) scale(1);
-    opacity: 1;
-  }
-  25% {
-    transform: perspective(200px) rotateY(20deg) scale(1.1);
-    opacity: 1;
-  }
-  30% {
-    transform: perspective(200px) rotateY(0deg) scale(1);
-    opacity: 1;
-  }
-  31% {
-    opacity: 0;
-  }
-  32% {
-    opacity: 1;
-  }
-  100% {
-    transform: perspective(200px) rotateY(10deg) scale(1.05);
-  }
-  100% {
-    transform: perspective(200px) rotateY(0deg) scale(1);
+.trace-device-icon-enter-from {
+  opacity: 0;
+  transform: translateY(5px) scale(0.9);
+  filter: blur(2px);
+}
+
+.trace-device-icon-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+  filter: blur(1px);
+}
+
+.trace-device-state-enter-active,
+.trace-device-state-leave-active {
+  transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.trace-device-state-enter-from {
+  opacity: 0;
+  transform: translateY(3px);
+}
+
+.trace-device-state-leave-to {
+  opacity: 0;
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-device-icon-enter-active,
+  .trace-device-icon-leave-active,
+  .trace-device-state-enter-active,
+  .trace-device-state-leave-active {
+    transition: none;
   }
 }
 </style>

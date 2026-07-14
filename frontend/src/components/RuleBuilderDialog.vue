@@ -4,8 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import type { DeviceNode } from '../types/node'
-import type { RuleForm } from '../types/rule'
+import type { DeviceManifest, DeviceTemplate } from '../types/device'
+import type { RuleForm, RuleSourceItemType } from '../types/rule'
 import boardApi from '../api/board'
+import { duplicateRuleReasonKey, ruleSimilarityReasonKey } from '@/utils/rule'
 
 const { t } = useI18n()
 
@@ -22,20 +24,17 @@ const props = withDefaults(defineProps<Props>(), {
   deviceTemplates: () => []
 })
 
-// 过滤掉内部变量节点（只保留真实设备）
-const deviceNodes = computed(() => {
-  return (props.nodes || []).filter((node: DeviceNode) => !node.templateName?.startsWith('variable_'))
-})
+const deviceNodes = computed(() => props.nodes || [])
 
 const resolveDeviceNode = (ref?: string | null): DeviceNode | undefined => {
   if (!ref) return undefined
-  return deviceNodes.value.find((node: DeviceNode) => node.label === ref || node.id === ref)
+  return deviceNodes.value.find((node: DeviceNode) => node.id === ref)
 }
 
 // Emits
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  'save-rule': [rule: RuleForm]
+  'save-rule': [request: { rule: RuleForm; complete: (saved: boolean) => void }]
 }>()
 
 // Rule data
@@ -44,19 +43,37 @@ const ruleData = reactive<RuleForm>({
   name: '',
   sources: [],
   toId: '',
-  toApi: ''
+  toApi: '',
+  contentDevice: '',
+  content: ''
 })
 
 // Current source being added
 const currentSource = reactive({
-  // 来源类型：device=设备API，globalVariable=全局变量
-  sourceType: '' as '' | 'device' | 'globalVariable',
-  fromId: '',  // 设备ID（仅 sourceType=device 时需要）
-  itemType: '',  // 'api' or 'variable'（仅 sourceType=device 时需要）
-  fromApi: '',  // API名称或全局变量名称
-  relation: '=',  // 条件关系（仅全局变量需要）
-  value: ''  // 值（仅全局变量需要）
+  fromId: '',  // Source board device id
+  itemType: '' as '' | RuleSourceItemType,
+  fromApi: '',  // API name, variable name, mode name; full-state conditions use state
+  relation: '=',
+  value: ''
 })
+
+interface SourceOption {
+  name: string
+  label?: string
+  type: RuleSourceItemType
+  values?: string[]
+  lowerBound?: number
+  upperBound?: number
+}
+
+interface ContentOption {
+  name: string
+  privacy: 'public' | 'private'
+}
+
+const VALUE_BASED_SOURCE_TYPES = new Set<RuleSourceItemType>(['variable', 'mode', 'state'])
+const isValueBasedSourceType = (type?: RuleSourceItemType | ''): type is RuleSourceItemType =>
+  Boolean(type && VALUE_BASED_SOURCE_TYPES.has(type))
 
 // 条件选项 - 使用 NuSMV 兼容的关系运算符（label 走 i18n，符号语言无关）
 const relationOptions = computed(() => [
@@ -65,57 +82,89 @@ const relationOptions = computed(() => [
   { label: `${t('app.relationGreater')} (>)`, value: '>' },
   { label: `${t('app.relationLess')} (<)`, value: '<' },
   { label: `${t('app.relationGreaterEqual')} (≥)`, value: '>=' },
-  { label: `${t('app.relationLessEqual')} (≤)`, value: '<=' }
+  { label: `${t('app.relationLessEqual')} (≤)`, value: '<=' },
+  { label: `${t('app.relationIn')} (in)`, value: 'in' },
+  { label: `${t('app.relationNotIn')} (not in)`, value: 'not in' }
 ])
 
-// 获取设备图标
-const getDeviceApis = (templateName: string) => {
-  if (!templateName) return []
+const conditionRelationOptions = computed(() => {
+  const enumRelations = new Set(['=', '!=', 'in', 'not in'])
+  const numericRelations = new Set(['=', '!=', '>', '<', '>=', '<=', 'in', 'not in'])
 
-  // 使用更宽松的匹配：支持大小写不敏感和空格变化
+  if (currentSource.itemType === 'mode' || currentSource.itemType === 'state') {
+    return relationOptions.value.filter(option => enumRelations.has(option.value))
+  }
+  if (currentSource.itemType === 'variable' && selectedSourceOption.value?.values?.length) {
+    return relationOptions.value.filter(option => enumRelations.has(option.value))
+  }
+  if (currentSource.itemType === 'variable') {
+    return relationOptions.value.filter(option => numericRelations.has(option.value))
+  }
+  return relationOptions.value
+})
+
+const resolveDeviceTemplate = (templateName: string): DeviceTemplate | undefined => {
+  if (!templateName) return undefined
+
   const normalizedName = templateName.toLowerCase().trim()
 
-  const template = props.deviceTemplates.find((t: any) => {
+  return props.deviceTemplates.find((t: DeviceTemplate) => {
     const tplName = t.manifest?.Name || t.name || ''
-    return tplName.toLowerCase().trim() === normalizedName ||
-           normalizedName.includes(tplName.toLowerCase().trim()) ||
-           tplName.toLowerCase().trim().includes(normalizedName)
+    return tplName.toLowerCase().trim() === normalizedName
   })
+}
+
+const splitStateTuple = (stateName: string) =>
+  String(stateName || '').split(';').map(part => part.trim()).filter(Boolean)
+
+const uniqueStrings = (values: string[]) =>
+  Array.from(new Set(values.filter(value => value !== '')))
+
+const getModeValues = (manifest: DeviceManifest, modeName: string): string[] => {
+  const modeIndex = (manifest.Modes || []).findIndex(mode => mode === modeName)
+  if (modeIndex < 0) return []
+
+  const values = (manifest.WorkingStates || [])
+    .map(state => splitStateTuple(state.Name)[modeIndex])
+    .filter(Boolean)
+
+  return uniqueStrings(values)
+}
+
+const getDeviceApis = (templateName: string, signalOnly = false): SourceOption[] => {
+  const template = resolveDeviceTemplate(templateName)
 
   if (template && template.manifest?.APIs) {
-    return template.manifest.APIs.map((api: any) => ({
-      name: api.Name || api.name || '',
-      type: 'api'
-    }))
+    return template.manifest.APIs
+      .filter((api: any) => !signalOnly || api.Signal === true || api.signal === true)
+      .map((api: any) => ({
+        name: api.Name || api.name || '',
+        type: 'api' as const
+      }))
   }
 
   // 如果没有找到模板，返回空数组
   return []
 }
 
-// 获取设备的变量列表（InternalVariables + ImpactedVariables）
-const getDeviceVariables = (templateName: string) => {
-  if (!templateName) return []
+// Rule variable conditions use template InternalVariables, which include both
+// device-local variables and shared environment variables.
+const getDeviceVariables = (templateName: string): SourceOption[] => {
+  const template = resolveDeviceTemplate(templateName)
+  const variables: SourceOption[] = []
 
-  // 使用更宽松的匹配：支持大小写不敏感和空格变化
-  const normalizedName = templateName.toLowerCase().trim()
-
-  const template = props.deviceTemplates.find((t: any) => {
-    const tplName = t.manifest?.Name || t.name || ''
-    return tplName.toLowerCase().trim() === normalizedName ||
-           normalizedName.includes(tplName.toLowerCase().trim()) ||
-           tplName.toLowerCase().trim().includes(normalizedName)
-  })
-
-  const variables: { name: string; type: string }[] = []
-
-  // 只使用 InternalVariables（内部变量）
   if (template && template.manifest?.InternalVariables) {
     template.manifest.InternalVariables.forEach((v: any) => {
       if (v.Name || v.name) {
+        const name = v.Name || v.name || ''
+        const scope = v.IsInside === true ? t('app.internalVariable') : t('app.environmentVariable')
         variables.push({
-          name: v.Name || v.name || '',
-          type: 'variable'  // 统一使用 'variable' 类型
+          name,
+          label: `${name} (${scope})`,
+          type: 'variable' as const,
+          values: Array.isArray(v.Values) ? v.Values.map((value: unknown) => String(value)) : undefined,
+          lowerBound: typeof v.LowerBound === 'number' ? v.LowerBound : undefined,
+          upperBound: typeof v.UpperBound === 'number' ? v.UpperBound : undefined
         })
       }
     })
@@ -125,10 +174,47 @@ const getDeviceVariables = (templateName: string) => {
   return variables
 }
 
-// 合并 API 和变量列表
-const getDeviceApiAndVariables = (templateName: string) => {
-  return [...getDeviceApis(templateName), ...getDeviceVariables(templateName)]
+const getDeviceModes = (templateName: string): SourceOption[] => {
+  const manifest = resolveDeviceTemplate(templateName)?.manifest
+  if (!manifest?.Modes?.length) return []
+
+  return manifest.Modes.map(mode => ({
+    name: mode,
+    type: 'mode' as const,
+    values: getModeValues(manifest, mode)
+  }))
 }
+
+const getDeviceStates = (templateName: string): SourceOption[] => {
+  const manifest = resolveDeviceTemplate(templateName)?.manifest
+  if (!manifest?.WorkingStates?.length) return []
+
+  return manifest.WorkingStates.map(state => ({
+    name: state.Name,
+    type: 'state' as const
+  }))
+}
+
+const getDeviceContents = (templateName: string): ContentOption[] => {
+  const manifest = resolveDeviceTemplate(templateName)?.manifest
+  if (!manifest?.Contents?.length) return []
+
+  return manifest.Contents
+    .filter(content => Boolean(content?.Name))
+    .map(content => ({
+      name: content.Name,
+      privacy: String(content.Privacy).toLowerCase() === 'private' ? 'private' : 'public'
+    }))
+}
+
+const contentCapableNodes = computed(() =>
+  deviceNodes.value.filter(node => getDeviceContents(node.templateName).length > 0)
+)
+
+const availableContentItems = computed(() => {
+  const node = resolveDeviceNode(ruleData.contentDevice)
+  return node ? getDeviceContents(node.templateName) : []
+})
 
 const availableTargetApis = computed(() => {
   if (!ruleData.toId) return []
@@ -140,57 +226,165 @@ const availableTargetApis = computed(() => {
   return apis.map((a: any) => a.name)
 })
 
-const availableSourceApis = computed(() => {
+const selectedTargetAcceptsContent = computed(() => {
+  const targetNode = resolveDeviceNode(ruleData.toId)
+  const manifest = targetNode ? resolveDeviceTemplate(targetNode.templateName)?.manifest : null
+  const api = manifest?.APIs?.find(candidate => candidate.Name === ruleData.toApi)
+  return api?.AcceptsContent === true
+})
+
+const currentSourceNode = computed(() =>
+  currentSource.fromId ? resolveDeviceNode(currentSource.fromId) : undefined
+)
+
+const sourceItemTypeOptions = computed(() => {
+  const templateName = currentSourceNode.value?.templateName || ''
+  return [
+    { value: 'api' as RuleSourceItemType, label: t('app.actionEvent'), count: getDeviceApis(templateName, true).length },
+    { value: 'variable' as RuleSourceItemType, label: t('app.variable'), count: getDeviceVariables(templateName).length },
+    { value: 'mode' as RuleSourceItemType, label: t('app.modes'), count: getDeviceModes(templateName).length },
+    { value: 'state' as RuleSourceItemType, label: t('app.state'), count: getDeviceStates(templateName).length }
+  ].filter(option => option.count > 0)
+})
+
+const availableSourceItems = computed<SourceOption[]>(() => {
   if (!currentSource.fromId) return []
-  const sourceNode = resolveDeviceNode(currentSource.fromId)
+  const sourceNode = currentSourceNode.value
   if (!sourceNode) return []
 
-  return getDeviceApiAndVariables(sourceNode.templateName)
+  if (currentSource.itemType === 'api') return getDeviceApis(sourceNode.templateName, true)
+  if (currentSource.itemType === 'variable') return getDeviceVariables(sourceNode.templateName)
+  if (currentSource.itemType === 'mode') return getDeviceModes(sourceNode.templateName)
+  if (currentSource.itemType === 'state') return getDeviceStates(sourceNode.templateName)
+  return []
 })
 
 // 根据选择的类型过滤显示的项
 const filteredSourceItems = computed(() => {
   if (!currentSource.itemType) return []
-  return availableSourceApis.value.filter((item: any) => item.type === currentSource.itemType)
+  return availableSourceItems.value.filter((item: SourceOption) => item.type === currentSource.itemType)
+})
+
+const selectedSourceOption = computed(() =>
+  filteredSourceItems.value.find((item: SourceOption) => item.name === currentSource.fromApi)
+)
+
+const currentValueOptions = computed(() => {
+  if (currentSource.itemType === 'state') {
+    return filteredSourceItems.value.map((item: SourceOption) => item.name)
+  }
+  return selectedSourceOption.value?.values || []
+})
+
+const isSetRelation = computed(() =>
+  currentSource.relation === 'in' || currentSource.relation === 'not in'
+)
+
+const splitRuleValueList = (value: unknown): string[] => {
+  if (!hasSourceValue(value)) return []
+  const delimiter = currentSource.itemType === 'state' ? /[,|]/ : /[,;|]/
+  return String(value)
+    .split(delimiter)
+    .map(part => part.trim())
+    .filter(Boolean)
+}
+
+const currentSourceValueList = computed<string[]>({
+  get: () => splitRuleValueList(currentSource.value),
+  set: values => {
+    currentSource.value = uniqueStrings(values).join(', ')
+  }
+})
+
+const currentValuePlaceholder = computed(() => {
+  if (currentSource.itemType === 'mode' || currentSource.itemType === 'state') {
+    return t('app.selectPlaceholder')
+  }
+  const bounds = selectedSourceOption.value
+  if (bounds?.lowerBound !== undefined || bounds?.upperBound !== undefined) {
+    const min = bounds.lowerBound ?? '-∞'
+    const max = bounds.upperBound ?? '∞'
+    return `${t('app.enterValuePlaceholder')} (${min} - ${max})`
+  }
+  return t('app.enterValuePlaceholder')
 })
 
 // 判断是否可以添加源（根据选择的项目类型决定是否需要条件/值）
 const canAddSource = computed(() => {
-  if (!currentSource.fromId || !currentSource.itemType || !currentSource.fromApi) {
+  if (!currentSource.fromId || !currentSource.itemType) {
     return false
   }
-  // 如果是变量类型，relation 默认是 EQ，所以总是可以添加
-  if (currentSource.itemType === 'variable') {
-    return true  // 变量类型只需要选择设备和变量名，条件/值可选
+  if (currentSource.itemType !== 'state' && !currentSource.fromApi) {
+    return false
   }
-  // API 类型只需要选择设备和 API
+
+  if (isValueBasedSourceType(currentSource.itemType)) {
+    return Boolean(currentSource.relation && currentSource.value)
+  }
+
   return true
 })
 
-// 判断是否可以自动添加源（变量类型需要 condition 和 value 都填写完）
-const canAutoAddSource = computed(() => {
-  if (!canAddSource.value) {
-    return false
+const hasSourceValue = (value: unknown) =>
+  value !== null && value !== undefined && value !== ''
+
+const formatSourceValue = (value: unknown, fallback: string) =>
+  hasSourceValue(value) ? String(value) : fallback
+
+watch(() => currentSource.fromId, () => {
+  currentSource.itemType = ''
+  currentSource.fromApi = ''
+  currentSource.relation = '='
+  currentSource.value = ''
+  if (sourceItemTypeOptions.value.length === 1) {
+    currentSource.itemType = sourceItemTypeOptions.value[0].value
   }
-  // 变量类型需要 condition 和 value 都填写完才能自动添加
-  if (currentSource.itemType === 'variable') {
-    return currentSource.relation && currentSource.value
-  }
-  // API 类型可以直接添加
-  return true
 })
 
-// 自动添加源：按回车键或失去焦点时触发
-const tryAutoAddSource = () => {
-  if (canAutoAddSource.value) {
-    addSource()
-  }
-}
+watch(sourceItemTypeOptions, options => {
+  if (!currentSource.fromId) return
+  if (currentSource.itemType && options.some(option => option.value === currentSource.itemType)) return
+  currentSource.itemType = options.length === 1 ? options[0].value : ''
+})
 
-// 监听 API 选择变化，自动添加（对于 API 类型）
-watch(() => currentSource.fromApi, (newVal) => {
-  if (newVal && currentSource.itemType === 'api' && canAddSource.value) {
-    addSource()
+watch(() => currentSource.itemType, (newType) => {
+  currentSource.fromApi = newType === 'state' ? 'state' : ''
+  currentSource.relation = '='
+  currentSource.value = ''
+})
+
+watch(() => currentSource.fromApi, () => {
+  if (currentSource.itemType !== 'api') {
+    currentSource.value = ''
+  }
+})
+
+watch(conditionRelationOptions, options => {
+  if (!options.some(option => option.value === currentSource.relation)) {
+    currentSource.relation = options[0]?.value || '='
+    currentSource.value = ''
+  }
+})
+
+watch(() => currentSource.relation, () => {
+  if (!isSetRelation.value && splitRuleValueList(currentSource.value).length > 1) {
+    currentSource.value = splitRuleValueList(currentSource.value)[0] || ''
+  }
+})
+
+watch(() => ruleData.contentDevice, () => {
+  if (!availableContentItems.value.some(item => item.name === ruleData.content)) {
+    ruleData.content = ''
+  }
+})
+
+watch(() => [ruleData.toId, ruleData.toApi, ...availableTargetApis.value], () => {
+  if (ruleData.toApi && !availableTargetApis.value.includes(ruleData.toApi)) {
+    ruleData.toApi = ''
+  }
+  if (!selectedTargetAcceptsContent.value) {
+    ruleData.contentDevice = ''
+    ruleData.content = ''
   }
 })
 
@@ -207,18 +401,20 @@ const rulePreview = computed(() => {
     sources: sourceNodes,
     sourceConditions: ruleData.sources,
     target: targetNode,
-    action: ruleData.toApi
+    action: ruleData.toApi,
+    contentDevice: resolveDeviceNode(ruleData.contentDevice),
+    content: ruleData.content
   }
 })
 
 // Methods
 const addSource = () => {
   // 添加源设备及其条件
-  if (currentSource.fromId && currentSource.itemType && currentSource.fromApi) {
+  if (canAddSource.value && currentSource.itemType) {
     ruleData.sources.push({
       fromId: currentSource.fromId,
-      fromApi: currentSource.fromApi,
-      itemType: currentSource.itemType as 'api' | 'variable' | undefined,
+      fromApi: currentSource.itemType === 'state' ? 'state' : currentSource.fromApi,
+      itemType: currentSource.itemType,
       relation: currentSource.relation,
       value: currentSource.value
     })
@@ -236,70 +432,242 @@ const removeSource = (index: number) => {
   ruleData.sources.splice(index, 1)
 }
 
-const handleSave = () => {
+const validateRuleDraft = (forDuplicateCheck = false) => {
   if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
-    ElMessage.warning(t('app.completeRequiredFields'))
-    return
+    ElMessage.warning(t(forDuplicateCheck ? 'app.completeRequiredFieldsBeforeDuplicateCheck' : 'app.completeRequiredFields'))
+    return false
   }
 
-  // Generate ID
-  ruleData.id = 'rule_' + Date.now()
+  if ((ruleData.contentDevice && !ruleData.content) || (!ruleData.contentDevice && ruleData.content)) {
+    ElMessage.warning(t('app.completeContentPayloadFields'))
+    return false
+  }
 
-  emit('save-rule', { ...ruleData })
-  handleClose()
+  return true
+}
+
+const buildRuleDraft = (id = ruleData.id): RuleForm => ({
+  ...ruleData,
+  id,
+  sources: ruleData.sources.map(source => ({ ...source })),
+  contentDevice: ruleData.contentDevice || undefined,
+  content: ruleData.content || undefined
+})
+
+const savingRule = ref(false)
+
+const emitRuleSave = async () => {
+  if (savingRule.value) return
+  savingRule.value = true
+  const rule: RuleForm = {
+    ...ruleData,
+    id: 'rule_' + Date.now(),
+    name: ruleData.name || buildReadableRuleName(),
+    sources: ruleData.sources.map(source => ({ ...source })),
+    contentDevice: ruleData.contentDevice || undefined,
+    content: ruleData.content || undefined
+  }
+  const saved = await new Promise<boolean>(resolve => {
+    emit('save-rule', { rule, complete: resolve })
+  })
+  savingRule.value = false
+  if (saved) {
+    resetAndClose()
+  }
 }
 
 const checkingDuplicate = ref(false)
+const checkingSimilarity = ref(false)
 
-const handleCheckDuplicate = async () => {
-  // Validate before checking
-  if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
-    ElMessage.warning(t('app.completeRequiredFieldsBeforeDuplicateCheck'))
-    return
-  }
-
+const runDuplicateCheck = async (
+  showClearFeedback: boolean
+): Promise<'clear' | 'save-anyway' | 'cancel'> => {
   checkingDuplicate.value = true
+  let result
   try {
-    const result = await boardApi.checkDuplicateRule(ruleData)
-
-    if (result.isDuplicate) {
-      const message = result.reason
-        ? t('app.duplicateRuleMayExist', { reason: result.reason })
-        : t('app.duplicateRuleExists')
-
+    result = await boardApi.checkDuplicateRule(buildRuleDraft())
+  } catch (error: any) {
+    console.error('Duplicate check failed:', error)
+    try {
       await ElMessageBox.confirm(
-        message,
-        t('app.duplicateRuleDetected'),
+        t('app.duplicateCheckFailedCanStillSave'),
+        t('app.checkDuplicate'),
         {
           confirmButtonText: t('app.saveAnyway'),
           cancelButtonText: t('app.cancel'),
-          type: 'warning'
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
         }
       )
-      // User chose "Save Anyway" - proceed with save
-      handleSave()
-    } else {
-      ElMessage.success(t('app.noDuplicatesFound'))
+      return 'save-anyway'
+    } catch (confirmError: any) {
+      if (confirmError === 'cancel' || confirmError === 'close') return 'cancel'
+      console.error('Duplicate check failure confirmation failed:', confirmError)
+      return 'cancel'
     }
-  } catch (error: any) {
-    if (error === 'cancel') {
-      // User cancelled after seeing duplicate warning - do nothing
-      return
-    }
-    console.error('Duplicate check failed:', error)
-    ElMessage.error(t('app.duplicateCheckFailedCanStillSave'))
   } finally {
     checkingDuplicate.value = false
   }
+
+  if (result.isDuplicate) {
+    const reason = t(duplicateRuleReasonKey(result.reasonCode))
+    const message = result.matchedRule
+      ? t('app.identicalRuleNotSavedWithMatch', {
+          rule: result.matchedRule,
+          reason
+        })
+      : t('app.identicalRuleNotSaved')
+
+    try {
+      await ElMessageBox.alert(
+        message,
+        t('app.identicalRuleDetected'),
+        {
+          confirmButtonText: t('app.confirm'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      )
+      return 'cancel'
+    } catch (error: any) {
+      if (error !== 'cancel' && error !== 'close') {
+        console.error('Identical rule notice failed:', error)
+      }
+      return 'cancel'
+    }
+  }
+
+  if (result.requiresReview) {
+    const reason = t(duplicateRuleReasonKey(result.reasonCode))
+    const message = result.matchedRule
+      ? t('app.overlappingRuleMayExistWithMatch', {
+          rule: result.matchedRule,
+          reason
+        })
+      : t('app.overlappingRuleMayExist', { reason })
+
+    try {
+      await ElMessageBox.confirm(
+        message,
+        t('app.overlappingRuleDetected'),
+        {
+          confirmButtonText: t('app.saveAnyway'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      )
+      return 'save-anyway'
+    } catch (error: any) {
+      if (error === 'cancel' || error === 'close') return 'cancel'
+      console.error('Overlap confirmation failed:', error)
+      return 'cancel'
+    }
+  }
+
+  if (showClearFeedback) {
+    ElMessage.success(t('app.noDuplicatesFound'))
+  }
+  return 'clear'
 }
 
-const handleClose = () => {
+const runSimilarityCheck = async (
+  showClearFeedback: boolean
+): Promise<'clear' | 'save-anyway' | 'cancel'> => {
+  checkingSimilarity.value = true
+  let result
+  try {
+    result = await boardApi.checkRuleSimilarity(buildRuleDraft())
+  } catch (error: any) {
+    console.error('AI similarity check failed:', error)
+    try {
+      await ElMessageBox.confirm(
+        t('app.aiSimilarityCheckFailedCanStillSave'),
+        t('app.aiRuleSimilarityDetected'),
+        {
+          confirmButtonText: t('app.saveAnyway'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      )
+      return 'save-anyway'
+    } catch (confirmError: any) {
+      if (confirmError === 'cancel' || confirmError === 'close') return 'cancel'
+      console.error('AI similarity failure confirmation failed:', confirmError)
+      return 'cancel'
+    }
+  } finally {
+    checkingSimilarity.value = false
+  }
+
+  if (result.requiresReview) {
+    const reason = t(ruleSimilarityReasonKey(result.reasonCode))
+    const message = result.matchedRule
+      ? t('app.aiSimilarRuleMayExistWithMatch', {
+          rule: result.matchedRule,
+          reason
+        })
+      : t('app.aiSimilarRuleMayExist', { reason })
+
+    try {
+      await ElMessageBox.confirm(
+        message,
+        t('app.aiRuleSimilarityDetected'),
+        {
+          confirmButtonText: t('app.saveAnyway'),
+          cancelButtonText: t('app.cancel'),
+          type: 'warning',
+          appendTo: 'body',
+          lockScroll: false
+        }
+      )
+      return 'save-anyway'
+    } catch (error: any) {
+      if (error === 'cancel' || error === 'close') return 'cancel'
+      console.error('AI similarity confirmation failed:', error)
+      ElMessage.error(t('app.aiSimilarityCheckFailedCanStillSave'))
+      return 'cancel'
+    }
+  }
+
+  if (showClearFeedback) {
+    ElMessage.success(t('app.noSimilarRulesFound'))
+  }
+  return 'clear'
+}
+
+const handleSave = async () => {
+  if (checkingDuplicate.value || checkingSimilarity.value || !validateRuleDraft(false)) return
+
+  const duplicateResult = await runDuplicateCheck(false)
+  if (duplicateResult === 'cancel') return
+
+  await emitRuleSave()
+}
+
+const handleCheckSimilarity = async () => {
+  if (checkingDuplicate.value || checkingSimilarity.value || !validateRuleDraft(true)) return
+
+  const similarityResult = await runSimilarityCheck(true)
+  if (similarityResult === 'save-anyway') {
+    await emitRuleSave()
+  }
+}
+
+const resetAndClose = () => {
   // Reset form
   ruleData.id = ''
   ruleData.name = ''
   ruleData.sources = []
   ruleData.toId = ''
   ruleData.toApi = ''
+  ruleData.contentDevice = ''
+  ruleData.content = ''
   currentSource.fromId = ''
   currentSource.itemType = ''
   currentSource.fromApi = ''
@@ -307,6 +675,11 @@ const handleClose = () => {
   currentSource.value = ''
 
   emit('update:modelValue', false)
+}
+
+const handleClose = () => {
+  if (savingRule.value) return
+  resetAndClose()
 }
 
 const isDialogOpen = computed(() => props.modelValue)
@@ -393,6 +766,50 @@ const getDeviceIcon = (node?: DeviceNode | null) => {
 const formatApiLabel = (api: string) => {
   return api.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
+
+function buildReadableRuleName(): string {
+  const sources = ruleData.sources.map(source => {
+    const deviceLabel = resolveDeviceNode(source.fromId)?.label || t('app.unknown')
+    const itemLabel = formatApiLabel(source.fromApi)
+    if (isValueBasedSourceType(source.itemType)) {
+      return `${deviceLabel}.${itemLabel} ${source.relation || '='} ${formatSourceValue(source.value, '')}`.trim()
+    }
+    return `${deviceLabel} ${t('app.triggers')} ${itemLabel}`
+  })
+  const targetLabel = resolveDeviceNode(ruleData.toId)?.label || t('app.unknown')
+  return t('app.ifThenDescription', {
+    source: sources.join(` ${t('app.and')} `),
+    target: targetLabel,
+    action: formatApiLabel(ruleData.toApi)
+  })
+}
+
+const getSourceTypeLabel = (type?: RuleSourceItemType) => {
+  if (type === 'api') return t('app.actionEvent')
+  if (type === 'variable') return t('app.variable')
+  if (type === 'mode') return t('app.modes')
+  if (type === 'state') return t('app.state')
+  return t('app.actionEvent')
+}
+
+const getSourceTypeIcon = (type?: RuleSourceItemType | '') => {
+  if (type === 'api') return 'bolt'
+  if (type === 'variable') return 'tune'
+  if (type === 'mode') return 'toggle_on'
+  if (type === 'state') return 'account_tree'
+  return 'category'
+}
+
+const getSourceTypeClass = (type?: RuleSourceItemType) => {
+  if (type === 'api') return 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
+  if (type === 'variable') return 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+  if (type === 'mode') return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
+  if (type === 'state') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  return 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+}
+
+const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
+  isValueBasedSourceType(type)
 </script>
 
 <template>
@@ -403,14 +820,15 @@ const formatApiLabel = (api: string) => {
   >
     <div
       :ref="setDialogRef"
-      class="w-full max-w-2xl bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-2xl"
+      data-testid="rule-builder-dialog"
+      class="rule-builder-dialog w-[92vw] max-w-6xl max-h-[88vh] bg-white dark:bg-slate-800 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-2xl flex flex-col"
       role="dialog"
       aria-modal="true"
       aria-labelledby="rule-builder-title"
       tabindex="-1"
     >
       <!-- Header -->
-      <div class="px-8 py-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="px-[clamp(1rem,3vw,2rem)] py-[clamp(1rem,2vw,1.5rem)] border-b border-slate-100 dark:border-slate-700">
         <div class="flex items-center justify-between mb-4">
           <h1 id="rule-builder-title" class="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2">
             <span class="material-icons-round text-blue-500" aria-hidden="true">auto_fix_high</span>
@@ -440,7 +858,7 @@ const formatApiLabel = (api: string) => {
       </div>
 
       <!-- Content -->
-      <div class="p-8 space-y-8">
+      <div class="rule-builder-content p-[clamp(1rem,3vw,2rem)] space-y-8 overflow-y-auto">
         <!-- IF (Trigger) Section -->
         <section class="space-y-4">
           <div class="flex items-center gap-2 mb-2">
@@ -451,9 +869,12 @@ const formatApiLabel = (api: string) => {
               {{ t('app.sourceDevices') }}
             </h2>
           </div>
+          <p class="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+            {{ t('app.ruleLogicHint') }}
+          </p>
 
           <!-- Add Source Form -->
-          <div class="grid grid-cols-5 gap-3">
+          <div class="rule-builder-grid">
             <!-- 设备选择 -->
             <div class="space-y-2">
               <label for="rule-source-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
@@ -465,9 +886,11 @@ const formatApiLabel = (api: string) => {
                   id="rule-source-device"
                   v-model="currentSource.fromId"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="deviceNodes.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
-                  <option v-for="node in deviceNodes" :key="node.id" :value="node.label">
+                  <option v-if="deviceNodes.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option v-for="node in deviceNodes" :key="node.id" :value="node.id">
                     {{ node.label }}
                   </option>
                 </select>
@@ -475,30 +898,37 @@ const formatApiLabel = (api: string) => {
               </div>
             </div>
 
-            <!-- 类型选择 (API / Variable) -->
+            <!-- 类型选择 (API / Variable / Mode / State) -->
             <div class="space-y-2">
               <label for="rule-source-type" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.type') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  {{ currentSource.itemType === 'variable' ? 'tune' : (currentSource.itemType === 'api' ? 'bolt' : 'category') }}
+                  {{ getSourceTypeIcon(currentSource.itemType) }}
                 </span>
                 <select
                   id="rule-source-type"
                   v-model="currentSource.itemType"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
-                  :disabled="!currentSource.fromId"
+                  :disabled="!currentSource.fromId || sourceItemTypeOptions.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
-                  <option value="api">{{ t('app.api') }}</option>
-                  <option value="variable">{{ t('app.variable') }}</option>
+                  <option v-if="!currentSource.fromId && deviceNodes.length > 0" value="">{{ t('app.selectPlaceholder') }}</option>
+                  <option v-else-if="sourceItemTypeOptions.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option
+                    v-for="option in sourceItemTypeOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
               </div>
             </div>
 
-            <!-- API选择 - 仅选择 API 类型时显示 -->
+            <!-- Observable action-event selection. Only Signal=true APIs can trigger a rule. -->
             <div class="space-y-2" v-if="currentSource.itemType === 'api'">
-              <label for="rule-source-api" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.api') }}</label>
+              <label for="rule-source-api" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.actionEvent') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
                   bolt
@@ -507,10 +937,12 @@ const formatApiLabel = (api: string) => {
                   id="rule-source-api"
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="filteredSourceItems.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
-                    {{ formatApiLabel(item.name) }}
+                    {{ item.label || formatApiLabel(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
@@ -528,18 +960,43 @@ const formatApiLabel = (api: string) => {
                   id="rule-source-variable"
                   v-model="currentSource.fromApi"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="filteredSourceItems.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
                   <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
-                    {{ formatApiLabel(item.name) }}
+                    {{ item.label || formatApiLabel(item.name) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
               </div>
             </div>
 
-            <!-- 条件选择 - 仅变量显示 -->
-            <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
+            <!-- Mode 选择 - 仅选择 Mode 类型时显示 -->
+            <div class="space-y-2" v-if="currentSource.itemType === 'mode'">
+              <label for="rule-source-mode" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.modes') }}</label>
+              <div class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  toggle_on
+                </span>
+                <select
+                  id="rule-source-mode"
+                  v-model="currentSource.fromApi"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="filteredSourceItems.length === 0"
+                >
+                  <option v-if="filteredSourceItems.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option v-for="item in filteredSourceItems" :key="item.name" :value="item.name">
+                    {{ item.name }}
+                  </option>
+                </select>
+                <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
+            </div>
+
+            <!-- 条件选择 - 值条件类型显示 -->
+            <div class="space-y-2" v-if="sourceShowsRelationValue(currentSource.itemType || undefined)">
               <label for="rule-source-condition" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.condition') }}</label>
               <div class="relative group select-wrapper">
                 <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
@@ -549,9 +1006,9 @@ const formatApiLabel = (api: string) => {
                   id="rule-source-condition"
                   v-model="currentSource.relation"
                   class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
-                  :disabled="!currentSource.fromApi"
+                  :disabled="currentSource.itemType !== 'state' && !currentSource.fromApi"
                 >
-                  <option v-for="rel in relationOptions" :key="rel.value" :value="rel.value">
+                  <option v-for="rel in conditionRelationOptions" :key="rel.value" :value="rel.value">
                     {{ rel.label }}
                   </option>
                 </select>
@@ -559,18 +1016,52 @@ const formatApiLabel = (api: string) => {
               </div>
             </div>
 
-            <!-- 值输入 - 仅变量显示 -->
-            <div class="space-y-2" v-if="currentSource.itemType === 'variable'">
+            <!-- 值输入 - 值条件类型显示 -->
+            <div class="space-y-2" v-if="sourceShowsRelationValue(currentSource.itemType || undefined)">
               <label for="rule-source-value" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.value') }}</label>
+              <div v-if="currentValueOptions.length > 0 && isSetRelation" class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  checklist
+                </span>
+                <select
+                  id="rule-source-value"
+                  v-model="currentSourceValueList"
+                  multiple
+                  size="4"
+                  class="w-full min-h-[7.5rem] pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="!currentSource.relation"
+                >
+                  <option v-for="value in currentValueOptions" :key="value" :value="value">
+                    {{ value }}
+                  </option>
+                </select>
+              </div>
+              <div v-else-if="currentValueOptions.length > 0" class="relative group select-wrapper">
+                <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                  list
+                </span>
+                <select
+                  id="rule-source-value"
+                  v-model="currentSource.value"
+                  class="w-full pl-10 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm"
+                  :disabled="!currentSource.relation"
+                >
+                  <option value="" disabled hidden>{{ t('app.selectPlaceholder') }}</option>
+                  <option v-for="value in currentValueOptions" :key="value" :value="value">
+                    {{ value }}
+                  </option>
+                </select>
+                <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
               <input
+                v-else
                 id="rule-source-value"
                 v-model="currentSource.value"
                 type="text"
-                :placeholder="t('app.enterValuePlaceholder')"
+                :placeholder="currentValuePlaceholder"
                 class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200 text-sm placeholder:text-slate-600 dark:placeholder:text-slate-400"
                 :disabled="!currentSource.relation"
-                @keydown.enter="tryAutoAddSource"
-                @blur="tryAutoAddSource"
+                @keydown.enter.prevent="addSource"
               />
             </div>
           </div>
@@ -578,6 +1069,7 @@ const formatApiLabel = (api: string) => {
           <button
             type="button"
             @click="addSource"
+            data-testid="rule-add-source"
             class="flex items-center gap-2 text-blue-500 font-medium text-sm hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-2 rounded-lg transition-all group"
             :disabled="!canAddSource"
           >
@@ -593,24 +1085,24 @@ const formatApiLabel = (api: string) => {
               class="flex items-center gap-2 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600"
             >
               <span class="material-icons-round text-blue-500 text-sm">sensors</span>
-              <span class="text-sm text-slate-700 dark:text-slate-200">
+              <span class="text-sm text-slate-700 dark:text-slate-200 truncate" :title="resolveDeviceNode(source.fromId)?.label || source.fromId">
                 {{ resolveDeviceNode(source.fromId)?.label || source.fromId }}
               </span>
               <span class="text-xs text-slate-400">•</span>
-              <span class="text-sm font-medium text-blue-600 dark:text-blue-400">
+              <span class="text-sm font-medium text-blue-600 dark:text-blue-400 truncate" :title="formatApiLabel(source.fromApi)">
                 {{ formatApiLabel(source.fromApi) }}
               </span>
-              <span class="text-xs px-1.5 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'">
-                {{ source.itemType || 'api' }}
+              <span class="text-xs px-1.5 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
+                {{ getSourceTypeLabel(source.itemType) }}
               </span>
-              <!-- 条件和值仅对变量显示 -->
-              <template v-if="source.itemType === 'variable'">
+              <!-- 条件和值仅对值条件类型显示 -->
+              <template v-if="sourceShowsRelationValue(source.itemType)">
                 <span class="text-xs text-slate-400">→</span>
                 <span class="text-sm font-medium text-orange-600 dark:text-orange-400">
                   {{ relationOptions.find(r => r.value === source.relation)?.label || source.relation || '=' }}
                 </span>
-                <span class="text-sm text-slate-600 dark:text-slate-300">
-                  {{ source.value || `(${t('app.anyValue')})` }}
+                <span class="text-sm text-slate-600 dark:text-slate-300 truncate" :title="formatSourceValue(source.value, `(${t('app.anyValue')})`)">
+                  {{ formatSourceValue(source.value, `(${t('app.anyValue')})`) }}
                 </span>
               </template>
               <button
@@ -637,7 +1129,7 @@ const formatApiLabel = (api: string) => {
             </h2>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="rule-builder-target-grid">
             <div class="space-y-2">
               <label for="rule-target-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">{{ t('app.device') }}</label>
               <div class="relative group select-wrapper">
@@ -648,9 +1140,11 @@ const formatApiLabel = (api: string) => {
                   id="rule-target-device"
                   v-model="ruleData.toId"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                  :disabled="deviceNodes.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectDevicePlaceholder') }}</option>
-                  <option v-for="node in deviceNodes" :key="node.id" :value="node.label">
+                  <option v-if="deviceNodes.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectDevicePlaceholder') }}</option>
+                  <option v-for="node in deviceNodes" :key="node.id" :value="node.id">
                     {{ node.label }}
                   </option>
                 </select>
@@ -668,14 +1162,84 @@ const formatApiLabel = (api: string) => {
                   id="rule-target-action"
                   v-model="ruleData.toApi"
                   class="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
-                  :disabled="!ruleData.toId"
+                  :disabled="!ruleData.toId || availableTargetApis.length === 0"
                 >
-                  <option value="" disabled hidden>{{ t('app.selectAction') }}</option>
+                  <option v-if="!ruleData.toId && deviceNodes.length > 0" value="" disabled hidden>{{ t('app.selectAction') }}</option>
+                  <option v-else-if="availableTargetApis.length === 0" value="">{{ t('app.none') }}</option>
+                  <option v-else value="" disabled hidden>{{ t('app.selectAction') }}</option>
                   <option v-for="api in availableTargetApis" :key="api" :value="api">
                     {{ formatApiLabel(api) }}
                   </option>
                 </select>
                 <span class="material-icons-round dropdown-arrow">expand_more</span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-if="selectedTargetAcceptsContent && contentCapableNodes.length > 0"
+            class="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/40"
+          >
+            <div class="mb-3 flex items-start gap-2">
+              <span class="material-icons-round text-sm text-emerald-500" aria-hidden="true">inventory_2</span>
+              <div class="min-w-0">
+                <p class="text-xs font-bold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                  {{ t('app.contentPayload') }}
+                </p>
+                <p class="mt-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                  {{ t('app.contentPayloadHint') }}
+                </p>
+              </div>
+            </div>
+
+            <div class="rule-builder-target-grid">
+              <div class="space-y-2">
+                <label for="rule-content-device" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">
+                  {{ t('app.contentSourceDevice') }}
+                </label>
+                <div class="relative group select-wrapper">
+                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    source
+                  </span>
+                  <select
+                    id="rule-content-device"
+                    v-model="ruleData.contentDevice"
+                    data-testid="rule-content-device"
+                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                  >
+                    <option value="">{{ t('app.noContentPayload') }}</option>
+                    <option v-for="node in contentCapableNodes" :key="node.id" :value="node.id">
+                      {{ node.label }}
+                    </option>
+                  </select>
+                  <span class="material-icons-round dropdown-arrow">expand_more</span>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <label for="rule-content-name" class="text-xs font-semibold text-slate-500 dark:text-slate-400 ml-1">
+                  {{ t('app.contentItem') }}
+                </label>
+                <div class="relative group select-wrapper">
+                  <span class="material-icons-round select-icon text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    photo_library
+                  </span>
+                  <select
+                    id="rule-content-name"
+                    v-model="ruleData.content"
+                    data-testid="rule-content-name"
+                    class="w-full pl-10 pr-10 py-3 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-700 dark:text-slate-200"
+                    :disabled="!ruleData.contentDevice || availableContentItems.length === 0"
+                  >
+                    <option v-if="!ruleData.contentDevice" value="">{{ t('app.selectContentDeviceFirst') }}</option>
+                    <option v-else-if="availableContentItems.length === 0" value="">{{ t('app.none') }}</option>
+                    <option v-else value="" disabled hidden>{{ t('app.selectContent') }}</option>
+                    <option v-for="content in availableContentItems" :key="content.name" :value="content.name">
+                      {{ t('app.contentItemWithSensitivity', { name: content.name, privacy: t(`app.${content.privacy}`) }) }}
+                    </option>
+                  </select>
+                  <span class="material-icons-round dropdown-arrow">expand_more</span>
+                </div>
               </div>
             </div>
           </div>
@@ -690,16 +1254,16 @@ const formatApiLabel = (api: string) => {
               <template v-for="(source, index) in rulePreview.sourceConditions" :key="source.fromId + index">
                 <div class="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs">
                   <span class="material-icons-round text-blue-500 text-sm">sensors</span>
-                  <span>{{ resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown') }}</span>
+                  <span class="truncate" :title="resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown')">{{ resolveDeviceNode(source.fromId)?.label || source.fromId || t('app.unknown') }}</span>
                   <span class="text-slate-400">→</span>
-                  <span class="text-blue-600 dark:text-blue-400">{{ formatApiLabel(source.fromApi) }}</span>
-                  <span class="text-xs px-1 py-0.5 rounded" :class="source.itemType === 'api' ? 'bg-purple-100 text-purple-600' : 'bg-green-100 text-green-600'">
-                    {{ source.itemType || 'api' }}
+                  <span class="text-blue-600 dark:text-blue-400 truncate" :title="formatApiLabel(source.fromApi)">{{ formatApiLabel(source.fromApi) }}</span>
+                  <span class="text-xs px-1 py-0.5 rounded" :class="getSourceTypeClass(source.itemType)">
+                    {{ getSourceTypeLabel(source.itemType) }}
                   </span>
-                  <!-- 条件和值仅对变量显示 -->
-                  <template v-if="source.itemType === 'variable'">
+                  <!-- 条件和值仅对值条件类型显示 -->
+                  <template v-if="sourceShowsRelationValue(source.itemType)">
                     <span class="text-orange-600 dark:text-orange-400">{{ relationOptions.find(r => r.value === source.relation)?.label.split(' ')[0] || '=' }}</span>
-                    <span class="text-slate-700 dark:text-slate-300">{{ source.value || '*' }}</span>
+                    <span class="text-slate-700 dark:text-slate-300">{{ formatSourceValue(source.value, '*') }}</span>
                   </template>
                 </div>
                 <!-- Add "AND" connector if not the last source -->
@@ -729,13 +1293,16 @@ const formatApiLabel = (api: string) => {
               <template v-else>
                 {{ t('app.multiSourceRulePreview', { source: rulePreview.sources[0]?.label, count: rulePreview.sources.length - 1, target: rulePreview.target?.label, action: formatApiLabel(rulePreview.action) }) }}
               </template>
+              <span v-if="rulePreview.contentDevice && rulePreview.content" class="mt-1 block not-italic text-emerald-600 dark:text-emerald-300">
+                {{ t('app.copyFrom') }} {{ rulePreview.contentDevice.label }}.{{ rulePreview.content }}
+              </span>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Footer -->
-      <div class="px-8 py-6 bg-slate-50/50 dark:bg-slate-900/20 border-t border-slate-100 dark:border-slate-700 flex justify-end gap-3">
+      <div class="px-[clamp(1rem,3vw,2rem)] py-4 bg-slate-50/50 dark:bg-slate-900/20 border-t border-slate-100 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
           @click="handleClose"
@@ -743,24 +1310,27 @@ const formatApiLabel = (api: string) => {
         >
           {{ t('app.cancel') }}
         </button>
-        <button
-          type="button"
-          @click="handleCheckDuplicate"
-          :disabled="checkingDuplicate"
-          class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <span v-if="checkingDuplicate" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
-          <span>{{ checkingDuplicate ? t('app.checking') : t('app.checkDuplicate') }}</span>
-        </button>
-        <button
-          type="button"
-          @click="handleSave"
-          :disabled="checkingDuplicate"
-          class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
-        >
-
-          {{ t('app.createRule') }}
-        </button>
+        <div class="flex flex-wrap items-center justify-end gap-3">
+          <button
+            type="button"
+            @click="handleCheckSimilarity"
+            data-testid="rule-check-duplicate"
+            :disabled="checkingDuplicate || checkingSimilarity || savingRule"
+            class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
+            <span>{{ checkingSimilarity ? t('app.checkingAiSimilarity') : t('app.aiSimilarityCheck') }}</span>
+          </button>
+          <button
+            type="button"
+            @click="handleSave"
+            data-testid="rule-save"
+            :disabled="checkingDuplicate || checkingSimilarity || savingRule"
+            class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+          >
+            {{ savingRule ? t('app.saving') : t('app.createRule') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -782,8 +1352,27 @@ const formatApiLabel = (api: string) => {
 }
 
 /* Container animation */
-.bg-white.dark\:bg-slate-800 {
+.rule-builder-dialog {
   animation: slideIn 0.3s ease-out;
+}
+
+.rule-builder-content {
+  min-height: 0;
+}
+
+.rule-builder-grid,
+.rule-builder-target-grid {
+  display: grid;
+  align-items: end;
+  gap: clamp(0.75rem, 2vw, 1rem);
+}
+
+.rule-builder-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.rule-builder-target-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
 }
 
 @keyframes slideIn {

@@ -34,7 +34,7 @@ public class SpecificationDto {
     @Size(max = 10, message = "Template ID must be at most 10 characters")
     private String templateId;
 
-    @NotBlank(message = "Template label is required")
+    /** Response/display cache rebuilt from templateId; ignored as write authority. */
     @Size(max = 255, message = "Template label must be at most 255 characters")
     private String templateLabel;
 
@@ -51,18 +51,19 @@ public class SpecificationDto {
     @NotNull(message = "Then-conditions cannot be null")
     private List<@Valid @NotNull(message = "Then-condition item cannot be null") SpecConditionDto> thenConditions = new ArrayList<>();
 
-    @Size(max = 4000, message = "Formula must be at most 4000 characters")
+    /** User-readable preview rebuilt from structured conditions; never parsed for verification. */
+    @Size(max = 4000, message = "Formula preview must be at most 4000 characters")
     private String formula;
 
-    @Valid
-    @NotNull(message = "Devices cannot be null")
     @Size(max = 50, message = "At most 50 devices can be bound to a specification")
+    @Valid
     private List<@Valid @NotNull(message = "Specification device item cannot be null") DeviceRefDto> devices = new ArrayList<>();
 
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
     public static class DeviceRefDto {
+        @NotBlank(message = "Specification device ID is required")
         @Size(max = 100, message = "Device ID must be at most 100 characters")
         private String deviceId;
 
@@ -73,16 +74,6 @@ public class SpecificationDto {
         @Size(max = 100, message = "At most 100 APIs can be selected for a specification device")
         private List<@NotNull(message = "Selected API name cannot be null")
                 @Size(max = 100, message = "Selected API name must be at most 100 characters") String> selectedApis = new ArrayList<>();
-
-        @JsonIgnore
-        @AssertTrue(message = "Specification device must include deviceId or deviceLabel")
-        public boolean isDeviceReferencePresent() {
-            return hasText(deviceId) || hasText(deviceLabel);
-        }
-
-        private boolean hasText(String value) {
-            return value != null && !value.isBlank();
-        }
     }
 
     @JsonIgnore

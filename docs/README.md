@@ -25,55 +25,59 @@ see Source) · ⚠️ pending (blocked on a decision).
 
 | Document | Status | Owns | Source (if not ready) |
 | :--- | :--- | :--- | :--- |
-| `README.md` | ✅ ready | Project pitch, feature highlights, 5-minute quick start, links into `docs/` | — |
-| `CHANGELOG.md` | ✅ ready | Change history (`Unreleased` + dated entries until a release process exists) | — |
-| `CONTRIBUTING.md` | ✅ ready | Branch/commit conventions, **doc-sync discipline**, language policy | — |
+| [README.md](../README.md) | ✅ ready | Project pitch, feature highlights, 5-minute quick start, links into `docs/` | — |
+| [CHANGELOG.md](../CHANGELOG.md) | ✅ ready | Change history (`Unreleased` + dated entries until a release process exists) | — |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | ✅ ready | Branch/commit conventions, **doc-sync discipline**, language policy | — |
 | `LICENSE` | ⚠️ pending | License text | **Blocked on decision**: no LICENSE file exists. The root README previously described the project as a Nanjing University Challenge Cup entry and `backend/README.md` said "MIT License"; the conflicting MIT claim has been removed pending a confirmed authorization stance. Add a LICENSE file only once that stance is decided. |
 
 ### Getting started
 
 | Document | Status | Owns | Source (if not ready) |
 | :--- | :--- | :--- | :--- |
-| `docs/getting-started/installation.md` | ✅ ready | Full prerequisites & install (JDK/Node/MySQL/Redis/NuSMV) | — |
-| `docs/getting-started/configuration.md` | ✅ ready | **SSOT** for every environment variable and default value | — |
-| `docs/getting-started/deployment.md` | ✅ ready | Production packaging, Nginx, profiles, `ProductionSafetyCheck` | — |
+| [docs/getting-started/installation.md](getting-started/installation.md) | ✅ ready | Full prerequisites & install (JDK/Node/MySQL/Redis/NuSMV) | — |
+| [docs/getting-started/configuration.md](getting-started/configuration.md) | ✅ ready | **SSOT** for every environment variable and default value | — |
+| [docs/getting-started/deployment.md](getting-started/deployment.md) | ✅ ready | Production packaging, Nginx, profiles, `ProductionSafetyCheck` | — |
 
 ### Architecture
 
 | Document | Status | Owns | Source (if not ready) |
 | :--- | :--- | :--- | :--- |
-| `docs/architecture/overview.md` | ✅ ready | System topology, front/back boundary, package layout | — |
-| `docs/architecture/verification-flow.md` | ✅ ready | SmvGenerator → NusmvExecutor → SmvTraceParser pipeline | — |
-| `docs/architecture/nusmv-model.md` | ✅ ready | SMV modeling logic, identifier sanitization, user-input → model mapping | — |
-| `docs/architecture/spec-templates.md` | ✅ ready | 7 spec templates ↔ CTL/LTL, `templateId` mapping, P1–P5 | — |
-| `docs/architecture/auto-fix.md` | ✅ ready | Fault localization + parameter/condition/disable strategies + forward verification | — |
+| [docs/architecture/overview.md](architecture/overview.md) | ✅ ready | System topology, front/back boundary, package layout | — |
+| [docs/architecture/device-identity.md](architecture/device-identity.md) | ✅ ready | Canonical device identity, display-label boundaries, NuSMV `varName` normalization | — |
+| [docs/architecture/data-authority-model.md](architecture/data-authority-model.md) | ✅ ready | Field-level data ownership for devices, environment pool, rules, specs, traces, tasks, and fix | — |
+| [docs/architecture/verification-flow.md](architecture/verification-flow.md) | ✅ ready | SmvGenerator → NusmvExecutor → SmvTraceParser pipeline | — |
+| [docs/architecture/nusmv-model.md](architecture/nusmv-model.md) | ✅ ready | SMV modeling logic, identifier sanitization, user-input → model mapping | — |
+| [docs/architecture/spec-templates.md](architecture/spec-templates.md) | ✅ ready | 7 spec templates ↔ CTL/LTL, `templateId` mapping, P1–P5 | — |
+| [docs/architecture/auto-fix.md](architecture/auto-fix.md) | ✅ ready | Fault localization + parameter/condition/permanent-removal strategies + forward verification | — |
 
 ### API
 
 | Document | Status | Owns | Source (if not ready) |
 | :--- | :--- | :--- | :--- |
-| `docs/api/overview.md` | ✅ ready | `Result<T>` envelope, auth convention, error codes | — |
-| `docs/api/rest-endpoints.md` | ✅ ready | **Index only**: method, path, controller, one-line note, link to domain doc | — |
-| `docs/api/auth.md` | ✅ ready | Auth DTO-level contract | — |
-| `docs/api/board.md` | ✅ ready | Board/rules/specs/templates/recommend contracts | — |
-| `docs/api/verification.md` | ✅ ready | Verify/simulate/task/trace/fix DTO-level contract | — |
-| `docs/api/chat-sse.md` | ✅ ready | SSE streaming protocol for chat | — |
-| `docs/api/ai-tools.md` | ✅ ready | The 30 AI tools: names, categories, argument semantics | — |
+| [docs/api/overview.md](api/overview.md) | ✅ ready | `Result<T>` envelope, auth convention, error codes | — |
+| [docs/api/rest-endpoints.md](api/rest-endpoints.md) | ✅ ready | **Index only**: method, path, controller, one-line note, link to domain doc | — |
+| [docs/api/auth.md](api/auth.md) | ✅ ready | Auth DTO-level contract | — |
+| [docs/api/board.md](api/board.md) | ✅ ready | Board/rules/specs/templates/recommend contracts | — |
+| [docs/api/verification.md](api/verification.md) | ✅ ready | Verify/simulate/task/trace/fix DTO-level contract | — |
+| [docs/api/chat-sse.md](api/chat-sse.md) | ✅ ready | SSE streaming protocol for chat | — |
+| [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 33 AI tools: names, categories, argument semantics | — |
 
 ### Guides
 
 | Document | Status | Owns | Source (if not ready) |
 | :--- | :--- | :--- | :--- |
-| `docs/guides/frontend-integration.md` | ✅ ready | How the frontend calls the backend (axios/SSE, real `boardApi`/`authApi` shape, type locations) | — |
-| `docs/guides/troubleshooting.md` | ✅ ready | FAQ (MySQL/Redis/CORS/NuSMV/timeout) | — |
+| [docs/guides/frontend-integration.md](guides/frontend-integration.md) | ✅ ready | How the frontend calls the backend (axios/SSE, real `boardApi`/`authApi` shape, type locations) | — |
+| [docs/guides/acceptance-demo.md](guides/acceptance-demo.md) | ✅ ready | End-to-end acceptance scene: three construction paths, simulation/verification animation, attack/privacy contrast, and verified repair | — |
+| [docs/guides/default-template-scenarios.md](guides/default-template-scenarios.md) | ✅ ready | Three additional importable default-template scenes covering fire response, rule priority, RFID trust/privacy, attack contrast, and verified repair | — |
+| [docs/guides/troubleshooting.md](guides/troubleshooting.md) | ✅ ready | FAQ (MySQL/Redis/CORS/NuSMV/timeout) | — |
 
 ### Module READMEs & Claude manuals
 
 | Document | Status | Notes |
 | :--- | :--- | :--- |
-| `backend/README.md` | ✅ ready | Slimmed to local-run + package layout + links into `docs/` |
-| `frontend/README.md` | ✅ ready | Slimmed to local-run + source layout + links into `docs/` |
-| `CLAUDE.md` (root), `backend/CLAUDE.md`, `frontend/CLAUDE.md` | ✅ ready | Claude Code working manuals — also serve as the coding-AI-agent guidance (cross-cutting rules at root, per-stack detail in each). A separate `AGENTS.md` is **not** used; the CLAUDE.md set fills that role. |
+| [backend/README.md](../backend/README.md) | ✅ ready | Slimmed to local-run + package layout + links into `docs/` |
+| [frontend/README.md](../frontend/README.md) | ✅ ready | Slimmed to local-run + source layout + links into `docs/` |
+| [CLAUDE.md](../CLAUDE.md) (root), [backend/CLAUDE.md](../backend/CLAUDE.md), [frontend/CLAUDE.md](../frontend/CLAUDE.md), [AGENTS.md](../AGENTS.md) | ✅ ready | Claude/Codex working manuals. `CLAUDE.md` owns the stack-specific coding-AI guidance (cross-cutting rules at root, per-stack detail in each); root `AGENTS.md` mirrors the cross-cutting Codex rules and points to the CLAUDE stack manuals. There are no backend/frontend `AGENTS.md` files. |
 
 Removed legacy docs (content fully migrated into the set above, so the files were
 deleted rather than kept as stubs):

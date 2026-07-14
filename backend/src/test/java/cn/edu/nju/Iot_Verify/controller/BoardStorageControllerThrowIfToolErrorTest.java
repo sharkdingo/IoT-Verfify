@@ -1,11 +1,15 @@
 package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
+import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckRuleSimilarityTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRulesTool;
+import cn.edu.nju.Iot_Verify.component.aitool.scenario.RecommendScenarioTool;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
+import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.BadGatewayException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ForbiddenException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
@@ -13,8 +17,13 @@ import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
+import cn.edu.nju.Iot_Verify.dto.recommendation.DeviceRecommendationRequestDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,18 +44,26 @@ class BoardStorageControllerThrowIfToolErrorTest {
     @Mock private RecommendRulesTool recommendRulesTool;
     @Mock private RecommendRelatedDevicesTool recommendRelatedDevicesTool;
     @Mock private CheckDuplicateRuleTool checkDuplicateRuleTool;
+    @Mock private CheckRuleSimilarityTool checkRuleSimilarityTool;
     @Mock private RecommendSpecificationsTool recommendSpecificationsTool;
+    @Mock private RecommendScenarioTool recommendScenarioTool;
     @Mock private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
+    @Mock private BoardBatchRequestParser boardBatchRequestParser;
 
     private BoardStorageController controller;
     private RuleDto dummyRule;
+    private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
+        objectMapper = new ObjectMapper()
+                .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true)
+                .configure(DeserializationFeature.ACCEPT_FLOAT_AS_INT, false);
         controller = new BoardStorageController(
                 boardService, recommendRulesTool, recommendRelatedDevicesTool,
-                checkDuplicateRuleTool, recommendSpecificationsTool, new ObjectMapper(),
-                deviceTemplateSchemaValidator);
+                checkDuplicateRuleTool, checkRuleSimilarityTool,
+                recommendSpecificationsTool, recommendScenarioTool, objectMapper,
+                deviceTemplateSchemaValidator, boardBatchRequestParser);
         dummyRule = new RuleDto();
         dummyRule.setConditions(List.of());
         dummyRule.setCommand(new RuleDto.Command("dev", "on", null, null));
@@ -95,6 +112,13 @@ class BoardStorageControllerThrowIfToolErrorTest {
     }
 
     @Test
+    void throwIfToolError_502_throwsBadGateway() throws Exception {
+        stubToolError(502, "AI_RESPONSE_INVALID");
+        assertThrows(BadGatewayException.class,
+                () -> controller.checkDuplicateRule(1L, dummyRule));
+    }
+
+    @Test
     void throwIfToolError_403_throwsForbidden() throws Exception {
         stubToolError(403, "FORBIDDEN");
         assertThrows(ForbiddenException.class,
@@ -116,9 +140,200 @@ class BoardStorageControllerThrowIfToolErrorTest {
     }
 
     @Test
-    void throwIfToolError_noErrorCode_returnsSuccess() throws Exception {
+    void completeDuplicateCheckResult_returnsSuccess() throws Exception {
+        when(checkDuplicateRuleTool.execute(anyString()))
+                .thenReturn("""
+                        {"isDuplicate":false,"requiresReview":false,"matchedRule":null,
+                         "similarity":0.0,"matchType":"none","reasonCode":"NO_MATCHING_SIGNATURE",
+                         "reason":"no matching signature",
+                         "message":"No obvious duplicate rule found; this is not a conflict-free proof."}
+                        """);
+        assertDoesNotThrow(() -> controller.checkDuplicateRule(1L, dummyRule));
+    }
+
+    @Test
+    void incompleteDuplicateCheckResult_throwsInternalServer() throws Exception {
         when(checkDuplicateRuleTool.execute(anyString()))
                 .thenReturn("{\"isDuplicate\":false}");
-        assertDoesNotThrow(() -> controller.checkDuplicateRule(1L, dummyRule));
+
+        assertThrows(InternalServerException.class,
+                () -> controller.checkDuplicateRule(1L, dummyRule));
+    }
+
+    @Test
+    void inconsistentSimilarityResult_throwsBadGateway() throws Exception {
+        when(checkRuleSimilarityTool.execute(anyString())).thenReturn("""
+                {"isSimilar":false,"isDuplicate":true,"requiresReview":true,
+                 "matchedRule":"Existing rule","similarity":1.0,"reasonCode":"AI_DUPLICATE",
+                 "reason":"same semantics","message":"duplicate"}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.checkRuleSimilarity(1L, dummyRule));
+    }
+
+    @Test
+    void completeRuleRecommendationResult_mapsToTypedDto() throws Exception {
+        when(recommendRulesTool.execute(anyString())).thenReturn("""
+                {"message":"One rule found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":1,"adjustedItems":[{"type":"rule","index":1,
+                 "reasonCode":"apiEventSyntaxNormalized","reason":"Equivalent event syntax normalized",
+                 "label":"Alert on motion","appliedValues":{"sourceApi":"motion"}}],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "conditions":[{"deviceId":"device_1",
+                 "deviceLabel":"Hall sensor","deviceName":"Hall sensor","attribute":"motion",
+                 "targetType":"api"}],"command":{"deviceId":"device_2",
+                 "deviceLabel":"Alarm","deviceName":"Alarm","action":"turn_on"}}]}
+                """);
+
+        var response = controller.recommendRules(1L, 5, "all", "en", "").getData();
+
+        assertEquals(1, response.getAdjustedCount());
+        assertEquals("apiEventSyntaxNormalized", response.getAdjustedItems().get(0).getReasonCode());
+    }
+
+    @Test
+    void incompleteRecommendationAccounting_throwsBadGateway() throws Exception {
+        when(recommendRulesTool.execute(anyString())).thenReturn("""
+                {"message":"One rule found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":0,"adjustedItems":[],
+                 "rawCandidateCount":2,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "conditions":[],"command":{}}]}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+    }
+
+    @Test
+    void keptRuleRecommendationWithoutPersistedName_throwsBadGateway() throws Exception {
+        when(recommendRulesTool.execute(anyString())).thenReturn("""
+                {"message":"One rule found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":0,"adjustedItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"conditions":[{"deviceId":"device_1",
+                 "deviceName":"Hall sensor","attribute":"motion","targetType":"api"}],
+                 "command":{"deviceId":"device_2","deviceName":"Alarm","action":"turn_on"}}]}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+    }
+
+    @Test
+    void unknownKeptRecommendationField_throwsBadGateway() throws Exception {
+        when(recommendRulesTool.execute(anyString())).thenReturn("""
+                {"message":"One rule found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":0,"adjustedItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"category":"security","name":"Alert on motion",
+                 "conditions":[],"command":{},"unmodeledEffect":"open door"}]}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+    }
+
+    @Test
+    void deviceRecommendationRequestAndAdjustments_mapToTypedDto() throws Exception {
+        when(recommendRelatedDevicesTool.executeBoardRecommendations(anyString())).thenReturn("""
+                {"message":"One device found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":1,"adjustedItems":[{"type":"device","index":1,
+                 "reasonCode":"deviceDefaultsApplied","reason":"Defaults applied",
+                 "label":"Hall sensor","appliedValues":{"initialState":"idle"}}],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"templateName":"Motion Detector",
+                 "suggestedLabel":"Hall sensor","intendedUse":"trigger",
+                 "suggestedPlacement":"hall",
+                 "description":"Detect motion","reason":"Supports automation",
+                 "initialState":"idle","currentStateTrust":"trusted",
+                 "currentStatePrivacy":"public"}]}
+                """);
+
+        assertDoesNotThrow(() -> controller.recommendDevices(
+                1L, new DeviceRecommendationRequestDto()));
+    }
+
+    @Test
+    void specificationRecommendation_mapsToTypedDto() throws Exception {
+        when(recommendSpecificationsTool.execute(anyString())).thenReturn("""
+                {"message":"One specification found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"rationale":"Motion must trigger alarm",
+                 "templateId":"5","aConditions":[],
+                 "ifConditions":[{"deviceId":"device_1","deviceLabel":"Hall sensor",
+                 "targetType":"api","key":"motion","relation":"=","value":"TRUE"}],
+                 "thenConditions":[{"deviceId":"device_2",
+                 "deviceLabel":"Alarm","targetType":"state","key":"state",
+                 "relation":"=","value":"on"}]}]}
+                """);
+
+        assertDoesNotThrow(() -> controller.recommendSpecs(1L, 5, "all", "en", ""));
+    }
+
+    @Test
+    void keptSpecificationRecommendationWithoutRationale_throwsBadGateway() throws Exception {
+        when(recommendSpecificationsTool.execute(anyString())).thenReturn("""
+                {"message":"One specification found.","count":1,"requestedCount":5,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "recommendations":[{"templateId":"3","aConditions":[],
+                 "ifConditions":[],"thenConditions":[]}]}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendSpecs(1L, 5, "all", "en", ""));
+    }
+
+    @Test
+    void scenarioFinalCountMayIncludeSynthesizedEnvironmentItem() throws Exception {
+        when(recommendScenarioTool.execute(anyString())).thenReturn("""
+                {"message":"Scenario generated.","count":3,"requestedCount":16,
+                 "validatedCount":2,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":1,"adjustedItems":[{"type":"environment",
+                 "reasonCode":"missingEnvironmentAdded","reason":"Required value added",
+                 "label":"temperature","appliedValues":{"value":"20"}}],
+                 "rawCandidateCount":2,"inspectedCount":2,"truncatedCount":0,
+                 "scenarioName":"Home","rationale":"Exercise a shared reading",
+                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "templates":[{"name":"Sensor","manifest":{"Name":"Sensor"}}],
+                 "devices":[{"id":"device_1","templateName":"Sensor","label":"Hall sensor",
+                 "position":{"x":0,"y":0},"width":176,"height":128}],
+                 "environmentVariables":[{"name":"temperature","value":"20",
+                 "trust":"trusted","privacy":"public"}],"rules":[],
+                 "specs":[{"templateId":"3","aConditions":[{"deviceId":"device_1",
+                 "targetType":"variable","key":"temperature","relation":">","value":"30"}],
+                 "ifConditions":[],"thenConditions":[]}]}}
+                """);
+
+        ScenarioRecommendationResponseDto response = controller.recommendScenario(
+                1L, new ScenarioRecommendationRequestDto()).getData();
+        JsonNode scene = objectMapper.valueToTree(response.getScene());
+
+        assertEquals(List.of("manifest", "name"),
+                iterableFieldNames(scene.path("templates").get(0)));
+        JsonNode device = scene.path("devices").get(0);
+        assertFalse(device.has("state"));
+        assertFalse(device.has("currentStateTrust"));
+        assertFalse(device.has("currentStatePrivacy"));
+        assertEquals("device_1", device.path("id").asText());
+        JsonNode condition = scene.path("specs").get(0).path("aConditions").get(0);
+        assertEquals(List.of("deviceId", "key", "relation", "targetType", "value"),
+                iterableFieldNames(condition));
+    }
+
+    private static List<String> iterableFieldNames(JsonNode node) {
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        node.fieldNames().forEachRemaining(names::add);
+        names.sort(String::compareTo);
+        return names;
     }
 }

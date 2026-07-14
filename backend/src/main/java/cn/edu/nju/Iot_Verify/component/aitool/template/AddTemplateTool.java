@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -61,12 +62,20 @@ public class AddTemplateTool extends AbstractAiTool {
         props.put("manifest", Map.of(
                 "type", "object",
                 "description", "Full device manifest JSON defining the device behavior. " +
-                        "For stateful devices, must include: Name, Description, Modes (array of mode dimension names), InitState (semicolon-separated for multi-mode), " +
+                        "For stateful devices, must include: Name, Description, Modes (array of mode dimension names), InitState (one concrete WorkingStates.Name, semicolon-separated for multi-mode; no wildcard/partial/case alias), " +
                         "WorkingStates (array of {Name, Description, Trust, Privacy, Dynamics[]}), " +
-                        "Transitions (array of {Name, StartState (optional), EndState (optional for internal variable transitions), Trigger{Attribute,Relation,Value}, Signal, Assignments[{Attribute,Value}]}), " +
-                        "APIs (array of {Name, Description, StartState (optional, empty or '_' means from any state), EndState, Signal, Trigger:null, Assignments[{Attribute,Value}]}). " +
+                        "Every multi-mode WorkingState.Name is a complete semicolon-separated tuple with one concrete value per mode. If a mode-state component is reused in several tuples, its Trust and Privacy labels must be identical because the formal model stores one label for that component. " +
+                        "Transitions (array of {Name, StartState (optional), EndState (optional for variable transitions), Trigger{Attribute,Relation,Value}, Assignments[{Attribute,Value}]}); every Transition requires a Trigger and has exactly one state or variable effect. Transition event signals are not supported. " +
+                        "APIs (array of {Name, Description, StartState, EndState, Signal, optional AcceptsContent, Trigger:null}); StartState is required: use an explicit empty string or '_' pattern for any state, otherwise provide the state precondition. Signal is required and must explicitly be true (observable one-step automation/specification trigger) or false (command only). AcceptsContent defaults to false; set it true only when a rule invoking this action may carry one explicitly selected Content sensitivity label. It does not model payload bytes or access control. APIs require a stateful template and cannot assign variables. " +
+                        "Use a triggered Transition for internal or shared-variable assignments; every assignment target and value must match a declared variable domain. " +
                         "For stateless sensors (no modes), Modes/InitState/WorkingStates can all be empty. " +
-                        "Optional: InternalVariables, ImpactedVariables, Contents. The manifest must match backend/device-template-schema.json exactly."
+                        "Optional: Icon (UI-only data:image or HTTPS image), InternalVariables, EnvironmentDomains, ImpactedVariables, Contents. " +
+                        "Every InternalVariables item must explicitly set IsInside, a domain, and FalsifiableWhenCompromised. IsInside=true means a device-local instance value; IsInside=false means one scene-wide shared environment value. Never omit it or infer ownership from the device type. Define the domain with Values (use [TRUE,FALSE] for boolean data) or LowerBound+UpperBound; an omitted domain is invalid. Set FalsifiableWhenCompromised true only when compromise may replace that reported sensor/received-data value with any value in its declared domain; use false for actuator state, progress, and setpoints. " +
+                        "This flag applies to both shared environment readings (IsInside=false) and device-local readings (IsInside=true), so API presence does not classify a device as purely sensor or actuator. " +
+                        "Every ImpactedVariables name must have its domain in this same manifest: use an IsInside=false InternalVariable when the device can also read it, or EnvironmentDomains when it can only affect it. EnvironmentDomains does not grant read permission. " +
+                        "Every WorkingState and InternalVariable must explicitly define Trust and Privacy; every Content must explicitly define Privacy; every EnvironmentDomain must define both labels. Trust is MEDIC control-source trust: one trusted trigger source retains trusted control and only an all-untrusted trigger set makes the target untrusted; it is not authentication or generic data integrity. Never treat a missing security label as trusted or public. " +
+                        "Icon is display-only and must not be used to express device behavior. " +
+                        "The manifest must match backend/device-template-schema.json exactly."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -85,10 +94,8 @@ public class AddTemplateTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String name = trimToNull(args.path("name").asText(null));
-            if (name == null) {
-                return errorJson("Template name is required.", "VALIDATION_ERROR", 400);
-            }
+            requireOnlyFields(args, "arguments", Set.of("name", "manifest"));
+            String name = requiredTextField(args, "name", "arguments");
 
             JsonNode manifestNode = args.path("manifest");
             if (manifestNode.isMissingNode() || !manifestNode.isObject()) {
@@ -124,9 +131,11 @@ public class AddTemplateTool extends AbstractAiTool {
             DeviceTemplateDto saved = boardStorageService.addDeviceTemplate(userId, dto);
             return successJson(Map.of(
                     "message", "Template added successfully.",
-                    "templateId", saved.getId(),
-                    "name", saved.getName()
+                    "operation", "created",
+                    "template", saved
             ), "Template added successfully.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("add_template busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

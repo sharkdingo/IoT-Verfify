@@ -2,7 +2,7 @@
 
 // 登录请求
 export interface LoginRequest {
-  phone: string;
+  identifier: string;
   password: string;
 }
 
@@ -11,6 +11,12 @@ export interface RegisterRequest {
   phone: string;
   username: string;
   password: string;
+}
+
+// 注销账号请求
+export interface DeleteAccountRequest {
+  password: string;
+  confirmation: string;
 }
 
 // 登录响应（包含token）
@@ -39,5 +45,5 @@ export interface UserInfo {
 export interface Result<T> {
   code: number;
   message: string;
-  data: T;
+  data?: T | null;
 }

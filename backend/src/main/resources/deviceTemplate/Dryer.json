@@ -6,7 +6,7 @@
 			"Name": "dryerJobState",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": false,
+			"FalsifiableWhenCompromised": false,
 			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["cooling", "delayWash", "drying", "finished", "none", "weightSensing", "wrinklePrevent"]
@@ -18,7 +18,6 @@
 		{
 			"Name": "regular;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -26,7 +25,6 @@
 		{
 			"Name": "regular;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -34,7 +32,6 @@
 		{
 			"Name": "regular;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -42,7 +39,6 @@
 		{
 			"Name": "lowHeat;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -50,7 +46,6 @@
 		{
 			"Name": "lowHeat;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -58,7 +53,6 @@
 		{
 			"Name": "lowHeat;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -66,7 +60,6 @@
 		{
 			"Name": "highHeat;pause",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -74,7 +67,6 @@
 		{
 			"Name": "highHeat;run",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -82,7 +74,6 @@
 		{
 			"Name": "highHeat;stop",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

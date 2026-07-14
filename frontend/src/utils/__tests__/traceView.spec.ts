@@ -1,57 +1,262 @@
 import { describe, it, expect } from 'vitest'
-import { canOpenTracePlayback, deriveTraceContext } from '../traceView'
+import {
+  canOpenTracePlayback,
+  deriveTraceContext,
+  formatTraceSpec,
+  isDeviceRepresentedInPlayback,
+  isPlaybackDeviceAttacked,
+  playbackDeviceChanged,
+  playbackDeviceChangeDetails,
+  playbackEnvironmentChangeDetails,
+  playbackDeviceSecurityFacts,
+  playbackDeviceSummaryParts
+} from '../traceView'
 
 describe('canOpenTracePlayback', () => {
   it('allows playback when no conflicting panel is open', () => {
     const r = canOpenTracePlayback({ simulationVisible: false, recommendationPanelVisible: false })
     expect(r.allowed).toBe(true)
-    expect(r.reason).toBe('')
+    expect(r.reasonCode).toBeNull()
   })
 
   it('blocks playback while the simulation timeline is visible', () => {
     const r = canOpenTracePlayback({ simulationVisible: true, recommendationPanelVisible: false })
     expect(r.allowed).toBe(false)
-    expect(r.reason).toMatch(/simulation timeline/i)
+    expect(r.reasonCode).toBe('SIMULATION_VISIBLE')
   })
 
   it('blocks playback while the recommendations panel is visible', () => {
     const r = canOpenTracePlayback({ simulationVisible: false, recommendationPanelVisible: true })
     expect(r.allowed).toBe(false)
-    expect(r.reason).toMatch(/recommendations/i)
+    expect(r.reasonCode).toBe('RECOMMENDATION_VISIBLE')
   })
 
   it('prefers the simulation message when both are open', () => {
     const r = canOpenTracePlayback({ simulationVisible: true, recommendationPanelVisible: true })
     expect(r.allowed).toBe(false)
-    expect(r.reason).toMatch(/simulation timeline/i)
+    expect(r.reasonCode).toBe('SIMULATION_VISIBLE')
+  })
+
+  it('formats all specification template shapes for trace feedback', () => {
+    const condition = {
+      deviceId: 'door_1',
+      deviceLabel: 'Front Door',
+      targetType: 'variable',
+      key: 'contact',
+      relation: 'NOT_IN',
+      value: 'closed,locked'
+    }
+
+    expect(formatTraceSpec(JSON.stringify({
+      templateId: '1',
+      templateLabel: 'Always',
+      aConditions: [condition]
+    }))).toBe('Always: Front Door.contact not in "closed,locked"')
+
+    expect(formatTraceSpec(JSON.stringify({
+      templateId: '5',
+      templateLabel: 'Response',
+      ifConditions: [{ ...condition, relation: 'EQ', value: 'open' }],
+      thenConditions: [{ ...condition, key: 'alarm', relation: 'GTE', value: '1' }]
+    }))).toBe('Response: IF Front Door.contact = "open", THEN eventually Front Door.alarm >= "1"')
+
+    expect(formatTraceSpec(JSON.stringify({
+      templateId: '7',
+      templateLabel: 'Safety',
+      aConditions: [condition]
+    }))).toBe('Safety: Front Door.contact not in "closed,locked" must not hold with an untrusted control-source label')
+  })
+
+  it('uses localized trace wording instead of hard-coded English', () => {
+    const translate = (key: string, params: Record<string, unknown> = {}) => {
+      const messages: Record<string, string> = {
+        'app.traceConditionAnd': ' 且 ',
+        'app.traceSpecNever': '不得发生：{condition}',
+        'app.relationNotIn': '不属于',
+        'app.unknownSpecification': '未知规约',
+        'app.unknownDevice': '未知设备',
+        'app.state': '状态',
+        'app.value': '值'
+      }
+      return (messages[key] || key).replace(/\{(\w+)\}/g, (_match, name) => String(params[name] ?? ''))
+    }
+
+    expect(formatTraceSpec({
+      templateId: '3',
+      aConditions: [{
+        deviceLabel: '玄关相机',
+        key: 'state',
+        relation: 'NOT_IN',
+        value: 'off'
+      }]
+    }, translate)).toBe('不得发生：玄关相机.state 不属于 "off"')
   })
 })
 
 describe('deriveTraceContext', () => {
-  const form = { isAttack: false, intensity: 3 }
-
   it('uses the trace own context when isAttack is set', () => {
-    const ctx = deriveTraceContext({ isAttack: true, intensity: 12 }, form)
-    expect(ctx).toEqual({ isAttack: true, intensity: 12 })
+    const ctx = deriveTraceContext({ isAttack: true, attackBudget: 12 })
+    expect(ctx).toEqual({ isAttack: true, attackBudget: 12, enablePrivacy: false })
   })
 
-  it('reflects a non-attack trace even when the live form has attack on', () => {
-    const ctx = deriveTraceContext({ isAttack: false, intensity: 0 }, { isAttack: true, intensity: 40 })
-    expect(ctx).toEqual({ isAttack: false, intensity: 0 })
+  it('reflects a non-attack trace from its own snapshot', () => {
+    const ctx = deriveTraceContext({ isAttack: false, attackBudget: 0 })
+    expect(ctx).toEqual({ isAttack: false, attackBudget: 0, enablePrivacy: false })
   })
 
-  it('falls back to the live form for legacy traces (isAttack undefined)', () => {
-    const ctx = deriveTraceContext({ isAttack: undefined, intensity: undefined }, { isAttack: true, intensity: 9 })
-    expect(ctx).toEqual({ isAttack: true, intensity: 9 })
+  it('fails closed to non-attack defaults when context is missing', () => {
+    const ctx = deriveTraceContext({ isAttack: undefined, attackBudget: undefined })
+    expect(ctx).toEqual({ isAttack: false, attackBudget: 0, enablePrivacy: false })
   })
 
-  it('falls back to the live form when trace is null', () => {
-    const ctx = deriveTraceContext(null, form)
-    expect(ctx).toEqual({ isAttack: false, intensity: 3 })
+  it('uses non-attack defaults when trace is null', () => {
+    const ctx = deriveTraceContext(null)
+    expect(ctx).toEqual({ isAttack: false, attackBudget: 0, enablePrivacy: false })
   })
 
-  it('defaults intensity to 0 when an attack trace omits it', () => {
-    const ctx = deriveTraceContext({ isAttack: true, intensity: undefined }, form)
-    expect(ctx).toEqual({ isAttack: true, intensity: 0 })
+  it('defaults attackBudget to 0 when an attack trace omits it', () => {
+    const ctx = deriveTraceContext({ isAttack: true, attackBudget: undefined })
+    expect(ctx).toEqual({ isAttack: true, attackBudget: 0, enablePrivacy: false })
+  })
+
+  it('uses the trace privacy-model context instead of the current form', () => {
+    const ctx = deriveTraceContext({ isAttack: false, attackBudget: 0, enablePrivacy: true })
+    expect(ctx.enablePrivacy).toBe(true)
+  })
+})
+
+describe('playback device facts', () => {
+  const idle = {
+    deviceId: 'sensor_1',
+    state: 'idle',
+    compromised: false,
+    variables: [
+      { name: 'temperature', value: '20' }
+    ]
+  }
+
+  it('keeps user-facing state, values, and compromise status separate', () => {
+    expect(playbackDeviceSummaryParts(idle)).toEqual(['idle', 'temperature=20'])
+    expect(isPlaybackDeviceAttacked(idle)).toBe(false)
+  })
+
+  it('distinguishes current Board devices that were not represented in the saved trace', () => {
+    const states = [
+      { devices: [{ deviceId: 'sensor_1' }] },
+      { devices: [{ deviceId: 'LIGHT_1' }] }
+    ]
+    expect(isDeviceRepresentedInPlayback(states, 'Sensor_1')).toBe(true)
+    expect(isDeviceRepresentedInPlayback(states, 'light_1')).toBe(true)
+    expect(isDeviceRepresentedInPlayback(states, 'light-1')).toBe(true)
+    expect(isDeviceRepresentedInPlayback(states, 'later_device')).toBe(false)
+  })
+
+  it('detects runtime attack and state changes from consecutive snapshots', () => {
+    const attacked = {
+      ...idle,
+      state: 'active',
+      compromised: true,
+      variables: [
+        { name: 'temperature', value: '24' }
+      ]
+    }
+    expect(isPlaybackDeviceAttacked(attacked)).toBe(true)
+    expect(playbackDeviceChanged(attacked, idle)).toBe(true)
+    expect(playbackDeviceChanged(attacked, attacked)).toBe(false)
+  })
+
+  it('compares merged trust and privacy facts without requiring an identity field', () => {
+    const previous = {
+      state: 'recording',
+      trustPrivacy: [{ name: 'recording', propertyScope: 'state' as const, trust: true }],
+      privacies: [{ name: 'recording', propertyScope: 'state' as const, privacy: 'public' }]
+    }
+    const equivalent = {
+      state: 'recording',
+      trustPrivacy: [{
+        name: 'recording',
+        propertyScope: 'state' as const,
+        trust: true,
+        privacy: 'public'
+      }]
+    }
+    const privateRecording = {
+      ...previous,
+      privacies: [{ name: 'recording', propertyScope: 'state' as const, privacy: 'private' }]
+    }
+
+    expect(playbackDeviceChanged(equivalent, previous)).toBe(false)
+    expect(playbackDeviceChanged(privateRecording, previous)).toBe(true)
+  })
+
+  it('builds independent before/after facts without exposing the model id as a label', () => {
+    const changed = playbackDeviceChangeDetails({
+      deviceId: 'generated_camera_1',
+      deviceLabel: 'Hall camera',
+      state: 'recording',
+      variables: [{ name: 'motion', value: 'TRUE' }]
+    }, {
+      deviceId: 'generated_camera_1',
+      deviceLabel: 'Hall camera',
+      state: 'idle',
+      variables: [{ name: 'motion', value: 'FALSE' }]
+    })
+
+    expect(changed).toMatchObject({
+      deviceId: 'generated_camera_1',
+      deviceLabel: 'Hall camera',
+      details: expect.arrayContaining([
+        expect.objectContaining({ kind: 'state', previousValue: 'idle', currentValue: 'recording' }),
+        expect.objectContaining({ kind: 'variable', name: 'motion', previousValue: 'FALSE', currentValue: 'TRUE' })
+      ])
+    })
+  })
+
+  it('reports environment changes independently from device changes', () => {
+    expect(playbackEnvironmentChangeDetails([
+      { name: 'temperature', value: '24' },
+      { name: 'motion', value: 'inactive' }
+    ], [
+      { name: 'temperature', value: '20' },
+      { name: 'motion', value: 'inactive' }
+    ])).toEqual([
+      { name: 'temperature', previousValue: '20', currentValue: '24' }
+    ])
+    expect(playbackEnvironmentChangeDetails([{ name: 'temperature', value: '20' }], null)).toEqual([])
+  })
+
+  it('reports variable/content labels and only the active state security labels', () => {
+    expect(playbackDeviceSecurityFacts({
+      deviceId: 'camera_1',
+      mode: 'CameraMode',
+      state: 'recording',
+      variables: [
+        { name: 'motion', value: 'TRUE', trust: 'untrusted' },
+        { name: 'battery', value: '80', trust: 'trusted' }
+      ],
+      trustPrivacy: [
+        { name: 'idle', propertyScope: 'state', mode: 'CameraMode', trust: false },
+        { name: 'recording', propertyScope: 'state', mode: 'CameraMode', trust: true }
+      ],
+      privacies: [
+        { name: 'idle', propertyScope: 'state', mode: 'CameraMode', privacy: 'private' },
+        { name: 'recording', propertyScope: 'state', mode: 'CameraMode', privacy: 'public' },
+        { name: 'video', propertyScope: 'content', privacy: 'private' }
+      ]
+    })).toEqual({
+      untrustedLabels: ['motion'],
+      privateLabels: ['video'],
+      hasTrustLabels: true,
+      hasPrivacyLabels: true
+    })
+  })
+
+  it('does not claim security labels exist when privacy modeling returned none', () => {
+    expect(playbackDeviceSecurityFacts(idle)).toEqual({
+      untrustedLabels: [],
+      privateLabels: [],
+      hasTrustLabels: false,
+      hasPrivacyLabels: false
+    })
   })
 })

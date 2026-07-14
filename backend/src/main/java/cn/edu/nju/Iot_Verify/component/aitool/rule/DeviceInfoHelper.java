@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
+import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,29 +33,63 @@ public class DeviceInfoHelper {
         }
 
         List<DeviceTemplateDto> templates = boardStorageService.getDeviceTemplates(userId);
-        Map<String, DeviceTemplateDto> templateMap = templates.stream()
-                .collect(Collectors.toMap(
-                        DeviceTemplateDto::getName,
-                        t -> t,
-                        (existing, replacement) -> existing
-                ));
+        Map<String, DeviceTemplateDto> templateMap = buildTemplateMap(templates);
 
         return nodes.stream()
                 .filter(n -> n != null && n.getTemplateName() != null)
                 .map(n -> {
-                    DeviceTemplateDto template = templateMap.get(n.getTemplateName());
+                    DeviceTemplateDto template = templateMap.get(normalizeTemplateKey(n.getTemplateName()));
                     return new DeviceInfo(
                             n.getId(),
                             n.getLabel(),
                             n.getTemplateName(),
                             n.getState(),
+                            n.getCurrentStateTrust(),
+                            n.getCurrentStatePrivacy(),
+                            n.getVariables(),
+                            n.getPrivacies(),
                             extractVariables(template),
                             extractApis(template),
                             extractTransitions(template),
-                            extractWorkingStates(template)
+                            extractModes(template),
+                            extractWorkingStates(template),
+                            extractContents(template)
                     );
                 })
                 .collect(Collectors.toList());
+    }
+
+    private Map<String, DeviceTemplateDto> buildTemplateMap(List<DeviceTemplateDto> templates) {
+        if (templates == null || templates.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, DeviceTemplateDto> templateMap = new HashMap<>();
+        for (DeviceTemplateDto template : templates) {
+            if (template == null) {
+                continue;
+            }
+            putTemplateAlias(templateMap, template.getName(), template);
+            if (template.getManifest() != null) {
+                putTemplateAlias(templateMap, template.getManifest().getName(), template);
+            }
+        }
+        return templateMap;
+    }
+
+    private void putTemplateAlias(Map<String, DeviceTemplateDto> templateMap,
+                                  String rawName,
+                                  DeviceTemplateDto template) {
+        String key = normalizeTemplateKey(rawName);
+        if (key != null) {
+            templateMap.putIfAbsent(key, template);
+        }
+    }
+
+    private String normalizeTemplateKey(String rawName) {
+        if (rawName == null || rawName.isBlank()) {
+            return null;
+        }
+        return rawName.trim().toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -92,29 +128,10 @@ public class DeviceInfoHelper {
                         a.getName(),
                         a.getDescription(),
                         a.getSignal(),
+                        a.getAcceptsContent(),
                         a.getStartState(),
-                        a.getEndState(),
-                        extractTriggerInfo(a),
-                        extractAssignments(a)
+                        a.getEndState()
                 ))
-                .collect(Collectors.toList());
-    }
-
-    private String extractTriggerInfo(DeviceTemplateDto.DeviceManifest.API api) {
-        if (api.getTrigger() == null) return null;
-        var t = api.getTrigger();
-        return String.format("%s %s %s",
-                t.getAttribute() != null ? t.getAttribute() : "",
-                t.getRelation() != null ? t.getRelation() : "",
-                t.getValue() != null ? t.getValue() : "");
-    }
-
-    private List<String> extractAssignments(DeviceTemplateDto.DeviceManifest.API api) {
-        if (api.getAssignments() == null) return Collections.emptyList();
-        return api.getAssignments().stream()
-                .map(a -> String.format("%s=%s",
-                        a.getAttribute() != null ? a.getAttribute() : "",
-                        a.getValue() != null ? a.getValue() : ""))
                 .collect(Collectors.toList());
     }
 
@@ -132,8 +149,7 @@ public class DeviceInfoHelper {
                         t.getName(),
                         t.getDescription(),
                         t.getStartState(),
-                        t.getEndState(),
-                        t.getSignal()
+                        t.getEndState()
                 ))
                 .collect(Collectors.toList());
     }
@@ -151,6 +167,73 @@ public class DeviceInfoHelper {
                 .collect(Collectors.toList());
     }
 
+    private List<ContentInfo> extractContents(DeviceTemplateDto template) {
+        if (template == null || template.getManifest() == null
+                || template.getManifest().getContents() == null) {
+            return Collections.emptyList();
+        }
+        return template.getManifest().getContents().stream()
+                .filter(Objects::nonNull)
+                .map(content -> new ContentInfo(content.getName(), content.getPrivacy()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 提取模式和值域。多模式设备的 WorkingStates 使用 "modeValue;stateValue" 元组，
+     * 这里按 Modes 中的顺序拆出每个 mode 的可选值，供 AI 推荐和后端校验使用。
+     */
+    private List<ModeInfo> extractModes(DeviceTemplateDto template) {
+        if (template == null || template.getManifest() == null
+                || template.getManifest().getModes() == null
+                || template.getManifest().getModes().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> modes = template.getManifest().getModes();
+        Map<String, LinkedHashSet<String>> valuesByMode = new LinkedHashMap<>();
+        for (String mode : modes) {
+            if (mode != null && !mode.isBlank()) {
+                valuesByMode.put(mode, new LinkedHashSet<>());
+            }
+        }
+
+        List<DeviceTemplateDto.DeviceManifest.WorkingState> states = template.getManifest().getWorkingStates();
+        if (states != null) {
+            for (DeviceTemplateDto.DeviceManifest.WorkingState state : states) {
+                String name = state != null ? state.getName() : null;
+                if (name == null || name.isBlank()) {
+                    continue;
+                }
+                String[] parts = name.split(";", -1);
+                if (modes.size() == 1) {
+                    addModeValue(valuesByMode, modes.get(0), name);
+                } else if (parts.length == modes.size()) {
+                    for (int i = 0; i < modes.size(); i++) {
+                        addModeValue(valuesByMode, modes.get(i), parts[i]);
+                    }
+                }
+            }
+        }
+
+        return valuesByMode.entrySet().stream()
+                .map(e -> new ModeInfo(e.getKey(), new ArrayList<>(e.getValue())))
+                .collect(Collectors.toList());
+    }
+
+    private void addModeValue(Map<String, LinkedHashSet<String>> valuesByMode, String mode, String rawValue) {
+        if (mode == null || rawValue == null) {
+            return;
+        }
+        LinkedHashSet<String> values = valuesByMode.get(mode);
+        if (values == null) {
+            return;
+        }
+        String value = rawValue.trim();
+        if (!value.isBlank() && !"_".equals(value)) {
+            values.add(value);
+        }
+    }
+
     /**
      * 设备信息数据结构
      */
@@ -159,10 +242,26 @@ public class DeviceInfoHelper {
             String label,
             String templateName,
             String currentState,
+            String currentStateTrust,
+            String currentStatePrivacy,
+            List<VariableStateDto> instanceVariables,
+            List<PrivacyStateDto> instancePrivacies,
             List<VariableInfo> variables,
             List<ApiInfo> apis,
             List<TransitionInfo> transitions,
-            List<String> workingStates
+            List<ModeInfo> modes,
+            List<String> workingStates,
+            List<ContentInfo> contents
+    ) {}
+
+    public record ContentInfo(String name, String privacy) {}
+
+    /**
+     * 模式信息
+     */
+    public record ModeInfo(
+            String name,
+            List<String> values
     ) {}
 
     /**
@@ -185,10 +284,9 @@ public class DeviceInfoHelper {
             String name,
             String description,
             Boolean signal,
+            Boolean acceptsContent,
             String startState,
-            String endState,
-            String triggerInfo,
-            List<String> assignments
+            String endState
     ) {}
 
     /**
@@ -198,8 +296,7 @@ public class DeviceInfoHelper {
             String name,
             String description,
             String startState,
-            String endState,
-            Boolean signal
+            String endState
     ) {}
 }
 

@@ -1,0 +1,610 @@
+package cn.edu.nju.Iot_Verify.component.aitool.spec;
+
+import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.component.aitool.rule.DeviceInfoHelper;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
+import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class RecommendSpecificationsToolTest {
+
+    @Mock
+    private DeviceInfoHelper deviceInfoHelper;
+
+    @Mock
+    private BoardStorageService boardStorageService;
+
+    @Mock
+    private PromptCompletionService promptCompletionService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private RecommendSpecificationsTool tool;
+
+    @BeforeEach
+    void setUp() {
+        tool = new RecommendSpecificationsTool(deviceInfoHelper, boardStorageService, promptCompletionService, objectMapper);
+        UserContextHolder.setUserId(1L);
+    }
+
+    @AfterEach
+    void tearDown() {
+        UserContextHolder.clear();
+    }
+
+    @Test
+    void execute_rejectsUnknownRequestFieldBeforeReadingBoardOrCallingAi() throws Exception {
+        JsonNode json = objectMapper.readTree(tool.execute("{\"catgory\":\"security\"}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals("$ contains unsupported field(s): catgory.", json.path("error").asText());
+        verify(deviceInfoHelper, never()).getDevicesWithTemplateInfo(1L);
+        verify(promptCompletionService, never()).complete(anyString(), anyString(), anyDouble(), anyInt());
+    }
+
+    @Test
+    void execute_withUnparseableAiResponse_returnsUpstreamErrorNotEmptySuccess() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("not-json");
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals("AI_RESPONSE_INVALID", json.path("errorCode").asText());
+        assertEquals(502, json.path("status").asInt());
+        assertEquals("response_parse", json.path("phase").asText());
+    }
+
+    @Test
+    void execute_whenAiReturnsNoCandidates_reportsNoFiltering() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("{\"recommendations\":[]}");
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, json.path("rawCandidateCount").asInt());
+        assertEquals(0, json.path("filteredCount").asInt());
+        assertTrue(json.path("message").asText().contains("returned no specification candidates"));
+    }
+
+    @Test
+    void execute_withChineseLanguage_returnsLocalizedBackendMessage() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(
+                anyString(),
+                contains("输出语言: 简体中文"),
+                anyDouble(),
+                anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "温度过高时必须保持安全状态",
+                              "templateId": "1",
+                              "templateLabel": "always",
+                              "aConditions": [
+                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.88
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("""
+                {
+                  "language": "zh-CN",
+                  "maxRecommendations": 3
+                }
+                """);
+
+        JsonNode json = objectMapper.readTree(result);
+
+        assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
+        assertEquals("基于当前设备找到 1 条规约推荐。", json.path("message").asText());
+        assertEquals(1, json.path("count").asInt());
+        assertEquals("1", json.path("recommendations").get(0).path("templateId").asText());
+        assertFalse(json.path("recommendations").get(0).has("templateLabel"));
+        assertFalse(json.path("recommendations").get(0).path("aConditions").get(0).has("side"));
+    }
+
+    @Test
+    void execute_acceptsModeConditionWithCanonicalDeviceId() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Sleep mode should never be active",
+                              "templateId": "3",
+                              "templateLabel": "never",
+                              "aConditions": [
+                                {"deviceId":"node-home-mode","deviceLabel":"Home Mode","targetType":"mode","key":"Mode","relation":"=","value":"sleep"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.81
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
+        assertEquals(1, json.path("count").asInt());
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+        assertEquals("mode", condition.path("targetType").asText());
+        assertEquals("Mode", condition.path("key").asText());
+        assertEquals("sleep", condition.path("value").asText());
+    }
+
+    @Test
+    void execute_returnsStatePrivacyAsSemanticScopeAndModeRatherThanGeneratedKey() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [{
+                            "rationale": "Current home mode state must not carry private data",
+                            "templateId": "3",
+                            "aConditions": [{
+                              "deviceId":"node-home-mode",
+                              "targetType":"privacy",
+                              "propertyScope":"STATE",
+                              "key":"mode",
+                              "relation":"=",
+                              "value":"PRIVATE"
+                            }],
+                            "ifConditions": [],
+                            "thenConditions": []
+                          }]
+                        }
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+
+        assertEquals(1, json.path("count").asInt());
+        assertEquals("state", condition.path("propertyScope").asText());
+        assertEquals("Mode", condition.path("key").asText());
+        assertEquals("private", condition.path("value").asText());
+        assertTrue(condition.toString().contains("\"Mode\""));
+        assertTrue(!condition.toString().contains("Mode_"));
+    }
+
+    @Test
+    void execute_normalizesSetRelationRecommendation() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Home mode should avoid away-only behavior",
+                              "templateId": "3",
+                              "templateLabel": "never",
+                              "aConditions": [
+                                {"deviceId":"node-home-mode","deviceLabel":"Home Mode","targetType":"mode","key":"Mode","relation":"not_in","value":"away"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.81
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+
+        assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
+        assertEquals(1, json.path("count").asInt());
+        assertEquals("not in", condition.path("relation").asText());
+        assertEquals("away", condition.path("value").asText());
+    }
+
+    @Test
+    void execute_acceptsFullStateTupleSetRecommendation() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Occupied idle modes should be explicitly checked",
+                              "templateId": "3",
+                              "templateLabel": "never",
+                              "aConditions": [
+                                {"deviceId":"node-home-mode","deviceLabel":"Home Mode","targetType":"state","key":"state","relation":"IN","value":"home;idle,sleep;idle"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.81
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+
+        assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
+        assertEquals(1, json.path("count").asInt());
+        assertEquals("state", condition.path("targetType").asText());
+        assertEquals("state", condition.path("key").asText());
+        assertEquals("in", condition.path("relation").asText());
+        assertEquals("home;idle,sleep;idle", condition.path("value").asText());
+    }
+
+    @Test
+    void execute_defaultsApiConditionValueToTrue() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(cameraDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Snapshot signal should be observable",
+                              "templateId": "1",
+                              "templateLabel": "always",
+                              "aConditions": [
+                                {"deviceId":"node-camera","deviceLabel":"Camera","targetType":"api","key":"take photo"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.75
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertTrue(json.path("error").isMissingNode(), "unexpected error envelope: " + result);
+        assertEquals(1, json.path("count").asInt());
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+        assertEquals("api", condition.path("targetType").asText());
+        assertEquals("=", condition.path("relation").asText());
+        assertEquals("TRUE", condition.path("value").asText());
+    }
+
+    @Test
+    void execute_canonicalizesAiFieldCaseBeforeReturningRecommendation() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Lowercase AI fields should still apply",
+                              "templateId": "3",
+                              "templateLabel": "never",
+                              "aConditions": [
+                                {"deviceId":"node-home-mode","deviceLabel":"Home Mode","targetType":"mode","key":"mode","relation":"EQ","value":"SLEEP"}
+                              ],
+                              "ifConditions": [],
+                              "thenConditions": [],
+                              "confidence": 0.81
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+        JsonNode condition = json.path("recommendations").get(0).path("aConditions").get(0);
+
+        assertEquals(1, json.path("count").asInt());
+        assertEquals("mode", condition.path("targetType").asText());
+        assertEquals("Mode", condition.path("key").asText());
+        assertEquals("=", condition.path("relation").asText());
+        assertEquals("sleep", condition.path("value").asText());
+    }
+
+    @Test
+    void execute_filtersAiConditionThatSuppliesConflictingDerivedSide() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "High temperature should immediately enter safe state",
+                              "templateId": "4",
+                              "templateLabel": "immediate",
+                              "aConditions": [],
+                              "ifConditions": [
+                                {"side":"then","deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                              ],
+                              "thenConditions": [
+                                {"side":"if","deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"state","key":"state","relation":"=","value":"safe"}
+                              ],
+                              "confidence": 0.81
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals(1, json.path("filteredCount").asInt());
+        assertEquals("conditionSideField",
+                json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    @Test
+    void execute_filtersRecommendationWithHiddenTemplateOneImplicationShape() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "rationale": "Hidden same-step implication",
+                              "templateId": "1",
+                              "templateLabel": "always",
+                              "aConditions": [],
+                              "ifConditions": [
+                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"variable","key":"temperature","relation":">","value":"30"}
+                              ],
+                              "thenConditions": [
+                                {"deviceId":"node-thermostat","deviceLabel":"Thermostat","targetType":"state","key":"state","relation":"=","value":"safe"}
+                              ],
+                              "confidence": 0.7
+                            }
+                          ]
+                        }
+                        """);
+
+        String result = tool.execute("{\"maxRecommendations\":3}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals(0, json.path("count").asInt());
+        assertTrue(json.path("recommendations").isEmpty());
+        assertEquals(1, json.path("filteredCount").asInt());
+        assertEquals(1, json.path("rawCandidateCount").asInt());
+        assertEquals(1, json.path("inspectedCount").asInt());
+        assertEquals(0, json.path("truncatedCount").asInt());
+        assertEquals("specification", json.path("filteredItems").get(0).path("type").asText());
+        assertEquals("invalidTemplateShape", json.path("filteredItems").get(0).path("reasonCode").asText());
+        assertEquals("Hidden same-step implication", json.path("filteredItems").get(0).path("label").asText());
+    }
+
+    @Test
+    void execute_rejectsOutOfRangeCountBeforePrompting() throws Exception {
+        String result = tool.execute("{\"maxRecommendations\":999,\"category\":\"nonsense\"}");
+        JsonNode json = objectMapper.readTree(result);
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals(400, json.path("status").asInt());
+        assertEquals("maxRecommendations must be between 1 and 10.", json.path("error").asText());
+        verify(deviceInfoHelper, never()).getDevicesWithTemplateInfo(1L);
+        verify(promptCompletionService, never()).complete(anyString(), anyString(), anyDouble(), anyInt());
+    }
+
+    @Test
+    void execute_rejectsUnsupportedLanguageInsteadOfSilentlyUsingEnglish() throws Exception {
+        JsonNode json = objectMapper.readTree(tool.execute("{\"language\":\"fr\"}"));
+
+        assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
+        assertEquals("language must be en or zh-CN.", json.path("error").asText());
+        verify(deviceInfoHelper, never()).getDevicesWithTemplateInfo(1L);
+        verify(promptCompletionService, never()).complete(anyString(), anyString(), anyDouble(), anyInt());
+    }
+
+    @Test
+    void execute_filtersSafetyApiThatHasNoModeledReliabilityTarget() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(serviceWithoutApiEndState()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [{
+                            "rationale": "Untrusted notification must not be emitted",
+                            "templateId": "7",
+                            "templateLabel": "Untrusted-source safety",
+                            "aConditions": [{
+                              "deviceId":"node-service",
+                              "targetType":"api",
+                              "key":"notify",
+                              "relation":"=",
+                              "value":"TRUE"
+                            }],
+                            "ifConditions": [],
+                            "thenConditions": []
+                          }]
+                        }
+                        """);
+
+        JsonNode result = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, result.path("count").asInt());
+        assertEquals(1, result.path("filteredCount").asInt());
+        assertEquals("invalidUntrustedSourceSafetyCondition",
+                result.path("filteredItems").get(0).path("reasonCode").asText());
+        assertTrue(result.path("filteredItems").get(0).path("reason").asText()
+                .contains("untrusted source"));
+    }
+
+    @Test
+    void execute_filtersCandidateWithUnknownSemanticField() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {"recommendations":[{
+                          "rationale":"Temperature stays safe",
+                          "templateId":"1",
+                          "aConditions":[{"deviceId":"node-thermostat","targetType":"state",
+                            "key":"state","relation":"=","value":"safe"}],
+                          "ifConditions":[],"thenConditions":[],
+                          "unmodeledAssumption":"window is closed"
+                        }]}
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals(1, json.path("filteredCount").asInt());
+        assertEquals("unknownCandidateField",
+                json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    @Test
+    void execute_filtersCandidateWithoutUserFacingRationale() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {"recommendations":[{
+                          "templateId":"1",
+                          "aConditions":[{"deviceId":"node-thermostat","targetType":"state",
+                            "key":"state","relation":"=","value":"safe"}],
+                          "ifConditions":[],"thenConditions":[]
+                        }]}
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals("missingSpecificationRationale",
+                json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
+    private DeviceInfoHelper.DeviceInfo thermostatDevice() {
+        return new DeviceInfoHelper.DeviceInfo(
+                "node-thermostat",
+                "Thermostat",
+                "Thermostat",
+                "normal",
+                "trusted",
+                null,
+                List.of(),
+                List.of(),
+                List.of(new DeviceInfoHelper.VariableInfo("temperature", "Temperature", null,
+                        0, 50, null, null)),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of("normal", "safe"),
+                List.of()
+        );
+    }
+
+    private DeviceInfoHelper.DeviceInfo homeModeDevice() {
+        return new DeviceInfoHelper.DeviceInfo(
+                "node-home-mode",
+                "Home Mode",
+                "Home Mode",
+                "sleep;idle",
+                "trusted",
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(
+                        new DeviceInfoHelper.ModeInfo("Mode", List.of("home", "away", "sleep")),
+                        new DeviceInfoHelper.ModeInfo("State", List.of("idle", "sendingAlertMessage", "sendingPhoto"))),
+                List.of("home;idle", "away;idle", "sleep;idle"),
+                List.of()
+        );
+    }
+
+    private DeviceInfoHelper.DeviceInfo cameraDevice() {
+        return new DeviceInfoHelper.DeviceInfo(
+                "node-camera",
+                "Camera",
+                "Camera",
+                "idle",
+                "trusted",
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new DeviceInfoHelper.ApiInfo("take photo", "Take photo",
+                        true, false, "_", "idle")),
+                List.of(),
+                List.of(new DeviceInfoHelper.ModeInfo("Mode", List.of("idle", "capturing"))),
+                List.of("idle", "capturing"),
+                List.of()
+        );
+    }
+
+    private DeviceInfoHelper.DeviceInfo serviceWithoutApiEndState() {
+        return new DeviceInfoHelper.DeviceInfo(
+                "node-service",
+                "Notification Service",
+                "Notification Service",
+                "idle",
+                "trusted",
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new DeviceInfoHelper.ApiInfo("notify", "Emit notification",
+                        true, false, "idle", null)),
+                List.of(),
+                List.of(new DeviceInfoHelper.ModeInfo("Status", List.of("idle"))),
+                List.of("idle"),
+                List.of()
+        );
+    }
+}

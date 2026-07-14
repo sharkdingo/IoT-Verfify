@@ -2,7 +2,9 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.po.BoardLayoutPo;
+import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,8 @@ class BoardStorageServiceImplLayoutTest {
 
     @Mock
     private BoardLayoutRepository layoutRepo;
+    @Mock
+    private UserRepository userRepository;
 
     private BoardStorageServiceImpl service;
 
@@ -30,11 +34,12 @@ class BoardStorageServiceImplLayoutTest {
     void setUp() {
         service = new BoardStorageServiceImpl(
                 null, null, null, null, layoutRepo, null, null, null,
-                null, null, null, null, null, new BoardLayoutMapper(), null, null);
+                null, null, null, null, new BoardLayoutMapper(), null, null, userRepository);
     }
 
     @Test
     void getLayout_createsDefaultInspectorSectionAsDevices() {
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(new UserPo()));
         when(layoutRepo.findByUserId(7L)).thenReturn(Optional.empty());
         when(layoutRepo.save(any(BoardLayoutPo.class))).thenAnswer(invocation -> invocation.getArgument(0));
 

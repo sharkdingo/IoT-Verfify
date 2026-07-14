@@ -6,8 +6,8 @@
 			"Name": "date",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["weekdays", "weekend", "MothersDay"]
 		},
@@ -15,8 +15,8 @@
 			"Name": "season",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["spring", "summer", "autumn", "winter"]
 		}

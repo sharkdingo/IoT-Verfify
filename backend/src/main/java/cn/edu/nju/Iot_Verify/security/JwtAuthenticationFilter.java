@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.security;
 
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.util.JwtUtil;
 import jakarta.servlet.FilterChain;
@@ -25,6 +26,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final TokenBlacklistService tokenBlacklistService;
+    private final UserRepository userRepository;
 
     @Override
     protected void doFilterInternal(@NonNull HttpServletRequest request, @NonNull HttpServletResponse response, @NonNull FilterChain filterChain)
@@ -38,11 +40,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 && !tokenBlacklistService.isBlacklisted(token)) {
             try {
                 Long userId = jwtUtil.getUserIdFromToken(token);
-                UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-                // Also set UserContextHolder for AI tools
-                UserContextHolder.setUserId(userId);
+                if (userRepository.existsById(userId)) {
+                    UsernamePasswordAuthenticationToken authentication =
+                            new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    // Also set UserContextHolder for AI tools
+                    UserContextHolder.setUserId(userId);
+                } else {
+                    log.debug("JWT references deleted or unknown user {}, ignoring authentication", userId);
+                }
             } catch (Exception e) {
                 // Token validation failed, continue without authentication
             }

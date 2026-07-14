@@ -8,26 +8,44 @@ import type {
   SimulationTask,
   SimulationTaskSummary
 } from '@/types/simulation'
+import type { TaskCancellationResult } from '@/types/task'
+import {
+  validateSimulationTask,
+  validateSimulationTaskSummaryList,
+  validateSimulationResult,
+  validateSimulationTrace,
+  validateSimulationTraceSummaryList,
+  validateTaskCancellationResult,
+  validateTaskProgress
+} from '@/utils/runResponse'
 
 // 辅助函数：解包Result
 const unpack = <T>(response: any): T => {
   return response.data.data
 }
 
+const SERVER_BOUNDED_REQUEST = { timeout: 0 } as const
+
 export default {
   // 执行模拟（不保存）- 同步
   simulate: async (req: SimulationRequest): Promise<SimulationResult> => {
-    return unpack<SimulationResult>(await api.post('/simulate', req))
+    return validateSimulationResult(
+      unpack<unknown>(await api.post('/simulate', req, SERVER_BOUNDED_REQUEST))
+    )
   },
 
-  // 执行异步模拟（后台任务完成后自动保存轨迹，返回任务ID）
-  simulateAsync: async (req: SimulationRequest): Promise<number> => {
-    return unpack<number>(await api.post('/simulate/async', req))
+  // 执行异步模拟并接收服务端真实任务快照
+  simulateAsync: async (req: SimulationRequest): Promise<SimulationTask> => {
+    return validateSimulationTask(
+      unpack<unknown>(await api.post('/simulate/async', req))
+    )
   },
 
   // 获取任务状态
   getTask: async (taskId: number): Promise<SimulationTask> => {
-    return unpack<SimulationTask>(await api.get(`/simulate/tasks/${taskId}`))
+    return validateSimulationTask(
+      unpack<unknown>(await api.get(`/simulate/tasks/${taskId}`))
+    )
   },
 
   // 获取当前用户的仿真任务收件箱
@@ -35,32 +53,51 @@ export default {
     const params = excludeTaskIds.length > 0
       ? { excludeTaskIds: excludeTaskIds.join(',') }
       : undefined
-    return unpack<SimulationTaskSummary[]>(await api.get('/simulate/tasks', { params }))
+    return validateSimulationTaskSummaryList(
+      unpack<unknown>(await api.get('/simulate/tasks', { params }))
+    )
+  },
+
+  deleteTask: async (taskId: number): Promise<void> => {
+    return unpack<void>(await api.delete(`/simulate/tasks/${taskId}`))
   },
 
   // 获取任务进度
   getTaskProgress: async (taskId: number): Promise<number> => {
-    return unpack<number>(await api.get(`/simulate/tasks/${taskId}/progress`))
+    return validateTaskProgress(
+      unpack<unknown>(await api.get(`/simulate/tasks/${taskId}/progress`)),
+      'Simulation task progress'
+    )
   },
 
   // 取消任务
-  cancelTask: async (taskId: number): Promise<boolean> => {
-    return unpack<boolean>(await api.post(`/simulate/tasks/${taskId}/cancel`))
+  cancelTask: async (taskId: number): Promise<TaskCancellationResult> => {
+    return validateTaskCancellationResult(
+      unpack<unknown>(await api.post(`/simulate/tasks/${taskId}/cancel`)),
+      taskId,
+      'Simulation task cancellation'
+    )
   },
 
   // 执行模拟并保存到数据库
   simulateAndSave: async (req: SimulationRequest): Promise<SimulationTrace> => {
-    return unpack<SimulationTrace>(await api.post('/simulate/traces', req))
+    return validateSimulationTrace(
+      unpack<unknown>(await api.post('/simulate/traces', req, SERVER_BOUNDED_REQUEST))
+    )
   },
 
   // 获取用户模拟记录列表
   getUserSimulations: async (): Promise<SimulationTraceSummary[]> => {
-    return unpack<SimulationTraceSummary[]>(await api.get('/simulate/traces'))
+    return validateSimulationTraceSummaryList(
+      unpack<unknown>(await api.get('/simulate/traces'))
+    )
   },
 
   // 获取单条模拟记录
   getSimulation: async (id: number): Promise<SimulationTrace> => {
-    return unpack<SimulationTrace>(await api.get(`/simulate/traces/${id}`))
+    return validateSimulationTrace(
+      unpack<unknown>(await api.get(`/simulate/traces/${id}`))
+    )
   },
 
   // 删除模拟记录

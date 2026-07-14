@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.ai;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmRole;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Verifies the persisted-content ⇄ domain-model conversion previously covered by the
@@ -99,16 +101,16 @@ class LlmMessageCodecTest {
     }
 
     @Test
-    void toMessages_shouldParseLegacySeparatorToolResult() {
+    void toMessages_shouldRejectUnstructuredToolContentInsteadOfInventingAResult() {
         ChatMessagePo po = new ChatMessagePo();
         po.setRole("tool");
-        po.setContent("tc_legacy" + LlmMessageCodec.TOOL_RESULT_SEPARATOR + "legacy-result");
+        po.setContent("raw tool output");
 
-        List<LlmMessage> messages = codec.toMessages(List.of(po));
-
-        LlmMessage toolMsg = messages.get(0);
-        assertEquals("tc_legacy", toolMsg.toolCallId());
-        assertEquals("legacy-result", toolMsg.content());
+        PersistedDataIntegrityException error = assertThrows(
+                PersistedDataIntegrityException.class,
+                () -> codec.toMessages(List.of(po)));
+        assertEquals("PERSISTED_SEMANTIC_DATA_INVALID", error.getReasonCode());
+        assertEquals("content", error.getField());
     }
 
     @Test

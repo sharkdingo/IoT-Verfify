@@ -2,27 +2,25 @@ package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
-import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
-import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
-import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceDeletionResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
-import cn.edu.nju.Iot_Verify.service.NodeService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.Collections;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -30,8 +28,7 @@ public class DeleteNodeTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
 
-    public DeleteNodeTool(NodeService nodeService, BoardStorageService boardStorageService,
-                          ObjectMapper objectMapper) {
+    public DeleteNodeTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
     }
@@ -44,25 +41,25 @@ public class DeleteNodeTool extends AbstractAiTool {
     @Override
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
-        props.put("identifier", Map.of(
-                "type", "string",
-                "description", "Preferred device identifier. Use either the device label or node id."
-        ));
-        props.put("label", Map.of(
-                "type", "string",
-                "description", "Device label. Backward-compatible alternative to identifier."
-        ));
         props.put("id", Map.of(
                 "type", "string",
-                "description", "Device node id. Backward-compatible alternative to identifier."
+                "description", "Canonical board node id of the device to delete."
+        ));
+        props.put("confirmed", Map.of(
+                "type", "boolean",
+                "description", "Use false to preview the device and every related rule, specification, and Environment Pool effect. Use true only in a later turn after the user explicitly confirms that exact preview."
+        ));
+        props.put("impactToken", Map.of(
+                "type", "string",
+                "description", "Required when confirmed=true. Copy the opaque impactToken from the latest preview; it binds confirmation to the complete deletion impact."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
-                "object", props, Collections.emptyList()
+                "object", props, List.of("id", "confirmed")
         );
 
         return LlmToolSpec.of(getName(),
-                "Delete a device node. Provide one of: identifier, label, or id.",
+                "Preview or, after explicit user confirmation, delete a device and every related rule, specification, and Environment Pool effect.",
                 schema);
     }
 
@@ -75,38 +72,65 @@ public class DeleteNodeTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String identifier = trimToNull(args.path("identifier").asText(null));
-            String label = trimToNull(args.path("label").asText(null));
-            String id = trimToNull(args.path("id").asText(null));
-            if (identifier == null) {
-                identifier = label != null ? label : id;
+            requireOnlyFields(args, "arguments", Set.of("id", "confirmed", "impactToken"));
+            String id = requiredTextField(args, "id", "arguments");
+
+            boolean confirmed = booleanArg(args, "confirmed", false);
+            DeviceDeletionResultDto preview = boardStorageService.previewNodeDeletion(userId, id);
+            String currentImpactToken = trimToNull(preview.getImpactToken());
+            if (currentImpactToken == null) {
+                return errorJson("Device deletion preview did not provide an impact token. No changes were made; retry the preview.",
+                        "RESULT_UNAVAILABLE", 503);
             }
-            if (identifier == null) {
-                return errorJson("Missing device identifier. Provide 'identifier', 'label', or 'id'.",
+            if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("message", "No changes were made. Explicit user confirmation is required before deleting this device and applying every related rule, specification, and Environment Pool consequence.");
+                response.put("operation", "preview");
+                response.put("requiresUserConfirmation", true);
+                response.put("device", preview.getDeletedDevice());
+                response.put("wouldRemoveRuleCount", preview.getRemovedRules().size());
+                response.put("wouldRemoveRules", preview.getRemovedRules());
+                response.put("wouldRemoveSpecificationCount", preview.getRemovedSpecifications().size());
+                response.put("wouldRemoveSpecifications", preview.getRemovedSpecifications());
+                response.put("wouldChangeEnvironmentVariableCount", preview.getEnvironmentChanges().size());
+                response.put("environmentChanges", preview.getEnvironmentChanges());
+                response.put("impactToken", currentImpactToken);
+                return readOnlySuccessJson(response, "Device deletion preview unavailable.");
+            }
+
+            String suppliedImpactToken = nullableTextField(args, "impactToken", "arguments");
+            if (suppliedImpactToken == null) {
+                return errorJson("impactToken is required when confirmed=true. Request a fresh deletion preview first.",
                         "VALIDATION_ERROR", 400);
             }
-
-            List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
-            DeviceNodeDto targetNode = resolveNode(nodes, identifier);
-            if (targetNode == null) {
-                return errorJson("Device not found for deletion: '" + identifier + "'.",
-                        "NOT_FOUND", 404);
+            if (!MessageDigest.isEqual(
+                    suppliedImpactToken.getBytes(StandardCharsets.UTF_8),
+                    currentImpactToken.getBytes(StandardCharsets.UTF_8))) {
+                return errorJson(
+                        "The device deletion impact changed after the preview. No changes were made; review and confirm a fresh preview.",
+                        "CONFIRMATION_STALE", 409,
+                        Map.of("requiresUserConfirmation", true));
             }
 
-            log.info("Executing delete_device, identifier={}, resolvedId={}, resolvedLabel={}",
-                    identifier, targetNode.getId(), targetNode.getLabel());
+            DeviceDeletionResultDto result = boardStorageService.deleteNodeCascade(
+                    userId, id, suppliedImpactToken);
+            log.info("Executed delete_device, id={}, label={}", id, result.getDeletedDevice().getLabel());
 
-            DeletePlan plan = buildDeletePlan(userId, nodes, targetNode);
-            boardStorageService.saveBoardBatch(userId,
-                    new BoardBatchDto(plan.nodes(), plan.rules(), plan.specs()));
-
-            return successJson(Map.of(
-                    "message", "Device deleted successfully.",
-                    "deletedDeviceId", targetNode.getId(),
-                    "deletedDeviceLabel", targetNode.getLabel(),
-                    "removedRules", plan.removedRuleCount(),
-                    "removedSpecs", plan.removedSpecCount()
-            ), "Device deleted successfully.");
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("message", "Device deleted successfully.");
+            response.put("operation", "deleted");
+            response.put("deletedDevice", result.getDeletedDevice());
+            response.put("removedRuleCount", result.getRemovedRules().size());
+            response.put("removedRules", result.getRemovedRules());
+            response.put("removedSpecificationCount", result.getRemovedSpecifications().size());
+            response.put("removedSpecifications", result.getRemovedSpecifications());
+            response.put("environmentChanges", result.getEnvironmentChanges());
+            response.put("remainingDeviceCount", result.getCurrentNodes().size());
+            return successJson(response, "Device deleted successfully.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
+        } catch (ResourceNotFoundException e) {
+            return errorJson(e.getMessage(), "NOT_FOUND", 404);
         } catch (ServiceUnavailableException e) {
             log.warn("delete_device busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -119,136 +143,4 @@ public class DeleteNodeTool extends AbstractAiTool {
         }
     }
 
-    private DeviceNodeDto resolveNode(List<DeviceNodeDto> nodes, String identifier) {
-        String normalized = identifier.toLowerCase(Locale.ROOT);
-        for (DeviceNodeDto node : nodes) {
-            if (node == null || node.getLabel() == null) {
-                continue;
-            }
-            if (node.getLabel().toLowerCase(Locale.ROOT).equals(normalized)) {
-                return node;
-            }
-        }
-        for (DeviceNodeDto node : nodes) {
-            if (node == null || node.getId() == null) {
-                continue;
-            }
-            if (node.getId().toLowerCase(Locale.ROOT).equals(normalized)) {
-                return node;
-            }
-        }
-        return null;
-    }
-
-    private DeletePlan buildDeletePlan(Long userId, List<DeviceNodeDto> nodes, DeviceNodeDto targetNode) {
-        List<DeviceNodeDto> nextNodes = nodes.stream()
-                .filter(node -> !isDeletedNode(node, targetNode))
-                .toList();
-
-        List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
-        List<RuleDto> nextRules = new ArrayList<>();
-        int removedRules = 0;
-        for (RuleDto rule : rules) {
-            if (isRuleRelatedToNode(rule, targetNode)) {
-                removedRules++;
-            } else {
-                nextRules.add(rule);
-            }
-        }
-
-        List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
-        List<SpecificationDto> nextSpecs = new ArrayList<>();
-        int removedSpecs = 0;
-        for (SpecificationDto spec : specs) {
-            if (isSpecRelatedToNode(spec, targetNode)) {
-                removedSpecs++;
-            } else {
-                nextSpecs.add(spec);
-            }
-        }
-
-        return new DeletePlan(nextNodes, nextRules, nextSpecs, removedRules, removedSpecs);
-    }
-
-    private boolean isDeletedNode(DeviceNodeDto node, DeviceNodeDto targetNode) {
-        if (node == null) {
-            return false;
-        }
-        String nodeId = trimToNull(node.getId());
-        String targetId = trimToNull(targetNode.getId());
-        if (targetId == null || nodeId == null) {
-            return false;
-        }
-        return targetId.equals(nodeId)
-                || (nodeId.startsWith(targetId + "_")
-                && node.getTemplateName() != null
-                && node.getTemplateName().startsWith("variable_"));
-    }
-
-    private boolean isRuleRelatedToNode(RuleDto rule, DeviceNodeDto targetNode) {
-        if (rule == null) {
-            return false;
-        }
-        if (rule.getCommand() != null
-                && (matchesNode(rule.getCommand().getDeviceName(), targetNode)
-                || matchesNode(rule.getCommand().getContentDevice(), targetNode))) {
-            return true;
-        }
-        for (RuleDto.Condition condition : safeList(rule.getConditions())) {
-            if (condition != null && matchesNode(condition.getDeviceName(), targetNode)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean isSpecRelatedToNode(SpecificationDto spec, DeviceNodeDto targetNode) {
-        if (spec == null) {
-            return false;
-        }
-        for (SpecConditionDto condition : safeList(spec.getAConditions())) {
-            if (conditionMatchesNode(condition, targetNode)) {
-                return true;
-            }
-        }
-        for (SpecConditionDto condition : safeList(spec.getIfConditions())) {
-            if (conditionMatchesNode(condition, targetNode)) {
-                return true;
-            }
-        }
-        for (SpecConditionDto condition : safeList(spec.getThenConditions())) {
-            if (conditionMatchesNode(condition, targetNode)) {
-                return true;
-            }
-        }
-        for (SpecificationDto.DeviceRefDto device : safeList(spec.getDevices())) {
-            if (device != null
-                    && (matchesNode(device.getDeviceId(), targetNode)
-                    || matchesNode(device.getDeviceLabel(), targetNode))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean conditionMatchesNode(SpecConditionDto condition, DeviceNodeDto targetNode) {
-        return condition != null
-                && (matchesNode(condition.getDeviceId(), targetNode)
-                || matchesNode(condition.getDeviceLabel(), targetNode));
-    }
-
-    private boolean matchesNode(String value, DeviceNodeDto targetNode) {
-        String normalized = trimToNull(value);
-        if (normalized == null || targetNode == null) {
-            return false;
-        }
-        return normalized.equals(targetNode.getId()) || normalized.equals(targetNode.getLabel());
-    }
-
-    private record DeletePlan(List<DeviceNodeDto> nodes,
-                              List<RuleDto> rules,
-                              List<SpecificationDto> specs,
-                              int removedRuleCount,
-                              int removedSpecCount) {
-    }
 }

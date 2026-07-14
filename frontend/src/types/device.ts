@@ -8,15 +8,26 @@ import type { Specification } from "./spec"
 export interface InternalVariable {
     Name: string
     Description?: string
-    IsInside?: boolean
-    PublicVisible?: boolean
-    Trust?: string          // "trusted" | "untrusted"
-    Privacy?: string        // "public" | "private"
+    IsInside: boolean
+    FalsifiableWhenCompromised: boolean
+    Trust: string           // "trusted" | "untrusted"
+    Privacy: string         // "public" | "private"
     // 数值型属性
     LowerBound?: number
     UpperBound?: number
     NaturalChangeRate?: string
     // 枚举型属性
+    Values?: string[]
+}
+
+export interface EnvironmentDomain {
+    Name: string
+    Description?: string
+    Trust: string
+    Privacy: string
+    LowerBound?: number
+    UpperBound?: number
+    NaturalChangeRate?: string
     Values?: string[]
 }
 
@@ -29,11 +40,10 @@ export interface Dynamic {
 
 export interface WorkingState {
     Name: string
-    Dynamics: Dynamic[]
-    Invariant: string
-    Description: string
+    Dynamics?: Dynamic[]
+    Description?: string
     Trust: string           // "trusted" | "untrusted"
-    Privacy?: string        // "public" | "private"
+    Privacy: string         // "public" | "private"
 }
 
 // Matches backend device-template-schema.json Transition.Trigger.
@@ -43,7 +53,7 @@ export interface DeviceTrigger {
     Value: string
 }
 
-// Matches backend DeviceTemplateDto.DeviceManifest.Assignment { Attribute, Value }.
+// Transition-only assignment. API actions change modeled state through EndState.
 export interface DeviceAssignment {
     Attribute: string
     Value: string
@@ -51,33 +61,48 @@ export interface DeviceAssignment {
 
 export interface DeviceAPI {
     Name: string
+    // Required; an empty string deliberately means callable from any state.
     StartState: string
     EndState: string
+    // A device command/action, not a network endpoint. It changes state only.
     // backend/device-template-schema.json is authoritative: API Trigger is always null.
     Trigger?: null
-    Assignments?: DeviceAssignment[]
-    Signal?: boolean
+    // Required choice: true exposes a one-step automation/specification trigger.
+    Signal: boolean
+    // Optional; false by default. Allows one selected content-sensitivity label on this action.
+    AcceptsContent?: boolean
     Description?: string
 }
 
-// Matches backend DeviceTemplateDto.DeviceManifest.Content { Name, Privacy, IsChangeable }.
+export interface DeviceTransition {
+    Name: string
+    StartState?: string
+    EndState?: string | null
+    Trigger?: DeviceTrigger | null
+    // The formal model accepts one state effect OR one assignment, never several.
+    Assignments?: [] | [DeviceAssignment]
+    Description?: string
+}
+
+// Matches backend DeviceTemplateDto.DeviceManifest.Content { Name, Privacy }.
 export interface DeviceContent {
     Name: string
-    Privacy?: string        // "public" | "private"
-    IsChangeable?: boolean
+    Privacy: string        // "public" | "private"
 }
 
 export interface DeviceManifest {
     Name: string
-    Description: string
+    Description?: string
+    Icon?: string
     Modes?: string[]
-    InternalVariables: InternalVariable[]
-    ImpactedVariables: string[]
-    InitState: string
-    WorkingStates: WorkingState[]
-    // Transition.Trigger uses DeviceTrigger; custom form creation is API-only, JSON import may include transitions.
-    Transitions?: any[]
-    APIs: DeviceAPI[]
+    InternalVariables?: InternalVariable[]
+    // Domain/default for a shared value this template affects; does not grant read access.
+    EnvironmentDomains?: EnvironmentDomain[]
+    ImpactedVariables?: string[]
+    InitState?: string
+    WorkingStates?: WorkingState[]
+    Transitions?: DeviceTransition[]
+    APIs?: DeviceAPI[]
     Contents?: DeviceContent[]
 }
 
@@ -85,6 +110,7 @@ export interface DeviceTemplate {
     id?: number      // 后端 Long；创建时无 id，响应中才有
     name: string
     manifest: DeviceManifest
+    defaultTemplate?: boolean
 }
 
 // ==== 视图辅助类型 (View Models) ====

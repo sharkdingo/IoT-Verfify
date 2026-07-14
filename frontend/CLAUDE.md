@@ -39,10 +39,10 @@ src/
   types/      TypeScript contracts (auth, device, node, edge, rule, spec, verify, fix, …)
   stores/     reactive state (auth, chat)
   router/     routes + auth guard
-  views/      Landing / Login / Register / Board / TemplateCreate / NotFound
+  views/      Landing / Board / NotFound
   components/ CanvasBoard, ChatView, ControlCenter, SystemInspector,
-              TraceVisualization, SimulationTimeline, FixResultDialog,
-              RuleBuilderDialog, DeviceDialog, …
+              TraceHistoryPanel, SimulationTimeline, FixResultDialog,
+              RuleBuilderDialog, DeviceDialog, AccountDeleteDialog, …
   assets/     static assets + i18n (zh-CN / en)
 ```
 
@@ -59,12 +59,18 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
     `unpack` returns `response.data.data`).
   - `authApi` returns the **full** `Result<T>` (`response.data`) — read `res.data.token`,
     not `res.token`, and check `res.code`.
-- **`verifyAsync(req)` returns the server-generated `taskId`** (`Promise<number>`); the
-  client does not pass a taskId in.
+- **`verifyAsync(req)` / `simulateAsync(req)` return the authoritative accepted task
+  DTO**, including the server-generated `id`, current status/progress, and frozen
+  `modelSnapshot`; the client does not pass an id in or fabricate a local task row.
+  Acceptance does not mean the run completed.
 - Verification/fix live on `boardApi` (there is **no** `api/verify.ts`); trace types
   live in `types/verify.ts` (there is **no** `types/trace.ts`).
 - Bilingual: user-facing strings go through Vue I18n (`assets` i18n, zh-CN + en) — do
-  not hardcode display text.
+  not hardcode display text. Backend/LLM free-text `message`, `reason`, `warning`, and
+  `errorMessage` fields are technical diagnostics unless their contract explicitly says
+  they follow the requested language. Prefer stable reason/status codes; otherwise use
+  `utils/userMessage.ts` for ordinary fallback copy and keep the raw text in Technical
+  Details or logs.
 
 ## Gotchas (the "why")
 
@@ -78,13 +84,21 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   `response.body.getReader()`, so it sets the `Authorization` header manually and the
   axios interceptors do not apply. Protocol:
   [../docs/api/chat-sse.md](../docs/api/chat-sse.md).
-- **Rule references are label-first.** `RuleBuilderDialog` stores new rule source/target
-  device references as `node.label`; lookup code must continue accepting legacy node ids.
-  Never synthesize dummy trigger conditions in `board.ts`; validate and surface an error
-  instead.
+- **Rule references are node-id authoritative.** `RuleBuilderDialog` stores new rule
+  source/target device references as canonical `DeviceNode.id` values; labels are only
+  shown to users. Never synthesize dummy trigger conditions in `board.ts`; validate and
+  surface an error instead.
 - **Verification warnings are user-visible.** `disabledRuleCount`,
   `skippedSpecCount`, and `[rule-disabled]` / `[spec-skipped]` entries in `checkLogs`
   must be shown even when `safe === true`.
+- **Run history has two user layers.** Task Status contains only active or no-result
+  failed/cancelled jobs. History Results contains one item per completed verification
+  or saved simulation; verification counterexamples are nested summary evidence, not
+  peer runs. Load full run/trace states only when opened, and keep malformed rows as
+  unavailable placeholders rather than failing the whole list.
+- **A stopped chat transport is not a cancelled tool operation.** Wait for the session
+  activity endpoint to become idle before switching/deleting the session or allowing a
+  new assistant mutation, then reconcile board and run-history state.
 
 ## Reference (link, don't duplicate)
 

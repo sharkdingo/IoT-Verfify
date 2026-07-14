@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import org.junit.jupiter.api.Test;
@@ -52,9 +53,9 @@ class SmvSpecificationBuilderNegationTest {
     }
 
     @Test
-    void generateSpecString_resolvesDeviceLabelWhenDeviceIdIsPersistentNodeId() {
+    void generateSpecString_resolvesCanonicalDeviceIdWhenLabelIsDisplayOnly() {
         DeviceSmvData smv = new DeviceSmvData();
-        smv.setVarName("LivingRoomAC");
+        smv.setVarName("ac_1");
         smv.setModuleName("AcModule");
         smv.setModes(List.of("AcState"));
         smv.setModeStates(Map.of("AcState", List.of("on", "off")));
@@ -64,9 +65,9 @@ class SmvSpecificationBuilderNegationTest {
         SpecificationDto spec = buildSpec("1", List.of(cond), null, null);
 
         String generated = builder.generateSpecString(
-                spec, false, 0, Map.of("LivingRoomAC", smv));
+                spec, false, 0, Map.of("ac_1", smv));
 
-        assertTrue(generated.contains("LivingRoomAC.AcState=on"));
+        assertTrue(generated.contains("ac_1.AcState=on"));
     }
 
     // ===== Template 1: always AG(A) → EF(!A) =====
@@ -82,18 +83,14 @@ class SmvSpecificationBuilderNegationTest {
         assertTrue(negated.contains("sensor_1.SensorState=active"));
     }
 
-    // ===== Template 1': always-imply AG(IF→THEN) → EF(IF & !THEN) =====
-
     @Test
-    void negate_template1_alwaysImply() {
+    void template1_withIfThenOnly_rejectsHiddenImplicationForm() {
         SpecConditionDto ifCond = buildCondition("sensor_1", "state", null, "=", "active");
         SpecConditionDto thenCond = buildCondition("sensor_1", "state", null, "=", "idle");
         SpecificationDto spec = buildSpec("1", null, List.of(ifCond), List.of(thenCond));
 
-        String negated = builder.generateNegatedSpec(spec, false, 0, buildDeviceMap());
-
-        assertTrue(negated.startsWith("CTLSPEC EF("));
-        assertTrue(negated.contains("& !("));
+        assertThrows(SmvSpecificationBuilder.InvalidConditionException.class,
+                () -> builder.generateNegatedSpec(spec, false, 0, buildDeviceMap()));
     }
 
     // ===== Template 2: eventually AF(A) → EG(!A) =====
@@ -187,6 +184,116 @@ class SmvSpecificationBuilderNegationTest {
 
         assertTrue(negated.startsWith("CTLSPEC EF("));
         assertTrue(negated.contains("sensor_1.SensorState=active"));
+    }
+
+    @Test
+    void template7_multiModeStateUsesEveryContributingReliabilityLabel() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("ac_1");
+        smv.setModes(List.of("Power", "Mode"));
+        smv.setModeStates(Map.of(
+                "Power", List.of("off", "on"),
+                "Mode", List.of("idle", "cool")));
+        SpecConditionDto condition = buildCondition("ac_1", "state", "state", "=", "on;cool");
+        SpecificationDto spec = buildSpec("7", List.of(condition), null, null);
+
+        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+
+        assertEquals("CTLSPEC AG !((ac_1.Power=on & ac_1.Mode=cool) & "
+                + "(ac_1.trust_Power_on=untrusted | ac_1.trust_Mode_cool=untrusted))", generated);
+        assertFalse(generated.contains("trust_Power_on_Mode_cool"));
+    }
+
+    @Test
+    void template7_multipleConditionsAreTaintedByAnyUntrustedSource() {
+        DeviceManifest.InternalVariable temperature = new DeviceManifest.InternalVariable();
+        temperature.setName("temperature");
+        temperature.setIsInside(true);
+        DeviceManifest.InternalVariable humidity = new DeviceManifest.InternalVariable();
+        humidity.setName("humidity");
+        humidity.setIsInside(true);
+
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setVariables(List.of(temperature, humidity));
+        SpecConditionDto hot = buildCondition("sensor_1", "variable", "temperature", ">", "30");
+        SpecConditionDto humid = buildCondition("sensor_1", "variable", "humidity", ">", "70");
+        SpecificationDto spec = buildSpec("7", List.of(hot, humid), null, null);
+
+        String generated = builder.generateSpecString(spec, false, 0, Map.of("sensor_1", smv));
+
+        assertEquals("CTLSPEC AG !(sensor_1.temperature>30 & sensor_1.humidity>70 & "
+                + "(sensor_1.trust_temperature=untrusted | sensor_1.trust_humidity=untrusted))", generated);
+    }
+
+    @Test
+    void template7_signalApiUsesEveryModeChangedByItsEndState() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("ac_1");
+        smv.setModes(List.of("Power", "Mode"));
+        smv.setModeStates(Map.of(
+                "Power", List.of("off", "on"),
+                "Mode", List.of("idle", "cool")));
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setApis(List.of(DeviceManifest.API.builder()
+                .name("startCooling")
+                .signal(true)
+                .endState("on;cool")
+                .build()));
+        smv.setManifest(manifest);
+        SpecConditionDto condition = buildCondition("ac_1", "api", "startCooling", "=", "TRUE");
+        SpecificationDto spec = buildSpec("7", List.of(condition), null, null);
+
+        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+
+        assertEquals("CTLSPEC AG !(ac_1.startCooling_a=TRUE & "
+                + "(ac_1.trust_Power_on=untrusted | ac_1.trust_Mode_cool=untrusted))", generated);
+    }
+
+    @Test
+    void template7_signalApiWithoutModeledEndStateFailsClosed() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("service_1");
+        smv.setModes(List.of("Status"));
+        smv.setModeStates(Map.of("Status", List.of("idle")));
+        DeviceManifest manifest = new DeviceManifest();
+        manifest.setApis(List.of(DeviceManifest.API.builder()
+                .name("notify")
+                .signal(true)
+                .build()));
+        smv.setManifest(manifest);
+        SpecConditionDto condition = buildCondition("service_1", "api", "notify", "=", "TRUE");
+        SpecificationDto spec = buildSpec("7", List.of(condition), null, null);
+
+        SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
+                SmvSpecificationBuilder.InvalidConditionException.class,
+                () -> builder.generateSpecString(spec, false, 0, Map.of("service_1", smv)));
+
+        assertTrue(error.getMessage().contains("cannot resolve the MEDIC control-source label"));
+    }
+
+    @Test
+    void template7_rejectsExplicitPrivacyPredicateInsteadOfChangingItsMeaning() {
+        SpecConditionDto cond = buildCondition("sensor_1", "privacy", "SensorState_active", "=", "private");
+        SpecificationDto spec = buildSpec("7", List.of(cond), null, null);
+
+        SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
+                SmvSpecificationBuilder.InvalidConditionException.class,
+                () -> builder.generateSpecString(spec, false, 0, buildDeviceMap()));
+
+        assertTrue(error.getMessage().contains("protected event or value"));
+    }
+
+    @Test
+    void template7_rejectsNegativeStateRelationWhoseTrustLabelWouldTargetTheExcludedState() {
+        SpecConditionDto cond = buildCondition("sensor_1", "state", null, "!=", "idle");
+        SpecificationDto spec = buildSpec("7", List.of(cond), null, null);
+
+        SmvSpecificationBuilder.InvalidConditionException error = assertThrows(
+                SmvSpecificationBuilder.InvalidConditionException.class,
+                () -> builder.generateSpecString(spec, false, 0, buildDeviceMap()));
+
+        assertTrue(error.getMessage().contains("require '='"));
     }
 
     // ===== buildNegated integration =====

@@ -43,7 +43,7 @@ Prerequisites: JDK 17+, Node.js 18+, Maven 3.6+, MySQL 8.0+, NuSMV 2.6–2.7
 mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # 2. Configure required env vars (see docs/getting-started/configuration.md)
-export DB_PASSWORD="..." JWT_SECRET="..." OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
+export DB_PASSWORD="..." JWT_SECRET="..." IOT_VERIFY_OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
 
 # 3. Backend (http://localhost:8080, auto-creates tables)
 cd backend && mvn spring-boot:run
@@ -67,6 +67,8 @@ Start at the **[Documentation Hub / Doc Map](docs/README.md)**. Highlights:
   [verification](docs/api/verification.md) · [chat (SSE)](docs/api/chat-sse.md) ·
   [AI tools](docs/api/ai-tools.md)
 - Architecture: [overview](docs/architecture/overview.md) ·
+  [device identity](docs/architecture/device-identity.md) ·
+  [data authority](docs/architecture/data-authority-model.md) ·
   [verification flow](docs/architecture/verification-flow.md) ·
   [NuSMV model](docs/architecture/nusmv-model.md) ·
   [spec templates & P1–P5](docs/architecture/spec-templates.md) ·

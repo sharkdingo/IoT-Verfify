@@ -3,6 +3,26 @@
 	"Description": "",
 	"InternalVariables": [
 	],
+	"EnvironmentDomains": [
+		{
+			"Name": "temperature",
+			"Description": "Ambient temperature",
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		},
+		{
+			"Name": "humidity",
+			"Description": "Ambient humidity",
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
 	"ImpactedVariables": ["temperature", "humidity"],
 	"Modes": ["HvacMode"],
 	"InitState": "auto",
@@ -10,7 +30,6 @@
 		{
 			"Name": "auto",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -23,7 +42,6 @@
 					"ChangeRate":"-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -36,7 +54,6 @@
 					"ChangeRate": "-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -49,7 +66,6 @@
 					"ChangeRate":"-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -62,7 +78,6 @@
 					"ChangeRate": "-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -70,7 +85,6 @@
 		{
 			"Name": "fanOnly",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -87,7 +101,6 @@
 					"ChangeRate": "-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -100,7 +113,6 @@
 					"ChangeRate":"1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -108,7 +120,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

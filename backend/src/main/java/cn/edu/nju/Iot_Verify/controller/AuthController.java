@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
+import cn.edu.nju.Iot_Verify.dto.auth.DeleteAccountRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterResponseDto;
@@ -33,6 +34,15 @@ public class AuthController {
     @PostMapping("/logout")
     public Result<Void> logout(@CurrentUser Long userId, @RequestHeader("Authorization") String authHeader) {
         authService.logout(userId, authHeader);
+        return Result.success();
+    }
+
+    @DeleteMapping("/account")
+    public Result<Void> deleteAccount(
+            @CurrentUser Long userId,
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody DeleteAccountRequestDto request) {
+        authService.deleteAccount(userId, authHeader, request);
         return Result.success();
     }
 }

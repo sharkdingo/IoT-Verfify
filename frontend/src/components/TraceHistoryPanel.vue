@@ -1,64 +1,67 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Trace, VerificationTaskSummary } from '@/types/verify'
-import type { SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
 import { useI18n } from 'vue-i18n'
+import type {
+  ModelGenerationIssue,
+  AvailableVerificationRunSummary,
+  TraceSummary,
+  VerificationRunSummary,
+  VerificationTaskSummary
+} from '@/types/verify'
+import type {
+  AvailableSimulationTraceSummary,
+  SimulationTaskSummary,
+  SimulationTraceSummary
+} from '@/types/simulation'
+import { formatTraceSpec } from '@/utils/traceView'
+import { generationIssueReasonKey } from '@/utils/generationIssue'
 
-type HistoryTab = 'tasks' | 'verification' | 'simulation'
+type HistoryLayer = 'tasks' | 'results'
+type ResultFilter = 'all' | 'verification' | 'simulation'
 type TaskKind = 'verification' | 'simulation'
-type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+type TaskStatus = 'PENDING' | 'RUNNING' | 'FAILED' | 'CANCELLED'
 
 type TaskItem =
   | (VerificationTaskSummary & { kind: 'verification' })
   | (SimulationTaskSummary & { kind: 'simulation' })
 
+type ResultItem =
+  | { kind: 'verification'; run: VerificationRunSummary }
+  | { kind: 'simulation'; run: SimulationTraceSummary }
+
 const props = defineProps<{
-  activeTab: HistoryTab
+  activeLayer: HistoryLayer
+  resultFilter: ResultFilter
   verificationTasks: VerificationTaskSummary[]
   simulationTasks: SimulationTaskSummary[]
-  verificationTraces: Trace[]
-  simulationTraces: SimulationTraceSummary[]
+  verificationRuns: VerificationRunSummary[]
+  simulationRuns: SimulationTraceSummary[]
   loadingTasks: boolean
-  loadingVerification: boolean
-  loadingSimulation: boolean
+  loadingResults: boolean
   actionLocked: boolean
 }>()
 
 const emit = defineEmits<{
-  (e: 'update:activeTab', value: HistoryTab): void
+  (e: 'update:activeLayer', value: HistoryLayer): void
+  (e: 'update:resultFilter', value: ResultFilter): void
   (e: 'close'): void
   (e: 'refresh-tasks'): void
-  (e: 'refresh-verification'): void
-  (e: 'refresh-simulation'): void
+  (e: 'refresh-results'): void
   (e: 'watch-verification-task', id: number): void
   (e: 'watch-simulation-task', id: number): void
-  (e: 'view-verification-task', id: number): void
-  (e: 'view-simulation-task', id: number): void
   (e: 'cancel-verification-task', id: number): void
   (e: 'cancel-simulation-task', id: number): void
-  (e: 'view-verification', id: number): void
-  (e: 'fix-verification', trace: Trace): void
-  (e: 'delete-verification', id: number): void
-  (e: 'view-simulation', id: number): void
-  (e: 'delete-simulation', id: number): void
+  (e: 'dismiss-verification-task', id: number): void
+  (e: 'dismiss-simulation-task', id: number): void
+  (e: 'open-verification-run', id: number): void
+  (e: 'delete-verification-run', run: VerificationRunSummary): void
+  (e: 'view-verification-trace', id: number): void
+  (e: 'fix-verification-trace', trace: TraceSummary): void
+  (e: 'view-simulation-run', id: number): void
+  (e: 'delete-simulation-run', run: SimulationTraceSummary): void
 }>()
 
 const { t } = useI18n()
-
-const taskItems = computed<TaskItem[]>(() => [
-  ...props.verificationTasks.map(task => ({ ...task, kind: 'verification' as const })),
-  ...props.simulationTasks.map(task => ({ ...task, kind: 'simulation' as const }))
-].sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt)))
-
-const activeTaskCount = computed(() =>
-  taskItems.value.filter(task => isActiveStatus(task.status)).length
-)
-
-const formatDate = (value?: string) => {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
-}
 
 const timestamp = (value?: string) => {
   if (!value) return 0
@@ -66,158 +69,186 @@ const timestamp = (value?: string) => {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
+const formatDate = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+const taskItems = computed<TaskItem[]>(() => [
+  ...props.verificationTasks
+    .filter(task => task.status !== 'COMPLETED')
+    .map(task => ({ ...task, kind: 'verification' as const })),
+  ...props.simulationTasks
+    .filter(task => task.status !== 'COMPLETED')
+    .map(task => ({ ...task, kind: 'simulation' as const }))
+].sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt)))
+
+const activeTasks = computed(() => taskItems.value.filter(task => isActiveStatus(task.status)))
+const unresolvedTasks = computed(() => taskItems.value.filter(task => !isActiveStatus(task.status)))
+
+const resultItems = computed<ResultItem[]>(() => {
+  const all: ResultItem[] = [
+    ...props.verificationRuns.map(run => ({ kind: 'verification' as const, run })),
+    ...props.simulationRuns.map(run => ({ kind: 'simulation' as const, run }))
+  ]
+  return all
+    .filter(item => props.resultFilter === 'all' || item.kind === props.resultFilter)
+    .sort((a, b) => {
+      const left = a.kind === 'verification' ? a.run.completedAt : a.run.createdAt
+      const right = b.kind === 'verification' ? b.run.completedAt : b.run.createdAt
+      return timestamp(right) - timestamp(left)
+    })
+})
+
+const tracesForRun = (run: VerificationRunSummary) => run.counterexamples || []
 const isActiveStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
-const isCompletedStatus = (status?: string) => status === 'COMPLETED'
+
 const taskProgress = (task: TaskItem) => {
   const fallback = isActiveStatus(task.status) ? 0 : 100
   const numeric = typeof task.progress === 'number' ? task.progress : fallback
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.min(100, Math.max(0, Math.round(numeric)))
+  return Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.round(numeric))) : fallback
 }
 
 const formatStatus = (status?: string) => {
   switch (status as TaskStatus | undefined) {
-    case 'PENDING':
-      return t('app.taskStatusPending')
-    case 'RUNNING':
-      return t('app.taskStatusRunning')
-    case 'COMPLETED':
-      return t('app.taskStatusCompleted')
-    case 'FAILED':
-      return t('app.taskStatusFailed')
-    case 'CANCELLED':
-      return t('app.taskStatusCancelled')
-    default:
-      return status || t('app.taskInitializing')
+    case 'PENDING': return t('app.taskStatusPending')
+    case 'RUNNING': return t('app.taskStatusRunning')
+    case 'FAILED': return t('app.taskStatusFailed')
+    case 'CANCELLED': return t('app.taskStatusCancelled')
+    default: return status || t('app.taskInitializing')
   }
+}
+
+const statusClass = (status?: string) => {
+  if (status === 'FAILED') return 'border-red-200 bg-red-50 text-red-700'
+  if (status === 'CANCELLED') return 'border-slate-200 bg-slate-100 text-slate-600'
+  return 'border-blue-200 bg-blue-50 text-blue-700'
 }
 
 const taskKindLabel = (kind: TaskKind) =>
   kind === 'verification' ? t('app.verification') : t('app.simulation')
 
-const statusClass = (status?: string) => {
-  switch (status) {
-    case 'COMPLETED':
-      return 'bg-green-50 text-green-700 border-green-200'
-    case 'FAILED':
-      return 'bg-red-50 text-red-700 border-red-200'
-    case 'CANCELLED':
-      return 'bg-slate-100 text-slate-600 border-slate-200'
-    case 'PENDING':
-    case 'RUNNING':
-      return 'bg-blue-50 text-blue-700 border-blue-200'
-    default:
-      return 'bg-slate-100 text-slate-600 border-slate-200'
-  }
-}
-
 const emitWatchTask = (task: TaskItem) => {
-  if (task.kind === 'verification') {
-    emit('watch-verification-task', task.id)
-  } else {
-    emit('watch-simulation-task', task.id)
-  }
-}
-
-const emitViewTask = (task: TaskItem) => {
-  if (task.kind === 'verification') {
-    emit('view-verification-task', task.id)
-  } else {
-    emit('view-simulation-task', task.id)
-  }
+  if (task.kind === 'verification') emit('watch-verification-task', task.id)
+  else emit('watch-simulation-task', task.id)
 }
 
 const emitCancelTask = (task: TaskItem) => {
-  if (task.kind === 'verification') {
-    emit('cancel-verification-task', task.id)
-  } else {
-    emit('cancel-simulation-task', task.id)
-  }
+  if (task.kind === 'verification') emit('cancel-verification-task', task.id)
+  else emit('cancel-simulation-task', task.id)
 }
 
-const taskSecondaryText = (task: TaskItem) => {
-  if (task.kind === 'verification') {
-    if (task.status === 'COMPLETED') {
-      return task.isSafe
-        ? t('app.verificationPassed')
-        : t('app.verificationFailedWithViolations', { count: task.violatedSpecCount || 0 })
+const emitDismissTask = (task: TaskItem) => {
+  if (task.kind === 'verification') emit('dismiss-verification-task', task.id)
+  else emit('dismiss-simulation-task', task.id)
+}
+
+const traceSpecTitle = (trace: TraceSummary) => {
+  if (!trace.dataAvailable) return t('app.historyItemUnavailable')
+  const summary = trace.violatedSpec ? formatTraceSpec(trace.violatedSpec, t) : ''
+  return summary || t('app.unknownSpecification')
+}
+
+const emitDeleteResult = (item: ResultItem) => {
+  if (item.kind === 'verification') emit('delete-verification-run', item.run)
+  else emit('delete-simulation-run', item.run)
+}
+
+const generationIssuesFor = (item: { generationIssues?: ModelGenerationIssue[] }) =>
+  Array.isArray(item.generationIssues) ? item.generationIssues : []
+
+const verificationOutcomeBadge = (run: AvailableVerificationRunSummary) => {
+  if (run.outcome === 'VIOLATED') {
+    return {
+      label: t('app.verificationFailedWithViolations', { count: run.violatedSpecCount }),
+      className: 'border-red-200 bg-red-50 text-red-700'
     }
-    return task.errorMessage || ''
   }
-
-  if (task.status === 'COMPLETED') {
-    return task.simulationTraceId
-      ? t('app.savedTraceNumber', { id: task.simulationTraceId })
-      : t('app.taskCompletedNoTraceFound')
+  if (run.outcome === 'SATISFIED' && run.modelComplete) {
+    return {
+      label: t('app.verificationPassed'),
+      className: 'border-green-200 bg-green-50 text-green-700'
+    }
   }
-  return task.errorMessage || ''
+  if (run.outcome === 'SATISFIED') {
+    return {
+      label: t('app.verificationPassedWithGenerationWarnings'),
+      className: 'border-amber-200 bg-amber-50 text-amber-800'
+    }
+  }
+  return {
+    label: t('app.verificationInconclusiveSummary'),
+    className: 'border-amber-200 bg-amber-50 text-amber-800'
+  }
 }
+
+const simulationOutcomeBadge = (run: AvailableSimulationTraceSummary) => run.modelComplete
+  ? {
+      label: t('app.allRulesModeled'),
+      className: 'border-blue-200 bg-blue-50 text-blue-700'
+    }
+  : {
+      label: t('app.incompleteModel'),
+      className: 'border-amber-200 bg-amber-50 text-amber-800'
+    }
 </script>
 
 <template>
   <div
-    class="board-floating-panel board-surface-panel fixed top-20 z-30 w-[440px] max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+    class="board-floating-panel board-surface-panel fixed top-20 z-30 w-[480px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border shadow-2xl"
     data-testid="trace-history-panel"
   >
-    <div class="relative overflow-hidden">
-      <div class="absolute inset-0 bg-gradient-to-br from-slate-700 to-cyan-700"></div>
-      <div class="relative flex items-center justify-between p-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center shadow-lg">
-            <span class="material-symbols-outlined text-white text-xl">inventory_2</span>
-          </div>
-          <div>
-            <h3 class="text-white font-bold text-base">{{ t('app.runHistory') }}</h3>
-            <p class="text-white/75 text-xs">{{ t('app.runHistorySubtitle') }}</p>
-          </div>
+    <div class="flex items-center justify-between bg-slate-800 p-4">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cyan-600 shadow-lg">
+          <span class="material-symbols-outlined text-xl text-white">history</span>
         </div>
+        <div class="min-w-0">
+          <h3 class="text-base font-bold text-white">{{ t('app.runHistory') }}</h3>
+          <p class="truncate text-xs text-white/75">{{ t('app.runHistorySubtitle') }}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="close-history-panel"
+        class="flex h-8 w-8 items-center justify-center rounded-lg text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+        :title="t('app.close')"
+        @click="emit('close')"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <div class="board-panel-tabs border-b p-3">
+      <div class="board-segmented grid grid-cols-2 gap-1 rounded-lg p-1">
         <button
-          @click="emit('close')"
-          data-testid="close-history-panel"
-          class="w-8 h-8 flex items-center justify-center rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-all"
-          :title="t('app.close')"
+          type="button"
+          data-testid="history-layer-tasks"
+          class="flex items-center justify-center gap-1 rounded-md px-3 py-2 text-xs font-bold transition-colors"
+          :class="activeLayer === 'tasks' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
+          @click="emit('update:activeLayer', 'tasks')"
         >
-          <span class="material-symbols-outlined">close</span>
+          <span class="material-symbols-outlined text-sm">pending_actions</span>
+          {{ t('app.taskStatusLayer') }}
+          <span v-if="activeTasks.length" class="rounded-full bg-cyan-100 px-1.5 text-[10px] text-cyan-800">
+            {{ activeTasks.length }}
+          </span>
+        </button>
+        <button
+          type="button"
+          data-testid="history-layer-results"
+          class="flex items-center justify-center gap-1 rounded-md px-3 py-2 text-xs font-bold transition-colors"
+          :class="activeLayer === 'results' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
+          @click="emit('update:activeLayer', 'results')"
+        >
+          <span class="material-symbols-outlined text-sm">fact_check</span>
+          {{ t('app.historyResultsLayer') }}
         </button>
       </div>
     </div>
 
-    <div class="board-panel-tabs p-3 border-b">
-      <div class="board-segmented grid grid-cols-3 gap-1 rounded-lg p-1">
-        <button
-          type="button"
-          data-testid="history-tab-tasks"
-          @click="emit('update:activeTab', 'tasks')"
-          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
-          :class="activeTab === 'tasks' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
-        >
-          <span class="material-symbols-outlined text-sm">inbox</span>
-          {{ t('app.taskInbox') }}
-        </button>
-        <button
-          type="button"
-          data-testid="history-tab-verification"
-          @click="emit('update:activeTab', 'verification')"
-          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
-          :class="activeTab === 'verification' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
-        >
-          <span class="material-symbols-outlined text-sm">verified_user</span>
-          {{ t('app.savedVerificationTraces') }}
-        </button>
-        <button
-          type="button"
-          data-testid="history-tab-simulation"
-          @click="emit('update:activeTab', 'simulation')"
-          class="px-2 py-2 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1"
-          :class="activeTab === 'simulation' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'"
-        >
-          <span class="material-symbols-outlined text-sm">play_circle</span>
-          {{ t('app.savedSimulationRuns') }}
-        </button>
-      </div>
-    </div>
-
-    <div class="board-panel-body p-3 max-h-[560px] overflow-y-auto">
+    <div class="board-panel-body max-h-[620px] overflow-y-auto p-3">
       <div
         v-if="actionLocked"
         class="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
@@ -226,19 +257,16 @@ const taskSecondaryText = (task: TaskItem) => {
         <span>{{ t('app.historyActionsLockedHint') }}</span>
       </div>
 
-      <div v-if="activeTab === 'tasks'" class="space-y-3">
+      <div v-if="activeLayer === 'tasks'" class="space-y-3">
         <div class="flex items-center justify-between px-1">
           <span class="text-xs font-medium text-slate-500">
-            {{ t('app.taskCount', { count: taskItems.length }) }}
-            <span v-if="activeTaskCount > 0" class="ml-1 text-blue-600">
-              {{ t('app.activeTaskCount', { count: activeTaskCount }) }}
-            </span>
+            {{ t('app.pendingTaskSummary', { active: activeTasks.length, unresolved: unresolvedTasks.length }) }}
           </span>
           <button
             type="button"
-            @click="emit('refresh-tasks')"
-            class="text-xs text-cyan-700 hover:text-cyan-800 font-medium flex items-center gap-1"
+            class="flex items-center gap-1 text-xs font-medium text-cyan-700 hover:text-cyan-800"
             :disabled="loadingTasks"
+            @click="emit('refresh-tasks')"
           >
             <span class="material-symbols-outlined text-sm" :class="loadingTasks ? 'animate-spin' : ''">refresh</span>
             {{ t('app.refresh') }}
@@ -246,235 +274,335 @@ const taskSecondaryText = (task: TaskItem) => {
         </div>
 
         <div v-if="loadingTasks" class="flex flex-col items-center justify-center py-10 text-slate-500">
-          <span class="material-symbols-outlined text-4xl animate-spin text-cyan-600">sync</span>
-          <p class="text-sm mt-3">{{ t('app.loadingTasks') }}</p>
+          <span class="material-symbols-outlined animate-spin text-4xl text-cyan-600">sync</span>
+          <p class="mt-3 text-sm">{{ t('app.loadingTasks') }}</p>
         </div>
 
-        <div v-else-if="taskItems.length === 0" class="flex flex-col items-center justify-center py-10">
-          <div class="board-muted-surface w-14 h-14 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">inbox</span>
+        <div v-else-if="taskItems.length === 0" class="flex flex-col items-center justify-center py-10 text-center">
+          <div class="board-muted-surface mb-3 flex h-14 w-14 items-center justify-center rounded-full">
+            <span class="material-symbols-outlined text-3xl text-slate-300">task_alt</span>
           </div>
-          <p class="text-slate-600 text-sm font-medium">{{ t('app.noTasks') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.noTasksHint') }}</p>
+          <p class="text-sm font-medium text-slate-600">{{ t('app.noPendingTasks') }}</p>
+          <p class="mt-1 px-4 text-xs text-slate-400">{{ t('app.noPendingTasksHint') }}</p>
         </div>
 
-        <div v-else class="space-y-2">
-          <div
-            v-for="task in taskItems"
-            :key="`${task.kind}-${task.id}`"
-            class="board-card-surface rounded-lg border shadow-sm p-3 hover:border-cyan-200 transition-colors"
-          >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-xs font-bold text-cyan-700">
-                    {{ taskKindLabel(task.kind) }} #{{ task.id }}
-                  </span>
-                  <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
-                    {{ formatStatus(task.status) }}
-                  </span>
-                </div>
-                <div v-if="isActiveStatus(task.status)" class="mt-2">
-                  <div class="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
-                    <div
-                      class="h-full rounded-full bg-cyan-600 transition-all"
-                      :style="{ width: `${taskProgress(task)}%` }"
-                    ></div>
+        <template v-else>
+          <section v-if="activeTasks.length" class="space-y-2">
+            <h4 class="px-1 text-xs font-bold text-slate-600">{{ t('app.runningTasks') }}</h4>
+            <div
+              v-for="task in activeTasks"
+              :key="`${task.kind}-${task.id}`"
+              class="board-card-surface rounded-lg border p-3 shadow-sm"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-cyan-700">{{ taskKindLabel(task.kind) }}</span>
+                    <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
+                      {{ formatStatus(task.status) }}
+                    </span>
                   </div>
-                  <div class="mt-1 text-[11px] text-slate-500">
-                    {{ taskProgress(task) }}%
+                  <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div class="h-full rounded-full bg-cyan-600 transition-all" :style="{ width: `${taskProgress(task)}%` }"></div>
+                  </div>
+                  <div class="mt-1 flex justify-between text-[11px] text-slate-500">
+                    <span>{{ taskProgress(task) }}%</span>
+                    <span>{{ formatDate(task.createdAt) }}</span>
                   </div>
                 </div>
-                <div v-if="taskSecondaryText(task)" class="text-xs text-slate-600 mt-1 truncate">
-                  {{ taskSecondaryText(task) }}
+                <div class="flex shrink-0 flex-col gap-1">
+                  <button
+                    type="button"
+                    class="rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700"
+                    @click="emitWatchTask(task)"
+                  >
+                    {{ t('app.watchTask') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700"
+                    @click="emitCancelTask(task)"
+                  >
+                    {{ t('app.cancel') }}
+                  </button>
                 </div>
-                <div class="text-xs text-slate-400 mt-1">{{ formatDate(task.createdAt) }}</div>
               </div>
-              <div class="flex flex-wrap justify-end gap-1 shrink-0">
+            </div>
+          </section>
+
+          <section v-if="unresolvedTasks.length" class="space-y-2">
+            <h4 class="px-1 text-xs font-bold text-slate-600">{{ t('app.tasksWithoutResults') }}</h4>
+            <div
+              v-for="task in unresolvedTasks"
+              :key="`${task.kind}-${task.id}`"
+              class="board-card-surface rounded-lg border p-3 shadow-sm"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-cyan-700">{{ taskKindLabel(task.kind) }}</span>
+                    <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="statusClass(task.status)">
+                      {{ formatStatus(task.status) }}
+                    </span>
+                  </div>
+                  <p class="mt-2 text-xs leading-5 text-slate-600">
+                    {{ task.status === 'CANCELLED' ? t('app.cancelledTaskNoResult') : t('app.failedTaskNoResult') }}
+                  </p>
+                  <details v-if="task.errorMessage" class="mt-2 text-[11px] text-slate-500">
+                    <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
+                    <code class="mt-1 block whitespace-pre-wrap break-words rounded bg-slate-950 px-2 py-1.5 text-slate-100">{{ task.errorMessage }}</code>
+                  </details>
+                  <div class="mt-1 text-[11px] text-slate-400">{{ formatDate(task.completedAt || task.createdAt) }}</div>
+                </div>
                 <button
-                  v-if="isActiveStatus(task.status)"
                   type="button"
-                  :data-testid="`watch-${task.kind}-task-${task.id}`"
-                  @click="emitWatchTask(task)"
-                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium"
+                  class="shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
+                  @click="emitDismissTask(task)"
                 >
-                  {{ t('app.watchTask') }}
-                </button>
-                <button
-                  v-if="isActiveStatus(task.status)"
-                  type="button"
-                  :data-testid="`cancel-${task.kind}-task-${task.id}`"
-                  @click="emitCancelTask(task)"
-                  class="px-2 py-1 bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 rounded text-xs font-medium"
-                >
-                  {{ t('app.cancel') }}
-                </button>
-                <button
-                  v-if="isCompletedStatus(task.status)"
-                  type="button"
-                  :data-testid="`view-${task.kind}-task-${task.id}`"
-                  @click="emitViewTask(task)"
-                  :disabled="actionLocked"
-                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {{ task.kind === 'verification' ? t('app.openResult') : t('app.replay') }}
+                  {{ t('app.dismissTask') }}
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-else-if="activeTab === 'verification'" class="space-y-3">
-        <div class="flex items-center justify-between px-1">
-          <span class="text-xs font-medium text-slate-500">
-            {{ t('app.traceCount', { count: verificationTraces.length }) }}
-          </span>
-          <button
-            type="button"
-            @click="emit('refresh-verification')"
-            class="text-xs text-cyan-700 hover:text-cyan-800 font-medium flex items-center gap-1"
-            :disabled="loadingVerification"
-          >
-            <span class="material-symbols-outlined text-sm" :class="loadingVerification ? 'animate-spin' : ''">refresh</span>
-            {{ t('app.refresh') }}
-          </button>
-        </div>
-
-        <div v-if="loadingVerification" class="flex flex-col items-center justify-center py-10 text-slate-500">
-          <span class="material-symbols-outlined text-4xl animate-spin text-cyan-600">sync</span>
-          <p class="text-sm mt-3">{{ t('app.loadingVerificationTraces') }}</p>
-        </div>
-
-        <div v-else-if="verificationTraces.length === 0" class="flex flex-col items-center justify-center py-10">
-          <div class="board-muted-surface w-14 h-14 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">rule</span>
-          </div>
-          <p class="text-slate-600 text-sm font-medium">{{ t('app.noVerificationTraces') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.noVerificationTracesHint') }}</p>
-        </div>
-
-        <div v-else class="space-y-2">
-          <div
-            v-for="trace in verificationTraces"
-            :key="trace.id"
-            class="board-card-surface rounded-lg border shadow-sm p-3 hover:border-cyan-200 transition-colors"
-          >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-cyan-700">{{ t('app.traceNumber', { id: trace.id }) }}</span>
-                  <span class="px-2 py-0.5 bg-red-50 text-red-600 rounded-full text-[11px] font-medium">
-                    {{ t('app.statesCount', { count: trace.states?.length || 0 }) }}
-                  </span>
-                </div>
-                <div class="text-xs text-slate-600 mt-1 truncate">
-                  {{ t('app.specPrefix') }}: {{ trace.violatedSpecId }}
-                </div>
-                <div class="text-xs text-slate-400 mt-1">{{ formatDate(trace.createdAt) }}</div>
-              </div>
-              <div class="flex flex-wrap justify-end gap-1 shrink-0">
-                <button
-                  type="button"
-                  :data-testid="`view-verification-trace-${trace.id}`"
-                  @click="emit('view-verification', trace.id)"
-                  :disabled="actionLocked"
-                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {{ t('app.view') }}
-                </button>
-                <button
-                  type="button"
-                  :data-testid="`fix-verification-trace-${trace.id}`"
-                  @click="emit('fix-verification', trace)"
-                  :disabled="actionLocked || !trace.violatedSpecId"
-                  :title="t('app.historicalFixMayFailIfBoardChanged')"
-                  class="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {{ t('app.fix') }}
-                </button>
-                <button
-                  type="button"
-                  :data-testid="`delete-verification-trace-${trace.id}`"
-                  @click="emit('delete-verification', trace.id)"
-                  :disabled="actionLocked"
-                  class="px-2 py-1 bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {{ t('app.delete') }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          </section>
+        </template>
       </div>
 
       <div v-else class="space-y-3">
-        <div class="flex items-center justify-between px-1">
-          <span class="text-xs font-medium text-slate-500">
-            {{ t('app.runCount', { count: simulationTraces.length }) }}
-          </span>
+        <div class="flex items-center justify-between gap-3 px-1">
+          <div class="board-segmented grid min-w-0 flex-1 grid-cols-3 gap-1 rounded-lg p-1">
+            <button
+              v-for="filter in (['all', 'verification', 'simulation'] as const)"
+              :key="filter"
+              type="button"
+              :data-testid="`history-result-filter-${filter}`"
+              class="rounded-md px-2 py-1.5 text-[11px] font-bold transition-colors"
+              :class="resultFilter === filter ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              @click="emit('update:resultFilter', filter)"
+            >
+              {{ filter === 'all' ? t('app.allResults') : filter === 'verification' ? t('app.verification') : t('app.simulation') }}
+            </button>
+          </div>
           <button
             type="button"
-            @click="emit('refresh-simulation')"
-            class="text-xs text-cyan-700 hover:text-cyan-800 font-medium flex items-center gap-1"
-            :disabled="loadingSimulation"
+            class="flex shrink-0 items-center gap-1 text-xs font-medium text-cyan-700 hover:text-cyan-800"
+            :disabled="loadingResults"
+            @click="emit('refresh-results')"
           >
-            <span class="material-symbols-outlined text-sm" :class="loadingSimulation ? 'animate-spin' : ''">refresh</span>
+            <span class="material-symbols-outlined text-sm" :class="loadingResults ? 'animate-spin' : ''">refresh</span>
             {{ t('app.refresh') }}
           </button>
         </div>
 
-        <div v-if="loadingSimulation" class="flex flex-col items-center justify-center py-10 text-slate-500">
-          <span class="material-symbols-outlined text-4xl animate-spin text-cyan-600">sync</span>
-          <p class="text-sm mt-3">{{ t('app.loadingSimulationRuns') }}</p>
+        <div v-if="loadingResults" class="flex flex-col items-center justify-center py-10 text-slate-500">
+          <span class="material-symbols-outlined animate-spin text-4xl text-cyan-600">sync</span>
+          <p class="mt-3 text-sm">{{ t('app.loadingRunResults') }}</p>
         </div>
 
-        <div v-else-if="simulationTraces.length === 0" class="flex flex-col items-center justify-center py-10">
-          <div class="board-muted-surface w-14 h-14 rounded-full flex items-center justify-center mb-3">
-            <span class="material-symbols-outlined text-slate-300 text-3xl">timeline</span>
+        <div v-else-if="resultItems.length === 0" class="flex flex-col items-center justify-center py-10 text-center">
+          <div class="board-muted-surface mb-3 flex h-14 w-14 items-center justify-center rounded-full">
+            <span class="material-symbols-outlined text-3xl text-slate-300">fact_check</span>
           </div>
-          <p class="text-slate-600 text-sm font-medium">{{ t('app.noSimulationRuns') }}</p>
-          <p class="text-slate-400 text-xs mt-1 text-center px-4">{{ t('app.noSimulationRunsHint') }}</p>
+          <p class="text-sm font-medium text-slate-600">{{ t('app.noRunResults') }}</p>
+          <p class="mt-1 px-4 text-xs text-slate-400">{{ t('app.noRunResultsHint') }}</p>
         </div>
 
-        <div v-else class="space-y-2">
-          <div
-            v-for="trace in simulationTraces"
-            :key="trace.id"
-            class="board-card-surface rounded-lg border shadow-sm p-3 hover:border-cyan-200 transition-colors"
+        <div v-else class="space-y-3">
+          <article
+            v-for="item in resultItems"
+            :key="`${item.kind}-${item.run.id}`"
+            class="board-card-surface rounded-lg border p-3 shadow-sm transition-colors hover:border-cyan-200"
           >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-cyan-700">{{ t('app.runNumber', { id: trace.id }) }}</span>
-                  <span class="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-[11px] font-medium">
-                    {{ t('app.stepsCount', { steps: trace.steps, requestedSteps: trace.requestedSteps }) }}
-                  </span>
+            <template v-if="!item.run.dataAvailable">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 text-amber-800">
+                    <span class="material-symbols-outlined text-base" aria-hidden="true">warning</span>
+                    <span class="text-xs font-bold">{{ t('app.historyItemUnavailable') }}</span>
+                  </div>
+                  <p class="mt-1 text-[11px] leading-4 text-slate-600">
+                    {{ t('app.historyItemUnavailableDetail') }}
+                  </p>
+                  <p class="mt-1 text-[11px] text-slate-400">
+                    {{ formatDate(item.kind === 'verification' ? item.run.completedAt : item.run.createdAt) }}
+                  </p>
                 </div>
-                <div class="text-xs text-slate-400 mt-1">{{ formatDate(trace.createdAt) }}</div>
-              </div>
-              <div class="flex flex-wrap justify-end gap-1 shrink-0">
                 <button
                   type="button"
-                  :data-testid="`replay-simulation-trace-${trace.id}`"
-                  @click="emit('view-simulation', trace.id)"
+                  class="shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
                   :disabled="actionLocked"
-                  class="px-2 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {{ t('app.replay') }}
-                </button>
-                <button
-                  type="button"
-                  :data-testid="`delete-simulation-trace-${trace.id}`"
-                  @click="emit('delete-simulation', trace.id)"
-                  :disabled="actionLocked"
-                  class="px-2 py-1 bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  @click="emitDeleteResult(item)"
                 >
                   {{ t('app.delete') }}
                 </button>
               </div>
-            </div>
-          </div>
+            </template>
+
+            <template v-else-if="item.kind === 'verification'">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-cyan-700">{{ t('app.verificationRunResult') }}</span>
+                    <span
+                      class="inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                      :class="verificationOutcomeBadge(item.run).className"
+                      :title="verificationOutcomeBadge(item.run).label"
+                    >
+                      <span class="truncate">{{ verificationOutcomeBadge(item.run).label }}</span>
+                    </span>
+                  </div>
+                  <p class="mt-1 text-[11px] text-slate-500">
+                    {{ t('app.runScopeCounts', {
+                      devices: item.run.modelSnapshot.deviceCount,
+                      rules: item.run.modelSnapshot.ruleCount,
+                      specs: item.run.modelSnapshot.specificationCount
+                    }) }}
+                  </p>
+                  <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.completedAt) }}</p>
+                </div>
+                <div class="flex shrink-0 flex-wrap justify-end gap-1">
+                  <button
+                    type="button"
+                    :data-testid="`open-verification-run-${item.run.id}`"
+                    class="rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('open-verification-run', item.run.id)"
+                  >
+                    {{ t('app.openResult') }}
+                  </button>
+                  <button
+                    type="button"
+                    :data-testid="`delete-verification-run-${item.run.id}`"
+                    class="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('delete-verification-run', item.run)"
+                  >
+                    {{ t('app.delete') }}
+                  </button>
+                </div>
+              </div>
+
+              <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
+                <li
+                  v-for="(issue, index) in generationIssuesFor(item.run)"
+                  :key="`${issue.itemLabel}-${index}`"
+                  class="border-l-2 border-amber-300 pl-2 text-[11px] leading-4 text-amber-800"
+                >
+                  <span class="font-semibold">{{ issue.itemLabel || t('app.unknownModelItem') }}</span>
+                  <span>: {{ t(generationIssueReasonKey(issue)) }}</span>
+                </li>
+              </ul>
+
+              <div v-if="item.run.outcome === 'VIOLATED'" class="mt-3 rounded-lg border border-red-100 bg-red-50/60 p-2.5">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-xs font-semibold text-red-800">
+                    {{ t('app.violationEvidenceSummary', {
+                      violations: item.run.violatedSpecCount,
+                      counterexamples: item.run.counterexampleCount
+                    }) }}
+                  </span>
+                </div>
+                <p
+                  v-if="item.run.counterexampleCount < item.run.violatedSpecCount"
+                  class="mt-1 text-[11px] leading-4 text-amber-800"
+                >
+                  {{ t('app.someViolationsHaveNoReplayableCounterexample') }}
+                </p>
+                <div v-if="tracesForRun(item.run).length" class="mt-2 space-y-1.5">
+                  <div
+                    v-for="trace in tracesForRun(item.run)"
+                    :key="trace.id"
+                    class="flex items-center justify-between gap-2 rounded-md border border-red-100 bg-white px-2 py-1.5"
+                  >
+                    <div class="min-w-0">
+                      <p class="truncate text-[11px] font-medium text-slate-700" :title="traceSpecTitle(trace)">
+                        {{ traceSpecTitle(trace) }}
+                      </p>
+                      <p v-if="trace.dataAvailable" class="text-[10px] text-slate-400">
+                        {{ t('app.statesCount', { count: trace.stateCount || 0 }) }}
+                      </p>
+                      <p v-else class="text-[10px] font-medium text-amber-700">
+                        {{ t('app.historyTraceUnavailableDetail') }}
+                      </p>
+                    </div>
+                    <div class="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        :data-testid="`view-verification-trace-${trace.id}`"
+                        class="rounded bg-cyan-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+                        :disabled="actionLocked || !trace.dataAvailable"
+                        @click="emit('view-verification-trace', trace.id)"
+                      >
+                        {{ t('app.replay') }}
+                      </button>
+                      <button
+                        type="button"
+                        :data-testid="`fix-verification-trace-${trace.id}`"
+                        class="rounded bg-amber-100 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-200 disabled:opacity-50"
+                        :disabled="actionLocked || !trace.dataAvailable"
+                        @click="emit('fix-verification-trace', trace)"
+                      >
+                        {{ t('app.fix') }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-cyan-700">{{ t('app.simulationRunResult') }}</span>
+                    <span
+                      class="inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                      :class="simulationOutcomeBadge(item.run).className"
+                    >
+                      <span class="truncate">{{ simulationOutcomeBadge(item.run).label }}</span>
+                    </span>
+                  </div>
+                  <p class="mt-1 text-[11px] text-slate-500">
+                    {{ t('app.simulationHistoryCounts', {
+                      requested: item.run.requestedSteps,
+                      steps: item.run.steps,
+                      states: item.run.steps + 1
+                    }) }}
+                  </p>
+                  <p class="mt-1 text-[11px] text-slate-400">{{ formatDate(item.run.createdAt) }}</p>
+                </div>
+                <div class="flex shrink-0 flex-wrap justify-end gap-1">
+                  <button
+                    type="button"
+                    :data-testid="`replay-simulation-trace-${item.run.id}`"
+                    class="rounded bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('view-simulation-run', item.run.id)"
+                  >
+                    {{ t('app.replay') }}
+                  </button>
+                  <button
+                    type="button"
+                    :data-testid="`delete-simulation-trace-${item.run.id}`"
+                    class="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="actionLocked"
+                    @click="emit('delete-simulation-run', item.run)"
+                  >
+                    {{ t('app.delete') }}
+                  </button>
+                </div>
+              </div>
+              <ul v-if="generationIssuesFor(item.run).length" class="mt-2 space-y-1.5">
+                <li
+                  v-for="(issue, index) in generationIssuesFor(item.run)"
+                  :key="`${issue.itemLabel}-${index}`"
+                  class="border-l-2 border-amber-300 pl-2 text-[11px] leading-4 text-amber-800"
+                >
+                  <span class="font-semibold">{{ issue.itemLabel || t('app.unknownModelItem') }}</span>
+                  <span>: {{ t(generationIssueReasonKey(issue)) }}</span>
+                </li>
+              </ul>
+            </template>
+          </article>
         </div>
       </div>
     </div>

@@ -1,26 +1,72 @@
 // src/utils/rule.ts
 import type { DeviceEdge } from '../types/edge'
 import type { DeviceNode } from '../types/node'
-import type { RuleForm, SourceEntry } from '../types/rule'
+import type {
+    DuplicateRuleReasonCode,
+    RuleForm,
+    RuleSimilarityReasonCode,
+    SourceEntry
+} from '../types/rule'
+
+export type RuleCheckReasonKey =
+    | 'app.ruleCheckNoExistingRules'
+    | 'app.ruleCheckExactMatch'
+    | 'app.ruleCheckContainedTriggers'
+    | 'app.ruleCheckSameShape'
+    | 'app.ruleCheckPartialOverlap'
+    | 'app.ruleCheckNoMatchingSignature'
+    | 'app.ruleSimilarityDuplicate'
+    | 'app.ruleSimilaritySimilar'
+    | 'app.ruleSimilarityHighScoreReview'
+    | 'app.ruleSimilarityNoSignificantMatch'
+
+const duplicateReasonKeys: Record<DuplicateRuleReasonCode, RuleCheckReasonKey> = {
+    NO_EXISTING_RULES: 'app.ruleCheckNoExistingRules',
+    EXACT_MATCH: 'app.ruleCheckExactMatch',
+    TRIGGER_SET_CONTAINS_OTHER: 'app.ruleCheckContainedTriggers',
+    SAME_TRIGGER_SHAPE_DIFFERENT_VALUES: 'app.ruleCheckSameShape',
+    PARTIAL_TRIGGER_OVERLAP: 'app.ruleCheckPartialOverlap',
+    NO_MATCHING_SIGNATURE: 'app.ruleCheckNoMatchingSignature'
+}
+
+const similarityReasonKeys: Record<RuleSimilarityReasonCode, RuleCheckReasonKey> = {
+    NO_EXISTING_RULES: 'app.ruleCheckNoExistingRules',
+    AI_DUPLICATE: 'app.ruleSimilarityDuplicate',
+    AI_SIMILAR: 'app.ruleSimilaritySimilar',
+    AI_HIGH_SCORE_REVIEW: 'app.ruleSimilarityHighScoreReview',
+    AI_NO_SIGNIFICANT_SIMILARITY: 'app.ruleSimilarityNoSignificantMatch'
+}
+
+export const duplicateRuleReasonKey = (code: DuplicateRuleReasonCode): RuleCheckReasonKey =>
+    duplicateReasonKeys[code] || 'app.ruleCheckNoMatchingSignature'
+
+export const ruleSimilarityReasonKey = (code: RuleSimilarityReasonCode): RuleCheckReasonKey =>
+    similarityReasonKeys[code] || 'app.ruleSimilarityNoSignificantMatch'
+
+const VALUE_BASED_SOURCE_TYPES = new Set(['variable', 'mode', 'state'])
 
 export const assertRuleHasTrigger = (rule: RuleForm, index = 0): void => {
-    const ruleName = rule.name || rule.id || `Rule ${index + 1}`
+    const ruleName = rule.name?.trim() || `Rule ${index + 1}`
     if (!rule.sources || rule.sources.length === 0) {
         throw new Error(`${ruleName}: at least one trigger source is required`)
     }
 
     rule.sources.forEach((source: SourceEntry, sourceIndex: number) => {
         const sourceName = `source ${sourceIndex + 1}`
-        if (!source.fromId || !source.fromApi) {
+        const hasAttribute = source.itemType === 'state' || !!source.fromApi
+        if (!source.fromId || !hasAttribute) {
             throw new Error(`${ruleName}: ${sourceName} must select a device and trigger attribute`)
         }
 
-        const sourceType = source.itemType || source.targetType
-        if (sourceType === 'variable') {
+        const sourceType = source.itemType
+        if (!sourceType) {
+            throw new Error(`${ruleName}: ${sourceName} must select a trigger type`)
+        }
+        if (VALUE_BASED_SOURCE_TYPES.has(sourceType)) {
             const hasRelation = !!source.relation
             const hasValue = source.value != null && String(source.value).trim().length > 0
             if (!hasRelation || !hasValue) {
-                throw new Error(`${ruleName}: ${sourceName} variable trigger requires relation and value`)
+                throw new Error(`${ruleName}: ${sourceName} ${sourceType} trigger requires relation and value`)
             }
         }
     })
@@ -55,8 +101,8 @@ export const updateRulesForNodeRename = (
  * 获取节点中心点坐标
  */
 export const getNodeCenter = (node: DeviceNode) => {
-    const w = node.width || 110
-    const h = node.height || 90
+    const w = node.width || 176
+    const h = node.height || 128
     return {
         x: node.position.x + w / 2,
         y: node.position.y + h / 2,
@@ -71,15 +117,15 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
     const fromCenter = getNodeCenter(fromNode)
     const toCenter = getNodeCenter(toNode)
 
-    const fw = fromNode.width || 110
-    const fh = fromNode.height || 90
+    const fw = fromNode.width || 176
+    const fh = fromNode.height || 128
     const fx1 = fromNode.position.x
     const fy1 = fromNode.position.y
     const fx2 = fx1 + fw
     const fy2 = fy1 + fh
 
-    const tw = toNode.width || 110
-    const th = toNode.height || 90
+    const tw = toNode.width || 176
+    const th = toNode.height || 128
     const tx1 = toNode.position.x
     const ty1 = toNode.position.y
     const tx2 = tx1 + tw
@@ -154,8 +200,8 @@ export const getLinkPoints = (fromNode: DeviceNode, toNode: DeviceNode) => {
  * 在节点右侧画一条“半椭圆”样式的 path
  */
 export const getSelfLoopPath = (node: DeviceNode): string => {
-    const w = node.width || 110
-    const h = node.height || 90
+    const w = node.width || 176
+    const h = node.height || 128
 
     const right = node.position.x + w
     const top = node.position.y

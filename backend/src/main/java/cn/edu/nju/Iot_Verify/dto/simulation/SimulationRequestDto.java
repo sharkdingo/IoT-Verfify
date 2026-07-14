@@ -1,9 +1,9 @@
 package cn.edu.nju.Iot_Verify.dto.simulation;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -21,12 +21,17 @@ import java.util.List;
  * 与 VerificationRequestDto 的区别：无 specs（模拟不检查规约），新增 steps 控制模拟步数。
  */
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class SimulationRequestDto {
 
     @Valid
     @NotEmpty(message = "Devices list cannot be empty")
     private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
+
+    /**
+     * Board-level environment pool. Device templates grant read permission; values live here.
+     */
+    @Valid
+    private List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables = new ArrayList<>();
 
     @Valid
     private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules = new ArrayList<>();
@@ -38,9 +43,11 @@ public class SimulationRequestDto {
     @JsonProperty("isAttack")
     private boolean isAttack = false;
 
+    /** Maximum compromised points (explicit 1-50 when enabled; exactly 0 when disabled); never widens domains. */
     @Min(0) @Max(50)
-    private int intensity = 3;
+    private int attackBudget = 0;
 
+    /** Track sensitivity-label propagation; this does not model access control or encryption. */
     private boolean enablePrivacy = false;
 
     // 阻止 Lombok 生成的 isAttack()/setAttack() 被 Jackson 序列化

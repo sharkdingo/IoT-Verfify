@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.node;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.NodeService;
@@ -14,7 +15,9 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -37,6 +40,7 @@ public class SearchNodeTool extends AbstractAiTool {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
+                "maxLength", 100,
                 "description", "Device template keyword (e.g. 'AC Cooler') or device name. Leave empty to return all devices."
         ));
 
@@ -56,10 +60,21 @@ public class SearchNodeTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String keyword = args.path("keyword").asText("").trim();
+            requireOnlyFields(args, "arguments", Set.of("keyword"));
+            String keyword = optionalTextArg(args, "keyword", "", 100);
             log.info("Executing search_devices, keyword: {}", keyword);
-            String raw = nodeService.searchNodes(userId, keyword);
-            return normalizeResult(raw);
+            List<DeviceNodeDto> devices = nodeService.searchNodes(userId, keyword);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("count", devices.size());
+            response.put("devices", devices);
+            if (devices.isEmpty()) {
+                response.put("message", keyword.isEmpty()
+                        ? "No devices are currently on the board."
+                        : "No devices matched the requested name or template.");
+            }
+            return objectMapper.writeValueAsString(response);
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("search_devices busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -72,30 +87,4 @@ public class SearchNodeTool extends AbstractAiTool {
         }
     }
 
-    private String normalizeResult(String raw) throws Exception {
-        if (raw == null || raw.isBlank()) {
-            return objectMapper.writeValueAsString(Map.of("count", 0, "devices", Collections.emptyList()));
-        }
-        JsonNode root;
-        try {
-            root = objectMapper.readTree(raw);
-        } catch (Exception ignore) {
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("message", raw);
-            body.put("count", 0);
-            body.put("devices", Collections.emptyList());
-            return objectMapper.writeValueAsString(body);
-        }
-        if (root.isArray()) {
-            return objectMapper.writeValueAsString(Map.of("count", root.size(), "devices", root));
-        }
-        if (root.isObject()) {
-            return raw;
-        }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("message", raw);
-        body.put("count", 0);
-        body.put("devices", Collections.emptyList());
-        return objectMapper.writeValueAsString(body);
-    }
 }

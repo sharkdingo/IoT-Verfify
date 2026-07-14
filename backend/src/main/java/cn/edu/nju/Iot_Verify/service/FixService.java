@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.service;
 
-import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FaultLocalizationResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
@@ -14,24 +14,29 @@ public interface FixService {
     /**
      * Localize fault rules from a counterexample trace (fast, pure in-memory).
      */
-    List<FaultRuleDto> localizeFault(Long userId, Long traceId);
+    FaultLocalizationResultDto localizeFault(Long userId, Long traceId);
 
     /**
-     * Attempt to fix a violation with optional preferred parameter ranges (may invoke NuSMV multiple times).
+     * Attempt to fix a violation with optional preferred parameter ranges keyed by ParameterAdjustment.targetId
+     * (may invoke NuSMV multiple times).
      */
     FixResultDto fix(Long userId, Long traceId, List<String> strategies, Map<String, PreferredRange> preferredRanges);
 
     /**
-     * Apply a fix suggestion to the user's persisted board rules and save.
+     * Apply a repair strategy to the user's persisted board rules.
      *
-     * <p>The server re-derives the fix (NuSMV-verified) for the given strategy and requires the submitted
-     * suggestion to match it, so the client's {@code verified} flag is not trusted. {@code preferredRanges}
-     * must be the same ranges /fix used to produce the suggestion, so the recompute reproduces it.</p>
-     *
-     * <p>The suggestion's rule/condition indices are computed against the trace's verification-time
-     * rule snapshot. This method aligns the snapshot with the current board rules (index + fingerprint)
-     * and rejects the apply if the board drifted, to avoid editing the wrong rule.</p>
+     * <p>The caller supplies only the strategy and optional ranges. The service re-derives a
+     * NuSMV-verified suggestion from the trace snapshot, checks board/template drift, and persists
+     * only that server-computed change.</p>
      */
+    FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
+                               Map<String, PreferredRange> preferredRanges);
+
+    /**
+     * Internal compatibility overload for service-level callers that need to assert a submitted
+     * suggestion against the server recomputation. It is not exposed by the REST API.
+     */
+    @Deprecated
     FixApplyResultDto applyFix(Long userId, Long traceId, String strategy, FixSuggestionDto suggestion,
                                Map<String, PreferredRange> preferredRanges);
 }

@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceTrustPrivacyDto;
@@ -18,13 +20,100 @@ class SmvTraceParserTest {
     private final SmvTraceParser parser = new SmvTraceParser();
 
     @Test
-    void parseCounterexample_parsesModeTrustPrivacyEnvAndRetainsIsAttack() {
+    void parseCounterexample_mapsInternalRuleProbesToStableTriggeredRuleSnapshots() {
+        RuleDto first = RuleDto.builder().id(41L).ruleString("Turn on the hallway light").build();
+        RuleDto second = RuleDto.builder().id(42L).ruleString("Notify the resident").build();
+        String counterexample = """
+                -> State: 1.1 <-
+                  iot_verify_rule_fired_0 = FALSE
+                  iot_verify_rule_fired_1 = FALSE
+                  iot_verify_automation_link_compromised_0 = TRUE
+                  iot_verify_automation_link_compromised_1 = FALSE
+                -> State: 1.2 <-
+                  iot_verify_rule_fired_0 = TRUE
+                -> State: 1.3 <-
+                  iot_verify_rule_fired_0 = FALSE
+                  iot_verify_rule_fired_1 = TRUE
+                -> State: 1.4 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of(), List.of(first, second));
+
+        assertTrue(states.get(0).getTriggeredRules().isEmpty());
+        assertEquals("41", states.get(1).getTriggeredRules().get(0).getRuleId());
+        assertEquals("Turn on the hallway light", states.get(1).getTriggeredRules().get(0).getRuleLabel());
+        assertEquals("42", states.get(2).getTriggeredRules().get(0).getRuleId());
+        assertEquals("42", states.get(3).getTriggeredRules().get(0).getRuleId(),
+                "NuSMV omits unchanged values, so probe state must carry forward");
+        assertEquals("41", states.get(0).getCompromisedAutomationLinks().get(0).getRuleId());
+        assertEquals("Turn on the hallway light",
+                states.get(3).getCompromisedAutomationLinks().get(0).getRuleLabel(),
+                "Frozen automation-link choices must carry forward without exposing generated indexes");
+        assertNull(findGlobalValue(states.get(1), "iot_verify_rule_fired_0"),
+                "Internal probes must not leak into runtime globals");
+        assertNull(findGlobalValue(states.get(1), "iot_verify_automation_link_compromised_0"),
+                "Internal automation-link attack choices must not leak into runtime globals");
+    }
+
+    @Test
+    void parseCounterexample_materializesCompleteSnapshotsFromNuSmvDeltas() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setDeviceLabel("Hall sensor");
+        smv.setTemplateName("Sensor");
+        smv.getModes().add("Mode");
+        smv.getModeStates().put("Mode", List.of("idle", "active"));
+        smv.getStates().addAll(List.of("idle", "active"));
+        smv.getVariables().add(internalVariable("temperature"));
+        smv.getEnvVariables().put("temperature", internalVariable("temperature"));
+        smv.getContents().add(content("photo"));
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  sensor_1.Mode = idle
+                  sensor_1.temperature = 20
+                  sensor_1.trust_temperature = untrusted
+                  sensor_1.privacy_photo = private
+                  sensor_1.is_attack = TRUE
+                  a_temperature = 20
+                  iot_verify_compromised_point_count = 1
+                -> State: 1.2 <-
+                  sensor_1.temperature = 21
+                  a_temperature = 21
+                -> State: 1.3 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("sensor_1", smv));
+
+        TraceDeviceDto secondDevice = states.get(1).getDevices().get(0);
+        assertEquals("idle", secondDevice.getState());
+        assertEquals("21", findVariable(secondDevice, "temperature").getValue());
+        assertEquals("untrusted", findVariable(secondDevice, "temperature").getTrust());
+        assertTrue(Boolean.TRUE.equals(secondDevice.getCompromised()));
+        assertNull(findVariable(secondDevice, "is_attack"));
+        assertEquals("private", findPrivacy(secondDevice, "photo").getPrivacy());
+        assertEquals("1", findGlobalValue(states.get(1), "compromisedPointCount"));
+
+        TraceDeviceDto thirdDevice = states.get(2).getDevices().get(0);
+        assertEquals("21", findVariable(thirdDevice, "temperature").getValue());
+        assertEquals("21", findEnvValue(states.get(2), "temperature"));
+        assertEquals("1", findGlobalValue(states.get(2), "compromisedPointCount"));
+        assertNotSame(secondDevice, thirdDevice, "Each API state must be an independent snapshot");
+    }
+
+    @Test
+    void parseCounterexample_parsesModeTrustPrivacyEnvAndMapsCompromiseState() {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setVarName("air_conditioner_1");
+        smv.setDeviceLabel("Bedroom AC");
         smv.setTemplateName("Air Conditioner");
         smv.getModes().add("HvacMode");
         smv.getModeStates().put("HvacMode", List.of("cool", "heat"));
         smv.getStates().addAll(List.of("cool", "heat"));
+        smv.getEnvVariables().put("temperature", null);
+        smv.getContents().add(content("photo"));
 
         Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
         deviceMap.put("air_conditioner_1", smv);
@@ -40,7 +129,7 @@ class SmvTraceParserTest {
                   air_conditioner_1.cool_a = TRUE
                   air_conditioner_1.privacy_photo = private
                   a_temperature = 25
-                  intensity = 1
+                  iot_verify_compromised_point_count = 1
                 -> State: 1.2 <-
                   air_conditioner_1.HvacMode = heat
                   a_temperature = 24
@@ -55,30 +144,127 @@ class SmvTraceParserTest {
         assertEquals("cool", d1.getState());
         assertEquals("HvacMode", d1.getMode());
         assertEquals("Air Conditioner", d1.getTemplateName());
-        assertEquals("air_conditioner_1", d1.getDeviceLabel());
+        assertEquals("Bedroom AC", d1.getDeviceLabel());
 
         TraceVariableDto temp = findVariable(d1, "temperature");
         assertNotNull(temp);
         assertEquals("25", temp.getValue());
         assertEquals("untrusted", temp.getTrust());
         assertNull(findVariable(d1, "temperature_rate"));
-        TraceVariableDto attack = findVariable(d1, "is_attack");
-        assertNotNull(attack);
-        assertEquals("FALSE", attack.getValue());
+        assertFalse(Boolean.TRUE.equals(d1.getCompromised()));
+        assertNull(findVariable(d1, "is_attack"));
         assertNull(findVariable(d1, "cool_a"));
 
-        TraceTrustPrivacyDto trust = findTrust(d1, "HvacMode_cool");
+        TraceTrustPrivacyDto trust = findTrust(d1, "cool");
         assertNotNull(trust);
         assertTrue(Boolean.TRUE.equals(trust.getTrust()));
+        assertEquals("state", trust.getPropertyScope());
+        assertEquals("HvacMode", trust.getMode());
 
         TraceTrustPrivacyDto privacy = findPrivacy(d1, "photo");
         assertNotNull(privacy);
         assertEquals("private", privacy.getPrivacy());
+        assertEquals("content", privacy.getPropertyScope());
+        assertNull(privacy.getMode());
 
-        assertEquals("25", findEnvValue(s1, "a_temperature"));
-        assertEquals("1", findEnvValue(s1, "intensity"));
-        assertEquals("24", findEnvValue(states.get(1), "a_temperature"));
+        assertEquals("25", findEnvValue(s1, "temperature"));
+        assertEquals("1", findGlobalValue(s1, "compromisedPointCount"));
+        assertEquals("24", findEnvValue(states.get(1), "temperature"));
         assertEquals("heat", states.get(1).getDevices().get(0).getState());
+    }
+
+    @Test
+    void parseCounterexample_stripsOnlyGeneratedEnvironmentPrefix() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setTemplateName("Sensor");
+        smv.getEnvVariables().put("temperature", null);
+        smv.getEnvVariables().put("a_noise", null);
+
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("sensor_1", smv);
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  a_temperature = 25
+                  a_a_noise = high
+                  a_unknown = raw
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
+
+        assertEquals(1, states.size());
+        assertEquals("25", findEnvValue(states.get(0), "temperature"));
+        assertEquals("high", findEnvValue(states.get(0), "a_noise"));
+        assertNull(findEnvValue(states.get(0), "a_unknown"));
+        assertEquals("raw", findGlobalValue(states.get(0), "a_unknown"),
+                "Unknown bare SMV names are runtime globals, not user environment variables");
+    }
+
+    @Test
+    void parseCounterexample_separatesInternalAttackCountFromEnvironmentVariableNamedAttackBudget() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("sensor_1");
+        smv.setTemplateName("Sensor");
+        smv.getEnvVariables().put("attackBudget", internalVariable("attackBudget"));
+
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("sensor_1", smv);
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  iot_verify_compromised_point_count = 3
+                  a_attackBudget = 42
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
+
+        assertEquals(1, states.size());
+        assertEquals("42", findEnvValue(states.get(0), "attackBudget"));
+        assertEquals("3", findGlobalValue(states.get(0), "compromisedPointCount"));
+    }
+
+    @Test
+    void parseCounterexample_keepsUserVariablesThatLookLikeGeneratedNames() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("meter_1");
+        smv.setTemplateName("Meter");
+        smv.getVariables().addAll(List.of(
+                internalVariable("trust_score"),
+                internalVariable("privacy_level"),
+                internalVariable("flow_rate"),
+                internalVariable("tap_a")
+        ));
+
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("meter_1", smv);
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  meter_1.trust_score = 7
+                  meter_1.privacy_level = private
+                  meter_1.flow_rate = 5
+                  meter_1.tap_a = TRUE
+                  meter_1.generated_rate = 1
+                  meter_1.generated_a = TRUE
+                  meter_1.trust_missing = untrusted
+                  meter_1.privacy_missing = private
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(counterexample, deviceMap);
+        TraceDeviceDto device = states.get(0).getDevices().get(0);
+
+        assertEquals("7", findVariable(device, "trust_score").getValue());
+        assertEquals("private", findVariable(device, "privacy_level").getValue());
+        assertEquals("5", findVariable(device, "flow_rate").getValue());
+        assertEquals("TRUE", findVariable(device, "tap_a").getValue());
+        assertNull(findVariable(device, "generated_rate"));
+        assertNull(findVariable(device, "generated_a"));
+        assertNull(findTrust(device, "score"));
+        assertNull(findPrivacy(device, "level"));
+        assertNull(findVariable(device, "missing"));
+        assertNull(findTrust(device, "missing"));
+        assertNull(findPrivacy(device, "missing"));
     }
 
     @Test
@@ -101,6 +287,39 @@ class SmvTraceParserTest {
         assertEquals(1, states.size());
         assertEquals("auto;on", states.get(0).getDevices().get(0).getState());
         assertEquals("Mode;ThermostatFanMode", states.get(0).getDevices().get(0).getMode());
+        assertNotNull(states.get(0).getDevices().get(0).getVariables());
+        assertTrue(states.get(0).getDevices().get(0).getVariables().isEmpty(),
+                "State-only devices must serialize an explicit empty variables array");
+    }
+
+    @Test
+    void parseCounterexample_keepsSameNamedStatesDistinctByModeWithoutGeneratedNames() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("device_1");
+        smv.setTemplateName("Composite");
+        smv.getModes().addAll(List.of("PowerMode", "PrivacyMode"));
+        smv.getModeStates().put("PowerMode", List.of("on", "off"));
+        smv.getModeStates().put("PrivacyMode", List.of("on", "off"));
+
+        String counterexample = """
+                -> State: 1.1 <-
+                  device_1.PowerMode = on
+                  device_1.PrivacyMode = on
+                  device_1.trust_PowerMode_on = trusted
+                  device_1.trust_PrivacyMode_on = untrusted
+                -> State: 1.2 <-
+                """;
+
+        List<TraceStateDto> states = parser.parseCounterexampleStates(
+                counterexample, Map.of("device_1", smv));
+        List<TraceTrustPrivacyDto> labels = states.get(1).getDevices().get(0).getTrustPrivacy();
+
+        assertEquals(2, labels.size());
+        assertTrue(labels.stream().allMatch(label -> "on".equals(label.getName())));
+        assertTrue(labels.stream().anyMatch(label -> "PowerMode".equals(label.getMode())
+                && Boolean.TRUE.equals(label.getTrust())));
+        assertTrue(labels.stream().anyMatch(label -> "PrivacyMode".equals(label.getMode())
+                && Boolean.FALSE.equals(label.getTrust())));
     }
 
     @Test
@@ -212,5 +431,28 @@ class SmvTraceParserTest {
                 .map(TraceVariableDto::getValue)
                 .findFirst()
                 .orElse(null);
+    }
+
+    private String findGlobalValue(TraceStateDto state, String name) {
+        if (state.getGlobalVariables() == null) {
+            return null;
+        }
+        return state.getGlobalVariables().stream()
+                .filter(v -> name.equals(v.getName()))
+                .map(TraceVariableDto::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private DeviceManifest.InternalVariable internalVariable(String name) {
+        DeviceManifest.InternalVariable variable = new DeviceManifest.InternalVariable();
+        variable.setName(name);
+        return variable;
+    }
+
+    private DeviceSmvData.ContentInfo content(String name) {
+        DeviceSmvData.ContentInfo content = new DeviceSmvData.ContentInfo();
+        content.setName(name);
+        return content;
     }
 }

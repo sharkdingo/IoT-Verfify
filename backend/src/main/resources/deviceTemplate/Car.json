@@ -6,8 +6,8 @@
 			"Name": "location",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["garage", "away"]
 		}

@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.RulePo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -27,21 +28,26 @@ public class RuleMapper {
         dto.setRuleString(po.getRuleString());
         dto.setCreatedAt(po.getCreatedAt());
 
-        if (po.getConditionsJson() != null && !po.getConditionsJson().isEmpty()) {
-            dto.setConditions(JsonUtils.fromJsonOrDefault(
-                    po.getConditionsJson(),
-                    new TypeReference<List<RuleDto.Condition>>() {},
-                    List.of()
-            ));
+        List<RuleDto.Condition> conditions = JsonUtils.readPersistedJsonRequired(
+                "rule", po.getId(), "conditionsJson", po.getConditionsJson(),
+                () -> JsonUtils.fromJson(
+                        po.getConditionsJson(), new TypeReference<List<RuleDto.Condition>>() {}));
+        if (conditions.isEmpty()) {
+            throw new PersistedDataIntegrityException(
+                    "rule", po.getId(), "conditionsJson", "rule has no trigger conditions");
         }
+        dto.setConditions(conditions);
 
-        if (po.getCommandJson() != null && !po.getCommandJson().isEmpty()) {
-            dto.setCommand(JsonUtils.fromJsonOrDefault(
-                    po.getCommandJson(),
-                    new TypeReference<RuleDto.Command>() {},
-                    null
-            ));
+        RuleDto.Command command = JsonUtils.readPersistedJsonRequired(
+                "rule", po.getId(), "commandJson", po.getCommandJson(),
+                () -> JsonUtils.fromJson(
+                        po.getCommandJson(), new TypeReference<RuleDto.Command>() {}));
+        if (command.getDeviceName() == null || command.getDeviceName().isBlank()
+                || command.getAction() == null || command.getAction().isBlank()) {
+            throw new PersistedDataIntegrityException(
+                    "rule", po.getId(), "commandJson", "command device and action are required");
         }
+        dto.setCommand(command);
 
         return dto;
     }

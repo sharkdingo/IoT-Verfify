@@ -2,14 +2,14 @@
 import { reactive, readonly } from 'vue';
 
 interface ChatState {
-  visible: boolean;      // AI 面板是否显示
-  isExpanded: boolean;    // 是否全屏展开
+  visible: boolean;
+  streaming: boolean;
 }
 
 // 初始状态
 const state = reactive<ChatState>({
   visible: false,
-  isExpanded: false,
+  streaming: false,
 });
 
 // 供外部使用
@@ -29,14 +29,8 @@ export const useChatStore = () => {
     state.visible = false;
   };
 
-  // 切换全屏展开
-  const toggleExpand = () => {
-    state.isExpanded = !state.isExpanded;
-  };
-
-  // 设置展开状态
-  const setExpanded = (expanded: boolean) => {
-    state.isExpanded = expanded;
+  const setStreaming = (streaming: boolean) => {
+    state.streaming = streaming;
   };
 
   return {
@@ -44,8 +38,7 @@ export const useChatStore = () => {
     toggleChat,
     openChat,
     closeChat,
-    toggleExpand,
-    setExpanded,
+    setStreaming,
   };
 };
 

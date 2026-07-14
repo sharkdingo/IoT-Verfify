@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -34,8 +35,11 @@ public class SmvModelValidator {
 
             validateTriggerAttributes(smv);
             validateStartEndStates(smv);
+            validateApiEventSemantics(smv);
             validateTrustPrivacyConsistency(smv);
             validatePropertyValues(smv);
+            validateImpactedEnvironmentDefinitions(smv);
+            validateVariableDomainsAndDynamics(smv);
         }
         validateEnvVarConflicts(deviceSmvMap);
     }
@@ -49,7 +53,7 @@ public class SmvModelValidator {
         Set<String> knownNames = new HashSet<>();
         for (DeviceManifest.InternalVariable v : smv.getVariables()) knownNames.add(v.getName());
         knownNames.addAll(smv.getEnvVariables().keySet());
-        for (String mode : smv.getModes()) knownNames.add(mode);
+        knownNames.addAll(smv.getImpactedEnvironmentVariables().keySet());
 
         for (VariableStateDto var : device.getVariables()) {
             if (var.getName() != null && !knownNames.contains(var.getName())) {
@@ -79,9 +83,34 @@ public class SmvModelValidator {
         if (manifest.getTransitions() != null) {
             for (DeviceManifest.Transition trans : manifest.getTransitions()) {
                 String ctx = "Transition '" + trans.getName() + "'";
-                // assignments 校验不依赖 trigger，始终执行
-                validateAssignments(smv.getVarName(), ctx, trans.getAssignments());
-                if (trans.getTrigger() == null) continue;
+                validateAssignments(smv, ctx, trans.getAssignments());
+                boolean hasAssignments = trans.getAssignments() != null && !trans.getAssignments().isEmpty();
+                int assignmentCount = hasAssignments ? trans.getAssignments().size() : 0;
+                boolean hasStartState = trans.getStartState() != null && !trans.getStartState().isBlank();
+                boolean hasEndState = trans.getEndState() != null && !trans.getEndState().isBlank();
+                int stateEffectCount = hasEndState ? countConcreteStateEffects(trans.getEndState()) : 0;
+                if (smv.getModes().isEmpty() && (hasStartState || hasEndState)) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " declares a state endpoint, but the template has no Modes; "
+                            + "stateless transitions may only use a Trigger and one variable Assignment");
+                }
+                if (hasEndState && stateEffectCount == 0) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " EndState changes no mode");
+                }
+                if (stateEffectCount + assignmentCount > 1) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " declares multiple state/variable effects that cannot be preserved as one atomic action; "
+                            + "use separate single-effect transitions with explicit triggers");
+                }
+                if (trans.getTrigger() == null) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " has no Trigger, so its autonomous effect has no modeled cause");
+                }
+                if (!hasEndState && !hasAssignments) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " has a Trigger but changes neither state nor a variable");
+                }
                 validateTriggerCompleteness(smv.getVarName(), ctx, trans.getTrigger());
                 String attr = trans.getTrigger().getAttribute();
                 if (!legalAttrs.contains(attr)) {
@@ -89,19 +118,39 @@ public class SmvModelValidator {
                             smv.getVarName(), ctx, attr, legalAttrs);
                 }
                 validateTriggerRelation(smv.getVarName(), ctx, trans.getTrigger().getRelation());
+                validateTriggerValue(smv, ctx, trans.getTrigger());
+                if (hasEndState && hasNoPossibleApiStateChange(trans.getStartState(), trans.getEndState())) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " has identical concrete StartState and EndState effects and cannot change the model");
+                }
             }
         }
         if (manifest.getApis() != null) {
+            if (!manifest.getApis().isEmpty() && (smv.getModes() == null || smv.getModes().isEmpty())) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                        "APIs require at least one Mode because API commands are modeled as state changes");
+            }
             for (DeviceManifest.API api : manifest.getApis()) {
                 String ctx = "API '" + api.getName() + "'";
-                if (api.getTrigger() == null) continue;
-                validateTriggerCompleteness(smv.getVarName(), ctx, api.getTrigger());
-                String attr = api.getTrigger().getAttribute();
-                if (!legalAttrs.contains(attr)) {
-                    throw SmvGenerationException.illegalTriggerAttribute(
-                            smv.getVarName(), ctx, attr, legalAttrs);
+                if (api.getEndState() == null || api.getEndState().isBlank()) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " requires a non-empty EndState");
                 }
-                validateTriggerRelation(smv.getVarName(), ctx, api.getTrigger().getRelation());
+                if (api.getEndState() != null
+                        && !api.getEndState().isEmpty()
+                        && api.getEndState().replace(";", "").isBlank()) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " EndState changes no mode; at least one concrete state effect is required");
+                }
+                if (api.getAssignments() != null && !api.getAssignments().isEmpty()) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " contains unsupported variable Assignments; use EndState or a triggered Transition");
+                }
+                if (api.getTrigger() != null) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), ctx
+                            + " contains an unsupported Trigger; API commands use StartState/EndState, while "
+                            + "conditional autonomous behavior belongs in Transitions");
+                }
             }
         }
     }
@@ -135,19 +184,217 @@ public class SmvModelValidator {
         return SmvRelationUtils.isSupportedTriggerRelation(relation);
     }
 
-    private void validateAssignments(String deviceName, String context, List<DeviceManifest.Assignment> assignments) {
+    private void validateTriggerValue(DeviceSmvData smv,
+                                      String context,
+                                      DeviceManifest.Trigger trigger) {
+        String attribute = trigger.getAttribute();
+        String relation = normalizeTriggerRelation(trigger.getRelation());
+        String normalizedValue = trigger.getValue().trim().replace(" ", "");
+        List<String> modeValues = smv.getModeStates().get(attribute);
+        if (modeValues != null) {
+            validateEnumeratedTriggerValue(smv.getVarName(), context, attribute, relation,
+                    normalizedValue, modeValues, "mode");
+            return;
+        }
+        DeviceManifest.InternalVariable variable = findReadableTriggerDomain(smv, attribute);
+        if (variable == null) {
+            return;
+        }
+        if (variable.getValues() != null && !variable.getValues().isEmpty()) {
+            validateEnumeratedTriggerValue(smv.getVarName(), context, attribute, relation,
+                    normalizedValue, variable.getValues(), "enum variable");
+            return;
+        }
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
+            final int numericValue;
+            try {
+                numericValue = Integer.parseInt(trigger.getValue().trim());
+            } catch (NumberFormatException exception) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                        + " compares numeric trigger '" + attribute + "' with non-integer value '"
+                        + trigger.getValue() + "'");
+            }
+            if (numericValue < variable.getLowerBound() || numericValue > variable.getUpperBound()) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                        + " compares '" + attribute + "' with " + numericValue + ", outside range "
+                        + variable.getLowerBound() + ".." + variable.getUpperBound());
+            }
+            return;
+        }
+        validateEnumeratedTriggerValue(smv.getVarName(), context, attribute, relation,
+                normalizedValue.toUpperCase(Locale.ROOT), List.of("TRUE", "FALSE"), "boolean variable");
+    }
+
+    private void validateEnumeratedTriggerValue(String deviceName,
+                                                String context,
+                                                String attribute,
+                                                String relation,
+                                                String normalizedValue,
+                                                List<String> values,
+                                                String domainKind) {
+        if (!"=".equals(relation) && !"!=".equals(relation)) {
+            throw SmvGenerationException.templateInvalid(deviceName, context + " uses ordering relation '"
+                    + relation + "' on " + domainKind + " '" + attribute + "'; use = or !=");
+        }
+        boolean allowed = values.stream()
+                .filter(Objects::nonNull)
+                .map(value -> value.replace(" ", ""))
+                .anyMatch(normalizedValue::equals);
+        if (!allowed) {
+            throw SmvGenerationException.templateInvalid(deviceName, context + " compares '"
+                    + attribute + "' with unknown value '" + normalizedValue + "'; allowed values are " + values);
+        }
+    }
+
+    private DeviceManifest.InternalVariable findReadableTriggerDomain(DeviceSmvData smv, String attribute) {
+        if (smv.getManifest().getInternalVariables() == null) {
+            return null;
+        }
+        return smv.getManifest().getInternalVariables().stream()
+                .filter(Objects::nonNull)
+                .filter(variable -> attribute.equals(variable.getName()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private int countConcreteStateEffects(String endState) {
+        int count = 0;
+        for (String component : endState.split(";", -1)) {
+            String normalized = DeviceSmvDataFactory.cleanStateName(component);
+            if (normalized != null && !normalized.isEmpty() && !"_".equals(normalized)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void validateAssignments(DeviceSmvData smv,
+                                     String context,
+                                     List<DeviceManifest.Assignment> assignments) {
         if (assignments == null) return;
         for (int i = 0; i < assignments.size(); i++) {
             DeviceManifest.Assignment a = assignments.get(i);
             if (a == null) {
-                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "] is null");
+                throw SmvGenerationException.incompleteTrigger(smv.getVarName(), context, "assignment[" + i + "] is null");
             }
             if (a.getAttribute() == null || a.getAttribute().isBlank()) {
-                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "].attribute is null/blank");
+                throw SmvGenerationException.incompleteTrigger(smv.getVarName(), context, "assignment[" + i + "].attribute is null/blank");
             }
             if (a.getValue() == null || a.getValue().isBlank()) {
-                throw SmvGenerationException.incompleteTrigger(deviceName, context, "assignment[" + i + "].value is null/blank");
+                throw SmvGenerationException.incompleteTrigger(smv.getVarName(), context, "assignment[" + i + "].value is null/blank");
             }
+            DeviceManifest.InternalVariable domain = findAssignmentDomain(smv, a.getAttribute());
+            if (domain == null) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                        + " assigns unknown variable '" + a.getAttribute()
+                        + "'; targets must be declared in InternalVariables or EnvironmentDomains");
+            }
+            validateAssignmentValue(smv.getVarName(), context, a, domain);
+        }
+    }
+
+    private void validateApiEventSemantics(DeviceSmvData smv) {
+        DeviceManifest manifest = smv.getManifest();
+        if (manifest == null || manifest.getApis() == null || manifest.getApis().isEmpty()) {
+            return;
+        }
+        Map<String, String> signalRoutes = new LinkedHashMap<>();
+        for (DeviceManifest.API api : manifest.getApis()) {
+            String context = "API '" + api.getName() + "'";
+            if (hasNoPossibleApiStateChange(api.getStartState(), api.getEndState())) {
+                throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                        + " has identical concrete StartState and EndState effects and cannot change the model");
+            }
+            if (Boolean.TRUE.equals(api.getSignal())) {
+                String route = canonicalApiState(api.getStartState(), true, smv.getModes().size())
+                        + "->" + canonicalApiState(api.getEndState(), false, smv.getModes().size());
+                String previous = signalRoutes.putIfAbsent(route, api.getName());
+                if (previous != null) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(),
+                            "signal APIs '" + previous + "' and '" + api.getName()
+                                    + "' have indistinguishable state-transition pulses");
+                }
+            }
+        }
+    }
+
+    private String canonicalApiState(String state, boolean startState, int modeCount) {
+        String[] raw = state == null ? new String[0] : state.split(";", -1);
+        List<String> parts = new ArrayList<>(modeCount);
+        for (int i = 0; i < modeCount; i++) {
+            String value = i < raw.length ? raw[i].trim().replace(" ", "").toLowerCase(Locale.ROOT) : "";
+            parts.add(startState && "_".equals(value) ? "" : value);
+        }
+        return String.join(";", parts);
+    }
+
+    private boolean hasNoPossibleApiStateChange(String startState, String endState) {
+        String[] starts = startState == null ? new String[0] : startState.split(";", -1);
+        String[] ends = endState == null ? new String[0] : endState.split(";", -1);
+        boolean hasEffect = false;
+        for (int i = 0; i < ends.length; i++) {
+            String end = DeviceSmvDataFactory.cleanStateName(ends[i]);
+            if (end == null || end.isEmpty()) {
+                continue;
+            }
+            hasEffect = true;
+            String start = i < starts.length ? DeviceSmvDataFactory.cleanStartState(starts[i]) : "";
+            if (start == null || start.isEmpty() || !start.equals(end)) {
+                return false;
+            }
+        }
+        return hasEffect;
+    }
+
+    private DeviceManifest.InternalVariable findAssignmentDomain(DeviceSmvData smv, String attribute) {
+        if (smv.getManifest() != null && smv.getManifest().getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable variable : smv.getManifest().getInternalVariables()) {
+                if (variable != null && attribute.equals(variable.getName())) {
+                    return variable;
+                }
+            }
+        }
+        return smv.getImpactedEnvironmentVariables() != null
+                ? smv.getImpactedEnvironmentVariables().get(attribute)
+                : null;
+    }
+
+    private void validateAssignmentValue(String deviceName,
+                                         String context,
+                                         DeviceManifest.Assignment assignment,
+                                         DeviceManifest.InternalVariable domain) {
+        String value = assignment.getValue().trim();
+        if (domain.getValues() != null && !domain.getValues().isEmpty()) {
+            String normalized = value.replace(" ", "");
+            boolean allowed = domain.getValues().stream()
+                    .filter(Objects::nonNull)
+                    .map(candidate -> candidate.replace(" ", ""))
+                    .anyMatch(normalized::equals);
+            if (!allowed) {
+                throw SmvGenerationException.templateInvalid(deviceName, context + " assigns '"
+                        + value + "' to '" + assignment.getAttribute() + "', outside enum domain "
+                        + domain.getValues());
+            }
+            return;
+        }
+        if (domain.getLowerBound() != null && domain.getUpperBound() != null) {
+            final int numeric;
+            try {
+                numeric = Integer.parseInt(value);
+            } catch (NumberFormatException e) {
+                throw SmvGenerationException.templateInvalid(deviceName, context + " assigns non-integer '"
+                        + value + "' to numeric variable '" + assignment.getAttribute() + "'");
+            }
+            if (numeric < domain.getLowerBound() || numeric > domain.getUpperBound()) {
+                throw SmvGenerationException.templateInvalid(deviceName, context + " assigns " + numeric
+                        + " to '" + assignment.getAttribute() + "', outside range "
+                        + domain.getLowerBound() + ".." + domain.getUpperBound());
+            }
+            return;
+        }
+        if (!"TRUE".equalsIgnoreCase(value) && !"FALSE".equalsIgnoreCase(value)) {
+            throw SmvGenerationException.templateInvalid(deviceName, context + " assigns '" + value
+                    + "' to boolean variable '" + assignment.getAttribute() + "'; use TRUE or FALSE");
         }
     }
 
@@ -238,8 +485,12 @@ public class SmvModelValidator {
             if (!entry.getKey().equals(smv.getVarName())) continue;
 
             for (Map.Entry<String, DeviceManifest.InternalVariable> ev : smv.getEnvVariables().entrySet()) {
-                envSources.computeIfAbsent(ev.getKey(), k -> new ArrayList<>())
-                        .add(new EnvVarSource(smv.getVarName(), ev.getValue()));
+                envSources.computeIfAbsent(ev.getKey().toLowerCase(Locale.ROOT), k -> new ArrayList<>())
+                        .add(new EnvVarSource(ev.getKey(), smv.getVarName(), "read", ev.getValue()));
+            }
+            for (Map.Entry<String, DeviceManifest.InternalVariable> ev : smv.getImpactedEnvironmentVariables().entrySet()) {
+                envSources.computeIfAbsent(ev.getKey().toLowerCase(Locale.ROOT), k -> new ArrayList<>())
+                        .add(new EnvVarSource(ev.getKey(), smv.getVarName(), "impact", ev.getValue()));
             }
         }
 
@@ -254,47 +505,200 @@ public class SmvModelValidator {
     }
 
     private void checkEnvVarCompatibility(String varName, EnvVarSource a, EnvVarSource b) {
-        DeviceManifest.InternalVariable va = a.var;
-        DeviceManifest.InternalVariable vb = b.var;
-
-        boolean aIsEnum = va.getValues() != null && !va.getValues().isEmpty();
-        boolean bIsEnum = vb.getValues() != null && !vb.getValues().isEmpty();
-        boolean aIsNumeric = va.getLowerBound() != null && va.getUpperBound() != null;
-        boolean bIsNumeric = vb.getLowerBound() != null && vb.getUpperBound() != null;
-
-        if (aIsEnum != bIsEnum || aIsNumeric != bIsNumeric) {
+        if (!a.name.equals(b.name)) {
             throw SmvGenerationException.envVarConflict(varName,
-                    "type mismatch: device '" + a.device + "' declares " + describeType(va)
-                            + ", device '" + b.device + "' declares " + describeType(vb));
+                    "name/case mismatch: device '" + a.device + "' declares '" + a.name
+                            + "', device '" + b.device + "' declares '" + b.name + "'");
         }
-        if (aIsNumeric && (!Objects.equals(va.getLowerBound(), vb.getLowerBound())
-                || !Objects.equals(va.getUpperBound(), vb.getUpperBound()))) {
+        String mismatch = EnvironmentDomainUtils.incompatibility(a.var, b.var);
+        if (mismatch != null) {
             throw SmvGenerationException.envVarConflict(varName,
-                    "range mismatch: device '" + a.device + "' declares " + va.getLowerBound() + ".." + va.getUpperBound()
-                            + ", device '" + b.device + "' declares " + vb.getLowerBound() + ".." + vb.getUpperBound());
+                    mismatch + ": device '" + a.device + "' (" + a.role + ") versus device '"
+                            + b.device + "' (" + b.role + ")");
         }
-        if (aIsEnum) {
-            Set<String> setA = new TreeSet<>(va.getValues());
-            Set<String> setB = new TreeSet<>(vb.getValues());
-            if (!setA.equals(setB)) {
-                throw SmvGenerationException.envVarConflict(varName,
-                        "enum mismatch: device '" + a.device + "' declares " + setA
-                                + ", device '" + b.device + "' declares " + setB);
+    }
+
+    private void validateImpactedEnvironmentDefinitions(DeviceSmvData smv) {
+        if (smv.getImpactedVariables() == null || smv.getImpactedVariables().isEmpty()) {
+            return;
+        }
+        Set<String> localVariables = new HashSet<>();
+        if (smv.getManifest() != null && smv.getManifest().getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable variable : smv.getManifest().getInternalVariables()) {
+                if (variable != null && variable.getName() != null && Boolean.TRUE.equals(variable.getIsInside())) {
+                    localVariables.add(variable.getName());
+                }
+            }
+        }
+        for (String impacted : smv.getImpactedVariables()) {
+            if (impacted == null || impacted.isBlank()) {
+                continue;
+            }
+            if (localVariables.contains(impacted)) {
+                throw SmvGenerationException.smvGenerationError(
+                        "Template '" + smv.getTemplateName() + "' uses ImpactedVariable '" + impacted
+                                + "' with the same name as a local InternalVariable. Use WorkingStates.Dynamics "
+                                + "for local device state, and reserve ImpactedVariables for shared environment variables.");
+            }
+            if (smv.getImpactedEnvironmentVariables() == null
+                    || !smv.getImpactedEnvironmentVariables().containsKey(impacted)) {
+                throw SmvGenerationException.smvGenerationError(
+                        "Template '" + smv.getTemplateName() + "' impacts environment variable '" + impacted
+                                + "', but its own manifest does not define that domain. Add EnvironmentDomains[].Name='"
+                                + impacted + "', or declare a readable InternalVariable with the same name and IsInside=false.");
             }
         }
     }
 
-    private String describeType(DeviceManifest.InternalVariable v) {
-        if (v.getValues() != null && !v.getValues().isEmpty()) return "enum" + v.getValues();
-        if (v.getLowerBound() != null && v.getUpperBound() != null) return v.getLowerBound() + ".." + v.getUpperBound();
-        return "boolean";
+    private void validateVariableDomainsAndDynamics(DeviceSmvData smv) {
+        DeviceManifest manifest = smv.getManifest();
+        Map<String, DeviceManifest.InternalVariable> writableDomains = new LinkedHashMap<>();
+        if (manifest.getInternalVariables() != null) {
+            for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
+                if (variable == null || variable.getName() == null) {
+                    continue;
+                }
+                validateVariableDomain(smv.getVarName(), "InternalVariable '" + variable.getName() + "'", variable);
+                if (Boolean.TRUE.equals(variable.getIsInside())) {
+                    writableDomains.putIfAbsent(variable.getName(), variable);
+                }
+            }
+        }
+        if (manifest.getEnvironmentDomains() != null) {
+            for (DeviceManifest.EnvironmentDomain domain : manifest.getEnvironmentDomains()) {
+                if (domain == null || domain.getName() == null) {
+                    continue;
+                }
+                validateVariableDomain(smv.getVarName(), "EnvironmentDomain '" + domain.getName() + "'",
+                        EnvironmentDomainUtils.asInternalVariable(domain));
+            }
+        }
+        if (manifest.getImpactedVariables() != null) {
+            for (String impacted : manifest.getImpactedVariables()) {
+                DeviceManifest.InternalVariable domain = EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted);
+                if (domain != null) {
+                    writableDomains.putIfAbsent(impacted, domain);
+                }
+            }
+        }
+        if (manifest.getWorkingStates() == null) {
+            return;
+        }
+        for (DeviceManifest.WorkingState state : manifest.getWorkingStates()) {
+            if (state == null || state.getDynamics() == null) {
+                continue;
+            }
+            Set<String> seen = new LinkedHashSet<>();
+            for (DeviceManifest.Dynamic dynamic : state.getDynamics()) {
+                String context = "WorkingState '" + state.getName() + "' Dynamics";
+                if (dynamic == null || dynamic.getVariableName() == null || dynamic.getVariableName().isBlank()) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                            + " requires VariableName");
+                }
+                if (!seen.add(dynamic.getVariableName())) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                            + " defines variable '" + dynamic.getVariableName() + "' more than once");
+                }
+                DeviceManifest.InternalVariable domain = writableDomains.get(dynamic.getVariableName());
+                if (domain == null) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                            + " targets unknown or non-writable variable '" + dynamic.getVariableName() + "'");
+                }
+                boolean numeric = domain.getLowerBound() != null && domain.getUpperBound() != null;
+                if (numeric && (dynamic.getChangeRate() == null || dynamic.getValue() != null)) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                            + " must use ChangeRate (not Value) for numeric variable '"
+                            + dynamic.getVariableName() + "'");
+                }
+                if (!numeric && (dynamic.getValue() == null || dynamic.getChangeRate() != null)) {
+                    throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                            + " must use Value (not ChangeRate) for enum/boolean variable '"
+                            + dynamic.getVariableName() + "'");
+                }
+                if (numeric) {
+                    try {
+                        Integer.parseInt(dynamic.getChangeRate().trim());
+                    } catch (NumberFormatException exception) {
+                        throw SmvGenerationException.templateInvalid(smv.getVarName(), context
+                                + " has non-integer ChangeRate '" + dynamic.getChangeRate() + "'");
+                    }
+                } else {
+                    validateDynamicValue(smv.getVarName(), context, dynamic, domain);
+                }
+            }
+        }
+    }
+
+    private void validateVariableDomain(String deviceName,
+                                        String context,
+                                        DeviceManifest.InternalVariable variable) {
+        if (variable.getLowerBound() != null && variable.getUpperBound() != null
+                && variable.getLowerBound() > variable.getUpperBound()) {
+            throw SmvGenerationException.templateInvalid(deviceName, context + " has LowerBound "
+                    + variable.getLowerBound() + " greater than UpperBound " + variable.getUpperBound());
+        }
+        if (variable.getValues() != null) {
+            Set<String> normalized = new LinkedHashSet<>();
+            for (String raw : variable.getValues()) {
+                String value = raw == null ? "" : raw.replace(" ", "");
+                if (value.isEmpty() || !normalized.add(value)) {
+                    throw SmvGenerationException.templateInvalid(deviceName, context
+                            + " has empty or duplicate enum values after model normalization");
+                }
+            }
+        }
+        String naturalRate = variable.getNaturalChangeRate();
+        boolean numeric = variable.getLowerBound() != null && variable.getUpperBound() != null;
+        if (naturalRate != null && !naturalRate.isBlank() && !numeric) {
+            throw SmvGenerationException.templateInvalid(deviceName, context
+                    + " declares NaturalChangeRate, but only numeric ranges can change by a rate");
+        }
+        if (naturalRate != null && !naturalRate.isBlank()) {
+            String[] parts = naturalRate.replace("[", "").replace("]", "").split(",", -1);
+            try {
+                int lowerRate;
+                int upperRate;
+                if (parts.length == 1) {
+                    int rate = Integer.parseInt(parts[0].trim());
+                    lowerRate = Math.min(0, rate);
+                    upperRate = Math.max(0, rate);
+                } else if (parts.length == 2) {
+                    lowerRate = Integer.parseInt(parts[0].trim());
+                    upperRate = Integer.parseInt(parts[1].trim());
+                } else {
+                    throw new NumberFormatException("wrong number of rate values");
+                }
+                if (lowerRate > upperRate) {
+                    throw SmvGenerationException.templateInvalid(deviceName, context
+                            + " has invalid or descending NaturalChangeRate '" + naturalRate + "'");
+                }
+            } catch (NumberFormatException exception) {
+                throw SmvGenerationException.templateInvalid(deviceName, context
+                        + " has invalid NaturalChangeRate '" + naturalRate + "'");
+            }
+        }
+    }
+
+    private void validateDynamicValue(String deviceName,
+                                      String context,
+                                      DeviceManifest.Dynamic dynamic,
+                                      DeviceManifest.InternalVariable domain) {
+        DeviceManifest.Assignment assignment = DeviceManifest.Assignment.builder()
+                .attribute(dynamic.getVariableName())
+                .value(dynamic.getValue())
+                .build();
+        validateAssignmentValue(deviceName, context, assignment, domain);
     }
 
     private static class EnvVarSource {
+        final String name;
         final String device;
+        final String role;
         final DeviceManifest.InternalVariable var;
-        EnvVarSource(String device, DeviceManifest.InternalVariable var) {
+        EnvVarSource(String name, String device, String role, DeviceManifest.InternalVariable var) {
+            this.name = name;
             this.device = device;
+            this.role = role;
             this.var = var;
         }
     }
@@ -349,11 +753,11 @@ public class SmvModelValidator {
         }
         // content privacy values
         for (DeviceSmvData.ContentInfo ci : smv.getContents()) {
-            if (ci.getPrivacy() != null && !VALID_PRIVACY_VALUES.contains(normalize(ci.getPrivacy()))) {
+            if (ci.getPrivacy() == null || !VALID_PRIVACY_VALUES.contains(normalize(ci.getPrivacy()))) {
                 throw SmvGenerationException.smvGenerationError(
                         "[INVALID_PROPERTY_VALUE] Device '" + smv.getVarName()
                                 + "': content privacy '" + ci.getPrivacy() + "' for content '" + ci.getName()
-                                + "' is invalid. Expected: " + VALID_PRIVACY_VALUES);
+                                + "' is required and must be one of " + VALID_PRIVACY_VALUES);
             }
         }
         // manifest variable trust values

@@ -1,15 +1,33 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
+import cn.edu.nju.Iot_Verify.dto.auth.DeleteAccountRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterResponseDto;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
+import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
+import cn.edu.nju.Iot_Verify.repository.BoardEnvironmentVariableRepository;
+import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
+import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
+import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
+import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
+import cn.edu.nju.Iot_Verify.repository.RuleRepository;
+import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
+import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
+import cn.edu.nju.Iot_Verify.repository.TraceRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.AuthService;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
+import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.JwtUtil;
 import cn.edu.nju.Iot_Verify.util.mapper.UserMapper;
 import io.jsonwebtoken.JwtException;
@@ -17,6 +35,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 @Slf4j
 @Service
@@ -29,8 +50,24 @@ public class AuthServiceImpl implements AuthService {
     private final TokenBlacklistService tokenBlacklistService;
     private final UserMapper userMapper;
     private final DeviceTemplateService deviceTemplateService;
+    private final VerificationService verificationService;
+    private final SimulationService simulationService;
+    private final UserRepository userRepository;
+    private final BoardEnvironmentVariableRepository boardEnvironmentVariableRepository;
+    private final BoardLayoutRepository boardLayoutRepository;
+    private final ChatMessageRepository chatMessageRepository;
+    private final ChatSessionRepository chatSessionRepository;
+    private final DeviceNodeRepository deviceNodeRepository;
+    private final DeviceTemplateRepository deviceTemplateRepository;
+    private final RuleRepository ruleRepository;
+    private final SimulationTaskRepository simulationTaskRepository;
+    private final SimulationTraceRepository simulationTraceRepository;
+    private final SpecificationRepository specificationRepository;
+    private final TraceRepository traceRepository;
+    private final VerificationTaskRepository verificationTaskRepository;
 
     @Override
+    @Transactional
     public RegisterResponseDto register(RegisterRequestDto request) {
         UserPo user = userService.register(
                 request.getPhone(),
@@ -38,20 +75,21 @@ public class AuthServiceImpl implements AuthService {
                 request.getPassword()
         );
 
-        // 注册成功后自动加载默认设备模板
-        try {
-            int count = deviceTemplateService.initDefaultTemplates(user.getId());
-            log.info("Loaded {} default templates for new user {}", count, user.getId());
-        } catch (Exception e) {
-            log.warn("Failed to load default templates for user {}, registration still succeeds", user.getId(), e);
+        // Registration is usable only when the initial type catalog is complete. Any bundled
+        // template failure rolls back the user and templates in this transaction.
+        int count = deviceTemplateService.initDefaultTemplates(user.getId());
+        if (count <= 0) {
+            throw new InternalServerException("Registration could not initialize the default device type catalog.");
         }
+        log.info("Loaded {} default templates for new user {}", count, user.getId());
 
         return userMapper.toRegisterResponseDto(user);
     }
 
     @Override
     public AuthResponseDto login(LoginRequestDto request) {
-        UserPo user = userService.findByPhone(request.getPhone())
+        String identifier = request.getIdentifier().trim();
+        UserPo user = resolveLoginUser(identifier)
                 .orElseThrow(UnauthorizedException::invalidCredentials);
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
@@ -62,12 +100,50 @@ public class AuthServiceImpl implements AuthService {
         return userMapper.toAuthResponseDto(user, token);
     }
 
+    private java.util.Optional<UserPo> resolveLoginUser(String identifier) {
+        java.util.Optional<UserPo> byPhone = userService.findByPhone(identifier);
+        if (byPhone.isPresent()) {
+            return byPhone;
+        }
+        return userService.findByUsername(identifier);
+    }
+
     @Override
     public void logout(Long userId, String authHeader) {
         if (userId == null) {
             throw UnauthorizedException.missingToken();
         }
 
+        blacklistCurrentToken(authHeader);
+    }
+
+    @Override
+    @Transactional
+    public void deleteAccount(Long userId, String authHeader, DeleteAccountRequestDto request) {
+        if (userId == null) {
+            throw UnauthorizedException.missingToken();
+        }
+
+        UserPo user = userRepository.findByIdForUpdate(userId)
+                .orElseThrow(UnauthorizedException::invalidToken);
+
+        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            throw new BadRequestException("Current password is incorrect.");
+        }
+
+        String confirmation = request.getConfirmation() == null ? "" : request.getConfirmation().trim();
+        if (!confirmation.equals(user.getUsername()) && !confirmation.equals(user.getPhone())) {
+            throw new BadRequestException("Account confirmation must match the username or phone number.");
+        }
+
+        blacklistCurrentToken(authHeader);
+        cancelActiveTasks(userId);
+        deleteUserOwnedData(userId);
+        userRepository.delete(user);
+        log.info("Deleted account and user-owned data for user {}", userId);
+    }
+
+    private void blacklistCurrentToken(String authHeader) {
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
             try {
@@ -75,8 +151,43 @@ public class AuthServiceImpl implements AuthService {
                 tokenBlacklistService.blacklist(token, expirationSeconds);
             } catch (JwtException e) {
                 // token 已过期或无效，无需加黑名单，登出仍视为成功
-                log.warn("Logout skipped blacklist: token expired or invalid", e);
+                log.warn("Logout skipped blacklist: token expired or invalid ({})", e.getClass().getSimpleName());
+                log.debug("Skipped token blacklist because the token cannot be parsed for expiration", e);
             }
         }
+    }
+
+    private void deleteUserOwnedData(Long userId) {
+        List<String> sessionIds = chatSessionRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+                .map(session -> session.getId())
+                .filter(id -> id != null && !id.isBlank())
+                .toList();
+        if (!sessionIds.isEmpty()) {
+            chatMessageRepository.deleteBySessionIdIn(sessionIds);
+        }
+        chatSessionRepository.deleteByUserId(userId);
+
+        traceRepository.deleteByUserId(userId);
+        verificationTaskRepository.deleteByUserId(userId);
+        simulationTraceRepository.deleteByUserId(userId);
+        simulationTaskRepository.deleteByUserId(userId);
+
+        deviceNodeRepository.deleteByUserId(userId);
+        boardEnvironmentVariableRepository.deleteByUserId(userId);
+        ruleRepository.deleteByUserId(userId);
+        specificationRepository.deleteByUserId(userId);
+        boardLayoutRepository.deleteByUserId(userId);
+        deviceTemplateRepository.deleteByUserId(userId);
+    }
+
+    private void cancelActiveTasks(Long userId) {
+        verificationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.PENDING)
+                .forEach(task -> verificationService.cancelTask(userId, task.getId()));
+        verificationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.RUNNING)
+                .forEach(task -> verificationService.cancelTask(userId, task.getId()));
+        simulationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.PENDING)
+                .forEach(task -> simulationService.cancelTask(userId, task.getId()));
+        simulationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.RUNNING)
+                .forEach(task -> simulationService.cancelTask(userId, task.getId()));
     }
 }

@@ -23,46 +23,56 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
 
     List<SimulationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
 
+    List<SimulationTaskPo> findByUserIdAndStatusNotOrderByCreatedAtDesc(
+            Long userId, SimulationTaskPo.TaskStatus status);
+
+    List<SimulationTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+            Long userId, SimulationTaskPo.TaskStatus status, List<Long> excludedIds);
+
+    void deleteByUserIdAndSimulationTraceId(Long userId, Long simulationTraceId);
+
     void deleteByUserId(Long userId);
 
     List<SimulationTaskPo> findByUserIdAndStatus(Long userId, SimulationTaskPo.TaskStatus status);
 
     /**
-     * Atomically complete a simulation task only if it has not been cancelled.
+     * Atomically complete a simulation task only while it is RUNNING.
+     * Terminal states are immutable: CANCELLED/COMPLETED/FAILED must not be overwritten.
      */
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE SimulationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
          + "t.progress = 100, t.steps = :steps, t.simulationTraceId = :simulationTraceId, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
-         + "t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
-    int completeTaskIfNotCancelled(@Param("taskId") Long taskId,
-                                   @Param("newStatus") SimulationTaskPo.TaskStatus newStatus,
-                                   @Param("completedAt") LocalDateTime completedAt,
-                                   @Param("steps") Integer steps,
-                                   @Param("simulationTraceId") Long simulationTraceId,
-                                   @Param("errorMessage") String errorMessage,
-                                   @Param("checkLogsJson") String checkLogsJson,
-                                   @Param("processingTimeMs") Long processingTimeMs,
-                                   @Param("cancelledStatus") SimulationTaskPo.TaskStatus cancelledStatus);
+         + "t.generationIssuesJson = :generationIssuesJson, t.processingTimeMs = :processingTimeMs "
+         + "WHERE t.id = :taskId AND t.status = :runningStatus")
+    int completeTaskIfRunning(@Param("taskId") Long taskId,
+                              @Param("newStatus") SimulationTaskPo.TaskStatus newStatus,
+                              @Param("completedAt") LocalDateTime completedAt,
+                              @Param("steps") Integer steps,
+                              @Param("simulationTraceId") Long simulationTraceId,
+                              @Param("errorMessage") String errorMessage,
+                              @Param("checkLogsJson") String checkLogsJson,
+                              @Param("generationIssuesJson") String generationIssuesJson,
+                              @Param("processingTimeMs") Long processingTimeMs,
+                              @Param("runningStatus") SimulationTaskPo.TaskStatus runningStatus);
 
     /**
-     * Atomically fail a simulation task only if it has not been cancelled.
+     * Atomically fail a simulation task only while it is still active.
      */
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE SimulationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
          + "t.progress = 100, t.errorMessage = :errorMessage, "
          + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
-    int failTaskIfNotCancelled(@Param("taskId") Long taskId,
-                               @Param("newStatus") SimulationTaskPo.TaskStatus newStatus,
-                               @Param("completedAt") LocalDateTime completedAt,
-                               @Param("errorMessage") String errorMessage,
-                               @Param("checkLogsJson") String checkLogsJson,
-                               @Param("processingTimeMs") Long processingTimeMs,
-                               @Param("cancelledStatus") SimulationTaskPo.TaskStatus cancelledStatus);
+         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
+    int failTaskIfActive(@Param("taskId") Long taskId,
+                         @Param("newStatus") SimulationTaskPo.TaskStatus newStatus,
+                         @Param("completedAt") LocalDateTime completedAt,
+                         @Param("errorMessage") String errorMessage,
+                         @Param("checkLogsJson") String checkLogsJson,
+                         @Param("processingTimeMs") Long processingTimeMs,
+                         @Param("activeStatuses") List<SimulationTaskPo.TaskStatus> activeStatuses);
 
     /**
      * Atomically transition a task from PENDING to RUNNING.
@@ -106,4 +116,23 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
     @Query("UPDATE SimulationTaskPo t SET t.progress = :progress "
          + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
     int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
+
+    /** Persist the assumptions under which this task will run without replacing task state. */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE SimulationTaskPo t SET t.isAttack = :isAttack, "
+         + "t.attackBudget = :attackBudget, t.enablePrivacy = :enablePrivacy, "
+         + "t.modeledDeviceAttackPointCount = :devicePointCount, "
+         + "t.modeledFalsifiableReadingDeviceCount = :falsifiableReadingDeviceCount, "
+         + "t.modeledAutomationLinkAttackPointCount = :linkPointCount, "
+         + "t.modelSnapshotJson = :modelSnapshotJson "
+         + "WHERE t.id = :taskId")
+    int updateModelContext(@Param("taskId") Long taskId,
+                           @Param("isAttack") boolean isAttack,
+                           @Param("attackBudget") int attackBudget,
+                           @Param("enablePrivacy") boolean enablePrivacy,
+                           @Param("devicePointCount") int devicePointCount,
+                           @Param("falsifiableReadingDeviceCount") int falsifiableReadingDeviceCount,
+                           @Param("linkPointCount") int linkPointCount,
+                           @Param("modelSnapshotJson") String modelSnapshotJson);
 }

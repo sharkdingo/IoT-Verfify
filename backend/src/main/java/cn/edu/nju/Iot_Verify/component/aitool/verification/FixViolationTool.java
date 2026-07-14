@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -45,22 +46,27 @@ public class FixViolationTool extends AbstractAiTool {
         props.put("strategies", Map.of(
                 "type", "array",
                 "description", "Fix strategies to attempt, in order. Supported: 'parameter' (§5.1 threshold adjustment), "
-                        + "'condition' (§5.2 triggering condition adjustment), 'disable' (rule disabling). "
-                        + "Default: ['parameter', 'condition', 'disable'].",
-                "items", Map.of("type", "string")
+                        + "'condition' (§5.2 triggering condition adjustment), 'remove' (permanently remove rules). "
+                        + "Omit this field for the default ['parameter', 'condition', 'remove']; an explicit array must be non-empty and is attempted exactly as supplied.",
+                "items", Map.of(
+                        "type", "string",
+                        "enum", List.of("parameter", "condition", "remove"))
         ));
-        props.put("preferredRanges", Map.of(
-                "type", "object",
-                "description", "Optional per-parameter preferred value ranges. "
-                        + "Keys are 'r{ruleIdx}_c{condIdx}' (e.g. 'r0_c1'). "
-                        + "Values are objects with 'lower' (int) and 'upper' (int) fields.",
-                "additionalProperties", Map.of(
+        props.put("preferredRangeSelections", Map.of(
+                "type", "array",
+                "description", "Optional preferred value ranges chosen from concrete parameter-adjustment targets. "
+                        + "Each item identifies the target by the opaque targetId copied from a ParameterAdjustment "
+                        + "returned for the same trace/fix context "
+                        + "plus 32-bit integer lower/upper bounds.",
+                "items", Map.of(
                         "type", "object",
                         "properties", Map.of(
+                                "targetId", Map.of("type", "string", "description", "targetId copied from the selected ParameterAdjustment"),
                                 "lower", Map.of("type", "integer", "description", "Lower bound (inclusive)"),
                                 "upper", Map.of("type", "integer", "description", "Upper bound (inclusive)")
                         ),
-                        "required", List.of("lower", "upper")
+                        "required", List.of("targetId", "lower", "upper"),
+                        "additionalProperties", false
                 )
         ));
 
@@ -70,7 +76,8 @@ public class FixViolationTool extends AbstractAiTool {
 
         return LlmToolSpec.of(getName(), "Analyze a violation trace to localize fault rules and suggest fixes. " +
                 "Supports 'parameter' (adjust numeric thresholds), 'condition' (remove triggering conditions), " +
-                "and 'disable' (disable entire rules) strategies. Requires a traceId from a previous verification.", schema);
+                "and 'remove' (permanently remove entire rules) strategies. This tool only analyzes and never applies a change. " +
+                "Requires a traceId from a previous verification.", schema);
     }
 
     @Override
@@ -82,58 +89,103 @@ public class FixViolationTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
+            requireOnlyFields(args, "arguments", Set.of(
+                    "traceId", "strategies", "preferredRangeSelections", "preferredRanges"));
 
-            if (!args.has("traceId") || args.get("traceId").isNull()) {
-                return errorJson("traceId is required.", "VALIDATION_ERROR", 400);
-            }
-            if (!args.get("traceId").isIntegralNumber()) {
-                return errorJson("traceId must be an integer.", "VALIDATION_ERROR", 400);
-            }
-            if (!args.get("traceId").canConvertToLong()) {
-                return errorJson("traceId is out of range.", "VALIDATION_ERROR", 400);
-            }
-            long traceId = args.get("traceId").asLong();
+            long traceId = positiveLongArg(args, "traceId");
 
-            List<String> strategies = new ArrayList<>();
-            if (args.has("strategies") && args.get("strategies").isArray()) {
-                for (JsonNode s : args.get("strategies")) {
-                    strategies.add(s.asText());
+            List<String> strategies = null;
+            if (args.has("strategies")) {
+                JsonNode strategiesNode = args.get("strategies");
+                if (!strategiesNode.isArray() || strategiesNode.isEmpty()) {
+                    return errorJson("strategies must be a non-empty array when provided. Omit it to use the default order.",
+                            "VALIDATION_ERROR", 400);
+                }
+                strategies = new ArrayList<>();
+                Set<String> seenStrategies = new LinkedHashSet<>();
+                for (int i = 0; i < strategiesNode.size(); i++) {
+                    JsonNode strategyNode = strategiesNode.get(i);
+                    if (!strategyNode.isTextual() || strategyNode.asText().isBlank()) {
+                        return errorJson("strategies[" + i + "] must be a non-empty string.",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    String strategy = strategyNode.asText().trim().toLowerCase(Locale.ROOT);
+                    if (!Set.of("parameter", "condition", "remove").contains(strategy)) {
+                        return errorJson("Unsupported strategy '" + strategy
+                                        + "'. Allowed: parameter, condition, remove.",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    if (!seenStrategies.add(strategy)) {
+                        return errorJson("Duplicate strategy '" + strategy + "'.",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    strategies.add(strategy);
                 }
             }
-            if (strategies.isEmpty()) {
-                strategies = null; // use RuleFixer default order
-            }
 
-            // Parse preferredRanges (strict validation, fail-fast on invalid input)
+            // Parse preferredRangeSelections (strict validation, fail-fast on invalid input).
             Map<String, PreferredRange> preferredRanges = null;
             if (args.has("preferredRanges")) {
-                JsonNode prNode = args.get("preferredRanges");
-                if (!prNode.isObject()) {
-                    return errorJson("preferredRanges must be an object.", "VALIDATION_ERROR", 400);
+                return errorJson("preferredRanges is an internal locator map. "
+                        + "Use preferredRangeSelections with targetId, lower, and upper.",
+                        "VALIDATION_ERROR", 400);
+            }
+            if (args.has("preferredRangeSelections")) {
+                JsonNode prNode = args.get("preferredRangeSelections");
+                if (!prNode.isArray()) {
+                    return errorJson("preferredRangeSelections must be an array.", "VALIDATION_ERROR", 400);
                 }
                 preferredRanges = new LinkedHashMap<>();
-                for (Map.Entry<String, JsonNode> entry : prNode.properties()) {
-                    String key = entry.getKey();
-                    if (!key.matches("r\\d+_c\\d+")) {
-                        return errorJson("preferredRanges key '" + key
-                                + "' must match 'r{ruleIdx}_c{condIdx}' (e.g. 'r0_c1').", "VALIDATION_ERROR", 400);
+                for (int i = 0; i < prNode.size(); i++) {
+                    JsonNode val = prNode.get(i);
+                    if (val == null || !val.isObject()) {
+                        return errorJson("preferredRangeSelections[" + i + "] must be an object.",
+                                "VALIDATION_ERROR", 400);
                     }
-                    JsonNode val = entry.getValue();
-                    if (!val.has("lower") || !val.has("upper")) {
-                        return errorJson("preferredRanges entry '" + key
-                                + "' missing 'lower' or 'upper'.", "VALIDATION_ERROR", 400);
+                    requireOnlyFields(val, "arguments.preferredRangeSelections[" + i + "]",
+                            Set.of("targetId", "lower", "upper"));
+                    String missingField = missingSelectionField(val);
+                    if (missingField != null) {
+                        return errorJson("preferredRangeSelections[" + i + "] missing '" + missingField + "'.",
+                                "VALIDATION_ERROR", 400);
                     }
-                    if (!val.get("lower").isIntegralNumber() || !val.get("upper").isIntegralNumber()) {
-                        return errorJson("preferredRanges entry '" + key
-                                + "': 'lower' and 'upper' must be integers.", "VALIDATION_ERROR", 400);
+                    String intFieldError = firstNonIntSelectionField(val);
+                    if (intFieldError != null) {
+                        return errorJson("preferredRangeSelections[" + i + "] field '" + intFieldError
+                                + "' must be a 32-bit integer.", "VALIDATION_ERROR", 400);
                     }
+                    if (!val.get("targetId").isTextual()) {
+                        return errorJson("preferredRangeSelections[" + i
+                                        + "] field 'targetId' must be a non-empty string.",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    String targetId = val.get("targetId").textValue();
                     int lower = val.get("lower").intValue();
                     int upper = val.get("upper").intValue();
-                    if (lower > upper) {
-                        return errorJson("preferredRanges entry '" + key
-                                + "': lower(" + lower + ") > upper(" + upper + ").", "VALIDATION_ERROR", 400);
+                    if (targetId == null || targetId.isBlank()) {
+                        return errorJson("preferredRangeSelections[" + i
+                                + "]: targetId must not be blank.",
+                                "VALIDATION_ERROR", 400);
                     }
-                    preferredRanges.put(key, new PreferredRange(lower, upper));
+                    if (lower > upper) {
+                        return errorJson("preferredRangeSelections[" + i
+                                + "]: lower(" + lower + ") > upper(" + upper + ").", "VALIDATION_ERROR", 400);
+                    }
+                    PreferredRangeSelection selection = PreferredRangeSelection.builder()
+                            .targetId(targetId)
+                            .lower(lower)
+                            .upper(upper)
+                            .build();
+                    if (!PreferredRangeSelection.isValidTargetId(targetId)) {
+                        return errorJson("preferredRangeSelections[" + i
+                                + "]: targetId is not a valid parameter-adjustment selector.",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    if (preferredRanges.containsKey(targetId)) {
+                        return errorJson("Duplicate target in preferredRangeSelections[" + i + "].",
+                                "VALIDATION_ERROR", 400);
+                    }
+                    preferredRanges.put(targetId, selection.toPreferredRange());
                 }
                 if (preferredRanges.isEmpty()) preferredRanges = null;
             }
@@ -142,11 +194,19 @@ public class FixViolationTool extends AbstractAiTool {
 
             Map<String, Object> summary = new LinkedHashMap<>();
             summary.put("traceId", result.getTraceId());
-            summary.put("violatedSpecId", result.getViolatedSpecId());
             summary.put("fixable", result.isFixable());
+            summary.put("sourceModelComplete", result.getSourceModelComplete());
+            summary.put("sourceDisabledRuleCount", result.getSourceDisabledRuleCount());
+            summary.put("sourceSkippedSpecCount", result.getSourceSkippedSpecCount());
+            summary.put("sourceGenerationIssues", result.getSourceGenerationIssues() != null
+                    ? result.getSourceGenerationIssues() : List.of());
+            summary.put("templateSnapshotComparison", result.getTemplateSnapshotComparison());
             summary.put("faultRuleCount", result.getFaultRules() != null ? result.getFaultRules().size() : 0);
             summary.put("suggestionCount", result.getSuggestions() != null ? result.getSuggestions().size() : 0);
             summary.put("summary", result.getSummary());
+            summary.put("strategyAttempts", result.getStrategyAttempts() != null
+                    ? result.getStrategyAttempts() : List.of());
+            summary.put("warnings", result.getWarnings() != null ? result.getWarnings() : List.of());
 
             if (result.getFaultRules() != null && !result.getFaultRules().isEmpty()) {
                 summary.put("faultRules", result.getFaultRules());
@@ -154,16 +214,23 @@ public class FixViolationTool extends AbstractAiTool {
             if (result.getSuggestions() != null && !result.getSuggestions().isEmpty()) {
                 summary.put("suggestions", result.getSuggestions());
             }
-            if (result.getUnusedPreferredRangeKeys() != null && !result.getUnusedPreferredRangeKeys().isEmpty()) {
-                summary.put("unusedPreferredRangeKeys", result.getUnusedPreferredRangeKeys());
+            if (result.getUnusedPreferredRangeSelections() != null
+                    && !result.getUnusedPreferredRangeSelections().isEmpty()) {
+                summary.put("unusedPreferredRangeSelections", result.getUnusedPreferredRangeSelections());
             }
 
-            return successJson(summary, "Fix analysis completed.");
+            String message = result.isFixable()
+                    ? "Fix analysis found one or more forward-verified suggestions; no Board change was applied."
+                    : "Fix analysis found no forward-verified suggestion; no Board change was applied.";
+            summary.put("message", message);
+            return readOnlySuccessJson(summary, message);
 
         } catch (ResourceNotFoundException e) {
             return errorJson("Trace not found: " + e.getMessage(), "NOT_FOUND", 404);
         } catch (BadRequestException e) {
             return errorJson(e.getMessage(), "BAD_REQUEST", 400);
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("fix_violation busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -180,5 +247,24 @@ public class FixViolationTool extends AbstractAiTool {
             log.error("FixViolationTool execution failed", e);
             return errorJson("Fix analysis failed.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private static String missingSelectionField(JsonNode node) {
+        for (String field : List.of("targetId", "lower", "upper")) {
+            if (!node.has(field)) {
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private static String firstNonIntSelectionField(JsonNode node) {
+        for (String field : List.of("lower", "upper")) {
+            JsonNode value = node.get(field);
+            if (value == null || !value.isIntegralNumber() || !value.canConvertToInt()) {
+                return field;
+            }
+        }
+        return null;
     }
 }

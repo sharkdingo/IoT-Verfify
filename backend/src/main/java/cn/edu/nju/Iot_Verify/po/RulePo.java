@@ -32,11 +32,18 @@ public class RulePo {
     @Column(name = "rule_string", columnDefinition = "TEXT")
     private String ruleString;
 
+    /** Zero-based model execution order; lower rules win per target mode when guards overlap. */
+    @Column(name = "execution_order")
+    private Integer executionOrder;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @PrePersist
     protected void onCreate() {
+        if (executionOrder == null) {
+            executionOrder = 0;
+        }
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
         }

@@ -3,6 +3,17 @@
 	"Description": "",
 	"InternalVariables": [
 	],
+	"EnvironmentDomains": [
+		{
+			"Name": "illuminance",
+			"Description": "Ambient illuminance",
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
 	"ImpactedVariables": ["illuminance"],
 	"Modes": ["SwitchState"],
 	"InitState": "on",
@@ -15,7 +26,6 @@
 					"ChangeRate":"1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -23,7 +33,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

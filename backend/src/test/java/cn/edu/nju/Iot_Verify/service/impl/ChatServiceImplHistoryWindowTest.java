@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
@@ -26,6 +27,8 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -214,5 +217,29 @@ class ChatServiceImplHistoryWindowTest {
         assertEquals(3, visible.size());
         assertEquals("assistant", visible.get(1).getRole());
         assertEquals("Calling tool...", visible.get(1).getContent());
+    }
+
+    @Test
+    void activeStream_shouldBlockConcurrentStreamAndSessionDeletionUntilServerFinishes() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("busy-session");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("busy-session", 1L)).thenReturn(Optional.of(session));
+
+        service.beginStreamRequest(1L, "busy-session");
+
+        assertTrue(service.getSessionActivity(1L, "busy-session").isActive());
+        assertThrows(ChatSessionBusyException.class,
+                () -> service.beginStreamRequest(1L, "busy-session"));
+        assertThrows(ChatSessionBusyException.class,
+                () -> service.deleteSession(1L, "busy-session"));
+        verify(messageRepo, never()).deleteBySessionId("busy-session");
+
+        service.endStreamRequest(1L, "busy-session");
+
+        assertFalse(service.getSessionActivity(1L, "busy-session").isActive());
+        service.deleteSession(1L, "busy-session");
+        verify(messageRepo).deleteBySessionId("busy-session");
+        verify(sessionRepo).deleteById("busy-session");
     }
 }

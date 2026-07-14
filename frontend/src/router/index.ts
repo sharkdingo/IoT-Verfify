@@ -21,10 +21,8 @@ const checkAuthSync = (): boolean => {
 // 在应用启动时清除可能的无效token，确保从登录页面开始
 const clearInvalidTokens = () => {
   // 如果当前页面不是公开页面但没有token，清除所有认证相关数据
-  const currentPath = window.location.hash.replace('#', '') || '/';
-  const isPublicPath = ['/', '/login', '/register', '/404'].includes(currentPath) ||
-                       currentPath.startsWith('/login') ||
-                       currentPath.startsWith('/register');
+  const currentPath = (window.location.hash.replace('#', '') || '/').split('?')[0];
+  const isPublicPath = ['/', '/404'].includes(currentPath);
 
   if (!isPublicPath && !checkAuthSync()) {
     // 清除可能的无效认证数据
@@ -43,28 +41,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'IoT-Verify', public: true }
   },
   {
-    path: '/login',
-    name: 'login',
-    component: () => import('../views/Login.vue'),
-    meta: { title: 'Login', public: true }
-  },
-  {
-    path: '/register',
-    name: 'register',
-    component: () => import('../views/Register.vue'),
-    meta: { title: 'Register', public: true }
-  },
-  {
     path: '/board',
     name: 'board',
     component: () => import('../views/Board.vue'),
     meta: { title: 'IoT-Verify', usesOwnHeader: true }
-  },
-  {
-    path: '/create-template',
-    name: 'create-template',
-    component: () => import('../views/TemplateCreate.vue'),
-    meta: { title: 'Create Template' }
   },
   {
     path: '/404',
@@ -94,8 +74,8 @@ router.beforeEach((to, _from, next) => {
 
   // 如果是公开页面，直接放行
   if (isPublic) {
-    // 如果已登录且访问登录/注册/landing页，跳转到board
-    if (isLoggedIn && ['/', '/login', '/register'].includes(to.path)) {
+    // 如果已登录且访问 landing 页，跳转到 board
+    if (isLoggedIn && to.path === '/') {
       next('/board');
     } else {
       next();
@@ -115,7 +95,7 @@ router.beforeEach((to, _from, next) => {
 
   // 保护页面需要登录
   if (!isLoggedIn) {
-    next({ path: '/login', query: { redirect: to.fullPath } });
+    next({ path: '/', query: { mode: 'login', redirect: to.fullPath } });
   } else {
     next();
   }

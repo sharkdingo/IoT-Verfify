@@ -53,6 +53,9 @@ public class DeviceNodePo {
     @Column(name = "current_state_trust", length = 50)
     private String currentStateTrust;
 
+    @Column(name = "current_state_privacy", length = 50)
+    private String currentStatePrivacy;
+
     @Column(name = "variables_json", columnDefinition = "JSON")
     private String variablesJson;
 

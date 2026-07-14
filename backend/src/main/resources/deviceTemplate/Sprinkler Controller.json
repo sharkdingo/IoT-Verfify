@@ -9,7 +9,6 @@
 		{
 			"Name": "closed",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -17,7 +16,6 @@
 		{
 			"Name": "open",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

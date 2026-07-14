@@ -4,7 +4,8 @@ import type {
     DeviceManifest,
     DeviceStateView,
     DeviceTemplate,
-    DeviceVariableView
+    DeviceVariableView,
+    InternalVariable
 } from '../types/device'
 import type { DeviceNode } from '../types/node'
 
@@ -28,10 +29,10 @@ export const getDeviceState = (deviceId: string, initState: string): string => {
 /**
  * 更新设备状态
  * @param deviceId 设备实例的唯一标识
- * @param newState 新状态
+ * @param nextState 新状态
  */
-export const updateDeviceState = (deviceId: string, newState: string): void => {
-    deviceStates.set(deviceId, newState)
+export const updateDeviceState = (deviceId: string, nextState: string): void => {
+    deviceStates.set(deviceId, nextState)
 }
 
 /**
@@ -71,6 +72,151 @@ export const clearDeviceState = (deviceId: string): void => {
 
 // --- 图标与路径 ---
 
+const deviceIconModules = import.meta.glob('../assets/*/*.svg', {
+    eager: true,
+    query: '?url',
+    import: 'default'
+}) as Record<string, string>
+
+const variableIconModules = import.meta.glob('../assets/variables/*.svg', {
+    eager: true,
+    query: '?url',
+    import: 'default'
+}) as Record<string, string>
+
+const normalizeAssetFolder = (name: string) =>
+    String(name || 'Device').trim().replace(/\s+/g, '_')
+
+const normalizeStateName = (state: string) => String(state || 'Working').trim()
+
+const svgDataUri = (svg: string): string =>
+    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+
+const escapeXml = (value: string): string =>
+    value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+
+const escapeAttr = (value: string): string =>
+    value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+
+const hashString = (value: string): number => {
+    let hash = 0
+    for (let i = 0; i < value.length; i++) {
+        hash = (hash * 31 + value.charCodeAt(i)) >>> 0
+    }
+    return hash
+}
+
+const getTemplateInitials = (name: string): string => {
+    const words = String(name || 'Device')
+        .replace(/[_-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+
+    const initials = words.length > 1
+        ? words.slice(0, 2).map(word => word.charAt(0)).join('')
+        : (words[0] || '?').slice(0, 2)
+
+    return initials.toUpperCase()
+}
+
+const createGeneratedDeviceIcon = (deviceType: string, state?: string): string => {
+    const name = String(deviceType || 'Device').replace(/_/g, ' ')
+    const hash = hashString(name)
+    const hue = hash % 360
+    const accent = `hsl(${hue} 78% 52%)`
+    const soft = `hsl(${hue} 88% 94%)`
+    const mid = `hsl(${hue} 72% 72%)`
+    const initials = escapeXml(getTemplateInitials(name))
+    const stateLabel = escapeXml(normalizeStateName(state || '').slice(0, 14))
+    const showState = stateLabel && stateLabel.toLowerCase() !== 'working'
+
+    return svgDataUri(`
+<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="6" y="6" width="60" height="60" rx="16" fill="${soft}" stroke="${accent}" stroke-width="3"/>
+  <rect x="18" y="18" width="36" height="27" rx="6" fill="white" stroke="${mid}" stroke-width="3"/>
+  <path d="M25 28h22M25 35h16" stroke="${accent}" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="49" cy="51" r="8" fill="${accent}"/>
+  <text x="36" y="59" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="${showState ? 8 : 13}" font-weight="800" fill="#0f172a">${showState ? stateLabel : initials}</text>
+</svg>`)
+}
+
+const getStateVariants = (state: string): string[] => {
+    const cleanState = normalizeStateName(state)
+    const variants = [
+        cleanState,
+        cleanState.toLowerCase(),
+        cleanState.charAt(0).toUpperCase() + cleanState.slice(1).toLowerCase(),
+        cleanState.includes(';') ? cleanState.split(';')[0] : '',
+        cleanState.includes(';') ? cleanState.split(';')[0].toLowerCase() : '',
+        'Working',
+        'working',
+        'On',
+        'on',
+        'Off',
+        'off'
+    ]
+
+    return [...new Set(variants.filter(Boolean))]
+}
+
+const getBundledDeviceIconPath = (folder: string, state: string): string | null => {
+    const normalizedFolder = normalizeAssetFolder(folder)
+
+    for (const stateName of getStateVariants(state)) {
+        const path = deviceIconModules[`../assets/${normalizedFolder}/${stateName}.svg`]
+        if (path) return path
+    }
+
+    return null
+}
+
+const getFirstBundledDeviceIconPath = (folder: string): string | null => {
+    const normalizedFolder = normalizeAssetFolder(folder)
+    const prefix = `../assets/${normalizedFolder}/`
+    const firstKey = Object.keys(deviceIconModules)
+        .filter(key => key.startsWith(prefix))
+        .sort((a, b) => a.localeCompare(b))
+        .find(Boolean)
+
+    return firstKey ? deviceIconModules[firstKey] : null
+}
+
+const isSafeManifestIcon = (icon: string | undefined | null): icon is string => {
+    if (!icon || typeof icon !== 'string') return false
+    const trimmed = icon.trim()
+    if (trimmed.length === 0 || trimmed.length > 262144) return false
+
+    return /^data:image\/(svg\+xml|png|jpe?g|webp|gif)(;[^,]+)?,/i.test(trimmed)
+        || /^https:\/\//i.test(trimmed)
+}
+
+const getManifestIcon = (manifest?: DeviceManifest | null): string | null => {
+    const icon = manifest?.Icon?.trim()
+    return isSafeManifestIcon(icon) ? icon : null
+}
+
+export const getDeviceIconUrl = (
+    deviceType: string,
+    state: string = 'Working',
+    manifest?: DeviceManifest | null
+): string => {
+    const manifestIcon = getManifestIcon(manifest)
+    if (manifestIcon) return manifestIcon
+
+    const folder = normalizeAssetFolder(deviceType)
+    return getBundledDeviceIconPath(folder, state)
+        || getFirstBundledDeviceIconPath(folder)
+        || createGeneratedDeviceIcon(deviceType, state)
+}
+
 /**
  * 获取设备图标的路径
  * @param folder 设备模板名称（转换为文件夹格式）
@@ -78,34 +224,9 @@ export const clearDeviceState = (deviceId: string): void => {
  * @returns 图标的 URL 路径
  */
 export const getDeviceIconPath = (folder: string, state: string) => {
-    // 尝试不同的状态名称变体
-    const possibleStates = [
-        state,
-        state.toLowerCase(),
-        state.charAt(0).toUpperCase() + state.slice(1).toLowerCase(),
-        // 对于多模式状态（如 "auto;auto"），尝试第一部分
-        state.includes(';') ? state.split(';')[0] : null,
-        state.includes(';') ? state.split(';')[0].toLowerCase() : null,
-        // 默认状态
-        'Working',
-        'On',
-        'Off'
-    ].filter(Boolean) as string[]
-
-    for (const stateName of possibleStates) {
-        try {
-            const path = new URL(`../assets/${folder}/${stateName}.svg`, import.meta.url).href
-            return path
-        } catch (e) {
-            continue
-        }
-    }
-
-    // 所有尝试都失败，返回一个占位符 SVG
-    return `<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="8" y="8" width="16" height="16" rx="2" fill="#94A3B8" stroke="#64748B" stroke-width="2"/>
-      <circle cx="16" cy="16" r="4" fill="white"/>
-    </svg>`
+    return getBundledDeviceIconPath(folder, state)
+        || getFirstBundledDeviceIconPath(folder)
+        || createGeneratedDeviceIcon(folder.replace(/_/g, ' '), state)
 }
 
 /**
@@ -114,54 +235,21 @@ export const getDeviceIconPath = (folder: string, state: string) => {
  * @returns 图标的 URL 路径
  */
 export const getVariableIconPath = (variableName: string) => {
-    try {
-        const path = new URL(`../assets/variables/${variableName}.svg`, import.meta.url).href
-        return path
-    } catch (e) {
-        // 如果变量图标不存在，返回默认变量图标
-        try {
-            return new URL(`../assets/variables/temperature.svg`, import.meta.url).href
-        } catch (e) {
-            return ''
-        }
-    }
+    return variableIconModules[`../assets/variables/${variableName}.svg`]
+        || variableIconModules['../assets/variables/temperature.svg']
+        || ''
 }
 
-export const getNodeIcon = (node: DeviceNode, manifest?: DeviceManifest) => {
-    const folder = node.templateName.replace(/ /g, '_')
+export const getNodeIcon = (
+    node: DeviceNode,
+    manifestOrState?: DeviceManifest | string | null,
+    stateOverride?: string
+) => {
+    const manifest = typeof manifestOrState === 'object' ? manifestOrState : null
+    const explicitState = typeof manifestOrState === 'string' ? manifestOrState : stateOverride
+    const currentState = explicitState || node.state || manifest?.InitState || 'Working'
 
-    // 如果是变量节点（templateName 以 variable_ 开头），从 variables 文件夹获取图标
-    if (node.templateName.startsWith('variable_')) {
-        const variableName = node.templateName.replace('variable_', '')
-        return getVariableIconPath(variableName)
-    }
-
-    // 如果传入了 manifest，优先使用状态管理
-    if (manifest) {
-        // 获取当前状态（优先使用状态管理的状态，否则使用 node 上的状态，否则使用初始状态）
-        const currentState = node.state || manifest.InitState
-        return getDeviceIconPath(folder, currentState)
-    }
-
-    // 兼容旧版：直接使用 node.state
-    const state = node.state || 'Working'
-
-    // Try different state name variations
-    const possibleStates = [state, state.toLowerCase(), state.charAt(0).toUpperCase() + state.slice(1).toLowerCase()]
-
-    for (const stateName of possibleStates) {
-        try {
-            const path = getDeviceIconPath(folder, stateName)
-            // In a real implementation, you'd check if the file exists
-            // For now, we'll just return the first possibility
-            return path
-        } catch (e) {
-            continue
-        }
-    }
-
-    // Fallback to a default icon or placeholder
-    return getDeviceIconPath('default', 'Working')
+    return getDeviceIconUrl(node.templateName, currentState, manifest)
 }
 
 // --- 状态查找 ---
@@ -173,7 +261,7 @@ export const getEndStateByApi = (
 ): string | null => {
     const tpl = templates.find(t => t.name === templateName)
     if (!tpl) return null
-    const api = tpl.manifest.APIs.find(a => a.Name === apiName)
+    const api = (tpl.manifest.APIs ?? []).find(a => a.Name === apiName)
     return api ? api.EndState : null
 }
 
@@ -224,7 +312,13 @@ export const extractDeviceVariables = (
     if (Array.isArray(manifest.ImpactedVariables)) {
         manifest.ImpactedVariables.forEach(name => {
             if (!views.some(v => v.name === name)) {
-                views.push({ name, value: '(External)', trust: '' })
+                const definition = resolveImpactEnvironmentDefinition(manifest, name)
+                const value = definition?.Values?.length
+                    ? definition.Values.join(' / ')
+                    : definition?.LowerBound !== undefined && definition?.UpperBound !== undefined
+                        ? `[${definition.LowerBound}, ${definition.UpperBound}]`
+                        : ''
+                views.push({ name, value, trust: definition?.Trust ?? '' })
             }
         })
     }
@@ -237,8 +331,8 @@ export const extractDeviceStates = (
     if (!manifest || !Array.isArray(manifest.WorkingStates)) return []
     return manifest.WorkingStates.map(ws => ({
         name: ws.Name,
-        description: ws.Description,
-        trust: ws.Trust
+        description: ws.Description ?? '',
+        trust: ws.Trust ?? ''
     }))
 }
 
@@ -248,7 +342,7 @@ export const extractDeviceApis = (
     if (!manifest || !Array.isArray(manifest.APIs)) return []
     return manifest.APIs.map(api => ({
         name: api.Name,
-        from: api.StartState,
+        from: api.StartState ?? '',
         to: api.EndState,
         description: api.Description ?? ''
     }))
@@ -256,24 +350,222 @@ export const extractDeviceApis = (
 
 // --- 校验逻辑 ---
 
+export const resolveImpactEnvironmentDefinition = (
+    manifest: DeviceManifest | null | undefined,
+    name: string
+): InternalVariable | undefined => {
+    const target = String(name || '').trim()
+    if (!manifest || !target) return undefined
+    const readable = manifest.InternalVariables?.find(variable =>
+        variable?.Name === target && variable.IsInside !== true
+    )
+    if (readable) return readable
+    const domain = manifest.EnvironmentDomains?.find(item => item?.Name === target)
+    return domain ? {
+        ...domain,
+        IsInside: false,
+        FalsifiableWhenCompromised: false
+    } : undefined
+}
+
 export const validateManifest = (obj: any): { valid: boolean; msg?: string } => {
     if (!obj || typeof obj !== 'object') return { valid: false, msg: 'Invalid JSON object' }
 
-    // 必填字段检查
     if (!obj.Name) return { valid: false, msg: 'Missing field "Name"' }
-    if (obj.InitState === undefined) return { valid: false, msg: 'Missing field "InitState"' }
 
-    // 数组类型检查
-    if (!Array.isArray(obj.InternalVariables)) return { valid: false, msg: '"InternalVariables" must be an array' }
-    if (!Array.isArray(obj.WorkingStates)) return { valid: false, msg: '"WorkingStates" must be an array' }
-    if (!Array.isArray(obj.APIs)) return { valid: false, msg: '"APIs" must be an array' }
+    for (const field of ['Modes', 'InternalVariables', 'EnvironmentDomains', 'ImpactedVariables', 'WorkingStates', 'Transitions', 'APIs', 'Contents']) {
+        if (obj[field] !== undefined && !Array.isArray(obj[field])) {
+            return { valid: false, msg: `"${field}" must be an array` }
+        }
+    }
 
-    // 逻辑一致性检查
-    // 1. InitState 必须存在于 WorkingStates 中 (或者是空字符串，某些设备允许)
-    if (obj.InitState !== '' && obj.WorkingStates.length > 0) {
-        const stateNames = obj.WorkingStates.map((s: any) => s.Name)
-        if (!stateNames.includes(obj.InitState)) {
+    const hasModes = Array.isArray(obj.Modes) && obj.Modes.length > 0
+    const hasInitState = typeof obj.InitState === 'string' && obj.InitState.trim() !== ''
+    const hasWorkingStates = Array.isArray(obj.WorkingStates) && obj.WorkingStates.length > 0
+    const validTrust = (value: unknown) => ['trusted', 'untrusted'].includes(String(value || '').trim().toLowerCase())
+    const validPrivacy = (value: unknown) => ['public', 'private'].includes(String(value || '').trim().toLowerCase())
+
+    if (hasModes || hasInitState || hasWorkingStates) {
+        if (!hasModes) return { valid: false, msg: 'Mode-based templates must contain non-empty "Modes"' }
+        if (!hasInitState) return { valid: false, msg: 'Mode-based templates must contain "InitState"' }
+        if (!hasWorkingStates) return { valid: false, msg: 'Mode-based templates must contain non-empty "WorkingStates"' }
+    }
+
+    if (hasInitState && hasWorkingStates) {
+        const initialState = obj.InitState.trim()
+        const stateNames = obj.WorkingStates.map((s: any) => String(s?.Name || '').trim())
+        if (!stateNames.includes(initialState)) {
             return { valid: false, msg: `InitState "${obj.InitState}" is not defined in WorkingStates` }
+        }
+    }
+
+    if (hasModes && hasWorkingStates) {
+        const normalizeStateComponent = (value: unknown) =>
+            String(value || '').trim().replace(/ /g, '').toLowerCase()
+        const fullStates = new Map<string, string>()
+        const components = new Map<string, { fullState: string; trust: string; privacy: string }>()
+        for (const state of obj.WorkingStates) {
+            const rawState = String(state?.Name || '').trim()
+            if (Object.prototype.hasOwnProperty.call(state || {}, 'Invariant')) {
+                return {
+                    valid: false,
+                    msg: `WorkingState "${rawState}" uses unsupported Invariant; define behavior with structured Dynamics, Transitions, rules, or specifications`
+                }
+            }
+            if (!validTrust(state?.Trust) || !validPrivacy(state?.Privacy)) {
+                return {
+                    valid: false,
+                    msg: `WorkingState "${rawState}" must define Trust as trusted/untrusted and Privacy as public/private`
+                }
+            }
+            const segments = rawState.split(';')
+            if (segments.length !== obj.Modes.length) {
+                return {
+                    valid: false,
+                    msg: `WorkingState "${rawState}" must contain one semicolon-separated value for each mode`
+                }
+            }
+            const normalizedSegments = segments.map(normalizeStateComponent)
+            const missingModeIndex = normalizedSegments.findIndex(segment => !segment || segment === '_')
+            if (missingModeIndex >= 0) {
+                return {
+                    valid: false,
+                    msg: `WorkingState "${rawState}" must define a concrete value for mode "${obj.Modes[missingModeIndex]}"`
+                }
+            }
+            const fullStateKey = normalizedSegments.join(';')
+            const previousFullState = fullStates.get(fullStateKey)
+            if (previousFullState) {
+                return {
+                    valid: false,
+                    msg: `WorkingStates "${previousFullState}" and "${rawState}" are duplicates after model normalization`
+                }
+            }
+            fullStates.set(fullStateKey, rawState)
+
+            const trust = String(state.Trust).trim().toLowerCase()
+            const privacy = String(state.Privacy).trim().toLowerCase()
+            for (let index = 0; index < obj.Modes.length; index += 1) {
+                const componentKey = `${normalizeStateComponent(obj.Modes[index])}\u0000${normalizedSegments[index]}`
+                const previous = components.get(componentKey)
+                if (previous && (previous.trust !== trust || previous.privacy !== privacy)) {
+                    return {
+                        valid: false,
+                        msg: `WorkingStates "${previous.fullState}" and "${rawState}" assign conflicting Trust/Privacy labels to ${obj.Modes[index]}="${segments[index].trim()}"`
+                    }
+                }
+                components.set(componentKey, { fullState: rawState, trust, privacy })
+            }
+        }
+    }
+
+    const normalizedName = (value: unknown) => String(value || '').trim().toLowerCase()
+    const internalNames = new Map<string, any>()
+    for (const variable of obj.InternalVariables || []) {
+        const name = normalizedName(variable?.Name)
+        if (!name) return { valid: false, msg: 'Every InternalVariables item must contain Name' }
+        if (internalNames.has(name)) return { valid: false, msg: `Duplicate InternalVariable "${variable.Name}"` }
+        if (!validTrust(variable.Trust) || !validPrivacy(variable.Privacy)) {
+            return {
+                valid: false,
+                msg: `InternalVariable "${variable.Name}" must define Trust as trusted/untrusted and Privacy as public/private`
+            }
+        }
+        if (typeof variable.FalsifiableWhenCompromised !== 'boolean') {
+            return { valid: false, msg: `InternalVariable "${variable.Name}" must define FalsifiableWhenCompromised` }
+        }
+        if (typeof variable.IsInside !== 'boolean') {
+            return { valid: false, msg: `InternalVariable "${variable.Name}" must explicitly define IsInside as true (device-local) or false (shared environment)` }
+        }
+        const hasValues = Array.isArray(variable.Values) && variable.Values.length > 0
+        const hasLower = Number.isInteger(variable.LowerBound)
+        const hasUpper = Number.isInteger(variable.UpperBound)
+        if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
+            return { valid: false, msg: `InternalVariable "${variable.Name}" must explicitly define Values or LowerBound+UpperBound` }
+        }
+        internalNames.set(name, variable)
+    }
+
+    const domainNames = new Map<string, any>()
+    for (const domain of obj.EnvironmentDomains || []) {
+        const name = normalizedName(domain?.Name)
+        if (!name) return { valid: false, msg: 'Every EnvironmentDomains item must contain Name' }
+        if (domainNames.has(name)) return { valid: false, msg: `Duplicate EnvironmentDomain "${domain.Name}"` }
+        if (internalNames.has(name)) {
+            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" duplicates an InternalVariable` }
+        }
+        if (!validTrust(domain.Trust) || !validPrivacy(domain.Privacy)) {
+            return {
+                valid: false,
+                msg: `EnvironmentDomain "${domain.Name}" must define Trust as trusted/untrusted and Privacy as public/private`
+            }
+        }
+        const hasValues = Array.isArray(domain.Values) && domain.Values.length > 0
+        const hasLower = Number.isInteger(domain.LowerBound)
+        const hasUpper = Number.isInteger(domain.UpperBound)
+        if (hasValues === (hasLower && hasUpper) || hasLower !== hasUpper) {
+            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" must define Values or LowerBound+UpperBound` }
+        }
+        domainNames.set(name, domain)
+    }
+
+    const impactedNames = new Set<string>()
+    for (const rawName of obj.ImpactedVariables || []) {
+        const name = normalizedName(rawName)
+        if (!name) return { valid: false, msg: 'ImpactedVariables cannot contain an empty name' }
+        if (impactedNames.has(name)) return { valid: false, msg: `Duplicate ImpactedVariable "${rawName}"` }
+        impactedNames.add(name)
+        const variable = internalNames.get(name)
+        if (variable?.IsInside === true) {
+            return { valid: false, msg: `ImpactedVariable "${rawName}" conflicts with a device-local InternalVariable` }
+        }
+        if (!variable && !domainNames.has(name)) {
+            return { valid: false, msg: `ImpactedVariable "${rawName}" needs a domain in this manifest` }
+        }
+    }
+    for (const [name, domain] of domainNames) {
+        if (!impactedNames.has(name)) {
+            return { valid: false, msg: `EnvironmentDomain "${domain.Name}" is not listed in ImpactedVariables` }
+        }
+    }
+
+    for (const content of obj.Contents || []) {
+        const name = String(content?.Name || '').trim()
+        if (!name) return { valid: false, msg: 'Every Contents item must contain Name' }
+        if (!validPrivacy(content?.Privacy)) {
+            return { valid: false, msg: `Content "${name}" must define Privacy as public/private` }
+        }
+    }
+
+    for (const transition of obj.Transitions || []) {
+        const name = String(transition?.Name || '').trim() || '<unnamed>'
+        if (Object.prototype.hasOwnProperty.call(transition || {}, 'Signal')) {
+            return {
+                valid: false,
+                msg: `Transition "${name}" uses unsupported Signal; event pulses are available only on state-changing APIs with Signal=true`
+            }
+        }
+    }
+
+    for (const api of obj.APIs || []) {
+        const name = String(api?.Name || '').trim() || '<unnamed>'
+        if (typeof api?.StartState !== 'string') {
+            return {
+                valid: false,
+                msg: `API "${name}" must explicitly define StartState (use an empty string for any state)`
+            }
+        }
+        if (typeof api?.Signal !== 'boolean') {
+            return {
+                valid: false,
+                msg: `API "${name}" must explicitly define boolean Signal (true = observable automation trigger; false = command only)`
+            }
+        }
+        if (api?.AcceptsContent !== undefined && typeof api.AcceptsContent !== 'boolean') {
+            return {
+                valid: false,
+                msg: `API "${name}" AcceptsContent must be boolean when provided`
+            }
         }
     }
 
@@ -282,49 +574,16 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
 
 // --- 增强版图标获取函数 ---
 export const getNodeIconWithFallback = (node: DeviceNode): string => {
-  const folder = node.templateName.replace(/ /g, '_')
-  const state = node.state || 'Working'
-
-  // Try different state name variations
-  const possibleStates = [
-    state,
-    state.toLowerCase(),
-    state.charAt(0).toUpperCase() + state.slice(1).toLowerCase(),
-    'Working', // Default fallback
-    'On',      // Alternative default
-    'Off'      // Another alternative
-  ]
-
-  for (const stateName of possibleStates) {
-    try {
-      const path = getDeviceIconPath(folder, stateName)
-      // In browser environment, we could check if image loads successfully
-      // For now, return the path and let the browser handle broken images
-      return path
-    } catch (e) {
-      continue
-    }
-  }
-
-  // If all attempts fail, return empty string
-  return ''
+  return getNodeIcon(node)
 }
 
 // --- 默认设备图标 ---
 // 注意：所有图标现在应该从 @frontend/src/assets 目录中获取
-export const getDefaultDeviceIcon = (deviceType: string, initState?: string): string => {
-  // 将设备类型名称转换为文件夹格式（使用下划线替换空格）
-  const folder = deviceType.replace(/ /g, '_')
-  
-  // 使用传入的初始状态，如果没有则默认为 'Working'
-  const state = initState || 'Working'
-  const iconPath = getDeviceIconPath(folder, state)
-  
-  // 如果图标路径是有效的 SVG 字符串（占位符），直接返回
-  if (iconPath.startsWith('<svg')) {
-    return iconPath
-  }
-  
-  // 返回包含图标的 img 标签
-  return `<img src="${iconPath}" alt="${deviceType}" class="w-full h-full object-contain" />`
+export const getDefaultDeviceIcon = (
+  deviceType: string,
+  initState?: string,
+  manifest?: DeviceManifest | null
+): string => {
+  const iconPath = getDeviceIconUrl(deviceType, initState || 'Working', manifest)
+  return `<img src="${escapeAttr(iconPath)}" alt="${escapeAttr(deviceType)}" class="w-full h-full object-contain" />`
 }

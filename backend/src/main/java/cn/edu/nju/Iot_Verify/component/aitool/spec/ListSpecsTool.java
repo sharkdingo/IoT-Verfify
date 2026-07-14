@@ -2,12 +2,14 @@ package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
-import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import cn.edu.nju.Iot_Verify.util.SpecificationFormulaPreview;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -16,8 +18,8 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -40,6 +42,7 @@ public class ListSpecsTool extends AbstractAiTool {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
+                "maxLength", 100,
                 "description", "Optional keyword to filter specifications by ID, template label, device, key, relation, or value. Leave empty to return all."
         ));
 
@@ -56,26 +59,37 @@ public class ListSpecsTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String keyword = args.path("keyword").asText("").trim().toLowerCase(Locale.ROOT);
+            requireOnlyFields(args, "arguments", Set.of("keyword"));
+            String keyword = optionalTextArg(args, "keyword", "", 100);
 
             List<SpecificationDto> specs = safeList(boardStorageService.getSpecs(userId));
+            List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+            List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
+            SpecificationFormulaPreview.Context presentationContext =
+                    SpecificationToolPresenter.context(nodes, templates);
             if (!keyword.isEmpty()) {
                 specs = specs.stream()
-                        .filter(spec -> containsSpecKeyword(spec, keyword))
+                        .filter(spec -> SpecificationToolPresenter.containsKeyword(
+                                spec, presentationContext, keyword))
                         .toList();
             }
 
             if (specs.isEmpty()) {
-                return objectMapper.writeValueAsString(Map.of(
+                return readOnlySuccessJson(Map.of(
                         "message", "No specifications found on the board.",
                         "count", 0
-                ));
+                ), "No specifications found on the board.");
             }
 
-            return objectMapper.writeValueAsString(Map.of(
+            List<Map<String, Object>> presentedSpecs = specs.stream()
+                    .map(spec -> SpecificationToolPresenter.present(spec, presentationContext))
+                    .toList();
+            return readOnlySuccessJson(Map.of(
                     "count", specs.size(),
-                    "specs", specs
-            ));
+                    "specs", presentedSpecs
+            ), "Specifications loaded.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("list_specs busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -88,41 +102,4 @@ public class ListSpecsTool extends AbstractAiTool {
         }
     }
 
-    private boolean containsSpecKeyword(SpecificationDto spec, String keyword) {
-        if (spec == null) {
-            return false;
-        }
-        if (contains(spec.getId(), keyword)
-                || contains(spec.getTemplateId(), keyword)
-                || contains(spec.getTemplateLabel(), keyword)) {
-            return true;
-        }
-        return containsConditions(spec.getAConditions(), keyword)
-                || containsConditions(spec.getIfConditions(), keyword)
-                || containsConditions(spec.getThenConditions(), keyword);
-    }
-
-    private boolean containsConditions(List<SpecConditionDto> conditions, String keyword) {
-        if (conditions == null) {
-            return false;
-        }
-        for (SpecConditionDto condition : conditions) {
-            if (condition == null) {
-                continue;
-            }
-            if (contains(condition.getDeviceId(), keyword)
-                    || contains(condition.getDeviceLabel(), keyword)
-                    || contains(condition.getTargetType(), keyword)
-                    || contains(condition.getKey(), keyword)
-                    || contains(condition.getRelation(), keyword)
-                    || contains(condition.getValue(), keyword)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean contains(String value, String keyword) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
-    }
 }

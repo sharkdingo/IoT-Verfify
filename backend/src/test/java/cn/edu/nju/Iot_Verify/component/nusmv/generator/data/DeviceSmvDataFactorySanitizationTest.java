@@ -44,7 +44,7 @@ class DeviceSmvDataFactorySanitizationTest {
     private DeviceSmvData callComputeIdentifiers(String templateName, String rawVarName) throws Exception {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setTemplateName(templateName);
-        DeviceSmvDataFactory factory = new DeviceSmvDataFactory(null, null, null);
+        DeviceSmvDataFactory factory = new DeviceSmvDataFactory(null, null, null, null);
         Method m = DeviceSmvDataFactory.class.getDeclaredMethod("computeIdentifiers", DeviceSmvData.class, String.class);
         m.setAccessible(true);
         m.invoke(factory, smv, rawVarName);

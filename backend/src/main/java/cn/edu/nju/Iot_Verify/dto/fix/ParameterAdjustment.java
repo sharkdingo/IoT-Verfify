@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -13,7 +14,16 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ParameterAdjustment {
+    /**
+     * Opaque API-facing id for selecting this adjustment as a preferred-range target.
+     * REST/AI clients should submit this id instead of ruleIndex/conditionIndex.
+     */
+    private String targetId;
+    /** Internal trace-snapshot locator used only while applying the server-recomputed fix. */
+    @JsonIgnore
     private int ruleIndex;
+    /** Internal trace-snapshot locator used only while applying the server-recomputed fix. */
+    @JsonIgnore
     private int conditionIndex;
     /** Attribute name, e.g. "temperature" */
     private String attribute;
@@ -25,4 +35,6 @@ public class ParameterAdjustment {
     private String newValue;
     private int lowerBound;
     private int upperBound;
+    /** Human-readable explanation of the rule condition this adjustment changes. */
+    private String description;
 }

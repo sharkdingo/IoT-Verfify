@@ -1,17 +1,36 @@
 <script setup lang="ts">
-import { ref, computed, defineAsyncComponent } from "vue";
+import { ref, computed, defineAsyncComponent, watch } from "vue";
 import { useRoute } from "vue-router";
 import type { StreamCommand } from "@/types/chat";
 import { useChatStore } from "@/stores/chat";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
-const Header = defineAsyncComponent(() => import("./components/Header.vue"));
 const ChatView = defineAsyncComponent(() => import("./components/ChatView.vue"));
 const chatStore = useChatStore();
 
-const showAppHeader = computed(() => !route.meta.public && !route.meta.usesOwnHeader);
-const shouldMountChat = computed(() => !route.meta.public && chatStore.state.visible);
+// Load the assistant lazily on first open, then keep it mounted while hidden. Closing a
+// floating panel must not discard the selected conversation or abort an active stream.
+const hasMountedChat = ref(false);
+watch(() => chatStore.state.visible, visible => {
+  if (visible) hasMountedChat.value = true;
+}, { immediate: true });
+const shouldMountChat = computed(() => !route.meta.public && hasMountedChat.value);
+const isBoardChat = computed(() => route.name === 'board');
+const isBoardChatInteractionLocked = computed(() => {
+  const view = routerViewRef.value;
+  return isBoardChat.value
+    && typeof view?.isChatInteractionLocked === 'function'
+    && Boolean(view.isChatInteractionLocked());
+});
+
+const getBoardChatContext = () => {
+  const view = routerViewRef.value;
+  if (!view || typeof view.getChatSuggestionContext !== 'function') {
+    return null;
+  }
+  return view.getChatSuggestionContext();
+};
 
 const invokeViewMethod = async (methodName: string) => {
   const view = routerViewRef.value;
@@ -33,6 +52,9 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
       case 'device_list':
         await invokeViewMethod('refreshDevices');
         break;
+      case 'environment_list':
+        await invokeViewMethod('refreshEnvironmentVariables');
+        break;
       case 'rule_list':
         await invokeViewMethod('refreshRules');
         break;
@@ -41,6 +63,12 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
         break;
       case 'template_list':
         await invokeViewMethod('refreshDeviceTemplates');
+        break;
+      case 'run_history':
+        await invokeViewMethod('refreshRunHistory');
+        break;
+      case 'board_state':
+        await invokeViewMethod('refreshAllBoardState');
         break;
       default:
         console.warn(`Unsupported REFRESH_DATA target: ${target}`);
@@ -56,10 +84,6 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
 
 <template>
   <div class="app-layout">
-    <header v-if="showAppHeader" class="app-header">
-      <Header />
-    </header>
-
     <main class="app-main">
       <router-view v-slot="{ Component }">
         <keep-alive>
@@ -67,7 +91,13 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
         </keep-alive>
       </router-view>
 
-      <ChatView v-if="shouldMountChat" @command="handleSystemCommand" />
+      <ChatView
+        v-if="shouldMountChat"
+        :board-mode="isBoardChat"
+        :get-board-context="getBoardChatContext"
+        :interaction-locked="isBoardChatInteractionLocked"
+        @command="handleSystemCommand"
+      />
     </main>
   </div>
 </template>
@@ -77,10 +107,6 @@ const handleSystemCommand = async (cmd: StreamCommand) => {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-.app-header {
-  flex: 0 0 auto;
 }
 
 .app-main {

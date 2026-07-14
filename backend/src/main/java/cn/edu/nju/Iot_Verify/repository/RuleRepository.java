@@ -8,10 +8,9 @@ import java.util.List;
 public interface RuleRepository extends JpaRepository<RulePo, Long> {
     List<RulePo> findByUserId(Long userId);
 
-    // Stable, deterministic order for rule reads. The fix apply drift check aligns board rules against
-    // the trace snapshot positionally (ruleIndex is an ordinal), so an unstable JPA iteration order could
-    // make it compare the wrong rules or edit the wrong one. Use this for any read that feeds indexing.
-    List<RulePo> findByUserIdOrderByIdAsc(Long userId);
+    // Explicit execution order is part of the model. ID is only a deterministic tie-breaker for
+    // pre-migration rows whose execution_order is still null or duplicated.
+    List<RulePo> findByUserIdOrderByExecutionOrderAscIdAsc(Long userId);
 
     void deleteByUserId(Long userId);
 }

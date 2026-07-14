@@ -17,23 +17,23 @@ class SpecificationDtoValidationTest {
     private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
     @Test
-    void deviceRef_withoutIdOrLabel_shouldReject() {
+    void deviceRef_withoutId_shouldReject() {
         SpecificationDto spec = validSpec();
         spec.setDevices(List.of(new SpecificationDto.DeviceRefDto(null, null, List.of())));
 
         Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
 
-        assertTrue(hasViolationContaining(violations, "Specification device must include deviceId or deviceLabel"));
+        assertTrue(hasViolationContaining(violations, "Specification device ID is required"));
     }
 
     @Test
-    void deviceRef_withLabel_shouldPassReferenceCheck() {
+    void deviceRef_withLabelOnly_shouldReject() {
         SpecificationDto spec = validSpec();
         spec.setDevices(List.of(new SpecificationDto.DeviceRefDto(null, "Kitchen Light", List.of())));
 
         Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
 
-        assertFalse(hasViolationContaining(violations, "Specification device must include deviceId or deviceLabel"));
+        assertTrue(hasViolationContaining(violations, "Specification device ID is required"));
     }
 
     @Test
@@ -54,6 +54,32 @@ class SpecificationDtoValidationTest {
         Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
 
         assertTrue(hasViolationContaining(violations, "A-condition item cannot be null"));
+    }
+
+    @Test
+    void condition_withoutId_shouldReject() {
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setDeviceId(null);
+        condition.setDeviceLabel(null);
+        spec.setAConditions(List.of(condition));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertTrue(hasViolationContaining(violations, "Device ID is required for spec condition"));
+    }
+
+    @Test
+    void condition_withLabelOnly_shouldReject() {
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setDeviceId(null);
+        condition.setDeviceLabel("Kitchen Light");
+        spec.setAConditions(List.of(condition));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertTrue(hasViolationContaining(violations, "Device ID is required for spec condition"));
     }
 
     @Test
@@ -95,6 +121,33 @@ class SpecificationDtoValidationTest {
 
         assertFalse(hasViolationContaining(violations, "Side must be one of: a, if, then"));
         assertFalse(hasViolationContaining(violations, "Specification condition side must match its containing collection"));
+    }
+
+    @Test
+    void condition_targetTypeMode_shouldPassTargetTypeValidation() {
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setTargetType("mode");
+        condition.setKey("Mode");
+        condition.setValue("sleep");
+        spec.setAConditions(List.of(condition));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertFalse(hasViolationContaining(violations, "targetType must be one of"));
+    }
+
+    @Test
+    void condition_relationAliasWithWhitespace_shouldPassBoundaryValidation() {
+        SpecificationDto spec = validSpec();
+        SpecConditionDto condition = validCondition("a");
+        condition.setRelation(" NOT_IN ");
+        condition.setValue("on,off");
+        spec.setAConditions(List.of(condition));
+
+        Set<ConstraintViolation<SpecificationDto>> violations = validator.validate(spec);
+
+        assertFalse(hasViolationContaining(violations, "Relation must be one of"));
     }
 
     private SpecificationDto validSpec() {

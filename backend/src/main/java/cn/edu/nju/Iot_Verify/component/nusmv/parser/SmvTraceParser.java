@@ -2,17 +2,24 @@ package cn.edu.nju.Iot_Verify.component.nusmv.parser;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceTrustPrivacyDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceTriggeredRuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
+import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,9 +41,19 @@ public class SmvTraceParser {
             Pattern.compile("(\\w+)\\.(\\w+)\\s*=\\s*(\\S+)");
     private static final Pattern ENV_VAR_PATTERN =
             Pattern.compile("^(\\w+)\\s*=\\s*(\\S+)$");
+    private static final Pattern RULE_EXECUTION_PROBE_PATTERN = Pattern.compile(
+            "^" + Pattern.quote(SmvConstants.RULE_EXECUTION_PROBE_PREFIX) + "(\\d+)$");
+    private static final Pattern AUTOMATION_LINK_ATTACK_PATTERN = Pattern.compile(
+            "^" + Pattern.quote(SmvConstants.AUTOMATION_LINK_ATTACK_PREFIX) + "(\\d+)$");
 
     public List<TraceStateDto> parseCounterexampleStates(String counterexample,
                                                          Map<String, DeviceSmvData> deviceSmvMap) {
+        return parseCounterexampleStates(counterexample, deviceSmvMap, List.of());
+    }
+
+    public List<TraceStateDto> parseCounterexampleStates(String counterexample,
+                                                         Map<String, DeviceSmvData> deviceSmvMap,
+                                                         List<RuleDto> rules) {
         List<TraceStateDto> states = new ArrayList<>();
         if (counterexample == null || counterexample.isEmpty()) {
             return states;
@@ -46,6 +63,9 @@ public class SmvTraceParser {
         TraceStateDto currentState = null;
         String pendingStateName = null;
         Map<String, Map<String, String>> previousModeValuesByDevice = new HashMap<>();
+        Map<Integer, Boolean> ruleExecutionValues = new HashMap<>();
+        Map<Integer, Boolean> automationLinkAttackValues = new HashMap<>();
+        TraceStateDto previousCompleteState = null;
 
         for (String line : lines) {
             line = line.trim();
@@ -58,12 +78,18 @@ public class SmvTraceParser {
                 int stateIdx = Integer.parseInt(stateMatcher.group(1));
                 if (currentState != null) {
                     finalizeModeStates(currentState, deviceSmvMap, previousModeValuesByDevice);
+                    materializeCompleteState(currentState, previousCompleteState);
+                    finalizeTriggeredRules(currentState, ruleExecutionValues, rules);
+                    finalizeCompromisedAutomationLinks(currentState, automationLinkAttackValues, rules);
                     states.add(currentState);
+                    previousCompleteState = currentState;
                 }
 
                 currentState = new TraceStateDto();
                 currentState.setStateIndex(stateIdx);
                 currentState.setDevices(new ArrayList<>());
+                currentState.setTriggeredRules(new ArrayList<>());
+                currentState.setCompromisedAutomationLinks(new ArrayList<>());
 
                 Matcher stateNameMatcher = STATE_PATTERN.matcher(line);
                 if (stateNameMatcher.find() && stateNameMatcher.group(2) != null) {
@@ -72,17 +98,22 @@ public class SmvTraceParser {
                     pendingStateName = null;
                 }
 
-                parseLineVariables(currentState, line, deviceSmvMap, pendingStateName);
+                parseLineVariables(currentState, line, deviceSmvMap, pendingStateName,
+                        ruleExecutionValues, automationLinkAttackValues);
                 continue;
             }
 
             if (currentState != null) {
-                parseLineVariables(currentState, line, deviceSmvMap, pendingStateName);
+                parseLineVariables(currentState, line, deviceSmvMap, pendingStateName,
+                        ruleExecutionValues, automationLinkAttackValues);
             }
         }
 
         if (currentState != null) {
             finalizeModeStates(currentState, deviceSmvMap, previousModeValuesByDevice);
+            materializeCompleteState(currentState, previousCompleteState);
+            finalizeTriggeredRules(currentState, ruleExecutionValues, rules);
+            finalizeCompromisedAutomationLinks(currentState, automationLinkAttackValues, rules);
             states.add(currentState);
         }
         return states;
@@ -91,7 +122,9 @@ public class SmvTraceParser {
     private void parseLineVariables(TraceStateDto currentState,
                                     String line,
                                     Map<String, DeviceSmvData> deviceSmvMap,
-                                    String pendingStateName) {
+                                    String pendingStateName,
+                                    Map<Integer, Boolean> ruleExecutionValues,
+                                    Map<Integer, Boolean> automationLinkAttackValues) {
         Matcher varMatcher = VAR_PATTERN.matcher(line);
         while (varMatcher.find()) {
             processVariable(currentState,
@@ -104,7 +137,8 @@ public class SmvTraceParser {
 
         Matcher envMatcher = ENV_VAR_PATTERN.matcher(line);
         while (envMatcher.find()) {
-            processEnvVariable(currentState, envMatcher.group(1), envMatcher.group(2));
+            processEnvVariable(currentState, envMatcher.group(1), envMatcher.group(2),
+                    deviceSmvMap, ruleExecutionValues, automationLinkAttackValues);
         }
     }
 
@@ -119,7 +153,7 @@ public class SmvTraceParser {
         }
 
         String cleanValue = value.replace(";", "").trim();
-        DeviceSmvData smv = findDeviceByIdOrName(deviceSmvMap, deviceId);
+        DeviceSmvData smv = findDeviceById(deviceSmvMap, deviceId);
         if (smv == null) {
             log.debug("Unmapped device variable ignored: {}.{} = {}", deviceId, attr, value);
             return;
@@ -130,7 +164,9 @@ public class SmvTraceParser {
             devTrace.setTemplateName(smv.getTemplateName());
         }
         if (devTrace.getDeviceLabel() == null) {
-            devTrace.setDeviceLabel(smv.getVarName() != null ? smv.getVarName() : deviceId);
+            devTrace.setDeviceLabel(smv.getDeviceLabel() != null
+                    ? smv.getDeviceLabel()
+                    : (smv.getVarName() != null ? smv.getVarName() : deviceId));
         }
         if (devTrace.getState() == null && stateName != null) {
             String matchedState = matchState(smv, stateName);
@@ -157,14 +193,24 @@ public class SmvTraceParser {
             return;
         }
 
+        if ("is_attack".equals(attr)) {
+            devTrace.setCompromised("TRUE".equalsIgnoreCase(cleanValue));
+            return;
+        }
+
+        if (isKnownDeviceVariable(smv, attr)) {
+            TraceVariableDto varTrace = findOrCreateVariable(devTrace, attr);
+            varTrace.setValue(cleanValue);
+            return;
+        }
+
         if (attr.startsWith("trust_")) {
             processTrustVariable(devTrace, smv, attr.substring("trust_".length()), cleanValue);
             return;
         }
 
         if (attr.startsWith("privacy_")) {
-            TraceTrustPrivacyDto privacy = findOrCreateTrustPrivacy(devTrace, false, attr.substring("privacy_".length()));
-            privacy.setPrivacy(cleanValue);
+            processPrivacyVariable(devTrace, smv, attr.substring("privacy_".length()), cleanValue);
             return;
         }
 
@@ -176,27 +222,312 @@ public class SmvTraceParser {
         varTrace.setValue(cleanValue);
     }
 
-    private void processEnvVariable(TraceStateDto state, String name, String value) {
+    private void processEnvVariable(TraceStateDto state,
+                                    String name,
+                                    String value,
+                                    Map<String, DeviceSmvData> deviceSmvMap,
+                                    Map<Integer, Boolean> ruleExecutionValues,
+                                    Map<Integer, Boolean> automationLinkAttackValues) {
         if (state == null || name == null || value == null) {
             return;
         }
 
-        if (state.getEnvVariables() == null) {
-            state.setEnvVariables(new ArrayList<>());
-        }
-
         String cleanValue = value.replace(";", "").trim();
-        for (TraceVariableDto envVar : state.getEnvVariables()) {
-            if (name.equals(envVar.getName())) {
-                envVar.setValue(cleanValue);
+        Matcher ruleProbeMatcher = RULE_EXECUTION_PROBE_PATTERN.matcher(name);
+        if (ruleProbeMatcher.matches()) {
+            int ruleIndex = Integer.parseInt(ruleProbeMatcher.group(1));
+            ruleExecutionValues.put(ruleIndex, "TRUE".equalsIgnoreCase(cleanValue));
+            return;
+        }
+        Matcher automationLinkMatcher = AUTOMATION_LINK_ATTACK_PATTERN.matcher(name);
+        if (automationLinkMatcher.matches()) {
+            int ruleIndex = Integer.parseInt(automationLinkMatcher.group(1));
+            automationLinkAttackValues.put(ruleIndex, "TRUE".equalsIgnoreCase(cleanValue));
+            return;
+        }
+        if (SmvConstants.NUSMV_COMPROMISED_POINT_COUNT.equals(name)) {
+            putStateVariable(state.getGlobalVariables(), state::setGlobalVariables,
+                    SmvConstants.TRACE_COMPROMISED_POINT_COUNT, cleanValue);
+            return;
+        }
+        String publicName = toPublicEnvironmentVariableName(name, deviceSmvMap);
+        if (isGeneratedEnvironmentVariableName(name, deviceSmvMap)) {
+            putStateVariable(state.getEnvVariables(), state::setEnvVariables, publicName, cleanValue);
+        } else {
+            putStateVariable(state.getGlobalVariables(), state::setGlobalVariables, name, cleanValue);
+        }
+    }
+
+    private void finalizeTriggeredRules(TraceStateDto state,
+                                        Map<Integer, Boolean> ruleExecutionValues,
+                                        List<RuleDto> rules) {
+        List<TraceTriggeredRuleDto> triggeredRules = new ArrayList<>();
+        ruleExecutionValues.entrySet().stream()
+                .filter(entry -> Boolean.TRUE.equals(entry.getValue()))
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    int index = entry.getKey();
+                    if (rules == null || index < 0 || index >= rules.size()) {
+                        log.warn("Trace rule probe {} has no matching submitted rule snapshot", index);
+                        return;
+                    }
+                    RuleDto rule = rules.get(index);
+                    if (rule == null) {
+                        return;
+                    }
+                    String label = rule.getRuleString();
+                    if (label != null && label.isBlank()) {
+                        label = null;
+                    }
+                    triggeredRules.add(TraceTriggeredRuleDto.builder()
+                            .ruleId(rule.getId() != null ? String.valueOf(rule.getId()) : null)
+                            .ruleLabel(label)
+                            .build());
+                });
+        state.setTriggeredRules(triggeredRules);
+    }
+
+    private void finalizeCompromisedAutomationLinks(TraceStateDto state,
+                                                      Map<Integer, Boolean> attackValues,
+                                                      List<RuleDto> rules) {
+        List<TraceTriggeredRuleDto> compromisedLinks = new ArrayList<>();
+        attackValues.entrySet().stream()
+                .filter(entry -> Boolean.TRUE.equals(entry.getValue()))
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    int index = entry.getKey();
+                    if (rules == null || index < 0 || index >= rules.size()) {
+                        log.warn("Trace automation-link attack choice {} has no matching submitted rule snapshot", index);
+                        return;
+                    }
+                    RuleDto rule = rules.get(index);
+                    if (rule == null) {
+                        return;
+                    }
+                    String label = rule.getRuleString();
+                    if (label != null && label.isBlank()) {
+                        label = null;
+                    }
+                    compromisedLinks.add(TraceTriggeredRuleDto.builder()
+                            .ruleId(rule.getId() != null ? String.valueOf(rule.getId()) : null)
+                            .ruleLabel(label)
+                            .build());
+                });
+        state.setCompromisedAutomationLinks(compromisedLinks);
+    }
+
+    /** NuSMV emits deltas after the first state; API trace states are complete snapshots. */
+    private void materializeCompleteState(TraceStateDto current, TraceStateDto previous) {
+        if (current == null || previous == null) {
+            return;
+        }
+        current.setDevices(mergeDevices(previous.getDevices(), current.getDevices()));
+        current.setEnvVariables(mergeVariables(previous.getEnvVariables(), current.getEnvVariables()));
+        current.setGlobalVariables(mergeVariables(previous.getGlobalVariables(), current.getGlobalVariables()));
+        current.setTrustPrivacies(mergeTrustPrivacy(
+                previous.getTrustPrivacies(), current.getTrustPrivacies()));
+    }
+
+    private List<TraceDeviceDto> mergeDevices(List<TraceDeviceDto> previous,
+                                              List<TraceDeviceDto> current) {
+        LinkedHashMap<String, TraceDeviceDto> merged = new LinkedHashMap<>();
+        if (previous != null) {
+            for (TraceDeviceDto device : previous) {
+                if (device != null && device.getDeviceId() != null) {
+                    merged.put(device.getDeviceId(), copyDevice(device));
+                }
+            }
+        }
+        if (current != null) {
+            for (TraceDeviceDto update : current) {
+                if (update == null || update.getDeviceId() == null) {
+                    continue;
+                }
+                TraceDeviceDto target = merged.computeIfAbsent(
+                        update.getDeviceId(), ignored -> new TraceDeviceDto());
+                mergeDevice(target, update);
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private TraceDeviceDto copyDevice(TraceDeviceDto source) {
+        TraceDeviceDto copy = new TraceDeviceDto();
+        mergeDevice(copy, source);
+        return copy;
+    }
+
+    private void mergeDevice(TraceDeviceDto target, TraceDeviceDto update) {
+        if (update.getDeviceId() != null) target.setDeviceId(update.getDeviceId());
+        if (update.getDeviceLabel() != null) target.setDeviceLabel(update.getDeviceLabel());
+        if (update.getTemplateName() != null) target.setTemplateName(update.getTemplateName());
+        if (update.getState() != null) target.setState(update.getState());
+        if (update.getMode() != null) target.setMode(update.getMode());
+        if (update.getCompromised() != null) target.setCompromised(update.getCompromised());
+        List<TraceVariableDto> variables = mergeVariables(target.getVariables(), update.getVariables());
+        target.setVariables(variables != null ? variables : new ArrayList<>());
+        target.setTrustPrivacy(mergeTrustPrivacy(target.getTrustPrivacy(), update.getTrustPrivacy()));
+        target.setPrivacies(mergeTrustPrivacy(target.getPrivacies(), update.getPrivacies()));
+    }
+
+    private List<TraceVariableDto> mergeVariables(List<TraceVariableDto> previous,
+                                                  List<TraceVariableDto> current) {
+        if ((previous == null || previous.isEmpty()) && (current == null || current.isEmpty())) {
+            return null;
+        }
+        LinkedHashMap<String, TraceVariableDto> merged = new LinkedHashMap<>();
+        if (previous != null) {
+            for (TraceVariableDto variable : previous) {
+                if (variable != null && variable.getName() != null) {
+                    merged.put(variable.getName(), copyVariable(variable));
+                }
+            }
+        }
+        if (current != null) {
+            for (TraceVariableDto update : current) {
+                if (update == null || update.getName() == null) continue;
+                TraceVariableDto target = merged.computeIfAbsent(update.getName(), ignored -> {
+                    TraceVariableDto created = new TraceVariableDto();
+                    created.setName(update.getName());
+                    return created;
+                });
+                if (update.getValue() != null) target.setValue(update.getValue());
+                if (update.getTrust() != null) target.setTrust(update.getTrust());
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private TraceVariableDto copyVariable(TraceVariableDto source) {
+        TraceVariableDto copy = new TraceVariableDto();
+        copy.setName(source.getName());
+        copy.setValue(source.getValue());
+        copy.setTrust(source.getTrust());
+        return copy;
+    }
+
+    private List<TraceTrustPrivacyDto> mergeTrustPrivacy(List<TraceTrustPrivacyDto> previous,
+                                                         List<TraceTrustPrivacyDto> current) {
+        if ((previous == null || previous.isEmpty()) && (current == null || current.isEmpty())) {
+            return null;
+        }
+        LinkedHashMap<String, TraceTrustPrivacyDto> merged = new LinkedHashMap<>();
+        if (previous != null) {
+            for (TraceTrustPrivacyDto item : previous) {
+                if (item != null && item.getName() != null) {
+                    merged.put(trustPrivacyKey(item), copyTrustPrivacy(item));
+                }
+            }
+        }
+        if (current != null) {
+            for (TraceTrustPrivacyDto update : current) {
+                if (update == null || update.getName() == null) continue;
+                String key = trustPrivacyKey(update);
+                TraceTrustPrivacyDto target = merged.computeIfAbsent(key, ignored -> {
+                    TraceTrustPrivacyDto created = new TraceTrustPrivacyDto();
+                    created.setName(update.getName());
+                    created.setPropertyScope(update.getPropertyScope());
+                    created.setMode(update.getMode());
+                    return created;
+                });
+                if (update.getTrust() != null) target.setTrust(update.getTrust());
+                if (update.getPrivacy() != null) target.setPrivacy(update.getPrivacy());
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private TraceTrustPrivacyDto copyTrustPrivacy(TraceTrustPrivacyDto source) {
+        TraceTrustPrivacyDto copy = new TraceTrustPrivacyDto();
+        copy.setName(source.getName());
+        copy.setPropertyScope(source.getPropertyScope());
+        copy.setMode(source.getMode());
+        copy.setTrust(source.getTrust());
+        copy.setPrivacy(source.getPrivacy());
+        return copy;
+    }
+
+    private String trustPrivacyKey(TraceTrustPrivacyDto item) {
+        return String.join("\u0000",
+                Objects.toString(item.getPropertyScope(), ""),
+                Objects.toString(item.getMode(), ""),
+                Objects.toString(item.getName(), ""));
+    }
+
+    private void putStateVariable(List<TraceVariableDto> variables,
+                                  Consumer<List<TraceVariableDto>> setter,
+                                  String name,
+                                  String value) {
+        List<TraceVariableDto> effectiveVariables = variables;
+        if (effectiveVariables == null) {
+            effectiveVariables = new ArrayList<>();
+            setter.accept(effectiveVariables);
+        }
+        for (TraceVariableDto variable : effectiveVariables) {
+            if (name.equals(variable.getName())) {
+                variable.setValue(value);
                 return;
             }
         }
-
         TraceVariableDto created = new TraceVariableDto();
         created.setName(name);
-        created.setValue(cleanValue);
-        state.getEnvVariables().add(created);
+        created.setValue(value);
+        effectiveVariables.add(created);
+    }
+
+    private String toPublicEnvironmentVariableName(String smvName, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (!isGeneratedEnvironmentVariableName(smvName, deviceSmvMap)) {
+            return smvName;
+        }
+
+        return smvName.substring("a_".length());
+    }
+
+    private boolean isGeneratedEnvironmentVariableName(String smvName, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (smvName == null || !smvName.startsWith("a_")) {
+            return false;
+        }
+        String candidate = smvName.substring("a_".length());
+        return isKnownEnvironmentVariable(candidate, deviceSmvMap);
+    }
+
+    private boolean isKnownEnvironmentVariable(String name, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (name == null || name.isBlank() || deviceSmvMap == null || deviceSmvMap.isEmpty()) {
+            return false;
+        }
+
+        for (DeviceSmvData smv : deviceSmvMap.values()) {
+            if (smv == null) {
+                continue;
+            }
+            if (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(name)) {
+                return true;
+            }
+            if (smv.getImpactedEnvironmentVariables() != null
+                    && smv.getImpactedEnvironmentVariables().containsKey(name)) {
+                return true;
+            }
+            if (smv.getImpactedVariables() != null && smv.getImpactedVariables().contains(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isKnownDeviceVariable(DeviceSmvData smv, String name) {
+        if (smv == null || name == null || name.isBlank()) {
+            return false;
+        }
+        if (smv.getVariables() != null) {
+            for (DeviceManifest.InternalVariable variable : smv.getVariables()) {
+                if (variable != null && name.equals(variable.getName())) {
+                    return true;
+                }
+            }
+        }
+        return (smv.getEnvVariables() != null && smv.getEnvVariables().containsKey(name))
+                || (smv.getImpactedEnvironmentVariables() != null
+                && smv.getImpactedEnvironmentVariables().containsKey(name));
     }
 
     private void processTrustVariable(TraceDeviceDto devTrace,
@@ -207,32 +538,77 @@ public class SmvTraceParser {
             return;
         }
 
-        boolean modeTrust = false;
-        if (smv.getModes() != null) {
-            for (String mode : smv.getModes()) {
-                if (targetName.startsWith(mode + "_")) {
-                    String stateName = targetName.substring((mode + "_").length());
-                    List<String> modeStates = smv.getModeStates() != null ? smv.getModeStates().get(mode) : null;
-                    if (modeStates != null && modeStates.contains(stateName)) {
-                        modeTrust = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (modeTrust) {
-            TraceTrustPrivacyDto trust = findOrCreateTrustPrivacy(devTrace, true, targetName);
+        StateProperty stateProperty = resolveStateProperty(smv, targetName);
+        if (stateProperty != null) {
+            TraceTrustPrivacyDto trust = findOrCreateTrustPrivacy(
+                    devTrace, true, "state", stateProperty.state(), stateProperty.mode());
             trust.setTrust("trusted".equals(value));
             return;
         }
 
+        if (!isKnownDeviceVariable(smv, targetName)) {
+            log.debug("Ignoring unmapped generated trust label '{}' for device '{}'",
+                    targetName, devTrace.getDeviceId());
+            return;
+        }
         TraceVariableDto variable = findOrCreateVariable(devTrace, targetName);
         variable.setTrust(value);
     }
 
+    private void processPrivacyVariable(TraceDeviceDto devTrace,
+                                        DeviceSmvData smv,
+                                        String targetName,
+                                        String value) {
+        if (targetName == null || targetName.isBlank()) {
+            return;
+        }
+        StateProperty stateProperty = resolveStateProperty(smv, targetName);
+        if (stateProperty != null) {
+            TraceTrustPrivacyDto privacy = findOrCreateTrustPrivacy(
+                    devTrace, false, "state", stateProperty.state(), stateProperty.mode());
+            privacy.setPrivacy(value);
+            return;
+        }
+        String scope;
+        if (isKnownDeviceVariable(smv, targetName)) {
+            scope = "variable";
+        } else if (isKnownContent(smv, targetName)) {
+            scope = "content";
+        } else {
+            log.debug("Ignoring unmapped generated privacy label '{}' for device '{}'",
+                    targetName, devTrace.getDeviceId());
+            return;
+        }
+        TraceTrustPrivacyDto privacy = findOrCreateTrustPrivacy(
+                devTrace, false, scope, targetName, null);
+        privacy.setPrivacy(value);
+    }
+
+    private StateProperty resolveStateProperty(DeviceSmvData smv, String generatedName) {
+        if (smv == null || generatedName == null || smv.getModes() == null) {
+            return null;
+        }
+        for (String mode : smv.getModes()) {
+            if (!generatedName.startsWith(mode + "_")) {
+                continue;
+            }
+            String stateName = generatedName.substring((mode + "_").length());
+            List<String> modeStates = smv.getModeStates() != null ? smv.getModeStates().get(mode) : null;
+            if (modeStates != null && modeStates.contains(stateName)) {
+                return new StateProperty(mode, stateName);
+            }
+        }
+        return null;
+    }
+
+    private boolean isKnownContent(DeviceSmvData smv, String name) {
+        return smv != null && smv.getContents() != null && smv.getContents().stream()
+                .anyMatch(content -> content != null && name.equals(content.getName()));
+    }
+
+    private record StateProperty(String mode, String state) {}
+
     private boolean isInternalControlVariable(String attr) {
-        // is_attack 不再过滤：前端需要知道反例路径中哪些设备被攻击
         return attr.endsWith("_rate") || attr.endsWith("_a");
     }
 
@@ -267,7 +643,9 @@ public class SmvTraceParser {
 
     private TraceTrustPrivacyDto findOrCreateTrustPrivacy(TraceDeviceDto devTrace,
                                                           boolean trustList,
-                                                          String name) {
+                                                          String propertyScope,
+                                                          String name,
+                                                          String mode) {
         List<TraceTrustPrivacyDto> list = trustList ? devTrace.getTrustPrivacy() : devTrace.getPrivacies();
         if (list == null) {
             list = new ArrayList<>();
@@ -279,13 +657,17 @@ public class SmvTraceParser {
         }
 
         for (TraceTrustPrivacyDto item : list) {
-            if (name.equals(item.getName())) {
+            if (name.equals(item.getName())
+                    && Objects.equals(propertyScope, item.getPropertyScope())
+                    && Objects.equals(mode, item.getMode())) {
                 return item;
             }
         }
 
         TraceTrustPrivacyDto created = new TraceTrustPrivacyDto();
         created.setName(name);
+        created.setPropertyScope(propertyScope);
+        created.setMode(mode);
         list.add(created);
         return created;
     }
@@ -298,7 +680,7 @@ public class SmvTraceParser {
         }
 
         for (TraceDeviceDto dev : state.getDevices()) {
-            DeviceSmvData smv = findDeviceByIdOrName(deviceSmvMap, dev.getDeviceId());
+            DeviceSmvData smv = findDeviceById(deviceSmvMap, dev.getDeviceId());
             if (smv == null || smv.getModes() == null || smv.getModes().isEmpty()) {
                 continue;
             }
@@ -353,14 +735,11 @@ public class SmvTraceParser {
 
             if (dev.getVariables() != null) {
                 dev.getVariables().removeIf(v -> v.getName() != null && v.getName().startsWith("__mode__"));
-                if (dev.getVariables().isEmpty()) {
-                    dev.setVariables(null);
-                }
             }
         }
     }
 
-    private DeviceSmvData findDeviceByIdOrName(Map<String, DeviceSmvData> deviceSmvMap, String id) {
+    private DeviceSmvData findDeviceById(Map<String, DeviceSmvData> deviceSmvMap, String id) {
         if (deviceSmvMap == null) {
             return null;
         }
@@ -376,11 +755,6 @@ public class SmvTraceParser {
             }
         }
 
-        for (DeviceSmvData smv : deviceSmvMap.values()) {
-            if (smv.getTemplateName() != null && smv.getTemplateName().equals(id)) {
-                return smv;
-            }
-        }
         return null;
     }
 

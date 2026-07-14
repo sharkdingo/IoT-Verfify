@@ -1,0 +1,343 @@
+{
+  "schema": "iot-verify.board-scene",
+  "version": 4,
+  "templates": [
+    {
+      "name": "Alarm",
+      "manifest": {
+        "Name": "Alarm",
+        "Description": "",
+        "InternalVariables": [],
+        "Modes": [
+          "AlertState"
+        ],
+        "InitState": "both",
+        "WorkingStates": [
+          {
+            "Name": "both",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "public"
+          },
+          {
+            "Name": "off",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "public"
+          },
+          {
+            "Name": "siren",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "public"
+          },
+          {
+            "Name": "strobe",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "public"
+          }
+        ],
+        "Transitions": [],
+        "APIs": [
+          {
+            "Name": "both",
+            "StartState": "",
+            "EndState": "both",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          },
+          {
+            "Name": "off",
+            "StartState": "",
+            "EndState": "off",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          },
+          {
+            "Name": "siren",
+            "StartState": "",
+            "EndState": "siren",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          },
+          {
+            "Name": "strobe",
+            "StartState": "",
+            "EndState": "strobe",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "Door",
+      "manifest": {
+        "Name": "Door",
+        "Description": "",
+        "InternalVariables": [],
+        "Modes": [
+          "LockState"
+        ],
+        "InitState": "locked",
+        "WorkingStates": [
+          {
+            "Name": "locked",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "private"
+          },
+          {
+            "Name": "unlocked",
+            "Dynamics": [],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "private"
+          }
+        ],
+        "Transitions": [],
+        "APIs": [
+          {
+            "Name": "lock",
+            "StartState": "",
+            "EndState": "locked",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          },
+          {
+            "Name": "unlock",
+            "StartState": "",
+            "EndState": "unlocked",
+            "Trigger": null,
+            "Assignments": [],
+            "Signal": true,
+            "Description": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "Door RFID",
+      "manifest": {
+        "Name": "Door RFID",
+        "Description": "",
+        "InternalVariables": [
+          {
+            "Name": "RFID",
+            "Description": "",
+            "IsInside": true,
+            "FalsifiableWhenCompromised": true,
+            "Trust": "untrusted",
+            "Privacy": "private",
+            "Values": [
+              "authorized",
+              "not authorized"
+            ]
+          }
+        ],
+        "Modes": [],
+        "InitState": "",
+        "WorkingStates": [],
+        "Transitions": [],
+        "APIs": []
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "rfid_1",
+      "templateName": "Door RFID",
+      "label": "Front-door Badge Reader",
+      "position": {
+        "x": 80,
+        "y": 120
+      },
+      "variables": [
+        {
+          "name": "RFID",
+          "value": "authorized",
+          "trust": "trusted"
+        }
+      ],
+      "privacies": [
+        {
+          "name": "RFID",
+          "privacy": "private"
+        }
+      ],
+      "width": 176,
+      "height": 128
+    },
+    {
+      "id": "door_1",
+      "templateName": "Door",
+      "label": "Front Door",
+      "position": {
+        "x": 370,
+        "y": 70
+      },
+      "state": "locked",
+      "currentStateTrust": "trusted",
+      "currentStatePrivacy": "private",
+      "width": 176,
+      "height": 128
+    },
+    {
+      "id": "alarm_1",
+      "templateName": "Alarm",
+      "label": "Entry Alarm",
+      "position": {
+        "x": 370,
+        "y": 250
+      },
+      "state": "off",
+      "currentStateTrust": "trusted",
+      "currentStatePrivacy": "public",
+      "width": 176,
+      "height": 128
+    }
+  ],
+  "environmentVariables": [],
+  "rules": [
+    {
+      "name": "When the badge is authorized, unlock the front door",
+      "sources": [
+        {
+          "fromId": "rfid_1",
+          "fromApi": "RFID",
+          "itemType": "variable",
+          "relation": "=",
+          "value": "authorized"
+        }
+      ],
+      "toId": "door_1",
+      "toApi": "unlock"
+    },
+    {
+      "name": "When the badge is not authorized, sound the entry alarm",
+      "sources": [
+        {
+          "fromId": "rfid_1",
+          "fromApi": "RFID",
+          "itemType": "variable",
+          "relation": "=",
+          "value": "not authorized"
+        }
+      ],
+      "toId": "alarm_1",
+      "toApi": "siren"
+    }
+  ],
+  "specs": [
+    {
+      "templateId": "4",
+      "aConditions": [],
+      "ifConditions": [
+        {
+          "deviceId": "rfid_1",
+          "targetType": "variable",
+          "key": "RFID",
+          "relation": "=",
+          "value": "authorized"
+        }
+      ],
+      "thenConditions": [
+        {
+          "deviceId": "door_1",
+          "targetType": "mode",
+          "key": "LockState",
+          "relation": "=",
+          "value": "unlocked"
+        }
+      ]
+    },
+    {
+      "templateId": "4",
+      "aConditions": [],
+      "ifConditions": [
+        {
+          "deviceId": "rfid_1",
+          "targetType": "variable",
+          "key": "RFID",
+          "relation": "=",
+          "value": "not authorized"
+        }
+      ],
+      "thenConditions": [
+        {
+          "deviceId": "alarm_1",
+          "targetType": "mode",
+          "key": "AlertState",
+          "relation": "=",
+          "value": "siren"
+        }
+      ]
+    },
+    {
+      "templateId": "3",
+      "aConditions": [
+        {
+          "deviceId": "rfid_1",
+          "targetType": "variable",
+          "key": "RFID",
+          "relation": "=",
+          "value": "not authorized"
+        },
+        {
+          "deviceId": "door_1",
+          "targetType": "mode",
+          "key": "LockState",
+          "relation": "=",
+          "value": "unlocked"
+        }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    },
+    {
+      "templateId": "7",
+      "aConditions": [
+        {
+          "deviceId": "door_1",
+          "targetType": "mode",
+          "key": "LockState",
+          "relation": "=",
+          "value": "unlocked"
+        }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    },
+    {
+      "templateId": "1",
+      "aConditions": [
+        {
+          "deviceId": "rfid_1",
+          "targetType": "privacy",
+          "key": "RFID",
+          "propertyScope": "variable",
+          "relation": "=",
+          "value": "private"
+        }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    }
+  ]
+}

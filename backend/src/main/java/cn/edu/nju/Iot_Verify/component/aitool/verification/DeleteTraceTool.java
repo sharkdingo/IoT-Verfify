@@ -2,9 +2,11 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -34,13 +37,19 @@ public class DeleteTraceTool extends AbstractAiTool {
 
     @Override
     public LlmToolSpec getDefinition() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("traceId", Map.of("type", "integer", "description", "Verification trace ID."));
+        properties.put("confirmed", Map.of(
+                "type", "boolean",
+                "description", "Use false to preview the trace. Use true only in a later turn after explicit user confirmation."
+        ));
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
-                Map.of("traceId", Map.of("type", "integer", "description", "Verification trace ID.")),
-                List.of("traceId")
+                properties,
+                List.of("traceId", "confirmed")
         );
 
-        return LlmToolSpec.of(getName(), "Delete a saved verification trace by traceId.", schema);
+        return LlmToolSpec.of(getName(), "Preview or, after explicit two-turn confirmation, delete a saved verification trace.", schema);
     }
 
     @Override
@@ -53,24 +62,32 @@ public class DeleteTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            if (!args.has("traceId") || !args.path("traceId").canConvertToLong()) {
-                return errorJson("'traceId' is required.", "VALIDATION_ERROR", 400);
-            }
-            long traceId = args.path("traceId").asLong();
-            if (traceId <= 0) {
-                return errorJson("'traceId' must be positive.", "VALIDATION_ERROR", 400);
+            requireOnlyFields(args, "arguments", Set.of("traceId", "confirmed"));
+            long traceId = positiveLongArg(args, "traceId");
+
+            TraceDto trace = verificationService.getTrace(userId, traceId);
+            boolean confirmed = booleanArg(args, "confirmed", false);
+            if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+                Map<String, Object> preview = new LinkedHashMap<>();
+                preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this saved verification trace.");
+                preview.put("operation", "preview");
+                preview.put("requiresUserConfirmation", true);
+                preview.put("traceId", traceId);
+                preview.put("violatedSpecification", ModelTraceToolPresenter.violatedSpecification(trace));
+                preview.put("stateCount", safeList(trace.getStates()).size());
+                return readOnlySuccessJson(preview, "Verification trace deletion preview prepared; no changes were made.");
             }
 
-            // Pre-check existence because deleteTrace is idempotent in service implementation.
-            TraceDto trace = verificationService.getTrace(userId, traceId);
             verificationService.deleteTrace(userId, traceId);
 
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("traceId", traceId);
-            body.put("violatedSpecId", trace.getViolatedSpecId());
+            body.put("violatedSpecification", ModelTraceToolPresenter.violatedSpecification(trace));
             body.put("deleted", true);
             body.put("message", "Trace deleted.");
             return successJson(body, "Trace deleted.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("delete_trace busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

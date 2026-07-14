@@ -7,7 +7,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
-import java.util.Optional;
 
 public interface DeviceNodeRepository extends JpaRepository<DeviceNodePo, DeviceNodeId> {
     List<DeviceNodePo> findByUserId(Long userId);
@@ -25,6 +24,5 @@ public interface DeviceNodeRepository extends JpaRepository<DeviceNodePo, Device
     List<DeviceNodePo> searchByUserIdAndTemplateOrLabel(@Param("userId") Long userId,
                                                          @Param("keyword") String keyword);
 
-    Optional<DeviceNodePo> findByUserIdAndLabel(Long userId, String label);
     void deleteByUserId(Long userId);
 }

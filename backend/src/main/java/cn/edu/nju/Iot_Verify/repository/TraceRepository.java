@@ -24,6 +24,10 @@ public interface TraceRepository extends JpaRepository<TracePo, Long> {
      * 根据用户ID和验证任务ID查询所有轨迹
      */
     List<TracePo> findByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
+
+    long countByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
+
+    void deleteByUserIdAndVerificationTaskId(Long userId, Long verificationTaskId);
     
     /**
      * 删除用户的所有轨迹

@@ -1,6 +1,6 @@
 # Installation
 
-> Verified against code on 2026-07-05. Source: root `README.md`, `backend/README.md`,
+> Verified against code on 2026-07-09. Source: root `README.md`, `backend/README.md`,
 > `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`,
 > `frontend/playwright.config.ts`.
 
@@ -35,7 +35,7 @@ NuSMV -version   # should report 2.6+ (not nuXmv)
 
 ### AI features
 
-AI-powered assistance (chat, rule/spec/device recommendations) requires an API key for an OpenAI-compatible endpoint (the official OpenAI API or a relay). Set it via `OPENAI_API_KEY`, and point `OPENAI_BASE_URL` at your endpoint (see [configuration.md](./configuration.md)).
+AI-powered assistance (chat, rule/spec/device recommendations) requires an API key for an OpenAI-compatible endpoint (the official OpenAI API or a relay). Set it via `IOT_VERIFY_OPENAI_API_KEY`, and point `IOT_VERIFY_OPENAI_BASE_URL` at your endpoint (see [configuration.md](./configuration.md)).
 
 ## Steps
 
@@ -55,15 +55,17 @@ All backend settings can be overridden by environment variables. At minimum you 
 
 - `DB_PASSWORD` — your MySQL password
 - `JWT_SECRET` — signing key for JWT auth (min 256 bits)
-- `OPENAI_API_KEY` — required for AI features
-- `OPENAI_BASE_URL` — OpenAI-compatible endpoint (defaults to the official API; set for a relay)
+- `IOT_VERIFY_OPENAI_API_KEY` — required for AI features
+- `IOT_VERIFY_OPENAI_BASE_URL` — OpenAI-compatible endpoint (defaults to the official API; set for a relay)
+- `IOT_VERIFY_OPENAI_MODEL` — model id or deployment name sent to the endpoint
 - `NUSMV_PATH` — absolute path to the NuSMV executable (required for verification)
 
 ```bash
 export DB_PASSWORD="your_mysql_password"
 export JWT_SECRET="your-secret-key-here-min-256-bits"
-export OPENAI_API_KEY="your-api-key"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+export IOT_VERIFY_OPENAI_API_KEY="your-api-key"
+export IOT_VERIFY_OPENAI_BASE_URL="https://api.openai.com/v1"
+export IOT_VERIFY_OPENAI_MODEL="gpt-5.5"
 export NUSMV_PATH="/path/to/NuSMV"
 ```
 
@@ -102,7 +104,7 @@ curl -X POST http://localhost:8080/api/auth/register \
 # Login
 curl -X POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"phone":"13800138000","password":"password123"}'
+  -d '{"identifier":"testuser","password":"password123"}'
 ```
 
 A successful call returns the standard envelope `{"code": 200, "message": "success", "data": {...}}`. If either call fails, see [../guides/troubleshooting.md](../guides/troubleshooting.md).

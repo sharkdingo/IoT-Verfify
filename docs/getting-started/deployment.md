@@ -22,7 +22,7 @@ When the backend starts under the `prod` or `production` profile, `ProductionSaf
 
 - `JWT_SECRET`
 - `DB_PASSWORD`
-- `OPENAI_API_KEY`
+- `IOT_VERIFY_OPENAI_API_KEY`
 
 If any of these still hold their default value, startup aborts with an error. Set real values before deploying — see [configuration.md](./configuration.md) for how each variable is resolved.
 

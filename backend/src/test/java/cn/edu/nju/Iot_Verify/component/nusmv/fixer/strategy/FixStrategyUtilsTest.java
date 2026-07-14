@@ -36,6 +36,24 @@ class FixStrategyUtilsTest {
         return map;
     }
 
+    private Map<String, DeviceSmvData> buildEnvironmentDeviceMap(String varName, String environmentName) {
+        DeviceManifest.InternalVariable env = DeviceManifest.InternalVariable.builder()
+                .name(environmentName)
+                .isInside(false)
+                .lowerBound(0)
+                .upperBound(100)
+                .build();
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName(varName);
+        smv.setModuleName(varName + "Module");
+        smv.setModes(List.of("default"));
+        smv.getModeStates().put("default", new ArrayList<>(List.of("on", "off")));
+        smv.setStates(List.of("on", "off"));
+        smv.setVariables(List.of(env));
+        smv.getEnvVariables().put(environmentName, env);
+        return Map.of(varName, smv);
+    }
+
     private SpecificationDto buildSpec(SpecConditionDto... conditions) {
         SpecificationDto spec = new SpecificationDto();
         spec.setId("s1");
@@ -63,17 +81,17 @@ class FixStrategyUtilsTest {
         // rule0: conditions on deviceA; rule1: conditions on deviceA; rule2: conditions on deviceB
         RuleDto rule0 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceA").attribute("temperature").relation(">").value("30").build()))
+                        .deviceName("deviceA").targetType("variable").attribute("temperature").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceB").action("on").build())
                 .build();
         RuleDto rule1 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceA").attribute("temperature").relation("<").value("10").build()))
+                        .deviceName("deviceA").targetType("variable").attribute("temperature").relation("<").value("10").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceC").action("off").build())
                 .build();
         RuleDto rule2 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceC").attribute("state").relation("=").value("on").build()))
+                        .deviceName("deviceC").targetType("state").attribute("state").relation("=").value("on").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceC").action("off").build())
                 .build();
         List<RuleDto> allRules = List.of(rule0, rule1, rule2);
@@ -96,7 +114,7 @@ class FixStrategyUtilsTest {
     void expandRuleIndices_emptySpec_returnsFaultRulesOnly() {
         RuleDto rule0 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceA").attribute("temp").relation(">").value("30").build()))
+                        .deviceName("deviceA").targetType("variable").attribute("temp").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceB").action("on").build())
                 .build();
         List<FaultRuleDto> faultRules = List.of(FaultRuleDto.builder().ruleIndex(0).build());
@@ -112,13 +130,13 @@ class FixStrategyUtilsTest {
     void expandRuleIndices_commandDeviceMatch() {
         RuleDto rule0 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceB").attribute("temp").relation(">").value("30").build()))
+                        .deviceName("deviceB").targetType("variable").attribute("temp").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceB").action("on").build())
                 .build();
         // rule1 has no condition on deviceA, but command targets deviceA
         RuleDto rule1 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceB").attribute("temp").relation("<").value("10").build()))
+                        .deviceName("deviceB").targetType("variable").attribute("temp").relation("<").value("10").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceA").action("on").build())
                 .build();
         List<RuleDto> allRules = List.of(rule0, rule1);
@@ -133,10 +151,10 @@ class FixStrategyUtilsTest {
     }
 
     @Test
-    void expandRuleIndices_usesSpecDeviceLabelWhenDeviceIdIsPersistentNodeId() {
+    void expandRuleIndices_ignoresSpecDeviceLabelWhenDeviceIdIsUnknown() {
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("LivingRoomAC").attribute("temperature").relation(">").value("30").build()))
+                        .deviceName("LivingRoomAC").targetType("variable").attribute("temperature").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("LivingRoomAC").action("on").build())
                 .build();
         SpecConditionDto specCond = buildSpecCond("node-1", "variable", "temperature", ">", "25");
@@ -146,15 +164,15 @@ class FixStrategyUtilsTest {
 
         Set<Integer> result = FixStrategyUtils.expandRuleIndices(null, List.of(rule), spec, deviceMap);
 
-        assertEquals(Set.of(0), result,
-                "scope expansion should resolve spec.deviceLabel when the persisted node id is not in the SMV map");
+        assertTrue(result.isEmpty(),
+                "deviceLabel is display-only; scope expansion must not resolve unknown deviceId through label fallback");
     }
 
     @Test
     void expandRuleIndices_nullFaultRules_scansSharedDeviceOnly() {
         RuleDto rule0 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("deviceA").attribute("temp").relation(">").value("30").build()))
+                        .deviceName("deviceA").targetType("variable").attribute("temp").relation(">").value("30").build()))
                 .command(RuleDto.Command.builder().deviceName("deviceB").action("on").build())
                 .build();
         SpecificationDto spec = buildSpec(buildSpecCond("deviceA", "variable", "temp", ">", "25"));
@@ -210,7 +228,99 @@ class FixStrategyUtilsTest {
     }
 
     @Test
-    void extractCandidateConditions_usesDeviceLabelWhenSpecDeviceIdIsPersistentNodeId() {
+    void extractCandidateConditions_modeMapping() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+
+        RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
+        SpecificationDto spec = buildSpec(
+                buildSpecCond("sensor", "mode", "default", "=", "on"));
+
+        List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
+                spec, rule, deviceMap, 5);
+
+        assertEquals(1, candidates.size());
+        assertEquals("default", candidates.get(0).getAttribute());
+        assertEquals("=", candidates.get(0).getRelation());
+        assertEquals("on", candidates.get(0).getValue());
+    }
+
+    @Test
+    void extractCandidateConditions_skipsCommandPostconditionButKeepsRealPrecondition() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("camera");
+        DeviceSmvData camera = deviceMap.get("camera");
+        camera.setModes(List.of("MachineState"));
+        camera.getModeStates().clear();
+        camera.getModeStates().put("MachineState", new ArrayList<>(List.of("off", "on", "takingphoto")));
+        camera.setStates(List.of("off", "on", "takingphoto"));
+        camera.setManifest(DeviceManifest.builder()
+                .name("Camera")
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("take photo")
+                        .startState("on")
+                        .endState("taking photo")
+                        .signal(true)
+                        .build()))
+                .build());
+
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("camera")
+                        .targetType("state")
+                        .attribute("state")
+                        .relation("=")
+                        .value("on")
+                        .build()))
+                .command(RuleDto.Command.builder().deviceName("camera").action("take photo").build())
+                .build();
+
+        List<RuleDto.Condition> postcondition = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "=", "taking photo")),
+                rule, deviceMap, 5);
+        assertTrue(postcondition.isEmpty(),
+                "a command's own EndState must not become the rule's trigger condition");
+
+        List<RuleDto.Condition> realPrecondition = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "=", "on")),
+                RuleDto.builder()
+                        .conditions(new ArrayList<>())
+                        .command(RuleDto.Command.builder().deviceName("camera").action("take photo").build())
+                        .build(),
+                deviceMap, 5);
+        assertEquals(1, realPrecondition.size(),
+                "a state that precedes the command remains a valid condition candidate");
+
+        RuleDto commandOnly = RuleDto.builder()
+                .conditions(new ArrayList<>())
+                .command(RuleDto.Command.builder().deviceName("camera").action("take photo").build())
+                .build();
+        List<RuleDto.Condition> contradictoryPrecondition = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "=", "off")),
+                commandOnly, deviceMap, 5);
+        assertTrue(contradictoryPrecondition.isEmpty(),
+                "a condition that contradicts the API StartState would make the command unreachable");
+
+        List<RuleDto.Condition> contradictoryNegativePrecondition = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "!=", "on")),
+                commandOnly, deviceMap, 5);
+        assertTrue(contradictoryNegativePrecondition.isEmpty(),
+                "negative conditions that are false in the API StartState are also unreachable");
+
+        List<RuleDto.Condition> compatibleNegativePrecondition = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "!=", "taking photo")),
+                commandOnly, deviceMap, 5);
+        assertEquals(1, compatibleNegativePrecondition.size(),
+                "a negative guard that is true in the API StartState remains eligible");
+
+        camera.getManifest().getApis().get(0).setStartState("_");
+        List<RuleDto.Condition> wildcardStartCandidate = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "state", null, "=", "off")),
+                commandOnly, deviceMap, 5);
+        assertEquals(1, wildcardStartCandidate.size(),
+                "a wildcard API StartState must not be treated as a proven contradiction");
+    }
+
+    @Test
+    void extractCandidateConditions_ignoresDeviceLabelWhenSpecDeviceIdIsUnknown() {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("LivingRoomAC");
 
         RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
@@ -221,8 +331,8 @@ class FixStrategyUtilsTest {
         List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
                 spec, rule, deviceMap, 5);
 
-        assertEquals(1, candidates.size());
-        assertEquals("LivingRoomAC", candidates.get(0).getDeviceName());
+        assertTrue(candidates.isEmpty(),
+                "deviceLabel is display-only; candidate extraction must not resolve unknown deviceId through label fallback");
     }
 
     @Test
@@ -272,7 +382,7 @@ class FixStrategyUtilsTest {
         // Rule already has temp>30
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("sensor").attribute("temperature").relation(">").value("30").build()))
+                        .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("30").build()))
                 .build();
         // Spec also has temp>30
         SpecificationDto spec = buildSpec(
@@ -319,9 +429,26 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("temperature").relation(">").value("30").build();
+                .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("30").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
+    }
+
+    @Test
+    void validateCandidateCondition_environmentVariableNamesAreLiteral() {
+        Map<String, DeviceSmvData> literalPrefixed = buildEnvironmentDeviceMap("sensor", "a_temperature");
+        RuleDto.Condition actualAPrefixedName = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("variable").attribute("a_temperature").relation(">").value("30").build();
+
+        assertTrue(FixStrategyUtils.validateCandidateCondition(actualAPrefixedName, literalPrefixed),
+                "a_ can be part of a real template variable name");
+
+        Map<String, DeviceSmvData> ordinary = buildEnvironmentDeviceMap("sensor", "temperature");
+        RuleDto.Condition generatedAlias = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("variable").attribute("a_temperature").relation(">").value("30").build();
+
+        assertFalse(FixStrategyUtils.validateCandidateCondition(generatedAlias, ordinary),
+                "a_temperature must not be treated as an alias for template variable temperature");
     }
 
     @Test
@@ -329,15 +456,45 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("=").value("on").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("=").value("on").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
 
     @Test
+    void validateCandidateCondition_validMode() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("mode").attribute("default").relation("=").value("on").build();
+
+        assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
+    }
+
+    @Test
+    void validateCandidateCondition_modeWithGreaterThan_rejected() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("mode").attribute("default").relation(">").value("on").build();
+
+        assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
+    }
+
+    @Test
+    void validateCandidateCondition_modeInvalidValue_rejected() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("mode").attribute("default").relation("=").value("missing").build();
+
+        assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
+    }
+
+    @Test
     void validateCandidateCondition_invalidDevice() {
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("nonexistent").attribute("temperature").relation(">").value("30").build();
+                .deviceName("nonexistent").targetType("variable").attribute("temperature").relation(">").value("30").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, Map.of()));
     }
@@ -347,7 +504,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("=").value("nonexistent_state").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("=").value("nonexistent_state").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -357,7 +514,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("unknownAttr").relation(">").value("30").build();
+                .deviceName("sensor").targetType("variable").attribute("unknownAttr").relation(">").value("30").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -367,7 +524,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("temperature").relation(null).value("30").build();
+                .deviceName("sensor").targetType("variable").attribute("temperature").relation(null).value("30").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -377,7 +534,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("temperature").relation(">").value("  ").build();
+                .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("  ").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -389,7 +546,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition c = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("temperature").relation(">").value("30").build();
+                .deviceName("sensor").targetType("variable").attribute("temperature").relation(">").value("30").build();
 
         String fp1 = FixStrategyUtils.conditionFingerprint(c, deviceMap);
         String fp2 = FixStrategyUtils.conditionFingerprint(c, deviceMap);
@@ -403,7 +560,7 @@ class FixStrategyUtilsTest {
     @Test
     void conditionFingerprint_nullDevice_returnsNull() {
         RuleDto.Condition c = RuleDto.Condition.builder()
-                .deviceName("nonexistent").attribute("temp").relation(">").value("30").build();
+                .deviceName("nonexistent").targetType("variable").attribute("temp").relation(">").value("30").build();
 
         assertNull(FixStrategyUtils.conditionFingerprint(c, Map.of()));
     }
@@ -416,7 +573,7 @@ class FixStrategyUtilsTest {
 
         // state conditions only allow = != in not_in — ">" should be rejected
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation(">").value("on").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation(">").value("on").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "state with > relation must be rejected (SmvMainModuleBuilder only allows = != in not_in)");
@@ -427,7 +584,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("<").value("on").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("<").value("on").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -438,7 +595,7 @@ class FixStrategyUtilsTest {
 
         // IN with both values valid
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("in").value("on,off").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("in").value("on,off").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -449,7 +606,7 @@ class FixStrategyUtilsTest {
 
         // IN with one invalid value
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("in").value("on,invalid_state").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("in").value("on,invalid_state").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "IN with any invalid state must be rejected");
@@ -460,7 +617,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("not in").value("on").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("not in").value("on").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -470,7 +627,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("!=").value("on").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("!=").value("on").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
     }
@@ -504,7 +661,7 @@ class FixStrategyUtilsTest {
 
         // "cool;high,heat;low" should split into ["cool;high", "heat;low"] by [,|] only
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("in").value("cool;high,heat;low").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("in").value("cool;high,heat;low").build();
 
         // cleanStateName("cool;high") → "cool_high" which is in states
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
@@ -516,7 +673,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("not in").value("off;off").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("not in").value("off;off").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "Multi-mode NOT_IN must preserve ; within tuples");
@@ -529,7 +686,7 @@ class FixStrategyUtilsTest {
 
         // "on;off" should split into ["on", "off"] for single-mode device
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("in").value("on;off").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("in").value("on;off").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "Single-mode IN should split ; as delimiter");
@@ -541,7 +698,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("=").value("cool").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("=").value("cool").build();
 
         assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "Single value on multi-mode device should be valid when exactly one mode matches");
@@ -553,7 +710,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("=").value("off").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("=").value("off").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "Single value matching multiple modes must be rejected (ambiguous)");
@@ -564,7 +721,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("=").value("turbo").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("=").value("turbo").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "Single value not in any mode must be rejected");
@@ -576,7 +733,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("=").value(";").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("=").value(";").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap),
                 "All-wildcard tuple must be rejected (resolveStateTupleCandidate:697 returns null)");
@@ -595,7 +752,7 @@ class FixStrategyUtilsTest {
         map.put("nomode", smv);
 
         RuleDto.Condition candidate = RuleDto.Condition.builder()
-                .deviceName("nomode").attribute("state").relation("=").value("on").build();
+                .deviceName("nomode").targetType("state").attribute("state").relation("=").value("on").build();
 
         assertFalse(FixStrategyUtils.validateCandidateCondition(candidate, map),
                 "State condition on no-mode device must be rejected (generator requires modes)");
@@ -610,7 +767,7 @@ class FixStrategyUtilsTest {
 
         // IN with two tuples separated by comma: "cool;high,heat;low"
         RuleDto.Condition c = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("in").value("cool;high,heat;low").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("in").value("cool;high,heat;low").build();
 
         String fp = FixStrategyUtils.conditionFingerprint(c, deviceMap);
 
@@ -632,7 +789,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
 
         RuleDto.Condition c = RuleDto.Condition.builder()
-                .deviceName("hvac").attribute("state").relation("not in").value("off;off").build();
+                .deviceName("hvac").targetType("state").attribute("state").relation("not in").value("off;off").build();
 
         String fp = FixStrategyUtils.conditionFingerprint(c, deviceMap);
 
@@ -640,10 +797,10 @@ class FixStrategyUtilsTest {
         // Single tuple "off;off" → cleanStateName → "offoff" or "off_off"
         // Wrong split would give "off,off" (two separate entries)
         String[] parts = fp.split("\\|");
-        assertEquals(4, parts.length, "fingerprint must have 4 pipe-separated segments: " + fp);
-        assertEquals("not in", parts[2], "relation segment");
+        assertEquals(5, parts.length, "fingerprint must have 5 pipe-separated segments: " + fp);
+        assertEquals("not in", parts[3], "relation segment");
         // The value segment should be a single cleaned tuple, not comma-separated two "off"s
-        String valSegment = parts[3];
+        String valSegment = parts[4];
         assertFalse("off,off".equals(valSegment),
                 "NOT_IN fingerprint must not split ; into two entries for multi-mode, got: " + fp);
     }
@@ -654,7 +811,7 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto.Condition c = RuleDto.Condition.builder()
-                .deviceName("sensor").attribute("state").relation("in").value("on;off").build();
+                .deviceName("sensor").targetType("state").attribute("state").relation("in").value("on;off").build();
 
         String fp = FixStrategyUtils.conditionFingerprint(c, deviceMap);
 

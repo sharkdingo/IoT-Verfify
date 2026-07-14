@@ -15,8 +15,8 @@ import org.springframework.validation.annotation.Validated;
  * matching API key; no code change is needed to switch providers.
  *
  * <p>Env mapping (see docs/getting-started/configuration.md):
- * {@code OPENAI_API_KEY} → {@code llm.api-key}, {@code OPENAI_BASE_URL} → {@code llm.base-url},
- * {@code OPENAI_MODEL} → {@code llm.model}.
+ * {@code IOT_VERIFY_OPENAI_API_KEY} → {@code llm.api-key}, {@code IOT_VERIFY_OPENAI_BASE_URL} → {@code llm.base-url},
+ * {@code IOT_VERIFY_OPENAI_MODEL} → {@code llm.model}.
  */
 @Data
 @Validated
@@ -31,7 +31,7 @@ public class LlmConfig {
     @NotBlank
     private String apiKey;
 
-    /** Model id/deployment name passed to the endpoint (e.g. {@code gpt-4o}). */
+    /** Model id/deployment name passed to the endpoint (e.g. {@code gpt-5.5}). */
     @NotBlank
     private String model;
 

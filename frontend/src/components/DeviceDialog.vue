@@ -1,12 +1,31 @@
 <script setup lang="ts">
 import {ref, watch, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
-import type {DeviceManifest} from '../types/device'
+import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/device'
+import type {DeviceNode} from '../types/node'
 import type {DeviceEdge} from '../types/edge'
-import type {Specification, SpecCondition} from '../types/spec'
-import {specTemplateDetails} from '../assets/config/specTemplates'
+import type {Specification} from '../types/spec'
+import { buildSpecFormula } from '@/utils/spec'
+import { resolveImpactEnvironmentDefinition } from '@/utils/device'
+import { specTemplateDetails } from '@/assets/config/specTemplates'
+import {
+  PRIVACY_OPTIONS,
+  TRUST_OPTIONS,
+  buildDeviceRuntimeConfig,
+  createDeviceRuntimeDraft,
+  findTemplateStatePrivacy,
+  findTemplateStateTrust,
+  getTemplateLocalVariables,
+  getTemplateWorkingStates,
+  resetDeviceRuntimeDraft,
+  templateVariableHasEnumValues,
+  templateVariableUsesNumericBounds,
+  validateDeviceRuntimeConfig,
+  type DeviceRuntimeConfig
+} from '@/utils/deviceRuntime'
 
 const props = defineProps<{
   visible: boolean
@@ -15,13 +34,18 @@ const props = defineProps<{
   label: string
   nodeId?: string
   manifest?: DeviceManifest | null
+  nodes?: DeviceNode[]
+  deviceTemplates?: DeviceTemplate[]
   rules?: DeviceEdge[]
   specs?: Specification[]
+  runtimeSaving?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
+  (e: 'rename'): void
   (e: 'delete'): void
+  (e: 'save-runtime', nodeId: string, runtime: DeviceRuntimeConfig): void
 }>()
 
 const {t} = useI18n()
@@ -37,90 +61,188 @@ const close = () => {
 }
 
 const onDelete = () => emit('delete')
+const onRename = () => emit('rename')
 
 const isDialogOpen = computed(() => innerVisible.value)
 const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen, close)
-
-// 从条件生成LTL公式
-const generateFormulaFromConditions = (spec: Specification): string => {
-  const template = specTemplateDetails.find(t => t.id === spec.templateId)
-  if (!template) return spec.templateLabel || t('app.unknown')
-
-  // 将条件转换为字符串
-  const conditionsToString = (conditions: SpecCondition[]) => {
-    return conditions
-      .filter(c => c && c.deviceId && c.key)
-      .map(c => {
-        const deviceName = (c.deviceLabel || c.deviceId).toLowerCase().replace(/\s+/g, '_')
-        const key = c.key
-        const relation = c.relation === '!=' ? '≠' : c.relation
-        const value = c.value ? ` ${relation} "${c.value}"` : ''
-        return `${deviceName}_${key}${value}`
-      })
-      .join(' ∧ ')
-  }
-
-  // 根据模板类型生成公式
-  switch (template.type) {
-    case 'always':
-      const aStr = conditionsToString(spec.aConditions || [])
-      return aStr ? `□(${aStr})` : '□A'
-    case 'eventually':
-      const evA = conditionsToString(spec.aConditions || [])
-      return evA ? `◇(${evA})` : '◇A'
-    case 'never':
-      const neverA = conditionsToString(spec.aConditions || [])
-      return neverA ? `□¬(${neverA})` : '□¬A'
-    case 'immediate':
-      const ifStr = conditionsToString(spec.ifConditions || [])
-      const thenStr = conditionsToString(spec.thenConditions || [])
-      if (ifStr && thenStr) {
-        return `□((${ifStr}) → ○(${thenStr}))`
-      } else if (ifStr) {
-        return `□((${ifStr}) → ○B)`
-      }
-      return '□(A → ○B)'
-    case 'response':
-      const respIf = conditionsToString(spec.ifConditions || [])
-      const respThen = conditionsToString(spec.thenConditions || [])
-      if (respIf && respThen) {
-        return `□((${respIf}) → ◇(${respThen}))`
-      } else if (respIf) {
-        return `□((${respIf}) → ◇B)`
-      }
-      return '□(A → ◇B)'
-    case 'persistence':
-      const persIf = conditionsToString(spec.ifConditions || [])
-      const persThen = conditionsToString(spec.thenConditions || [])
-      if (persIf && persThen) {
-        return `□((${persIf}) → □(${persThen}))`
-      } else if (persIf) {
-        return `□((${persIf}) → □B)`
-      }
-      return '□(A → □B)'
-    case 'safety':
-      const safeA = conditionsToString(spec.aConditions || [])
-      return safeA ? `□¬((${safeA}) ∧ untrusted)` : '□(untrusted → ¬A)'
-    default:
-      return spec.templateLabel || 'Unknown'
-  }
-}
 
 /* ---------- 核心展示数据提取 ---------- */
 
 const manifest = computed<DeviceManifest | null>(() => props.manifest ?? null)
 
+type StateDisplaySegment = {
+  mode: string
+  value: string
+}
+
+const stateModeLabel = (index: number) => {
+  const mode = manifest.value?.Modes?.[index]?.trim()
+  return mode || `${t('app.mode')} ${index + 1}`
+}
+
+const getStateDisplaySegments = (rawState?: string | null): StateDisplaySegment[] => {
+  const raw = String(rawState ?? '').trim()
+  if (!raw || raw === '_') return []
+
+  const modes = manifest.value?.Modes || []
+  const parts = raw.includes(';') || modes.length > 1
+    ? raw.split(';')
+    : [raw]
+
+  return parts
+    .map((part, index) => ({
+      mode: stateModeLabel(index),
+      value: part.trim()
+    }))
+    .filter(segment => segment.value && segment.value !== '_')
+}
+
+const formatStateForDisplay = (rawState?: string | null, emptyLabel = t('app.anyState')) => {
+  const raw = String(rawState ?? '').trim()
+  if (!raw || raw === '_') return emptyLabel
+
+  const modes = manifest.value?.Modes || []
+  const segments = getStateDisplaySegments(raw)
+  if (!segments.length) return emptyLabel
+  if (!raw.includes(';') && modes.length <= 1) return segments[0].value
+  return segments.map(segment => `${segment.mode}: ${segment.value}`).join(' · ')
+}
+
+const getManifestModes = () =>
+  (manifest.value?.Modes || [])
+    .map(mode => String(mode || '').trim())
+    .filter(Boolean)
+
+const currentNode = computed(() =>
+  props.nodes?.find(node => node.id === props.nodeId) || null
+)
+
+const currentTemplate = computed<DeviceTemplate | null>(() => {
+  const m = manifest.value
+  if (!m) return null
+  const matched = props.deviceTemplates?.find(template =>
+    template.name === props.deviceName
+    || template.name === m.Name
+    || template.manifest?.Name === props.deviceName
+    || template.manifest?.Name === m.Name
+  )
+  return matched || {
+    name: props.deviceName || m.Name,
+    manifest: m
+  }
+})
+
+const runtimeDraft = ref(createDeviceRuntimeDraft())
+const syncingRuntimeDraft = ref(false)
+
+const runtimeWorkingStates = computed(() =>
+  getTemplateWorkingStates(currentTemplate.value)
+)
+
+const runtimeInternalVariables = computed(() =>
+  getTemplateLocalVariables(currentTemplate.value)
+)
+
+const runtimeHasModes = computed(() => {
+  const m = currentTemplate.value?.manifest
+  return Array.isArray(m?.Modes)
+    && m.Modes.length > 0
+    && runtimeWorkingStates.value.length > 0
+})
+
+const hasRuntimeFields = computed(() =>
+  Boolean(currentTemplate.value && (runtimeHasModes.value || runtimeInternalVariables.value.length > 0))
+)
+
+const variableInputPlaceholder = (variable: InternalVariable) => {
+  if (templateVariableUsesNumericBounds(variable)) {
+    const lower = variable.LowerBound ?? '-∞'
+    const upper = variable.UpperBound ?? '∞'
+    return `${lower} - ${upper}`
+  }
+  return t('app.enterValuePlaceholder')
+}
+
+const syncRuntimeDraftFromNode = () => {
+  const template = currentTemplate.value
+  const draft = createDeviceRuntimeDraft()
+  resetDeviceRuntimeDraft(draft, template)
+
+  const node = currentNode.value
+  if (node) {
+    if (runtimeHasModes.value && node.state) {
+      draft.state = node.state
+      draft.currentStateTrust = node.currentStateTrust || findTemplateStateTrust(template, node.state)
+      draft.currentStatePrivacy = node.currentStatePrivacy || findTemplateStatePrivacy(template, node.state)
+    }
+
+    for (const variable of node.variables || []) {
+      if (!variable?.name) continue
+      draft.variables[variable.name] = variable.value ?? ''
+      draft.variableTrusts[variable.name] = variable.trust || draft.variableTrusts[variable.name] || ''
+    }
+
+    for (const privacy of node.privacies || []) {
+      if (!privacy?.name) continue
+      draft.privacies[privacy.name] = privacy.privacy || draft.privacies[privacy.name] || ''
+    }
+  }
+
+  syncingRuntimeDraft.value = true
+  runtimeDraft.value = draft
+  queueMicrotask(() => {
+    syncingRuntimeDraft.value = false
+  })
+}
+
+watch(
+  () => [props.visible, props.nodeId, props.manifest, props.nodes] as const,
+  () => {
+    if (props.visible) syncRuntimeDraftFromNode()
+  },
+  { immediate: true }
+)
+
+watch(() => runtimeDraft.value.state, state => {
+  if (syncingRuntimeDraft.value) return
+  if (!runtimeHasModes.value) return
+  runtimeDraft.value.currentStateTrust = findTemplateStateTrust(currentTemplate.value, state)
+  runtimeDraft.value.currentStatePrivacy = findTemplateStatePrivacy(currentTemplate.value, state)
+})
+
+const saveRuntime = () => {
+  const template = currentTemplate.value
+  const node = currentNode.value
+  if (!template || !node || !props.nodeId) return
+
+  const runtime = buildDeviceRuntimeConfig(template, runtimeDraft.value, {
+    includeEmptyCollections: true,
+    variableScope: 'local'
+  }) || {}
+  const validationMessage = validateDeviceRuntimeConfig(template, runtime, t, { variableScope: 'local' })
+  if (validationMessage) {
+    ElMessage.warning(validationMessage)
+    return
+  }
+
+  emit('save-runtime', props.nodeId, runtime)
+}
+
 // 1. 基础信息数据
 const basicInfo = computed(() => {
   const m = manifest.value
   if (!m) return {}
+  const modes = getManifestModes()
 
   return {
     name: m.Name,
     instanceName: props.label,
     description: m.Description || props.description || t('app.null'),
     initState: m.InitState,
-    modes: m.Modes?.join(', '),
+    initStateLabel: modes.length > 0
+      ? formatStateForDisplay(m.InitState, t('app.notSpecified'))
+      : t('app.noStateMachine'),
+    modes,
     impactedVariables: m.ImpactedVariables
   }
 })
@@ -130,6 +252,7 @@ const variables = computed(() => {
   const m = manifest.value
   if (!m) return []
   const list: any[] = []
+  const impactedSet = new Set((m.ImpactedVariables || []).map(name => String(name || '').trim()).filter(Boolean))
 
   // Internal Variables (完整对象)
   if (m.InternalVariables) {
@@ -139,12 +262,16 @@ const variables = computed(() => {
       if (iv.Values && iv.Values.length) valDisplay = iv.Values.join(' / ')
       else if (iv.LowerBound !== undefined && iv.UpperBound !== undefined) valDisplay = `[${iv.LowerBound}, ${iv.UpperBound}]`
 
+      const isEnvironment = iv.IsInside !== true
       list.push({
         name: iv.Name,
-        range: valDisplay,
+        range: valDisplay || (isEnvironment ? t('app.fromEnvironmentPool') : ''),
         trust: iv.Trust,
         privacy: iv.Privacy,
-        type: 'Impacted'
+        falsifiableWhenCompromised: iv.FalsifiableWhenCompromised === true,
+        type: isEnvironment ? t('app.environmentVariable') : t('app.internalVariable'),
+        isInternal: !isEnvironment,
+        affectsEnvironment: impactedSet.has(iv.Name)
       })
     })
   }
@@ -154,12 +281,21 @@ const variables = computed(() => {
     m.ImpactedVariables.forEach(vName => {
       // 避免重复显示
       if (!list.some(item => item.name === vName)) {
+        const definition = resolveImpactEnvironmentDefinition(m, vName)
+        const range = definition?.Values?.length
+          ? definition.Values.join(' / ')
+          : definition?.LowerBound !== undefined && definition?.UpperBound !== undefined
+            ? `[${definition.LowerBound}, ${definition.UpperBound}]`
+            : ''
         list.push({
           name: vName,
-          range: '(External)',
-          trust: '-',
-          privacy: '-',
-          type: 'Impacted'
+          range,
+          trust: definition?.Trust || null,
+          privacy: definition?.Privacy || null,
+          falsifiableWhenCompromised: null,
+          type: t('app.affectsEnvironment'),
+          isInternal: false,
+          affectsEnvironment: true
         })
       }
     })
@@ -167,14 +303,15 @@ const variables = computed(() => {
   return list
 })
 
-// 3. 状态列表 (展示隐私、不变式)
+// 3. 状态列表
 const states = computed(() => {
   const m = manifest.value
   if (!m || !m.WorkingStates) return []
   return m.WorkingStates.map(s => ({
     name: s.Name,
+    displayName: formatStateForDisplay(s.Name, t('app.null')),
     description: s.Description,
-    invariant: s.Invariant,
+    trust: s.Trust,
     privacy: s.Privacy
   }))
 })
@@ -188,18 +325,21 @@ const apis = computed(() => {
     description: api.Description || '',
     startState: api.StartState,
     endState: api.EndState,
+    startStateLabel: formatStateForDisplay(api.StartState, t('app.anyState')),
+    endStateLabel: formatStateForDisplay(api.EndState, t('app.noStateChange')),
     trigger: formatTrigger(api.Trigger),
-    signal: api.Signal || false
+    signal: api.Signal || false,
+    acceptsContent: api.AcceptsContent === true
   }))
 })
 
 // Trigger is an object { Attribute, Relation, Value }; render it as readable text.
-const formatTrigger = (t: any): string => {
-  if (!t) return 'user'
-  if (typeof t === 'string') return t   // tolerate legacy string-form data
-  const rel = t.Relation || '='
-  const val = t.Value !== undefined && t.Value !== '' ? ` ${rel} ${t.Value}` : ''
-  return t.Attribute ? `${t.Attribute}${val}` : 'user'
+const formatTrigger = (trigger: any): string => {
+  if (!trigger) return t('app.userRole')
+  if (typeof trigger !== 'object') return t('app.userRole')
+  const rel = trigger.Relation || '='
+  const val = trigger.Value !== undefined && trigger.Value !== '' ? ` ${rel} ${trigger.Value}` : ''
+  return trigger.Attribute ? `${trigger.Attribute}${val}` : t('app.userRole')
 }
 
 // 获取设备图标
@@ -326,6 +466,15 @@ const getDeviceIcon = (deviceName: string) => {
   return 'devices_other'
 }
 
+const getSpecFormulaKind = (spec: Specification, formula: string) => {
+  if (spec.templateId === '6') return 'LTL'
+  if (spec.templateId) return 'CTL'
+  const normalized = String(formula || '').trim().toUpperCase()
+  if (normalized.startsWith('LTLSPEC')) return 'LTL'
+  if (normalized.startsWith('CTLSPEC')) return 'CTL'
+  return t('app.modelFormulaKind')
+}
+
 // 获取设备相关的规约
 const deviceSpecs = computed(() => {
   if (!props.specs || !props.nodeId) {
@@ -346,8 +495,6 @@ const deviceSpecs = computed(() => {
   
   return props.specs
     .filter(spec => {
-      // 检查单设备规约
-      if (spec.deviceId === currentDeviceId) return true
       // 检查多设备规约
       if (spec.devices && Array.isArray(spec.devices) && spec.devices.some(d => d && d.deviceId === currentDeviceId)) return true
       // 检查条件中是否包含该设备
@@ -355,56 +502,41 @@ const deviceSpecs = computed(() => {
       return false
     })
     .map(spec => {
-      // 使用templateLabel或根据templateId映射
-      let specType = spec.templateLabel || 'Unknown'
-      
-      // 根据templateId设置类型（运行时 templateId 恒为 '1'-'7'，后端 @Pattern 强制）
-      switch (spec.templateId) {
-        case '1':
-          specType = spec.templateLabel || 'Safety'
-          break
-        case '2':
-          specType = spec.templateLabel || 'Liveness'
-          break
-        case '3':
-          specType = spec.templateLabel || 'Fairness'
-          break
-        case '4':
-          specType = spec.templateLabel || 'Always'
-          break
-        case '5':
-          specType = spec.templateLabel || 'Eventually'
-          break
-        case '6':
-          specType = spec.templateLabel || 'Never'
-          break
-        case '7':
-          specType = spec.templateLabel || 'Response'
-          break
-      }
+      const template = specTemplateDetails.find(candidate => candidate.id === spec.templateId)
+      const specType = template?.labelKey
+        ? t(template.labelKey)
+        : spec.templateLabel || template?.label || t('app.unknown')
 
       // 处理设备信息显示
       let deviceInfo = ''
       if (spec.devices && spec.devices.length > 0) {
         const deviceLabels = spec.devices.map(d => d.deviceLabel || d.deviceId).join(', ')
         deviceInfo = deviceLabels
-      } else if (spec.deviceId) {
-        deviceInfo = spec.deviceLabel || spec.deviceId
       } else {
-        deviceInfo = 'Global'
+        const allConditions = [
+          ...(spec.aConditions || []),
+          ...(spec.ifConditions || []),
+          ...(spec.thenConditions || [])
+        ]
+        const deviceLabels = Array.from(new Set(
+          allConditions
+            .map(c => c.deviceLabel || c.deviceId)
+            .filter(Boolean)
+        ))
+        deviceInfo = deviceLabels.length > 0 ? deviceLabels.join(', ') : 'Global'
       }
 
-      // 生成公式：如果formula不存在，从条件生成
-      let formula = spec.formula
-      if (!formula || formula === 'No formula defined') {
-        formula = generateFormulaFromConditions(spec)
-      }
+      const formula = buildSpecFormula(spec, {
+        nodes: props.nodes || [],
+        deviceTemplates: props.deviceTemplates || []
+      })
 
       return {
         id: spec.id,
         type: specType,
         typeColor: 'red', // 强制使用红色
-        formula: formula,
+        formula,
+        formulaKind: getSpecFormulaKind(spec, formula),
         devices: deviceInfo,
         status: 'Active'
       }
@@ -418,13 +550,14 @@ const deviceSpecs = computed(() => {
     <transition name="modal-fade" appear>
       <div
         v-if="innerVisible"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        class="device-dialog-overlay"
         @keydown="handleModalKeydown"
       >
         <transition name="modal-scale" appear>
           <div
             :ref="setDialogRef"
-            class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            data-testid="device-dialog"
+            class="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-6rem)]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="device-dialog-title"
@@ -441,8 +574,6 @@ const deviceSpecs = computed(() => {
                   <h1 id="device-dialog-title" class="text-xl font-bold text-slate-900 leading-tight">{{ t('app.deviceInfo') }}</h1>
                   <div class="flex items-center gap-2 mt-1">
                     <p class="text-sm text-slate-500 font-medium">{{ label }}</p>
-                    <span class="text-slate-300">•</span>
-                    <p class="text-sm text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded text-xs">ID: {{ nodeId?.substring(0, 8) }}</p>
                   </div>
                 </div>
               </div>
@@ -453,6 +584,14 @@ const deviceSpecs = computed(() => {
 
             <!-- Body -->
             <div class="flex-1 overflow-y-auto custom-scrollbar px-8 py-6 space-y-8">
+              <div
+                v-if="!manifest"
+                data-testid="device-template-details-unavailable"
+                class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900"
+              >
+                {{ t('app.deviceTemplateDetailsUnavailable', { template: deviceName }) }}
+              </div>
+
               <!-- Basic Info -->
               <section>
                 <div class="flex items-center gap-2 mb-4">
@@ -483,31 +622,42 @@ const deviceSpecs = computed(() => {
                       </tr>
 
                       <!-- Modes -->
-                      <tr class="hover:bg-slate-50/50 transition-colors">
+                      <tr v-if="manifest" class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.modes') }}</td>
                         <td class="px-4 py-3">
                           <div class="flex flex-wrap gap-1.5">
-                            <span v-for="(mode, idx) in (basicInfo.modes || 'Working, Off').split(',')" :key="idx" 
-                                  class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200">
-                              {{ mode.trim() }}
+                            <template v-if="basicInfo.modes && basicInfo.modes.length">
+                              <span
+                                v-for="mode in basicInfo.modes"
+                                :key="mode"
+                                class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-md font-medium border border-slate-200"
+                              >
+                                {{ mode }}
+                              </span>
+                            </template>
+                            <span
+                              v-else
+                              class="px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-md font-medium border border-slate-200"
+                            >
+                              {{ t('app.noStateMachine') }}
                             </span>
                   </div>
                         </td>
                       </tr>
 
                       <!-- Initial State -->
-                      <tr class="hover:bg-slate-50/50 transition-colors">
+                      <tr v-if="manifest" class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">{{ t('app.initState') }}</td>
                         <td class="px-4 py-3">
                           <div class="flex items-center gap-2">
                             <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                    <span class="text-sm font-medium text-slate-700">{{ basicInfo.initState || 'Working' }}</span>
+                    <span class="text-sm font-medium text-slate-700" :title="basicInfo.initStateLabel">{{ basicInfo.initStateLabel }}</span>
                   </div>
                         </td>
                       </tr>
 
                       <!-- Description -->
-                      <tr class="hover:bg-slate-50/50 transition-colors">
+                      <tr v-if="manifest" class="hover:bg-slate-50/50 transition-colors">
                         <td class="px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider align-top">{{ t('app.description') }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600 leading-relaxed">{{ basicInfo.description || '-' }}</td>
                       </tr>
@@ -527,6 +677,141 @@ const deviceSpecs = computed(() => {
                     </tbody>
                   </table>
                 </div>
+                <details v-if="nodeId" class="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <summary class="cursor-pointer font-semibold text-slate-700">{{ t('app.technicalDetails') }}</summary>
+                  <div class="mt-2 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
+                    <span class="font-medium text-slate-500">{{ t('app.deviceTechnicalId') }}</span>
+                    <code class="break-all rounded bg-white px-2 py-1 text-[11px] text-slate-700">{{ nodeId }}</code>
+                  </div>
+                </details>
+              </section>
+
+              <!-- Instance runtime overrides -->
+              <section v-if="hasRuntimeFields" data-testid="device-instance-runtime">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <div class="w-1 h-5 bg-purple-500 rounded-full"></div>
+                    <div class="min-w-0">
+                      <h2 class="text-lg font-semibold text-slate-800">{{ t('app.instanceRuntime') }}</h2>
+                      <p class="text-xs text-slate-500 mt-0.5">{{ t('app.instanceRuntimeHint') }}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="device-runtime-save"
+                    @click="saveRuntime"
+                    :disabled="runtimeSaving"
+                    class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-purple-300"
+                  >
+                    <span v-if="runtimeSaving" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+                    <span v-else class="material-symbols-outlined text-sm" aria-hidden="true">save</span>
+                    {{ t('app.saveInstanceConfig') }}
+                  </button>
+                </div>
+
+                <div class="space-y-3 rounded-xl border border-purple-100 bg-purple-50/40 p-4">
+                  <div v-if="runtimeHasModes" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
+                      <select
+                        v-model="runtimeDraft.state"
+                        data-testid="device-runtime-state"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-100/60"
+                      >
+                        <option v-for="state in runtimeWorkingStates" :key="state.Name" :value="state.Name">
+                          {{ formatStateForDisplay(state.Name, state.Name) }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.stateTrust') }}</span>
+                      <select
+                        v-model="runtimeDraft.currentStateTrust"
+                        data-testid="device-runtime-state-trust"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-100/60"
+                      >
+                        <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
+                      </select>
+                    </label>
+
+                    <label class="min-w-0">
+                      <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.statePrivacy') }}</span>
+                      <select
+                        v-model="runtimeDraft.currentStatePrivacy"
+                        data-testid="device-runtime-state-privacy"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-100/60"
+                      >
+                        <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div v-if="runtimeInternalVariables.length > 0" class="space-y-2">
+                    <div
+                      v-for="variable in runtimeInternalVariables"
+                      :key="variable.Name"
+                      class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                    >
+                      <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
+                        <div class="min-w-0">
+                          <span class="block truncate text-xs font-bold text-slate-700" :title="variable.Name">{{ variable.Name }}</span>
+                          <span class="text-[10px] font-semibold text-slate-400">
+                            {{ variable.IsInside !== true ? t('app.environmentVariable') : t('app.internalVariable') }}
+                          </span>
+                        </div>
+                        <span v-if="templateVariableUsesNumericBounds(variable)" class="shrink-0 text-[10px] font-semibold text-slate-400">
+                          {{ variableInputPlaceholder(variable) }}
+                        </span>
+                      </div>
+
+                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_8rem]">
+                        <label class="min-w-0">
+                          <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableValue') }}</span>
+                          <select
+                            v-if="templateVariableHasEnumValues(variable)"
+                            v-model="runtimeDraft.variables[variable.Name]"
+                            :data-testid="`device-runtime-variable-${variable.Name}`"
+                            class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="">{{ t('app.modelControlled') }}</option>
+                            <option v-for="value in variable.Values" :key="value" :value="String(value)">{{ value }}</option>
+                          </select>
+                          <input
+                            v-else
+                            v-model="runtimeDraft.variables[variable.Name]"
+                            :data-testid="`device-runtime-variable-${variable.Name}`"
+                            class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
+                            :placeholder="variableInputPlaceholder(variable)"
+                            type="text"
+                          />
+                        </label>
+
+                        <label class="min-w-0">
+                          <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
+                          <select
+                            v-model="runtimeDraft.variableTrusts[variable.Name]"
+                            :data-testid="`device-runtime-variable-trust-${variable.Name}`"
+                            class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
+                          >
+                            <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
+                          </select>
+                        </label>
+
+                        <label class="min-w-0">
+                          <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
+                          <select
+                            v-model="runtimeDraft.privacies[variable.Name]"
+                            :data-testid="`device-runtime-privacy-${variable.Name}`"
+                            class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
+                          >
+                            <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </section>
 
               <!-- Variables -->
@@ -535,32 +820,66 @@ const deviceSpecs = computed(() => {
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceVariables') }}</h2>
                 </div>
-                <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
+                <div class="overflow-x-auto border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
                       <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.range') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.compromiseBehavior') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.type') }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 bg-white">
                       <tr v-for="(v, idx) in variables" :key="idx" class="hover:bg-blue-50/30 transition-colors">
-                        <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ v.name }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-600 font-mono">{{ v.range || '-' }}</td>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="v.name">{{ v.name }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 font-mono" :title="v.range || '-'">{{ v.range || '-' }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600">
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-                            :class="v.trust === 'high' || v.trust === 'trusted' ? 'bg-green-100 text-green-700' : 
-                                    v.trust === 'medium' ? 'bg-yellow-100 text-yellow-700' : 
+                            :class="v.trust === 'trusted' ? 'bg-green-100 text-green-700' :
+                                    v.trust === 'untrusted' ? 'bg-red-100 text-red-700' :
                                     'bg-slate-100 text-slate-600'">
-                            {{ v.trust || '-' }}
+                            {{ v.trust ? t(`app.${v.trust}`) : '-' }}
                           </span>
                         </td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                            :class="v.privacy === 'private' ? 'bg-purple-100 text-purple-700' :
+                                    v.privacy === 'public' ? 'bg-blue-100 text-blue-700' :
+                                    'bg-slate-100 text-slate-600'">
+                            {{ v.privacy ? t(`app.${v.privacy}`) : '-' }}
+                          </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <span
+                            v-if="v.falsifiableWhenCompromised !== null"
+                            class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium"
+                            :class="v.falsifiableWhenCompromised ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'"
+                          >
+                            <span class="material-symbols-outlined text-sm" aria-hidden="true">
+                              {{ v.falsifiableWhenCompromised ? 'data_alert' : 'verified_user' }}
+                            </span>
+                            {{ v.falsifiableWhenCompromised ? t('app.readingMayBeFalsified') : t('app.notFalsifiedByAttackModel') }}
+                          </span>
+                          <span v-else>-</span>
+                        </td>
                         <td class="px-4 py-3">
-                          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+                          <div class="flex flex-wrap gap-1.5">
+                          <span
+                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                            :class="v.isInternal ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-800'"
+                          >
                             {{ v.type }}
                           </span>
+                          <span
+                            v-if="v.affectsEnvironment"
+                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700"
+                          >
+                            {{ t('app.affectsEnvironmentShort') }}
+                          </span>
+                          </div>
                         </td>
                       </tr>
                     </tbody>
@@ -569,18 +888,18 @@ const deviceSpecs = computed(() => {
               </section>
 
               <!-- States -->
-              <section>
+              <section v-if="manifest" data-testid="device-dialog-states">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-primary rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceStates') }}</h2>
                 </div>
-                <div class="overflow-hidden border border-slate-200 rounded-xl shadow-sm">
+                <div class="overflow-x-auto border border-slate-200 rounded-xl shadow-sm">
                   <table class="w-full text-left border-collapse">
                     <thead>
                       <tr class="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.name') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.description') }}</th>
-                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.invariant') }}</th>
+                        <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.trust') }}</th>
                         <th class="px-4 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">{{ t('app.privacy') }}</th>
                       </tr>
                     </thead>
@@ -591,15 +910,20 @@ const deviceSpecs = computed(() => {
                         </td>
                       </tr>
                       <tr v-for="(s, idx) in states" :key="idx" class="hover:bg-blue-50/30 transition-colors">
-                        <td class="px-4 py-3 text-sm font-medium text-slate-700">{{ s.name }}</td>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-700" :title="s.displayName">{{ s.displayName }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600">{{ s.description || '-' }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-600 font-mono text-xs">{{ s.invariant || '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                            :class="s.trust === 'trusted' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                            {{ t(`app.${s.trust}`) }}
+                          </span>
+                        </td>
                         <td class="px-4 py-3 text-sm text-slate-600">
                           <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
                             :class="s.privacy === 'public' ? 'bg-blue-100 text-blue-700' : 
                                     s.privacy === 'private' ? 'bg-purple-100 text-purple-700' : 
                                     'bg-slate-100 text-slate-600'">
-                            {{ s.privacy || '-' }}
+                            {{ t(`app.${s.privacy}`) }}
                           </span>
                         </td>
                       </tr>
@@ -609,7 +933,7 @@ const deviceSpecs = computed(() => {
               </section>
 
               <!-- APIs Section -->
-              <section v-if="apis.length > 0">
+              <section v-if="apis.length > 0" data-testid="device-dialog-apis">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-emerald-500 rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.deviceApis') }}</h2>
@@ -627,32 +951,37 @@ const deviceSpecs = computed(() => {
                         </div>
                         <span class="text-sm font-bold text-slate-800">{{ api.name }}</span>
                       </div>
-                      <span v-if="api.signal" class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium border border-amber-200">
-                        {{ t('app.signal') }}
-                      </span>
+                      <div class="flex flex-wrap justify-end gap-1">
+                        <span v-if="api.signal" class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-medium border border-amber-200">
+                          {{ t('app.signal') }}
+                        </span>
+                        <span v-if="api.acceptsContent" class="text-[10px] px-1.5 py-0.5 bg-fuchsia-100 text-fuchsia-700 rounded font-medium border border-fuchsia-200">
+                          {{ t('app.acceptsContentSensitivity') }}
+                        </span>
+                      </div>
                     </div>
                     <p v-if="api.description" class="text-xs text-slate-600 mb-4 line-clamp-2">
                       {{ api.description }}
                     </p>
-                    <div class="flex items-center gap-2 text-xs bg-slate-50 p-2 rounded-lg border border-slate-100">
-                      <div class="flex items-center gap-1 text-slate-500">
+                    <div class="flex items-center gap-2 text-xs bg-slate-50 p-2 rounded-lg border border-slate-100 min-w-0">
+                      <div class="flex items-center gap-1 text-slate-500 min-w-0">
                         <span class="material-icons-round text-sm font-bold">play_arrow</span>
-                        <span class="font-medium text-slate-700">{{ api.startState }}</span>
+                        <span class="font-medium text-slate-700 truncate max-w-[10rem]" :title="api.startStateLabel">{{ api.startStateLabel }}</span>
                       </div>
-                      <span class="text-slate-300">→</span>
-                      <div class="flex items-center gap-1 text-slate-500">
+                      <span class="text-slate-300 shrink-0">→</span>
+                      <div class="flex items-center gap-1 text-slate-500 min-w-0">
                         <span class="material-icons-round text-sm font-bold">stop</span>
-                        <span class="font-medium text-slate-700">{{ api.endState }}</span>
+                        <span class="font-medium text-slate-700 truncate max-w-[12rem]" :title="api.endStateLabel">{{ api.endStateLabel }}</span>
                       </div>
                       <div class="flex-1"></div>
-                      <span class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">{{ t('app.trigger') }}: {{ api.trigger }}</span>
+                      <span class="text-[10px] text-slate-400 uppercase font-semibold tracking-wider shrink-0">{{ t('app.trigger') }}: {{ api.trigger }}</span>
                     </div>
                   </div>
                 </div>
               </section>
 
               <!-- Specifications Section -->
-              <section v-if="deviceSpecs.length > 0">
+              <section v-if="manifest && deviceSpecs.length > 0">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-1 h-5 bg-rose-500 rounded-full"></div>
                   <h2 class="text-lg font-semibold text-slate-800">{{ t('app.specifications') }}</h2>
@@ -681,10 +1010,20 @@ const deviceSpecs = computed(() => {
                       </div>
                     </div>
                     <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                      <p class="text-[11px] text-slate-400 uppercase font-bold tracking-wider mb-1">{{ t('app.ltlFormula') }}</p>
+                      <div class="mb-1 flex items-center gap-2">
+                        <p class="text-[11px] text-slate-400 uppercase font-bold tracking-wider">{{ t('app.formulaPreview') }}</p>
+                        <span class="rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{{ spec.formulaKind }}</span>
+                      </div>
                       <div class="text-xs text-slate-700 leading-relaxed font-mono break-all">
                       {{ spec.formula }}
                       </div>
+                      <details class="mt-2 text-[11px] text-slate-500">
+                        <summary class="cursor-pointer font-semibold">{{ t('app.technicalDetails') }}</summary>
+                        <div class="mt-1 grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
+                          <span class="font-medium">{{ t('app.specificationTechnicalId') }}</span>
+                          <code class="break-all rounded bg-white px-2 py-1 text-[11px] text-slate-700">{{ spec.id }}</code>
+                        </div>
+                      </details>
                     </div>
                   </div>
                 </div>
@@ -693,6 +1032,16 @@ const deviceSpecs = computed(() => {
 
             <!-- Footer -->
             <div class="px-8 py-5 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-white flex justify-end items-center gap-3">
+              <button
+                v-if="nodeId"
+                type="button"
+                data-testid="device-rename"
+                @click="onRename"
+                class="px-5 py-2.5 text-sm font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-lg transition-all flex items-center gap-2 border border-blue-200"
+              >
+                <span class="material-icons-round text-lg text-blue-600" aria-hidden="true">edit</span>
+                {{ t('app.rename') }}
+              </button>
                 <button type="button" @click="close" class="px-6 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-all shadow-sm border border-slate-200">
                   {{ t('app.close') }}
                 </button>
@@ -709,6 +1058,29 @@ const deviceSpecs = computed(() => {
 </template>
 
 <style scoped>
+.device-dialog-overlay {
+  position: fixed;
+  top: 4rem;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.36);
+  backdrop-filter: blur(6px);
+}
+
+@media (max-width: 640px) {
+  .device-dialog-overlay {
+    top: 3.5rem;
+    padding: 0.75rem;
+  }
+}
+
 /* Modal Transitions */
 .modal-fade-enter-active,
 .modal-fade-leave-active {

@@ -1,110 +1,73 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.service.NodeService;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Method;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-/**
- * Tests for SearchNodeTool.normalizeResult() — FIX-3 regression.
- * Uses reflection to test the private method directly, avoiding the need to mock NodeService.
- */
+/** Public response-contract tests for search_devices. */
 class SearchNodeToolNormalizeResultTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private SearchNodeTool tool;
-    private Method normalizeResult;
+    private final NodeService nodeService = mock(NodeService.class);
+    private final SearchNodeTool tool = new SearchNodeTool(nodeService, objectMapper);
 
-    @BeforeEach
-    void setUp() throws Exception {
-        tool = new SearchNodeTool(null, objectMapper);
-        normalizeResult = SearchNodeTool.class.getDeclaredMethod("normalizeResult", String.class);
-        normalizeResult.setAccessible(true);
-    }
-
-    private String invoke(String raw) throws Exception {
-        return (String) normalizeResult.invoke(tool, raw);
+    @AfterEach
+    void clearUser() {
+        UserContextHolder.clear();
     }
 
     @Test
-    @DisplayName("null input returns empty count/devices")
-    void nullInput_returnsEmpty() throws Exception {
-        String result = invoke(null);
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals(0, node.get("count").asInt());
-        assertTrue(node.get("devices").isArray());
-        assertEquals(0, node.get("devices").size());
+    void emptyResult_explainsThatNoDeviceMatched() throws Exception {
+        UserContextHolder.setUserId(1L);
+        when(nodeService.searchNodes(1L, "light")).thenReturn(List.of());
+
+        JsonNode result = objectMapper.readTree(tool.execute("{\"keyword\":\" light \"}"));
+
+        assertEquals(0, result.path("count").asInt());
+        assertTrue(result.path("devices").isArray());
+        assertTrue(result.path("devices").isEmpty());
+        assertTrue(result.path("message").asText().contains("matched"));
     }
 
     @Test
-    @DisplayName("blank input returns empty count/devices")
-    void blankInput_returnsEmpty() throws Exception {
-        String result = invoke("   ");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals(0, node.get("count").asInt());
+    void nonEmptyResult_returnsStructuredDeviceSnapshots() throws Exception {
+        UserContextHolder.setUserId(1L);
+        DeviceNodeDto device = new DeviceNodeDto();
+        device.setId("light_1");
+        device.setLabel("Kitchen Light");
+        device.setTemplateName("Light");
+        when(nodeService.searchNodes(1L, "")).thenReturn(List.of(device));
+
+        JsonNode result = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(1, result.path("count").asInt());
+        assertEquals("light_1", result.path("devices").get(0).path("id").asText());
+        assertEquals("Kitchen Light", result.path("devices").get(0).path("label").asText());
     }
 
     @Test
-    @DisplayName("JSON array input is wrapped with count")
-    void jsonArray_wrappedWithCount() throws Exception {
-        String result = invoke("[{\"name\":\"dev1\"},{\"name\":\"dev2\"}]");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals(2, node.get("count").asInt());
-        assertTrue(node.get("devices").isArray());
-        assertEquals(2, node.get("devices").size());
-        assertEquals("dev1", node.get("devices").get(0).get("name").asText());
-    }
+    void wrongTypeOrUnknownSearchOption_isRejectedBeforeSearch() throws Exception {
+        UserContextHolder.setUserId(1L);
 
-    @Test
-    @DisplayName("JSON object input is returned as-is")
-    void jsonObject_returnedAsIs() throws Exception {
-        String input = "{\"count\":1,\"devices\":[{\"name\":\"dev1\"}]}";
-        String result = invoke(input);
-        // Should return the raw string unchanged
-        assertEquals(input, result);
-    }
+        JsonNode wrongType = objectMapper.readTree(tool.execute("{\"keyword\":42}"));
+        JsonNode unknown = objectMapper.readTree(tool.execute("{\"query\":\"light\"}"));
 
-    @Test
-    @DisplayName("invalid JSON is wrapped as plain message with empty devices")
-    void invalidJson_wrappedAsMessage() throws Exception {
-        String result = invoke("this is not json");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals("this is not json", node.get("message").asText());
-        assertEquals(0, node.get("count").asInt());
-        assertTrue(node.get("devices").isArray());
-        assertEquals(0, node.get("devices").size());
-    }
-
-    @Test
-    @DisplayName("JSON primitive (number) is wrapped as plain message")
-    void jsonPrimitive_wrappedAsMessage() throws Exception {
-        String result = invoke("42");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals("42", node.get("message").asText());
-        assertEquals(0, node.get("count").asInt());
-    }
-
-    @Test
-    @DisplayName("JSON primitive (string) is wrapped as plain message")
-    void jsonString_wrappedAsMessage() throws Exception {
-        String result = invoke("\"hello\"");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals("\"hello\"", node.get("message").asText());
-        assertEquals(0, node.get("count").asInt());
-    }
-
-    @Test
-    @DisplayName("empty JSON array returns count=0")
-    void emptyArray_returnsZeroCount() throws Exception {
-        String result = invoke("[]");
-        JsonNode node = objectMapper.readTree(result);
-        assertEquals(0, node.get("count").asInt());
-        assertTrue(node.get("devices").isArray());
-        assertEquals(0, node.get("devices").size());
+        assertEquals("VALIDATION_ERROR", wrongType.path("errorCode").asText());
+        assertEquals("VALIDATION_ERROR", unknown.path("errorCode").asText());
+        verify(nodeService, never()).searchNodes(1L, "42");
+        verify(nodeService, never()).searchNodes(1L, "");
     }
 }

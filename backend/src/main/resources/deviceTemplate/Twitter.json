@@ -9,7 +9,6 @@
 		{
 			"Name": "idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -17,7 +16,6 @@
 		{
 			"Name": "posting",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -34,7 +32,6 @@
 				"Value": "posting"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],
@@ -46,6 +43,7 @@
 			"Trigger": null,
 			"Assignments": [],
 			"Signal": true,
+			"AcceptsContent": true,
 			"Description": ""
 		}
 	]

@@ -35,27 +35,41 @@ public final class FixStrategyApplier {
      */
     public static List<RuleDto> apply(String strategy, FixSuggestionDto suggestion,
                                       List<RuleDto> rules, Map<String, DeviceSmvData> deviceSmvMap) {
-        return apply(strategy, suggestion, rules, deviceSmvMap, Map.of());
+        return apply(strategy, suggestion, rules, deviceSmvMap, Map.of(), Map.of());
     }
 
     /**
      * Apply the suggestion, translating newly-added condition device references through
-     * {@code persistenceDeviceNames} when provided. Verified suggestions are computed against SMV
-     * varNames, while persisted rules should keep the board's current device labels so the UI can
-     * resolve them directly.
+     * {@code persistenceDeviceRefs} when provided. Verified suggestions are computed against SMV
+     * varNames, while persisted rules should keep the board's raw {@code DeviceNode.id} references so
+     * the UI and storage layer keep using the same stable identity.
      */
     public static List<RuleDto> apply(String strategy, FixSuggestionDto suggestion,
                                       List<RuleDto> rules, Map<String, DeviceSmvData> deviceSmvMap,
-                                      Map<String, String> persistenceDeviceNames) {
+                                      Map<String, String> persistenceDeviceRefs) {
+        return apply(strategy, suggestion, rules, deviceSmvMap, persistenceDeviceRefs, Map.of());
+    }
+
+    /**
+     * {@code displayDeviceNames} maps persisted and normalized device references to current user-facing
+     * labels. It affects only regenerated rule text; typed rule references remain unchanged.
+     */
+    public static List<RuleDto> apply(String strategy, FixSuggestionDto suggestion,
+                                      List<RuleDto> rules, Map<String, DeviceSmvData> deviceSmvMap,
+                                      Map<String, String> persistenceDeviceRefs,
+                                      Map<String, String> displayDeviceNames) {
         List<RuleDto> working = FixStrategyUtils.deepCopyRules(rules);
         switch (strategy) {
             case "parameter":
                 applyParameter(suggestion.getParameterAdjustments(), working);
+                refreshRuleStrings(working, displayDeviceNames);
                 return working;
             case "condition":
-                return applyCondition(suggestion.getConditionAdjustments(), working, persistenceDeviceNames);
-            case "disable":
-                return applyDisable(suggestion.getDisabledRuleIndices(), working);
+                List<RuleDto> adjusted = applyCondition(suggestion.getConditionAdjustments(), working, persistenceDeviceRefs);
+                refreshRuleStrings(adjusted, displayDeviceNames);
+                return adjusted;
+            case "remove":
+                return applyRemove(suggestion.getRemovedRuleIndices(), working);
             default:
                 throw new BadRequestException("Unsupported fix strategy: " + strategy);
         }
@@ -72,8 +86,8 @@ public final class FixStrategyApplier {
             // Sanity check: the condition we are about to edit should be the one the fix targeted.
             if (adj.getAttribute() != null && cond.getAttribute() != null
                     && !adj.getAttribute().equals(cond.getAttribute())) {
-                throw new BadRequestException("Parameter fix target mismatch at rule "
-                        + adj.getRuleIndex() + " condition " + adj.getConditionIndex()
+                throw new BadRequestException("Parameter fix target mismatch at "
+                        + describeConditionPosition(adj.getRuleIndex(), adj.getConditionIndex())
                         + ": expected attribute '" + adj.getAttribute()
                         + "' but found '" + cond.getAttribute() + "'.");
             }
@@ -87,7 +101,7 @@ public final class FixStrategyApplier {
     // ---- condition: add candidate conditions and remove disabled ones ----
 
     private static List<RuleDto> applyCondition(List<ConditionAdjustment> adjustments, List<RuleDto> rules,
-                                                Map<String, String> persistenceDeviceNames) {
+                                                Map<String, String> persistenceDeviceRefs) {
         if (adjustments == null || adjustments.isEmpty()) {
             throw new BadRequestException("Condition fix has no adjustments to apply.");
         }
@@ -104,8 +118,9 @@ public final class FixStrategyApplier {
                 toRemove.computeIfAbsent(ruleIdx, k -> new ArrayList<>()).add(adj.getConditionIndex());
             } else if ("add".equals(action)) {
                 RuleDto.Condition cond = RuleDto.Condition.builder()
-                        .deviceName(persistenceDeviceName(adj.getDeviceName(), persistenceDeviceNames))
+                        .deviceName(persistenceDeviceRef(adj.getDeviceName(), persistenceDeviceRefs))
                         .attribute(adj.getAttribute())
+                        .targetType(adj.getTargetType())
                         .relation(adj.getRelation())
                         .value(adj.getValue())
                         .build();
@@ -136,7 +151,8 @@ public final class FixStrategyApplier {
             rule.getConditions().addAll(e.getValue());
         }
 
-        // A rule with no conditions left would be an always-on trigger; reject rather than persist that.
+        // A rule with no conditions is fail-closed during SMV generation and is invalid in the
+        // persisted DTO; reject rather than use an empty condition list to imitate rule removal.
         for (RuleDto rule : rules) {
             if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
                 throw new BadRequestException("Applying this condition fix would leave a rule with no "
@@ -146,26 +162,109 @@ public final class FixStrategyApplier {
         return rules;
     }
 
-    private static String persistenceDeviceName(String deviceName, Map<String, String> persistenceDeviceNames) {
-        if (deviceName == null || persistenceDeviceNames == null || persistenceDeviceNames.isEmpty()) {
-            return deviceName;
+    private static void refreshRuleStrings(List<RuleDto> rules, Map<String, String> displayDeviceNames) {
+        if (rules == null) {
+            return;
         }
-        String mapped = persistenceDeviceNames.get(deviceName);
-        return mapped != null ? mapped : deviceName;
+        for (RuleDto rule : rules) {
+            if (rule != null) {
+                rule.setRuleString(buildRuleString(rule, displayDeviceNames));
+            }
+        }
     }
 
-    // ---- disable: drop the flagged rules entirely ----
-
-    private static List<RuleDto> applyDisable(List<Integer> disabledIndices, List<RuleDto> rules) {
-        if (disabledIndices == null || disabledIndices.isEmpty()) {
-            throw new BadRequestException("Disable fix has no rule indices to remove.");
+    private static String buildRuleString(RuleDto rule, Map<String, String> displayDeviceNames) {
+        List<String> conditionTexts = new ArrayList<>();
+        if (rule.getConditions() != null) {
+            for (RuleDto.Condition condition : rule.getConditions()) {
+                if (condition != null) {
+                    conditionTexts.add(describeCondition(condition, displayDeviceNames));
+                }
+            }
         }
-        for (int idx : disabledIndices) {
+        String ifPart = conditionTexts.isEmpty() ? "FALSE" : String.join(" AND ", conditionTexts);
+        return "IF " + ifPart + " THEN " + describeCommand(rule.getCommand(), displayDeviceNames);
+    }
+
+    private static String describeCondition(RuleDto.Condition condition, Map<String, String> displayDeviceNames) {
+        String device = displayDeviceName(condition.getDeviceName(), displayDeviceNames);
+        String attribute = text(condition.getAttribute(), "unknown-attribute");
+        String targetType = condition.getTargetType() == null ? "" : condition.getTargetType().trim().toLowerCase();
+        if ("api".equals(targetType)) {
+            return device + " emits " + attribute;
+        }
+        return device + "." + attribute + " "
+                + text(condition.getRelation(), "?") + " "
+                + text(condition.getValue(), "?");
+    }
+
+    private static String describeCommand(RuleDto.Command command, Map<String, String> displayDeviceNames) {
+        if (command == null) {
+            return "missing-command";
+        }
+        String result = displayDeviceName(command.getDeviceName(), displayDeviceNames)
+                + "." + text(command.getAction(), "unknown-action");
+        String content = textOrNull(command.getContent());
+        String contentDevice = textOrNull(command.getContentDevice());
+        if (content != null || contentDevice != null) {
+            result += " with";
+            if (content != null) {
+                result += " content " + content;
+            }
+            if (contentDevice != null) {
+                result += " from " + displayDeviceName(contentDevice, displayDeviceNames);
+            }
+        }
+        return result;
+    }
+
+    private static String displayDeviceName(String deviceRef, Map<String, String> displayDeviceNames) {
+        String ref = textOrNull(deviceRef);
+        if (ref == null) {
+            return "unknown device";
+        }
+        String label = displayDeviceNames == null ? null : textOrNull(displayDeviceNames.get(ref));
+        return label != null ? label : ref;
+    }
+
+    private static String text(String value, String fallback) {
+        String trimmed = textOrNull(value);
+        return trimmed != null ? trimmed : fallback;
+    }
+
+    private static String textOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private static String persistenceDeviceRef(String deviceRef, Map<String, String> persistenceDeviceRefs) {
+        String ref = textOrNull(deviceRef);
+        if (ref == null || persistenceDeviceRefs == null || persistenceDeviceRefs.isEmpty()) {
+            throw new BadRequestException("The automatic fix could not map a device reference to the current board. "
+                    + "No rule was changed. Please re-run verification and try again.");
+        }
+        String mapped = persistenceDeviceRefs.get(ref);
+        if (mapped == null || mapped.isBlank()) {
+            throw new BadRequestException("The automatic fix could not map a device reference to the current board. "
+                    + "No rule was changed. Please re-run verification and try again.");
+        }
+        return mapped;
+    }
+
+    // ---- remove: permanently drop the flagged rules ----
+
+    private static List<RuleDto> applyRemove(List<Integer> removedIndices, List<RuleDto> rules) {
+        if (removedIndices == null || removedIndices.isEmpty()) {
+            throw new BadRequestException("Remove-rules fix has no rules to remove.");
+        }
+        for (int idx : removedIndices) {
             requireRuleIndex(rules, idx);
         }
         List<RuleDto> remaining = new ArrayList<>();
         for (int i = 0; i < rules.size(); i++) {
-            if (!disabledIndices.contains(i)) {
+            if (!removedIndices.contains(i)) {
                 remaining.add(rules.get(i));
             }
         }
@@ -178,7 +277,7 @@ public final class FixStrategyApplier {
         requireRuleIndex(rules, ruleIdx);
         List<RuleDto.Condition> conds = rules.get(ruleIdx).getConditions();
         if (conds == null || condIdx < 0 || condIdx >= conds.size()) {
-            throw new BadRequestException("Fix references condition " + condIdx + " of rule " + ruleIdx
+            throw new BadRequestException("Fix references " + describeConditionPosition(ruleIdx, condIdx)
                     + " which does not exist.");
         }
         return conds.get(condIdx);
@@ -186,9 +285,17 @@ public final class FixStrategyApplier {
 
     private static void requireRuleIndex(List<RuleDto> rules, int ruleIdx) {
         if (ruleIdx < 0 || ruleIdx >= rules.size()) {
-            throw new BadRequestException("Fix references rule index " + ruleIdx
-                    + " which is out of range (0.." + (rules.size() - 1) + ").");
+            throw new BadRequestException("Fix references " + describeRulePosition(ruleIdx)
+                    + " which is out of range for the current rule list.");
         }
+    }
+
+    private static String describeConditionPosition(int ruleIdx, int condIdx) {
+        return describeRulePosition(ruleIdx) + " condition #" + (condIdx + 1);
+    }
+
+    private static String describeRulePosition(int ruleIdx) {
+        return "Rule #" + (ruleIdx + 1);
     }
 
     /** Expose {@link FixStrategyUtils#resolveVarNameSafe} for the service's drift check. */

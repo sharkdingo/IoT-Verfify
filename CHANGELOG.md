@@ -15,6 +15,1072 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-14
+
+#### Added
+- Added explicit `historyPersistence` metadata to synchronous verification and
+  simulation responses, separating a completed formal/model result from whether its
+  run-history write was saved, failed, not requested, or has an unknown outcome.
+- Added lightweight counterexample summaries under verification-run history and
+  unavailable-row placeholders, so one damaged persisted result no longer prevents the
+  user from loading other history.
+- Added per-session Smart Assistant activity status and busy conflicts. Stopped browser
+  streams now wait for server work to settle before conversation switching, deletion,
+  or another assistant mutation.
+- Added token-bound device-template deletion previews with itemized device-instance
+  blockers for REST, frontend, and AI-tool callers.
+
+#### Changed
+- Made persisted model-bearing JSON fail closed. Missing, blank, malformed, or unknown
+  rule/spec/template/trace/task fields are no longer reinterpreted as empty/default
+  semantics, and a database template name cannot silently overwrite a different
+  `manifest.Name`.
+- Moved full verification traces and simulation states behind on-demand history detail
+  loading. History lists now carry only the fields needed to explain and select a run.
+- Made async task progress reach 100 only with the atomic final-result persistence
+  operation, preventing a visible 100% state without a committed result.
+
+#### Fixed
+- Preserved completed verification conclusions and playable simulation trajectories
+  when their separate history save cannot be confirmed, while showing an explicit
+  outcome-unknown warning and reconciling history instead of claiming success.
+- Returned the current structured template-deletion preview from AI-tool stale/blocked
+  conflicts instead of collapsing the reason into a generic business error.
+- Bounded Smart Assistant activity-query failures so a network outage cannot leave the
+  interface locked for the full stream timeout.
+
+### 2026-07-13
+
+#### Added
+- Added three self-contained standard-scene examples generated from bundled default
+  templates: fire evacuation, conflicting climate control, and RFID access. Real NuSMV
+  and Playwright regressions lock their importability, baseline/attack outcomes,
+  animatable simulations, and the verified removals for the two intentionally unsafe
+  scenes.
+- Added `docs/examples/multi-violation-repair-scene.json`, a self-contained default-template
+  scene with two baseline violations sharing one root automation and a verified single-rule
+  repair path.
+
+#### Changed
+- Mapped the persisted environment-variable value to the non-reserved
+  `variable_value` database column and added an H2 repository regression test, so schema
+  creation can no longer log a hidden failure while the broader application-context test
+  still reports success.
+- Renamed the physical authentication table from the reserved identifier `user` to
+  `app_user` and added a repository write/read regression test. The REST authentication
+  contract and user-facing account model are unchanged.
+- Kept raw model-checker execution logs in simulation run details when a run produces no
+  states; the primary failure notice now uses a localized user-facing explanation instead
+  of exposing the final technical log line.
+- Replaced the three peer run-history tabs with a two-layer model: Task Status now
+  contains only active, failed, or cancelled background work, while History Results
+  contains one entry per completed verification or saved simulation. Verification
+  counterexamples are nested under their owning result, with violated-property and
+  replayable-counterexample counts shown separately.
+- Added completed verification-run DTOs and `/api/verify/runs` endpoints. Synchronous
+  verification now persists its complete conclusion and counterexamples atomically;
+  deleting a verification result removes its linked counterexamples, and failed or
+  cancelled no-result tasks can be dismissed explicitly.
+- Increased AI recommendation `userRequirement` inputs from 500 to 2,000 characters
+  across REST DTOs, AI tool schemas, Board controls, tests, and documentation. Detailed
+  coupled-scene requests no longer need compressed shorthand, while the input remains
+  bounded and is never silently truncated.
+- Relaxed only the semantically equivalent rule-event edge case in AI full-scene
+  validation: `api = TRUE` is retained as an API event source, normalized by removing
+  redundant relation/value fields, and disclosed through `adjustedItems`. `FALSE`,
+  partial fields, and other relations remain rejected instead of changing rule meaning.
+- Applied the same transparent API-event normalization to standalone AI rule
+  recommendations. Equivalent `= TRUE` candidates are kept with an itemized adjustment
+  shown by the Board; ambiguous, false, or non-equality comparisons are now filtered
+  with an explicit reason instead of having their comparison fields silently erased.
+- Restored complete automatic-fix strategy regression coverage against the production
+  snapshot-aware model-generation entry points, and made missing fix-context environment
+  values explicitly default to an empty pool. `SpecificationDto.devices` now also
+  recursively rejects null bindings, missing device ids, and null selected-API entries.
+
+#### Fixed
+- Added stable model-generation omission reason codes across verification, simulation,
+  history, and automatic-fix contracts. Ordinary UI now localizes disabled-rule and
+  skipped-specification explanations instead of exposing English generator diagnostics;
+  the original diagnostic remains available only for technical logs and advanced detail.
+- Failed background tasks now show a localized no-result explanation first. The raw
+  executor error remains available only in a collapsed Technical Details disclosure,
+  instead of appearing as the task's primary user-facing status.
+- Automatic-fix template drift now has a stable `templateSnapshotComparison` contract.
+  The dialog derives source-model and template-snapshot limitations from structured
+  fields, while English fix diagnostics remain behind a collapsed technical disclosure.
+- Rule duplicate and AI similarity checks now return stable reason codes; AI similarity
+  also returns the authoritative `requiresReview` decision. Rule creation and
+  recommendation application localize these codes instead of inserting deterministic or
+  LLM-generated English prose into Chinese confirmation dialogs.
+- Historical counterexample titles now format specification templates through i18n.
+  Chinese history and playback surfaces no longer fall back to hard-coded English
+  `Always`, `Never`, `Response`, `IF`, or `THEN` wording when rebuilding a trace label.
+- Trace-playback mutual-exclusion guards now return reason codes rather than English UI
+  sentences, so blocked playback uses the existing localized simulation/recommendation
+  guidance.
+- Default-device-type reset blockers now include stable reason codes. The reset preview
+  localizes device/rule/spec/environment incompatibilities and moves the original
+  validation sentence into a collapsed technical disclosure.
+- Added a shared locale guard for backend free text and applied it to Board mutation
+  errors. Scene-import validation now presents localized item coordinates and keeps raw
+  field diagnostics behind Technical Details instead of mixing English exceptions into
+  Chinese dialogs.
+- Applied the same locale guard to AI recommendation summaries, rationales, filtered
+  reasons, intended-use notes, and placements. A provider response in the wrong language
+  now falls back to localized advisory copy rather than silently mixing languages.
+- Localized deterministic Smart Assistant safety notices and fallback explanations from
+  the current user message. Chinese destructive-action previews no longer start with an
+  English no-write control sentence, while confirmation, partial execution, uncertain
+  mutation, planning-limit, missing-reply, and stream-error safeguards remain explicit.
+- Stopped exposing chat implementation placeholders and parser errors as display text.
+  Untitled sessions now return `title=null` so the client renders a localized label, the
+  final AI reply is explicitly instructed to follow the latest user-message language,
+  and client-detected SSE failures use stable error kinds mapped through frontend i18n.
+- Fixed two Smart Assistant lifecycle regressions. An empty streamed response placeholder
+  now contains the "replying" status inside one compact assistant bubble, and reopening
+  the assistant no longer leaves conversation history blank until the user creates or
+  sends another chat. The history sidebar now exposes loading, empty, retryable-failure,
+  and loaded states explicitly while panel close preserves the mounted conversation.
+- Prevented automatic condition fixes from using a rule command's resulting device state as that
+  same rule's trigger or adding a condition that contradicts the command API's concrete start state.
+  Both cases could make an automation unreachable while falsely looking like a useful repair.
+  Fixed apply-time mapping from normalized NuSMV device names back to raw canvas node ids, and
+  replaced the leaked internal-reference error with a no-write, user-facing message.
+- Raised the automatic-fix dialog above the verification-result modal. Opening
+  "Fix" from a violation now exposes the strategy controls and apply workflow instead
+  of rendering an interactive dialog behind the still-open verification result.
+- Made automatic-fix response collections stable JSON arrays. Strategy-specific details
+  and unused preferred-range selections now serialize as `[]` when not applicable,
+  preventing a valid verified suggestion from being rejected as an incomplete contract.
+- Clarified the automatic-fix empty state: a completed condition-adjustment search now tells
+  the user that no condition change passed full-model rechecking, instead of implying that
+  the strategy was not run or that suggestions failed to load.
+- Clarified the boundary between condition adjustment and permanent rule removal. Condition
+  adjustment now describes changing trigger timing while retaining the rule and command;
+  removal remains an explicit rule-set deletion rather than an empty-condition workaround.
+- Replaced the generic run-history load failure with a source-specific partial-load
+  message. If verification results or simulation results fail independently, the Board
+  now names the unavailable source and keeps any successfully loaded history visible.
+- Restored the canvas device context menu for mouse right-click and added a persistent
+  Rename action to device details. Renaming is now discoverable without a keyboard-only
+  Context Menu shortcut while retaining the same targeted, identity-preserving API.
+- Kept canvas rule labels hidden when a rule is merely selected or newly created. The
+  readable label now appears only while its connection is hovered or keyboard-focused,
+  preventing persistent rule text from covering devices and nearby links.
+- Replaced decorative simulation-step arrows with real decrement/increment controls and
+  added direct numeric entry alongside the range slider. All three inputs stay aligned
+  to the backend-supported integer range of `1..100`.
+- Moved long attack-budget, privacy-propagation, and Environment Pool explanations into
+  reusable accessible info tooltips across simulation, verification, and inspector
+  panels. Active limits, invalid input, required privacy modeling, and incomplete-model
+  warnings remain visible rather than being hidden as optional help.
+- Reworked simulation playback around the user's review task. State navigation, playback,
+  and selected-state deltas now stay in the first visible layer; frozen run scope is
+  collapsible; the run-details action lives in the timeline header instead of covering
+  the bottom controls; and diagnostic logs, state tables, and raw NuSMV output are
+  collapsed behind a compact run summary.
+- Corrected simulation result counting to show actual model states, actual parsed
+  transitions, and requested steps as separate concepts. A trajectory shorter than the
+  requested horizon now remains visibly qualified in both run details and playback.
+- Localized playback changes on the canvas: only devices changed by the selected model
+  transition receive motion/emphasis, and backend-reported triggered rules retain
+  command-flow emphasis on their edges.
+  Current Board ids are normalized with the same NuSMV device-name rule as saved trace
+  ids, preventing live devices from being mislabeled as historical.
+- Moved playback before/after explanations out of compact device nodes into a bounded,
+  draggable change panel. Simulation and counterexample timelines now keep state
+  navigation and the timeline in the primary layer; verbose state details remain
+  collapsed, and the panel position is constrained to the viewport.
+- Reworked model playback motion so device icons and state labels cross-fade to the new
+  state, every semantic device delta can retrigger a short settle highlight, and delivered
+  command flow completes within one playback step. Change-panel content now transitions
+  between steps, and reduced-motion preferences suppress non-essential movement.
+- Kept the draggable playback-change panel present for initial and no-delta states, added
+  environment-value and automation-cause summaries, and explained why rule edges remain
+  still. Delivered-rule edge flow now restarts once per selected transition, including
+  consecutive transitions driven by the same rule, instead of continuing an unrelated
+  infinite animation.
+- Moved the long counterexample model-scope explanation behind an accessible info tooltip.
+  The playback header keeps only compact attack, privacy, and completeness status labels,
+  while the full interpretation remains available on hover, focus, or click.
+- Fixed verification, simulation, and automatic-fix modal headers being compressed by long
+  scrollable content. Headers now remain fully visible while only the body scrolls;
+  localized the default fault-localization and strategy-attempt explanations so Chinese UI
+  does not display backend English summaries.
+
+### 2026-07-12
+
+#### Fixed
+- Removed duplicate `aconditions`/`aConditions` keys from typed AI scene responses.
+  Portable specifications now serialize exactly the canonical standard-scene field, so
+  strict JSON clients can parse and import the recommended draft.
+- Aligned the AI full-scene prompt with its rule validator: observable API event sources
+  now explicitly omit `relation`/`value`, while specification API conditions retain
+  `= TRUE`. The previous example instructed the model to emit a shape that the backend
+  would then itemize and filter, commonly breaking otherwise valid event chains.
+- Restored the documented `isDuplicate` and `isSimilar` JSON field names on typed rule
+  check responses. Manual rule creation no longer treats a successful deterministic
+  duplicate check as a broken response and unnecessarily asks the user to bypass it.
+- Prevented automatic-fix apply from falsely reporting default-template drift after a
+  verification snapshot round trip. Drift checks now compare the persisted manifest
+  projection and exact template-name set, so an omitted versus empty legacy API
+  `Assignments` list is treated as the same model while real template changes still
+  block stale repairs.
+- Removed literal wrapper quotes from automatic-removal rule descriptions, so the fix
+  dialog names the affected automation exactly as the user authored it.
+- Made the long full-scene import/clear confirmation usable on short viewports. The
+  Element Plus message-box style is now loaded explicitly, its warning icon is bounded,
+  and the consequence text scrolls while the destructive action buttons remain
+  reachable.
+- Kept `TraceDeviceDto.variables` as an explicit array for state-only devices. Saved
+  simulation responses no longer omit the field and get rejected by the frontend's
+  completeness guard before an otherwise valid model trajectory can be animated; old
+  persisted traces without the field also deserialize to an empty array.
+- Fixed full-scene replacement for ordinary API-event rule triggers, whose comparison
+  relation is intentionally absent. Generated-namespace validation now classifies those
+  triggers as non-parameterizable instead of throwing an internal error before the
+  atomic scene write.
+- Added a canonical acceptance-demo scene and real-NuSMV regression covering standard
+  scene JSON, a four-device event chain, complete mixed verification results, animatable
+  simulation/counterexample traces, budget-one trust/privacy/automation-link attack
+  behavior, single-rule fault localization, forward-verified permanent removal, and
+  all-properties-pass post-repair verification. The accompanying runbook defines manual,
+  AI-assisted, and JSON construction paths without treating AI generation as atomic or
+  already verified; its exact default-template AI scene prompt fits the public
+  500-character requirement limit.
+- Applied the same user-semantic projection to saved simulation AI tools: list results
+  name the operational handle `simulationId`, detail states omit device/rule model ids,
+  and every success explains that a simulation is one possible model trajectory. The AI
+  tool no longer exposes an `includeRaw` escape hatch for NuSMV output or internal request
+  snapshots; REST technical diagnostics remain separate.
+- Removed persistence/model identities from ordinary AI counterexample and fix-analysis
+  output. Trace tools now expose only the operational `traceId`, user-facing
+  specification/device/rule context, completeness evidence, and projected states;
+  automatic fix no longer accepts a numeric specification reference as a hidden list
+  index or prints an unresolved internal id in its summary.
+- Made rule-trigger authoring commit only on an explicit Add-source action (or Enter from
+  the value field). Selecting an event API or leaving a value input no longer silently
+  inserts a trigger while the visible Add button suggests the row is still a draft.
+- Stopped the verification/simulation forms from silently reducing an attack budget or
+  turning attack modeling off when Board edits shrink the modeled attack surface. The
+  original selection remains visible, receives an explicit invalid-state explanation,
+  and must be revised or disabled before a run can start.
+- Made Board-backed AI verification and simulation consume one atomic semantic snapshot
+  across devices, the Environment Pool, rules, specifications, and exact template
+  manifests. Automatic-fix apply now performs every final drift check against the same
+  complete snapshot inside the rule-write transaction. Chat verification results also
+  use user-facing specification labels and previews instead of exposing `specId`, while
+  retaining the actual checked expression as explicitly named technical evidence.
+- Made the low-level NuSMV generator enforce the same exact attack-option contract as
+  REST and AI callers. It now rejects out-of-range budgets, enabled attack mode with a
+  zero budget, and disabled attack mode with a positive budget instead of silently
+  clamping or discarding the caller's meaning. Specification-template 7 copy now also
+  distinguishes a protected condition's propagated untrusted label from the individual
+  trigger sources that produced it, and rule previews describe target APIs as commands
+  being executed rather than new trigger events.
+- Qualified automatic-fix evidence in the ordinary UI. Suggestions are now labelled as
+  having passed recomputation in the current complete formal model; apply success states
+  that every submitted specification passed before the write and that unmodelled reality
+  is outside that claim. The UI no longer presents a raw English backend message as an
+  unconditional "verified solution", and rule-drift errors identify the readable
+  automation plus a one-based position instead of exposing `Rule #0`.
+- Made every AI tool enforce its declared exact argument object at execution time,
+  including recommendation, search/list, task/status, trace, and no-argument tools.
+  Unknown fields and wrongly typed scalars can no longer be ignored after a permissive
+  caller bypasses the model-facing schema. Duplicate/similarity checks now accept an
+  exact rule-candidate shape rather than silently coercing a full persistence DTO.
+- Made standalone recommendation REST payloads preserve omission semantics. Optional
+  fields are no longer reintroduced as explicit `null`, specification conditions no
+  longer expose derived `side` or persistence `id`, and the Board validates kept
+  candidates before display/application without inventing relations or coercing values.
+  The assistant response contract now also distinguishes candidates from applied or
+  verified state and requires complete kept/filtered/truncated disclosure.
+- Added a source-wide check that every literal frontend translation call resolves in
+  both supported languages, and fixed the rule-similarity clear result so it explains
+  that an AI non-match is not proof of conflict freedom or safe behavior instead of
+  exposing a missing translation key.
+- Removed the browser manifest cache as a device-detail authority. When a device type
+  cannot be resolved from the current backend catalog, the detail dialog now fails
+  closed, keeps only instance identity visible, and does not present stale states,
+  variables, APIs, trust/privacy labels, or related formula previews as current facts.
+- Stopped the Board's local duplicate-rule key from inventing `=` when a value-based
+  condition has no relation. Missing relation remains distinguishable and is rejected
+  by the authoritative rule contract instead of being compared as equality.
+- Closed the remaining playback overlay entry points. Run History and the task inbox now
+  share the same model-trace lock as simulation, verification, and recommendations, so a
+  user must close the current timeline before selecting another run or task surface.
+- Made strict REST rejection actionable. Unknown JSON fields and DTO type mismatches now
+  return a safe field path in `message` and `data.errors`, without echoing values or Java
+  types, instead of collapsing every deserialization failure into an unexplained
+  `Malformed request body` response.
+- Removed generator-level silent changes to explicit model values. Invalid local or shared
+  enum/numeric initial values, unknown environment entries, duplicate entries, and
+  undeclared domains now fail model generation; malformed natural-change rates and
+  signal APIs without a representable state transition fail as well. Only an omitted
+  valid initial value may use the template's intentional default or nondeterministic
+  behavior.
+- Made AI board-mutation arguments exact instead of best-effort. Tool JSON schemas now
+  disallow extra root fields, and device/rule/specification/environment/template/fix
+  tools reject unknown, action-irrelevant, or wrongly typed fields before writing.
+  `manage_spec` no longer turns a malformed condition collection into an empty side or
+  invents equality for a non-API condition with only a value; API signal checks retain
+  their documented `= TRUE` authoring default.
+- Changed manual and recommendation rule/specification creation feedback to state that
+  persistence succeeded but formal verification has not run, matching the existing AI
+  tool response contract instead of letting a save toast imply a checked property.
+- Made attack toggle/budget combinations exact across REST and AI verification and
+  simulation entry points. Non-attack requests now use the DTO default `0` and reject a
+  positive budget instead of silently discarding it; enabled runs require `1..50`.
+  Unknown AI run options fail before board loading, and async start responses now echo
+  the task's effective attack/privacy context alongside its frozen model scope.
+- Made standard scene v4 scalar handling lossless and fail-fast. Import no longer turns
+  JSON numbers/booleans into text fields, while export no longer filters incomplete
+  environment entries or rule sources or invents a missing relation; malformed semantic
+  state is rejected instead of being presented as a successful but changed scene.
+- Made targeted device-list JSON import equally explicit about input interpretation.
+  Runtime/template/name values no longer coerce non-string scalars, competing aliases
+  such as `template` plus `type` are rejected instead of silently prioritized, and the
+  preview now exposes every error and planned duplicate-name rename in a scrollable list.
+- Stopped silently clamping manual batch-device counts. Values outside the displayed
+  `1..50` range now keep the create action disabled with an inline error, so the preview
+  and persisted count cannot differ from what the user entered.
+- Made automatic-fix strategy selection exact across REST, AI tools, DTO validation, and
+  the service boundary. Defaults now apply only when `strategies` is omitted; explicit
+  empty, malformed, unknown, or duplicate lists are rejected instead of unexpectedly
+  restoring the default chain that includes permanent rule removal.
+- Made recommendation controls strict across REST and AI tools. Unsupported language or
+  category values, non-string requirements, and requirements over 500 characters now
+  return validation errors instead of silently switching to English/all categories or
+  truncating the user's scenario before it reaches the model.
+- Rejected null device-local value/sensitivity override items at the model-service boundary
+  instead of allowing lower-level expansion to discard them. Shared environment trust and
+  privacy documentation now distinguishes intentional omission/default inheritance from
+  explicit blank or invalid labels, which are rejected before model generation.
+- Made assistant `add_device` honor explicitly requested instance names exactly. Name
+  conflicts are now detected inside the atomic create operation and return a structured
+  no-write `409` with the requested and available suggested names; only omitted names may
+  be generated with a suffix. The obsolete successful `nameAdjusted` contract was removed,
+  and the chat loop stops at the alternative-name prompt instead of accepting its own
+  suggestion in a later tool round.
+- Closed the cross-tab/external-writer gap in destructive scene replacement. Import and
+  clear now preview authoritative server counts and bind confirmation to an opaque
+  current-board impact token; the server rechecks it under the database user-row lock
+  before any template or scene write, returns an itemized fresh preview on drift, and the
+  frontend refreshes without retrying or claiming success. `/board/batch` no longer
+  supports the contradictory `null = preserve this collection` behavior: all four scene
+  collections and the exact template snapshot set are required complete inputs.
+- Aligned AI device creation with manual and JSON-import name semantics. A colliding AI
+  suggestion now shows the exact available instance name before writing and requires
+  explicit confirmation; a second collision while the mutation is queued aborts instead
+  of silently adding another suffix after confirmation.
+- Removed a nonexistent priority concept from AI rule/specification candidates. Rule
+  recommendations now return `name`, which is the exact name persisted on apply;
+  specification recommendations return an advisory `rationale`, while the UI states that
+  only the template and structured conditions enter the formal property. Missing names or
+  rationales are itemized filters, and recommendation order carries relevance without
+  pretending to alter rule execution order or specification checking order.
+- Stopped presenting AI recommendation attempts as completed Board changes. Rule,
+  device, and specification candidates now have separate processing and committed states,
+  remain tied to the response epoch that produced them, and show "Added" only after an
+  authoritative response or reconciliation confirms persistence.
+- Serialized all Board semantic writes, device-type mutations, automatic-fix refreshes,
+  and assistant-triggered collection refreshes before applying authoritative snapshots.
+  Verification/simulation now wait for pending writes before capturing their immutable
+  requests. Scene replacement locks live editing from a stable confirmation preview
+  through reconciliation and cannot start while an assistant tool stream may still be
+  mutating the Board; playback likewise blocks new assistant requests.
+- Split device edits into complete, intent-owned layout and runtime subresources and
+  removed the ambiguous whole-device update contract. Canvas moves/resizes can no longer
+  overwrite modeled runtime fields, runtime saves cannot change identity/label/layout,
+  dimensions stay inside the backend's integer domain, and each update returns validated
+  before/after snapshots plus itemized changed fields. The Board now serializes create,
+  layout, runtime, rename, and confirmed-delete snapshots to prevent late responses from
+  overwriting newer state.
+- Unified portable geometry across saved canvases, standard scene JSON, and AI scene
+  drafts. All paths now accept finite coordinates in `-1000000..1000000`, integer widths
+  in `80..2000`, and integer heights in `60..2000`; service-layer validation prevents AI
+  or batch callers from bypassing the REST contract, and invalid AI candidates are
+  reported as itemized filters instead of failing only during application.
+- Replaced AI scene REST reuse of full template/device/specification DTOs with exact
+  portable nested DTOs. Serialization can no longer add null template ids/flags,
+  condition ids/sides/display labels, or stateless-device label fields that make a tool-
+  validated scene fail the standard importer. Frontend types now model that portable
+  contract directly, exports self-check against their own importer, and missing optional
+  AI rule titles no longer discard otherwise valid trigger/action semantics.
+- Made the shared file/AI scene confirmation describe the selected scene and its full
+  replacement consequence, rather than incorrectly referring to a file when the user
+  entered from an AI draft. Shared success and validation-result messages now use the
+  same source-neutral scene language.
+- Aligned manual, batch, and device-list import name handling with the backend's
+  case-insensitive device-instance uniqueness rule. Single creation now blocks and keeps
+  the user's typed name instead of committing an unconfirmed suffix; batch/JSON previews
+  show the exact case-insensitive rename plan, rename prechecks use the same rule, and
+  submission still aborts on drift.
+- Clarified the destructive Clear Scene boundary: it atomically removes devices, the
+  Environment Pool, rules, and specifications, while preserving device types, run
+  history, and AI conversations.
+- Moved standard-scene relation and specification-template shape checks before the
+  destructive replacement confirmation. Unsupported operators and missing/unexpected
+  condition sections are now identified in the JSON instead of asking for confirmation
+  and only then relying on backend rejection.
+- Added one-based user coordinates to local and single-item scene validation feedback
+  while retaining the exact zero-based JSON field path as technical editing detail.
+- Made each verification property result self-contained at submission time. `specResults`
+  now carry the submitted template semantics, user-facing label, rebuilt formula preview,
+  and CTL/LTL kind beside the actual checked expression. Async/history UI no longer joins
+  a technical `specId` to the mutable current Board, and generated NuSMV expressions and
+  ids moved into expandable technical details instead of the ordinary result row.
+- Made Environment Pool editing genuinely field-level. A value, source-label, or
+  sensitivity-label edit now preserves every omitted field instead of resetting it to a
+  template default. The REST response itemizes supplied, changed, and preserved fields
+  with before/after values and the authoritative pool; the Board validates and presents
+  that outcome before claiming success. Device-create environment patches use the same
+  semantics, while complete scene replacement and explicit internal default reset remain
+  separate contracts.
+- Made Stop/close/regenerate authoritative for all four AI recommendation flows. Each
+  request now owns an epoch and abort controller, so a late canceled response cannot
+  clear or overwrite a newer request. Device panels also show every backend-kept
+  candidate instead of silently re-slicing results when the next-request count input is
+  edited.
+- Made AI-assistant interruption and conversation switching request-owned. Aborted
+  streams no longer fire the normal-completion callback, late chunks/tool commands and
+  stale history responses are ignored, and old callbacks cannot clear a newly started
+  stream. Conversation-history loading now has its own status instead of showing a Stop
+  control that could not cancel it.
+- Reclassified AI device `role`/`location` output as advisory `intendedUse` and
+  `suggestedPlacement`. The Board states that this context is not persisted or modeled,
+  and both manual and AI device creation now preview currently missing shared
+  Environment Pool names that creation will initialize; final server-reported changes
+  remain authoritative.
+- Persisted specification list order explicitly in the internal
+  `specification.list_order` column and ordered all reads by it. Multi-spec scene
+  import/export can no longer depend on incidental database row order while claiming a
+  stable, byte-identical portable round trip.
+- Made specification writes semantic-only across manual, AI, and scene paths. Clients no
+  longer submit template labels, formula text, device summaries, or condition display
+  fields as authority; board storage rebuilds those caches from current nodes and
+  structured conditions. AI list/create and board-overview previews now use current
+  device/template context, show shared values as Environment concepts, and cannot leak a
+  stale persisted NuSMV expression. Scene replacement also checks the authoritative 200
+  response for semantic equivalence before reporting a complete import.
+- Closed a portable-scene defaulting gap: v4 import/export now requires every shared
+  Environment value to be explicit and non-blank, so `null` cannot silently mean
+  "restore the template default" in a supposedly lossless round trip. AI prompts now call
+  their output a self-contained full-replacement draft and explicitly avoid claims that
+  it is complete, safe, verified, or already applied.
+- Made the MEDIC label-propagation boundary machine-readable and visible in results.
+  Runs now return `labelPropagationScope=AUTOMATION_RULE_COMMANDS_ONLY`; frontend
+  contract checks and trace/verification assumptions explain that template-internal
+  transitions and natural dynamics do not relabel their outputs.
+- Aligned the remaining built-in external-input defaults with MEDIC origin semantics.
+  Inbound email, vehicle/mobile location, step counts, exterior RFID events, and
+  door/window contact readings now start as `untrusted`; this avoids treating a sensor
+  observation or outside-house event as retained in-house user control.
+- Closed the model-trace animation/current-Board identity gap. Playback now uses only
+  saved trace state, dims and labels current devices absent from that trace, blocks live
+  device-detail editing while playback is open, and defers background playback instead
+  of interrupting an active editor. Chinese locale timestamps now use `zh-CN` formatting.
+- Distinguished the scene's full attack surface from the 50-point per-run input cap.
+  Verification and simulation controls no longer describe a capped slider maximum as the
+  number of modeled points, and explicitly disclose the branches a capped run excludes.
+- Added an explicit `API.AcceptsContent` capability for privacy-label flows. Manual rules,
+  Board/model validation, AI recommendations, and scene recommendations now reject
+  attaching content sensitivity to ordinary actions; built-in mail, social-post, photo
+  send, and cloud-upload actions declare the capability and the UI only offers content
+  selection for those actions.
+- Removed remaining internal-position and certainty leakage from user-facing AI paths.
+  Rule/specification condition errors now use one-based display positions, chat presets
+  no longer fall back to persistence ids or call preview text a raw formula, and
+  violation-oriented prompts require simulation/formal verification instead of promising
+  a counterexample. Attack-budget help now states that each submitted rule contributes
+  one logical delivery point regardless of how many trigger edges the canvas renders.
+- Corrected built-in Clock and Calendar control-source defaults to `untrusted`. MEDIC
+  treats environment-driven time/date events as outside direct in-house user control;
+  leaving them `trusted` could hide unauthorized-control findings for scheduled rules.
+- Separated AI tool success, failure, and unavailable-result outcomes. A serialization
+  failure now stops the tool loop, is never counted as success, refreshes authoritative
+  state only when a mutation may already have committed, and blocks automatic retry until
+  the user can inspect that state.
+- Unified AI rule identity with board/recommendation contracts: `manage_rule` now accepts
+  `deviceId` plus display-only labels, while rule/spec list and mutation results expose
+  semantic views instead of raw persistence DTO names. Created rules and specifications
+  explicitly return `verificationStatus=NOT_VERIFIED`; specification tool views call
+  cached formula text `formulaPreview`.
+- Split background-task lifecycle from result meaning in Run History. A completed task is
+  now neutral, with a separate verification-outcome or generated-model-completeness badge,
+  so a completed violated verification can no longer look like a green safety result.
+- Stopped the Board from inferring `modelComplete=true` when a run omitted that required
+  field. Only an explicit backend `true` can produce a complete-model result state.
+- Made `board_overview` usable as semantic AI context instead of an internal-id summary.
+  Rules and specifications now expose typed conditions with separate stable device refs
+  and current display labels; generated summaries use labels, content-flow commands stay
+  visible, and specification formula text is explicitly named `formulaPreview`.
+- Removed the remaining "complete scenario" claim from AI scene tool definitions and
+  success/error messages. The backend now calls the output an importable scene draft,
+  states that it passed structure/capability checks only, and explicitly says it has not
+  been formally verified or applied to the Board.
+- Froze every referenced device-template manifest at the verification/simulation model
+  boundary and returned a user-facing `modelSnapshot` on results, tasks, and traces.
+  Queued runs can no longer validate one template version and execute another. The Board
+  now shows the exact submitted item counts and distinguishes same-tab unchanged input,
+  changed input, unavailable comparison, and historical results that were not compared
+  with the current Board.
+- Replaced bare async verification/simulation submit ids with authoritative accepted-task
+  DTOs carrying status, progress, model semantics, and the frozen model scope. REST, AI,
+  TypeScript, polling code, and documentation now state that acceptance is not completion.
+- Made automatic-fix template replay exact and template comparison three-state. Suggestions
+  run against the counterexample's saved manifests; confirmed drift is explained, an
+  unavailable comparison is warned rather than hidden, and apply blocks the latter with
+  retryable `503` instead of falsely claiming templates changed.
+- Replaced the bare fault-localization rule array with an explanatory result carrying
+  source-model completeness, itemized generation issues, warnings, and a causally
+  conservative summary. The automatic-fix UI and AI contract now describe localized
+  automations as involved in counterexample transitions rather than proven independent
+  root causes. Missing source completeness metadata fails closed, and fix apply rejects
+  it before template checks or NuSMV recomputation.
+- Corrected AI-assistant interruption semantics. Stopping or losing the SSE response no
+  longer implies that an already-started tool transaction was cancelled: the UI explains
+  the uncertainty and reconciles all board collections plus run history. Async task and
+  trace tools now refresh run history, pending mutation refreshes are still sent when a
+  later AI step fails, and max-round/missing-reply fallbacks report usable and failed
+  tool-step counts without claiming the whole request completed.
+- Renamed the AI scene action to generate an importable, unverified scene draft rather
+  than a "complete scene". Browser JSON exports now report that a download was requested,
+  not that the browser or file system definitely saved it.
+- Model request construction now rejects a nameless shared-environment entry instead of
+  silently filtering it out and verifying or simulating a different input than the Board
+  displayed.
+
+### 2026-07-11
+
+#### Fixed
+- Distinguished automation **Action Event** from **Action** in rule and specification
+  authoring. Only a template action explicitly marked `Signal=true` is selectable as an
+  IF event; all valid template actions remain selectable as a THEN command. This avoids
+  presenting a model event pulse and a device command as the same user concept.
+- Removed the obsolete internal preferred-range locator map from the public automatic-fix
+  request DTOs. REST and AI callers now have one contract only: select an opaque
+  `ParameterAdjustment.targetId` and submit `preferredRangeSelections`; extra locator
+  fields are rejected by strict request parsing.
+- Made device-driven Environment Pool changes explicit. Device mutation DTOs now return
+  itemized added/updated/removed shared values. Device deletion has an authoritative REST
+  preview used by the Board and AI, displays environment removals before confirmation,
+  and rechecks rule, specification, and environment impact sets in the same locked
+  transaction; any drift returns `409` without a partial delete. AI `add_device` now
+  returns the authoritative pool and the same itemized transaction changes instead of
+  reporting only the created device while shared values changed silently. Chat-driven
+  device creation/deletion and environment edits now also refresh the Board Environment
+  Pool rather than leaving its displayed model inputs stale.
+- Made Board write responses authoritative at the frontend boundary. Device, rule,
+  specification, Environment Pool, and complete-scene operations now reject missing
+  snapshots, mismatched affected sets, wrong operations, and inconsistent counts instead
+  of substituting local drafts or empty arrays and showing success. Unknown device-delete
+  and environment-edit outcomes refresh from the server and remain visibly unconfirmed.
+- Reconciled rule-order and device-type catalog writes after lost or incomplete
+  responses. The UI now compares the refreshed rule order, reloads templates after
+  import/delete/reset uncertainty, and never retries a destructive request implicitly.
+- Closed the automatic-fix apply response loop. The frontend now validates the
+  server-recomputed verified suggestion, strategy, before/after counts, and full
+  persisted rule snapshot, then updates the Board directly from that response instead
+  of creating a second refresh-failure window.
+- Made AI recommendation candidate accounting end to end. All four panels now show raw,
+  inspected, kept, rejected, and limit-truncated counts; inconsistent/missing counters or
+  per-item reasons reject the response. Backend messages also distinguish an AI model
+  returning zero candidates from candidates rejected by capability validation.
+- Corrected scenario-recommendation accounting when the backend synthesizes a required
+  Environment Pool entry. The frontend now checks final `count` against the four scene
+  collections while keeping `validatedCount` tied to inspected raw AI candidates, and it
+  validates every filtered/adjusted item rather than accepting empty reason objects.
+- Replaced all four untyped AI recommendation REST maps and the two POST request maps
+  with explicit Java DTOs, including strong candidate and portable-scene shapes. The
+  controller now revalidates candidate accounting and explanation rows before returning
+  HTTP 200, so tool/DTO drift becomes an explicit 502 instead of a partial success.
+- Removed the permanently empty `warnings` field from REST device-mutation results and
+  blocked batch device creation when names would change after the displayed preview. The
+  Board now shows the proposed changes and submits no devices instead of silently renaming
+  them behind a generic count-only success message.
+- Replaced untyped rule duplicate/similarity REST maps with explicit result DTOs and
+  matching frontend runtime validation. Missing booleans or explanations, out-of-range
+  similarity scores, and contradictory AI duplicate results now fail the check instead
+  of being interpreted as evidence that no conflict was found.
+- Added runtime conclusion contracts for verification, counterexamples, simulation, and
+  persisted simulation history. The Board now requires explicit completeness, matching
+  itemized generation issues, consistent model semantics, and structurally playable
+  states; completed async verification tasks can no longer infer a conclusion from
+  missing fields.
+- Extended those contracts across asynchronous task creation, inbox/status polling,
+  progress, completed simulation trace references, and cancellation outcomes. Malformed
+  200 responses now fail explicitly instead of becoming a false timeout or success, and
+  opening a pending, failed, or cancelled simulation task no longer says that a completed
+  task merely lost its trace. Cancellation documentation now matches the explanatory DTO.
+- Replaced the count-only default-template reload with an impact-token preview and an
+  atomic reset result containing every type change, affected device label, blocker,
+  Environment Pool change, and final type/environment snapshot. Ordinary catalog GETs
+  no longer resurrect deleted defaults, malformed bundled resources fail the whole
+  import instead of being skipped, and registration now rolls back when its initial
+  default catalog cannot be created.
+- Restored the unavailable-attack explanation to the verification and simulation panels.
+  The previous condition hid it exactly when the effective attack surface was zero, and
+  the simulation copy had been rendered inside the unrelated rename-device dialog.
+- Made the attack-effect contract scene-exact. `attackEffects` no longer claims reading
+  falsification for scenes without a falsifiable reading, or command loss for scenes
+  without rules. The immutable run snapshot now also carries and persists the
+  falsifiable-reading device subset count; backend analysis deduplicates by canonical
+  device instance identity, and the Board explains the exact mechanism counts.
+- Made canvas motion truthful to the saved model trace. Ordinary topology edges and
+  idle rules are now static; command-flow particles appear only when the backend says a
+  rule produced the selected state, and a compromised delivery link never animates.
+- Renamed the machine-readable command-loss attack effects from `MAY_BE_DROPPED` to
+  `IS_DROPPED`. The NuSMV guards deterministically block a command once its target device
+  or delivery link is selected as compromised; DTOs, frontend checks, UI wording, and
+  documentation now state that behavior exactly.
+- Made device-list JSON import reject conflicting declarations of the same shared
+  Environment Pool value, control-source label, or sensitivity label. Identical and
+  complementary declarations still merge, while conflicts name both input rows and no
+  device in the batch is created.
+- Made every template API explicitly declare `Signal`. Omitting the field no longer
+  silently turns a state-changing action into a command-only action; `true` means the
+  event can trigger automations/specifications and `false` means command-only. Device
+  details now use that user-facing wording instead of the implementation term “Signal”.
+  Observable API routes are also rejected when another API or autonomous Transition
+  could produce the same pulse, preventing one action from being reported as another.
+- Made API `StartState` explicit. Template import no longer interprets a missing command
+  precondition as “callable from any state”; authors must write an empty string/`_`
+  pattern for that deliberate choice or provide a concrete start state.
+- Rejected unknown JSON fields across user-facing REST request DTOs instead of silently
+  discarding misspelled board, model, fix, auth, or chat inputs. Verification and
+  simulation now report the exact unsupported nested path, retain HTTP `400` for DTO
+  shape errors, and reserve `422` for model/template semantic validation.
+- Validated raw verification/simulation environment overrides before default merging.
+  Duplicate names, explicit blank values or trust/privacy labels, and invalid domains now
+  fail visibly; omitted or `null` model-request fields retain their documented
+  template-default meaning. Board Environment Pool REST edits use the separate
+  field-patch contract documented above.
+- Made device-list JSON import reject and identify unsupported top-level and nested
+  runtime fields rather than creating a device after silently dropping them.
+- Corrected the specification architecture contract for Safety template 7. The
+  executable property checks attacked and non-attacked paths alike and never injects an
+  `is_attack=FALSE` escape clause; only the main-module invariant limits the selected
+  attack budget. The previous document example described the opposite behavior.
+- Aligned the Environment Pool's defensive display fallback with the backend: an
+  unresolved legacy source label is shown as untrusted rather than silently appearing
+  trusted. Valid current templates still provide explicit trust/privacy labels.
+- Made `InternalVariables[].IsInside` required across the canonical schema, Java DTO,
+  frontend type/import preflight, and AI template guidance. Template authors must now
+  explicitly choose device-local versus scene-shared ownership; omission can no longer
+  silently turn an instance value into a shared environment value.
+- Removed the implicit boolean domain for template variables. Every internal/shared
+  reading must now declare either enum `Values` (including explicit `TRUE`/`FALSE` for a
+  boolean) or complete numeric bounds, so a forgotten domain cannot be accepted with
+  different model semantics.
+- Rejected attack-enabled verification/simulation when a scene has no automation link
+  and no reading declared falsifiable on compromise. The Board now disables the option
+  with an explicit reason instead of reporting a behaviorally identical no-op run as
+  attack analysis.
+- Excluded behaviorally inert device instances from the MEDIC compromise budget. A
+  device is now a countable attack point only when it has a declared falsifiable reading
+  or receives an automation command; rule delivery links remain separate points. Model
+  generation, request validation, async task snapshots, result semantics, Board budget
+  controls, AI tool descriptions, and documentation now use the same effective surface.
+- Required a stateful template's `InitState` to be one concrete complete
+  `WorkingState`. Wildcard, partial, or undefined initial configurations now fail at the
+  canonical backend boundary, matching manual device creation and portable-scene
+  semantics.
+- Replaced remaining Safety-template preview text that called MEDIC control-source
+  labels an "untrusted state" or generic "untrusted data". User-facing summaries now
+  match the generated property: the protected condition must not hold when any related
+  control-source label is untrusted.
+- Aligned the executable trust aggregation and machine-readable run contract with MEDIC
+  Definition 3.3. Trust now means retained trusted control rather than generic integrity
+  taint: one trusted trigger source keeps the target trusted, and only an all-untrusted
+  trigger set marks it untrusted. Verification UI text now states this limitation.
+- Revalidate raw stored template manifests at every model-build boundary. Unknown fields
+  and missing required security labels now stop verification before DTO conversion;
+  content privacy is no longer silently defaulted to public for stale template records.
+- Made standard scene import fail closed on unknown JSON fields. The frontend now reports
+  the exact unsupported path before confirmation, while `/api/board/batch` strictly
+  parses every non-template DTO and validates raw template manifests before typed
+  conversion. Response-only and template-catalog ids are rejected, preventing a lossy
+  import from being reported as a complete replacement.
+- Removed the unreferenceable `Transition.Signal` field from the canonical template
+  schema, backend/frontend DTOs, AI guidance, and docs. Autonomous transitions now
+  require a structured trigger and one modeled effect; user-visible one-step event
+  pulses remain available only on state-changing APIs with `Signal=true`.
+- Removed the misleading `WorkingState.Invariant` field from schema, DTOs, frontend
+  types, device details, defaults, and examples. It was stored and displayed as if it
+  constrained verification but was never read by the generator; device behavior and
+  checked requirements now remain exclusively in structured Dynamics, Transitions,
+  rules, and specifications.
+- Removed unsafe implicit `trusted`/`public` template labels. Working states and internal
+  variables now require explicit trust and privacy, content items require privacy, and
+  frontend import preflight plus AI template guidance enforce the same contract. The
+  built-in Oven template now labels its three local variables explicitly. Runtime
+  builders inherit template labels only when an override is omitted; an explicit invalid
+  label remains visible to validation instead of being silently replaced.
+- Declared read-only trust/privacy labels for stateful sensor templates that have modes
+  but no command APIs. Rules and specifications can now use those states as labeled
+  sources without generating references to undeclared NuSMV variables; compromise still
+  affects only explicitly falsifiable readings rather than hijacking sensor state.
+- Corrected variable-evolution semantics and made them user-visible: undeclared
+  device-local enum/boolean behavior now stutters instead of changing arbitrarily,
+  while verification, simulation, and counterexample results return and display the
+  declared-rate/device-effect policy for shared numeric values and domain-bounded
+  nondeterminism for shared enum/boolean environment values.
+- Rejected accepted-looking template behavior that the formal model could only apply
+  partially or ignore. APIs are now state-only device commands (not network endpoints),
+  API assignments/triggers and stateless APIs fail fast, API signals pulse only on an
+  actual complete state change, and autonomous Transitions are limited to one validated
+  state or variable effect. Environment-triggered state transitions now read the shared
+  environment value instead of an undeclared device-local field.
+- Made state-dependent template Dynamics domain-safe and executable. Numeric targets use
+  integer rates; enum/boolean targets use validated values; unknown, duplicate, wrong-type,
+  descending-range, normalized-duplicate, and malformed natural-rate declarations fail
+  before save/model generation instead of being silently skipped or assigned a fallback
+  rate. Boolean impacted variables no longer receive invalid numeric `_rate` machinery.
+- Persisted immutable device/link/total attack-point counts with verification and
+  simulation tasks and returned them in `modelSemantics`. Current and historical result
+  UIs now explain the selected budget against the run snapshot rather than silently
+  recomputing a potentially different denominator from the current board.
+- Made automation execution precedence visible and user-controlled. Rules now persist an
+  explicit order, the Board provides identity-preserving up/down controls backed by an
+  atomic reorder endpoint, and standard scene JSON preserves the same semantics through
+  `rules[]` order. State transitions, triggered-rule traces, and MEDIC trust/privacy
+  propagation now share the exact first-selected branch, including API start-state and
+  attack-delivery guards, so an unexecuted lower rule can no longer update labels.
+- Corrected the machine-readable privacy contract to include rule-selected content
+  sensitivity as well as trigger-source labels. UI scope text, TypeScript consistency
+  checks, API/architecture docs, and tests now describe the actual propagation model
+  without implying payload copying, access control, encryption, or transmission blocking.
+- Separated user-facing device names from persistent device identity. Manual UI and AI
+  `add_device` creation now assign opaque `device_*` references while preserving explicit
+  display labels; case-insensitive conflicts are rejected without a write, and renaming
+  never changes rule/specification identity.
+- Treated complete-scene AI ids as response-local graph aliases instead of permanent
+  user identity. `recommend_scenario` now assigns portable `device_1...` references and
+  rewrites rule sources/targets, content sources, and specification conditions together,
+  so punctuation/case in an LLM alias cannot merge devices at the NuSMV boundary.
+- Added board-write model-namespace preflight for generated shared-environment, rule
+  playback, attack-analysis, and existing-condition automatic-fix identifiers. Invalid
+  standard scene JSON is rejected before any collection write with a reason attached to
+  the offending device reference; the display name may remain unchanged.
+- Extended direct verification/simulation namespace validation to include generated
+  rule execution and automation-link attack markers, using shared constants with the
+  generator and trace parser instead of drifting duplicate strings.
+- Preserved every semantic `ValidationException` field error in REST `422` responses as
+  `data.errors`. Scene import now shows a complete diagnostic list for compound failures
+  and explicitly leaves the current board unchanged instead of surfacing only the first
+  rejected field.
+- Added explicit AI-scene adjustment feedback for deterministic runtime/layout defaults
+  and missing required environment entries, separated from rejected and truncated
+  candidates. The preview now shows device-local/environment runtime semantics and does
+  not present a no-mode sensor's internal `Working` placeholder as a real state machine.
+- Made standalone device recommendations expose the exact initial runtime that creation
+  will use. Omitted labels, state/source/sensitivity labels, and local variable values are
+  materialized from deterministic template defaults and listed in `adjustedItems`; explicit
+  invalid values still reject the whole candidate instead of being silently replaced.
+- Aligned AI-assistant `add_device` with the same effective-runtime semantics: partial or
+  empty local runtime arrays now retain explicit values, fill each omitted template value
+  and label, and report the exact defaulted paths. Its tool schema no longer calls the
+  user-facing device name an id.
+- Unified manual and device-list JSON creation on the same effective local-runtime helper.
+  Omitted values now materialize enum-first or numeric-lower-bound defaults before save,
+  while explicit blank scalar fields are rejected instead of being silently interpreted
+  as defaults; scene exports continue to carry those effective values losslessly.
+- Upgraded portable board scenes to schema version 4 and removed the canvas-only
+  `Working` state from stateless device semantics. Stateful templates require an initial
+  state; stateless scenes reject state-level source/sensitivity fields, restore the
+  rendering placeholder only inside the canvas, and omit it again on export and AI scene
+  responses.
+
+### 2026-07-10
+
+#### Fixed
+- Corrected MEDIC trust propagation so a target event becomes untrusted only when every
+  contributing trigger source is untrusted; one trusted source retains a trusted control
+  path as defined by MEDIC Definition 3.3. Template-7 safety checks combine protected
+  conditions with any untrusted protected-state label,
+  and frontend formula previews use the same semantics as generated NuSMV. Multi-mode
+  full-state conditions now propagate labels only from the modes they actually read,
+  combining trust with AND and privacy with OR; multi-mode APIs include every changed
+  state. Template import rejects incomplete state tuples or conflicting labels for a
+  reused mode-state component instead of silently selecting a label by JSON order.
+- Expanded the attack budget from device instances only to device instances plus one
+  logical command-delivery link per submitted automation rule. Compromised links can
+  drop their rule command independently, are included in the same upper-bound counter,
+  and are returned as stable rule snapshots for named broken-link trace playback rather
+  than exposing generated link indexes. Broken-link playback now stops command-flow
+  particles, and the UI states that one run does not calculate a minimum violating
+  compromise count. Attack-enabled requests now require a positive budget; disabled
+  attack mode is the only user-facing state with an effective zero budget.
+- Structured trace trust/privacy entries as literal `{ propertyScope, mode?, name }`
+  labels and translated internal attack flags/counters to `compromised` and
+  `compromisedPointCount`, keeping generated `Mode_state`, `trust_*`, `privacy_*`, and
+  link-choice identifiers out of the user-facing trace contract.
+- Replaced the ambiguous verification `safe`-only conclusion with explicit
+  `SATISFIED` / `VIOLATED` / `INCONCLUSIVE` outcomes and `modelComplete` across sync,
+  async, AI-tool, and Board result/history flows. No-emission and parser/count failures
+  are now inconclusive rather than being presented as property violations.
+- Replaced per-specification `passed` booleans with explicit per-item outcomes and
+  stopped emitting `CTLSPEC FALSE` for specifications that cannot be translated.
+  Omitted specifications can no longer manufacture violations or counterexamples;
+  verification, simulation, async tasks, saved traces, AI tools, and Board history now
+  carry and render item-level `{ issueType, itemLabel, reason }` generation issues.
+- Made synchronous simulation fail with structured reason codes on timeout,
+  interruption, execution failure, or zero parsed states instead of returning an empty
+  success DTO. Simulation results, tasks, saved traces, AI history tools, and the Board
+  now expose and display reduced-model status through `modelComplete` and
+  `disabledRuleCount`.
+- Added per-strategy automatic-fix attempt statuses and warnings, blocked fix generation
+  and apply for counterexamples produced from incomplete generated models, and made
+  forward verification reject any candidate that disables rules, skips specs, or has an
+  incomplete emitted/parsed property result set.
+- Changed automatic-fix discovery from an implicit serial run of every strategy to an
+  explicit choose-and-try flow. Fault localization and strategy execution now have
+  independent progress/error states, so a slow parameter search cannot be presented as
+  “no suggestions” or hide a viable disable/condition strategy. Trying a strategy is
+  explicitly read-only; only the separate Apply action writes server-recomputed rules.
+- Renamed the destructive automatic-fix strategy from `disable` to `remove` and its
+  response field to `removedRuleDescriptions`. The implementation permanently deletes
+  rules and has no reversible enabled state, so REST, AI, frontend, docs, and tests no
+  longer imply temporary disablement. Applying this strategy now requires a destructive
+  confirmation that names the number of rules to be removed.
+- Made `FIX_TIMEOUT_MS` a real pipeline deadline: each fix-time NuSMV capacity wait and
+  process run is capped by the remaining budget. Strategy attempts distinguish
+  `TIMED_OUT` (started but incomplete) from `SKIPPED_TIMEOUT` (never started), and the
+  frontend's server-bounded long requests no longer fail at the generic 100-second CRUD
+  timeout while the backend is still computing.
+- Fixed the automatic-fix dialog's independent loading state and preference lifecycle:
+  opening performs fault localization only, users explicitly try one strategy, editing a
+  parameter preference invalidates the old apply action without losing selectable
+  targets, and a mutating apply cannot be dismissed as though it were cancelled.
+- Preserved persisted rule identity across the frontend verification/simulation model
+  boundary. Triggered-rule and compromised-link snapshots now correlate to current
+  rule-derived canvas edges, so animation no longer labels every active automation as a
+  removed historical rule. Portable scene files and temporary UI ids remain id-free.
+- Replaced raw verification `violatedSpecJson` in client responses with a structured
+  `violatedSpec` snapshot, kept trace/simulation ownership and persisted request JSON
+  server-internal, and returned structured attack/privacy execution context instead.
+- Tightened portable scene files to the exact `iot-verify.board-scene` schema/version and
+  a self-contained template dependency set: every referenced template requires a
+  matching snapshot even if already installed, unreferenced snapshots are rejected, and
+  missing device coordinates no longer default silently. Scene v3 also removes derived
+  specification labels and requires the exact environment pool with explicit trust and
+  privacy labels. Snapshot `name` must exactly match `manifest.Name`, so import cannot
+  silently rename a template. Both frontend and backend reject these defects before any
+  board mutation.
+- Made shared environment semantics self-contained and order-independent. Impact-only
+  templates now declare `EnvironmentDomains` without gaining read capability; unused
+  account templates no longer supply hidden domains. Board/model boundaries reject
+  same-name conflicts in casing, domain/enum order, natural change rate, default trust,
+  or default privacy, and shared declarations require explicit trust/privacy labels.
+- Documented `currentStatePrivacy` across the Board and AI recommendation contracts so
+  manual creation, AI suggestions, and portable-scene JSON all preserve the same
+  initial-state sensitivity label without implying access control.
+- Tightened user-facing guarantee boundaries across verification, simulation, scene
+  import/export, rule duplicate/similarity checks, and auto-fix apply. The Board now
+  presents explicit verification outcome plus model completeness rather than a `safe`
+  boolean that could be mistaken for full system safety,
+  presents simulation as a model trace, includes environment variables in scene
+  summaries, and keeps trace/spec/device technical ids in technical details.
+- Replaced ordinary board full-list writes with targeted device/rule/spec create,
+  update, rename, and delete commands. Mutation responses identify the affected item and
+  return authoritative post-mutation collections; `/board/batch` is now reserved for
+  explicitly confirmed atomic scene replacement/clear.
+- Added dependency-aware device deletion: the UI confirms the exact related rules/specs,
+  the backend compares those dependency ids under the write lock, and drift returns 409
+  before any write instead of deleting newly related items.
+- Made AI deletion of devices, templates, rules, specifications, and saved traces a
+  server-enforced two-turn flow. The first call is a no-write preview, the tool loop
+  stops, and a later explicit user confirmation is required; device previews use an
+  opaque impact token and reject changed collateral effects.
+- Kept rule/device/spec creation drafts open until targeted persistence acknowledges
+  success, prevented duplicate submits while saving, and made device creation messages
+  use the server-confirmed instance name after any conflict rename.
+- Changed AI response-serialization fallback from a false success message to
+  `RESULT_UNAVAILABLE`, distinguishing read-only failures from mutations that may have
+  committed and instructing callers to refresh before retrying.
+- Changed deterministic duplicate and AI similarity checks to return readable
+  `matchedRule` text instead of rule database ids, and surfaced that rule in manual-create
+  and recommendation-apply confirmation dialogs while retaining the explicit
+  "not a conflict-free proof" boundary for negative results.
+- Completed the auto-fix preferred-range contract: REST, AI tools, frontend types, and
+  docs now submit `{ targetId, lower, upper }` copied from `ParameterAdjustment.targetId`
+  instead of exposing zero-based rule/condition selectors to callers. Target ids are
+  opaque trace-scoped selectors rather than reversible wrappers around internal
+  rule/condition keys.
+- Tightened the auto-fix apply contract so clients submit only a strategy and optional
+  preferred ranges. The server recomputes and verifies the concrete repair before saving;
+  normal REST/AI fix responses now expose readable adjustment and removed-rule
+  descriptions instead of rule/condition positions or rule database ids.
+- Added `rawCandidateCount`, `inspectedCount`, and `truncatedCount` to AI rule, device,
+  specification, and coupled-scene recommendation responses, and surfaced truncated raw
+  candidates in the Board recommendation panels.
+- Removed ambiguous AI-rule `requiresUserInput` output from directly applicable
+  recommendations, derived specification template labels from validated `templateId`,
+  and stopped truncating an applied rule's displayed name to 30 characters.
+- Changed malformed or schema-less whole AI recommendation responses from misleading
+  empty HTTP-200 results into structured `AI_RESPONSE_INVALID` / HTTP-502 errors, while
+  retaining `filteredItems` for parseable individual candidates that fail validation.
+  AI rule-similarity parse failures likewise no longer degrade to a false "not similar"
+  result.
+- Made AI device and coupled-scene recommendations candidate-atomic for device runtime,
+  rule-source, rule-content, and specification-condition validation so invalid nested
+  items are reported through `filteredItems` instead of being silently defaulted or
+  dropped from an otherwise "successful" recommendation.
+- Rejected scene JSON imports that contain environment variables outside the retained
+  device-template environment domains, and made `recommend_scenario` report those
+  variables as filtered items so scene export/apply round trips do not lose them silently.
+- Renamed the frontend specification-template preview field from `ltlFormula` to
+  `formulaPreview` and explicitly labels the Control Center formula code as a formula
+  preview while keeping CTL/LTL badges as type hints.
+- Made specification `formula` and `devices[]` presentation caches derived from
+  structured conditions in manual creation, AI-assistant creation, recommendation
+  apply, and standard scene import; AI/file-provided preview caches no longer override
+  the semantics shown to users.
+- Made scene import and clear save the complete board semantic model
+  (`nodes`, `environmentVariables`, `rules`, and `specs`) through one `/board/batch`
+  transaction, so imported topology cannot be persisted with the previous environment
+  pool. Batch device creation appends devices and applies environment patches through a
+  targeted atomic mutation rather than replacing unrelated board collections.
+- Extended scene-import batch saves so portable template snapshots are checked and any
+  missing referenced templates are created in the same transaction as the complete board
+  replacement. The response reports `createdTemplates`; failed imports no longer rely on
+  a best-effort frontend rollback that could leave template side effects behind. A
+  snapshot-marked scene request must provide all four semantic collections, and omitted
+  required environment variables are rejected instead of being inherited or defaulted.
+- Preserved authored `rules[]`, rule `sources[]`, `specs[]`, and specification
+  condition-list order in portable scene JSON canonicalization because previews,
+  generation, trace localization, and fix suggestions use positions from the board
+  snapshot.
+
+### 2026-07-09
+
+#### Fixed
+- Added per-candidate `filteredItems` feedback to AI rule, device, specification, and
+  complete-scene recommendations so the Board can show why individual AI candidates were
+  rejected by backend capability validation instead of only showing `filteredCount`.
+- Reworked auto-fix parameter preferences in the Board dialog to choose from actual
+  `ParameterAdjustment` targets; users no longer type rule/condition numbers to produce
+  internal `r{idx}_c{idx}` preferred-range keys.
+- Changed the REST and AI auto-fix steering contract to `preferredRangeSelections[]`
+  (`targetId`, `lower`, `upper`) and reject the old internal
+  `preferredRanges` locator map instead of accepting or silently ignoring it.
+- Relabeled device/specification formula displays as formula previews with CTL/LTL
+  badges where applicable, labeled verification result expressions as actual checked
+  expressions, and moved device/specification technical ids behind collapsible technical
+  details.
+- Aligned coding-agent manuals with the current device-identity contract: board
+  references are canonical node ids, labels are display-only snapshots, and stack
+  guidance lives in the `CLAUDE.md` files while root `AGENTS.md` mirrors Codex rules.
+- Added board scene import/export in the Board header for reusable devices,
+  environment variables, rules, specifications, and referenced template snapshots, with
+  import validation and rollback on failed saves.
+- Improved Board ergonomics: larger default device nodes, direct minimap zoom controls,
+  clearer rule edges, inspector device clicks that focus/highlight nodes instead of
+  opening details, and environment-pool text that hides backend-only NuSMV names.
+- Tightened scene portability and board orientation: scene JSON export is now canonical
+  and round-trip comparable, scene import rejects mismatched template snapshots, the
+  Board header includes a confirmed Clear Scene action, inspector device/rule/spec tabs
+  have consistent collapsible search panels, and created devices/rules are focused on
+  the canvas after save.
+- Added an end-to-end guard that exports a scene, clears the board, imports the scene,
+  exports it again byte-identically, and verifies the imported scene can be modeled.
+- Aligned AI `add_device` and backend node creation defaults with the Board UI's
+  176x128 device node size.
+- Aligned AI-created rules/specifications with user-visible board semantics:
+  `manage_rule` now persists readable `ruleString` text, `manage_spec` now derives
+  `formula` and bound `devices[]`, and environment variable keys are matched literally
+  instead of treating `a_` as a user-facing alias for generated SMV names.
+- Removed remaining reserved-prefix leaks from the user contract: `variable_` is no
+  longer treated as a hidden canvas-node prefix, `trust_`/`privacy_` condition keys are
+  matched literally like `a_` variables, trace environment variables are serialized and
+  replayed with literal user/template names instead of generated NuSMV aliases, and
+  custom template creation now rejects concrete generated NuSMV identifier collisions.
+- Added a coupled AI scene recommendation tool and Action Dock entry. The backend
+  `recommend_scenario` tool returns one importable `iot-verify.board-scene` draft whose
+  devices, environment variables, rules, and specifications are validated together,
+  instead of stitching together independent device/rule/spec recommendations.
+- Improved AI recommendation UX: rule/device/spec/scene responses now expose validation
+  counters so the Board can explain filtered suggestions, and device recommendations now
+  return/apply concrete instance hints such as suggested label, role, location, initial
+  state, and local runtime values instead of only a template name.
+- Tightened AI recommendation application semantics: applying a recommended rule now runs
+  the explicit AI similarity check before saving, and scene recommendation no longer
+  reports a complete scenario when validation removes every generated device.
+- Synchronized AI-tool documentation/index references after adding `recommend_scenario`
+  and `check_rule_similarity`: the endpoint index now lists `/api/board/scenario/recommend`
+  and `/api/board/rules/check-similarity`, and the documented tool count/category map
+  reflects 33 tools including environment management, scene recommendation, and AI
+  rule-similarity tools.
+- Split rule duplicate detection from AI semantic similarity analysis. `Create Rule`
+  now uses a deterministic typed trigger/action duplicate check before saving, while the
+  original external-LLM analysis is available through the explicit AI similarity check
+  action and `/api/board/rules/check-similarity`.
+- Fixed fix-apply semantic drift detection for environment-only changes: the canonical
+  board fingerprint now includes shared environment variables that are affected by
+  devices even when no current device reads them, so stale fixes cannot be applied after
+  changing those environment initial values.
+- Tightened Board scene-import and creation feedback: imported rules now fail fast when
+  required target command fields are missing, and newly created specifications focus and
+  highlight in the inspector just like devices/rules.
+- Bound retained NuSMV temporary model directories to diagnostic identity: verification
+  and simulation model dirs now include `user_<userId>` plus `sync` or `task_<taskId>`,
+  saved simulation dirs use `saved_trace`, and auto-fix model dirs include
+  `trace_<traceId>`.
+- Aligned async simulation feedback with sync simulation and async verification: when a
+  user waits for an async simulation to complete and no other animation is active, the
+  Board opens the simulation timeline immediately; if another timeline is active, the
+  completed trace stays in history without stealing focus, and the user is told where
+  to find the saved run instead of seeing a silent completion. Playback now stops as
+  soon as the final state is shown, resets when a same-length run replaces the visible
+  simulation, and disables Play for one-state counterexamples.
+- Clarified verification-result status in the Board UI: a `safe=true` response with
+  disabled rules or skipped specs now shows a warning state instead of presenting the
+  incomplete emitted-spec check as full system safety.
+- Removed the remaining auto-fix preferred-range rule/condition number inputs in favor
+  of selecting parameter-adjustment targets with fault-rule context.
+- Corrected specification UI terminology: the spec panel no longer describes the
+  mixed CTL/LTL template set as LTL-only, and the creation preview now says
+  specification description while deriving the CTL/LTL badge from the generated formula.
+  The preview sentence is now localized and formats state/mode/variable/API/trust/privacy
+  targets as user-facing device properties instead of hard-coded English fragments.
+- Clarified the rule-save contract in docs and code comments: `saveRules` takes the
+  complete desired rule list, preserves surviving ids/`createdAt`, inserts new rules,
+  and deletes existing rules omitted from the request.
+- Changed AI `manage_spec` add semantics to require an explicit `templateId` instead of
+  silently defaulting missing ids to the Always template, preventing ambiguous AI-created
+  specifications.
+- Prevented incomplete async verification tasks from opening as unsafe results: failed,
+  cancelled, pending, and running tasks now show task-state feedback instead of coercing
+  a missing `isSafe` value to `false`.
+- Separated trace runtime globals from board environment variables: the compromised-point counter and
+  other NuSMV globals now serialize under `TraceStateDto.globalVariables`, while
+  `envVariables` contains only literal user environment names.
+- Preserved literal device variables that look like generated NuSMV helper names
+  (`trust_*`, `privacy_*`, `*_rate`, `*_a`) during trace parsing instead of routing or
+  dropping them by prefix/shape alone.
+- Added a concrete `MODULE main` namespace collision guard so device instance ids cannot
+  collide with generated environment identifiers (`a_<name>`), the compromised-point counter, or
+  auto-fix `param_*` / `lambda_*` variables in the emitted SMV model.
+- Aligned AI verification/simulation tool argument validation with REST/service
+  semantics: out-of-range `attackBudget` and simulation `steps` now return a structured
+  validation error instead of being silently clamped.
+- Disabled silent JSON scalar coercion and count clamping at user/API boundaries:
+  integer and boolean fields now reject quoted strings/floats, AI id/count arguments
+  fail before board loading when malformed, and the Board UI validates recommendation
+  counts, simulation steps, attack budget, and scene-import geometry without rewriting
+  user input.
+- Clarified NuSMV init-value semantics in docs and generator comments: user-facing
+  device/environment initial values are rejected at save/model boundaries when illegal;
+  generator-level clamping is only defensive fallback behavior for direct low-level calls.
+- Hardened AI integer-argument validation against oversized JSON integers and documented
+  non-integer rejection. `attackBudget` is an upper bound over device-instance and
+  submitted automation-link points; attack-mode requests cannot exceed that total, and
+  the Board UI uses `min(50, deviceCount + ruleCount)` as the visible slider limit.
+- Hardened `fix_violation.preferredRangeSelections` parsing so oversized JSON integers
+  cannot be truncated into accepted 32-bit bounds.
+
 ### 2026-07-06
 
 #### Changed
@@ -23,7 +1089,7 @@ history into a technical spec. The spec content itself now lives under
   pan/zoom. The old `board_active` DTO/entity/repository/API was removed.
 - **Verification spec results are now identity-bearing objects.** Sync verification,
   completed async verification tasks, and `verify_model` AI tool output now return
-  `specResults` as `{ specId, passed, expression }` entries for the specifications
+  `specResults` as `{ specId, outcome, expression }` entries for the specifications
   actually emitted to NuSMV. Async task persistence stores this object-array JSON in the
   existing `specResultsJson` column; `specResults` is strictly the structured shape (the
   pre-release boolean-array format is no longer read, so the column must not contain it).
@@ -95,9 +1161,9 @@ history into a technical spec. The spec content itself now lives under
 - **Empty verification requests no longer succeed vacuously.** Sync and async verification now
   require at least one specification at the DTO boundary (`@NotEmpty`), the Board UI blocks
   no-spec verification before calling the API, and service-layer defensive paths fail instead of
-  returning `safe=true` with empty `specResults`. NuSMV generation warnings and fix forward
-  verification remain fail-closed: skipped/degraded specs surface as warnings, and empty NuSMV
-  result sets are not treated as verified fixes.
+  returning a satisfied result with empty `specResults`. NuSMV generation warnings and fix
+  forward verification remain explicit: omitted specs surface as structured issues, and empty
+  NuSMV result sets are not treated as verified fixes.
 - **Fix-apply now blocks spec/device-only drift.** Applying a verified fix previously replayed the
   trace's stored context on the server, so editing spec conditions or device instance state
   (variables, privacies, initial state, trust) after verifying — without touching rules or templates —
@@ -158,8 +1224,9 @@ history into a technical spec. The spec content itself now lives under
 #### Fixed
 - **NuSMV generation warnings are now part of the verification contract.** Rule
   conditions that cannot be generated fail closed to `FALSE`, skipped/invalid specs are
-  recorded, and `VerificationResultDto` returns `checkLogs`,
-  `disabledRuleCount`, and `skippedSpecCount` so a "safe" result cannot hide that part of
+  omitted rather than emitted as false properties, and verification/simulation DTOs
+  return `generationIssues` alongside `checkLogs`, `disabledRuleCount`, and
+  `skippedSpecCount` so a satisfied subset cannot hide that part of
   the requested model was excluded. Warning collection is passed through a request-scoped
   `SmvGenerationContext` instead of global mutable state, and completed async verification
   tasks now persist/return the same two count fields.
@@ -214,10 +1281,9 @@ history into a technical spec. The spec content itself now lives under
 - **Integrated duplicate-rule checking in rule creation dialog.**
   The `POST /api/board/rules/check-duplicate` endpoint (backend implementation existed
   but was frontend-unintegrated) is now callable via `boardApi.checkDuplicateRule(rule)`.
-  `RuleBuilderDialog.vue` adds a "Check Duplicate" button (non-blocking: if AI detects
-  duplication, a confirmation dialog offers "Save Anyway" or "Cancel"). This avoids
-  forcing users through an AI check that has latency, cost, and potential false positives
-  while surfacing the duplicate-detection capability where useful.
+  `RuleBuilderDialog.vue` added a visible check action and confirmation flow; the current
+  2026-07-09 contract splits deterministic save-time duplicate detection from the
+  explicit AI similarity action.
 - **Frontend API base URL is now relative by default and configurable end-to-end.**
   Both `src/api/http.ts` (axios, `(VITE_API_BASE_URL || '') + '/api'`) and
   `src/api/chat.ts` (SSE) derive their base URL from `import.meta.env.VITE_API_BASE_URL`.
@@ -321,9 +1387,9 @@ history into a technical spec. The spec content itself now lives under
 #### Documentation
 - Clarified architecture documentation ownership and kept durable backend design notes
   in the owning API / architecture overview documents rather than a dated audit report.
-- **`POST /api/board/rules/check-duplicate` integrated in frontend** as an optional
-  manual pre-save check in `RuleBuilderDialog` (non-blocking: AI duplicate detection
-  prompts confirmation, user can "Save Anyway").
+- **`POST /api/board/rules/check-duplicate` integrated in frontend** through
+  `RuleBuilderDialog`; the 2026-07-09 contract now uses this endpoint as the deterministic
+  save-time duplicate check and exposes AI semantic analysis separately.
 - Aligned `ChatSession`/`ChatMessage` frontend types to backend DTOs (`userId: number`,
   added missing `createdAt`/`sessionId` fields).
 - Updated `docs/guides/frontend-integration.md` to clarify `Trace*` / `Simulation*` type
@@ -372,9 +1438,9 @@ history into a technical spec. The spec content itself now lives under
 - **Defensive intensity handling**: `SmvGenerator` clamps `intensity` to `0..50`;
   `SmvBoundsUtils` additionally zeroes negative intensities.
 - **`SmvSpecificationBuilder.build()`** gained a 5th parameter `enablePrivacy`; with
-  privacy off, a privacy spec is skipped and emitted as
-  `CTLSPEC FALSE -- privacy spec skipped: enablePrivacy=false` (defense-in-depth;
-  `validateNoPrivacySpecs` upstream is the primary guard).
+  privacy off, a privacy spec is omitted and reported as a structured generation issue
+  (defense-in-depth; `validateNoPrivacySpecs` upstream is the primary guard). No
+  always-false placeholder is emitted.
 - **Regression coverage** (`SmvGeneratorFixesTest`): WITH-rate extreme NCR, internal
   variable boundary branches, `range=0` and negative-intensity cases.
 

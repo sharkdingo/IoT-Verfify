@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDeviceDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceTriggeredRuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceVariableDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for FaultLocalizer: verifies correct fault localization along counterexample traces,
- * including cross/same-device condition semantics, startState constraints, conflict detection,
+ * including current-state condition semantics, startState constraints, conflict detection,
  * relation normalization, and edge cases.
  */
 class FaultLocalizerTest {
@@ -31,6 +32,40 @@ class FaultLocalizerTest {
     // ===== Basic triggering tests =====
 
     @Test
+    void localize_prefersExecutionProbeOverHeuristicMatches() {
+        DeviceSmvData lightSmv = buildDevice("light_1", "Light", List.of("Power"),
+                Map.of("Power", List.of("off", "on")),
+                buildManifest("Light", List.of(buildApi("turn_on", "off", "on"))));
+        RuleDto first = RuleDto.builder()
+                .id(1L)
+                .ruleString("First matching rule")
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("light_1").attribute("Power").relation("=").value("off").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
+                .build();
+        RuleDto suppressed = RuleDto.builder()
+                .id(2L)
+                .ruleString("Suppressed duplicate action")
+                .conditions(first.getConditions())
+                .command(first.getCommand())
+                .build();
+
+        TraceStateDto current = buildState(0, List.of(buildDeviceTrace("light_1", "off")));
+        current.setTriggeredRules(List.of());
+        TraceStateDto next = buildState(1, List.of(buildDeviceTrace("light_1", "on")));
+        next.setTriggeredRules(List.of(TraceTriggeredRuleDto.builder()
+                .ruleId("1")
+                .ruleLabel("First matching rule")
+                .build()));
+
+        List<FaultRuleDto> faults = localizer.localize(
+                List.of(current, next), List.of(first, suppressed), Map.of("light_1", lightSmv));
+
+        assertEquals(1, faults.size());
+        assertEquals(1L, faults.get(0).getRuleId());
+    }
+
+    @Test
     void localize_simpleRuleTrigger_returnsOneFault() {
         // Scenario: Rule says "if sensor state=hot then turn_on AC"
         // Trace: step0 sensor=hot, AC=off → step1 sensor=hot, AC=on
@@ -40,13 +75,15 @@ class FaultLocalizerTest {
         DeviceSmvData acSmv = buildDevice("ac_1", "AC", List.of("ACMode"),
                 Map.of("ACMode", List.of("on", "off")),
                 buildManifest("AC", List.of(buildApi("turn_on", "off", "on"))));
+        acSmv.setDeviceLabel("Kitchen AC");
+        acSmv.getManifest().getApis().get(0).setDescription("Turn on");
 
         Map<String, DeviceSmvData> deviceMap = Map.of("sensor_1", sensorSmv, "ac_1", acSmv);
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .ruleString("if sensor=hot then AC.turn_on")
                 .build();
 
@@ -59,9 +96,12 @@ class FaultLocalizerTest {
 
         assertEquals(1, faults.size());
         assertEquals(0, faults.get(0).getRuleIndex());
-        assertEquals(0, faults.get(0).getTriggerStep());
-        assertEquals("AC", faults.get(0).getTargetDevice());
-        assertEquals("turn_on", faults.get(0).getTargetAction());
+        assertEquals(1, faults.get(0).getTransitionNumber());
+        assertEquals("ac_1", faults.get(0).getTargetDeviceId());
+        assertEquals("Kitchen AC", faults.get(0).getTargetDeviceLabel());
+        assertEquals("turn_on", faults.get(0).getTargetActionId());
+        assertEquals("Turn on", faults.get(0).getTargetActionLabel());
+        assertEquals("TRIGGERED", faults.get(0).getReasonCode());
         assertFalse(faults.get(0).isConflicting());
     }
 
@@ -75,8 +115,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("1Light").attribute("state").relation("=").value("off").build()))
-                .command(RuleDto.Command.builder().deviceName("1Light").action("turn_on").build())
+                        .deviceName("d_1Light").attribute("state").relation("=").value("off").build()))
+                .command(RuleDto.Command.builder().deviceName("d_1Light").action("turn_on").build())
                 .ruleString("if 1Light=off then 1Light.turn_on")
                 .build();
 
@@ -89,7 +129,47 @@ class FaultLocalizerTest {
 
         assertEquals(1, faults.size());
         assertEquals(0, faults.get(0).getRuleIndex());
-        assertEquals("1Light", faults.get(0).getTargetDevice());
+        assertEquals("d_1Light", faults.get(0).getTargetDeviceId());
+    }
+
+    @Test
+    void localize_crossDeviceVariableRule_usesCurrentConditionLikeGeneratedSmv() {
+        DeviceSmvData motionSmv = buildDevice("motion_entry", "Motion Detector", List.of(),
+                Map.of(), buildManifest("Motion Detector", List.of()));
+        motionSmv.getVariables().add(DeviceManifest.InternalVariable.builder()
+                .name("motion").values(List.of("active", "inactive")).build());
+        DeviceSmvData cameraSmv = buildDevice("privacy_camera", "Camera", List.of("MachineState"),
+                Map.of("MachineState", List.of("on", "off", "takingphoto")),
+                buildManifest("Camera", List.of(buildApi("take photo", "on", "taking photo"))));
+
+        Map<String, DeviceSmvData> deviceMap = Map.of("motion_entry", motionSmv, "privacy_camera", cameraSmv);
+
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("motion_entry")
+                        .attribute("motion")
+                        .targetType("variable")
+                        .relation("=")
+                        .value("active")
+                        .build()))
+                .command(RuleDto.Command.builder().deviceName("privacy_camera").action("take photo").build())
+                .ruleString("if motion active then camera takes photo")
+                .build();
+
+        TraceDeviceDto currentMotion = buildDeviceTrace("motion_entry", null);
+        currentMotion.setVariables(List.of(traceVar("motion", "active")));
+        TraceDeviceDto nextMotion = buildDeviceTrace("motion_entry", null);
+        nextMotion.setVariables(List.of(traceVar("motion", "inactive")));
+
+        List<TraceStateDto> states = List.of(
+                buildState(0, List.of(currentMotion, buildDeviceTrace("privacy_camera", "on"))),
+                buildState(1, List.of(nextMotion, buildDeviceTrace("privacy_camera", "takingphoto")))
+        );
+
+        List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
+        assertEquals(1, faults.size());
+        assertEquals(0, faults.get(0).getRuleIndex());
+        assertEquals("privacy_camera", faults.get(0).getTargetDeviceId());
     }
 
     @Test
@@ -106,8 +186,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("cold").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("cold").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -119,12 +199,11 @@ class FaultLocalizerTest {
         assertTrue(faults.isEmpty());
     }
 
-    // ===== Cross-device vs same-device condition semantics =====
+    // ===== Current-state condition semantics =====
 
     @Test
-    void localize_crossDeviceCondition_evaluatedOnNextState() {
-        // Cross-device: condition device (sensor) != command device (AC)
-        // Condition should be evaluated on Si+1, not Si
+    void localize_crossDeviceCondition_evaluatedOnCurrentState() {
+        // Cross-device rules still read the user-authored IF condition on Si.
         DeviceSmvData sensorSmv = buildDevice("sensor_1", "Sensor", List.of("SensorMode"),
                 Map.of("SensorMode", List.of("hot", "cold")),
                 buildManifest("Sensor", List.of()));
@@ -137,18 +216,17 @@ class FaultLocalizerTest {
         // Rule: if sensor=hot then AC.turn_on
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
-        // Sensor is cold at step 0, hot at step 1 (cross-device evaluates on Si+1)
+        // Sensor is hot at step 0, cold at step 1; current-state evaluation must still trigger.
         List<TraceStateDto> states = List.of(
-                buildState(0, List.of(buildDeviceTrace("sensor_1", "cold"), buildDeviceTrace("ac_1", "off"))),
-                buildState(1, List.of(buildDeviceTrace("sensor_1", "hot"), buildDeviceTrace("ac_1", "on")))
+                buildState(0, List.of(buildDeviceTrace("sensor_1", "hot"), buildDeviceTrace("ac_1", "off"))),
+                buildState(1, List.of(buildDeviceTrace("sensor_1", "cold"), buildDeviceTrace("ac_1", "on")))
         );
 
         List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
-        // Cross-device evaluates sensor on Si+1 where sensor=hot, condition satisfied
         assertEquals(1, faults.size());
     }
 
@@ -165,8 +243,8 @@ class FaultLocalizerTest {
         // Rule: if AC state=off then AC.turn_on (same device)
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("AC").attribute("state").relation("EQ").value("off").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("ac_1").attribute("state").relation("EQ").value("off").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         // AC is off at step 0 (same-device evaluates on Si), on at step 1
@@ -205,13 +283,13 @@ class FaultLocalizerTest {
 
         RuleDto rule1 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
                 .build();
         RuleDto rule2 = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_off").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_off").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -256,16 +334,16 @@ class FaultLocalizerTest {
         // Test "==" format
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("==").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("==").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
         assertEquals(1, localizer.localize(states, List.of(rule), deviceMap).size());
 
         // Test "NEQ" format
         RuleDto ruleNeq = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("NEQ").value("cold").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("NEQ").value("cold").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
         assertEquals(1, localizer.localize(states, List.of(ruleNeq), deviceMap).size());
     }
@@ -288,8 +366,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("temperature").relation("GT").value("30").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("temperature").relation("GT").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         TraceDeviceDto sensorTrace = buildDeviceTrace("sensor_1", "active");
@@ -298,7 +376,7 @@ class FaultLocalizerTest {
         tempVar.setValue("35");
         sensorTrace.setVariables(List.of(tempVar));
 
-        // Cross-device condition (sensor != AC) is evaluated on Si+1, so variable must be on Si+1 sensor
+        // Cross-device condition reads Si, matching SmvMainModuleBuilder.
         TraceDeviceDto sensorTraceNext = buildDeviceTrace("sensor_1", "active");
         sensorTraceNext.setVariables(List.of(tempVar));
 
@@ -326,8 +404,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("EQ").value("hot").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("EQ").value("hot").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         // AC is in "standby" at step0 — startState is "off", so rule should NOT trigger
@@ -392,7 +470,7 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of()) // empty conditions → fail-closed
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -419,8 +497,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("IN").value("{hot,warm}").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("IN").value("{hot,warm}").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -445,8 +523,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("IN").value("hot;warm").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("IN").value("hot;warm").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -471,8 +549,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("IN").value("hot|warm").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("IN").value("hot|warm").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -498,8 +576,8 @@ class FaultLocalizerTest {
         // NOT_IN "hot,cold": sensor is "warm" → NOT in set → condition satisfied
         RuleDto ruleSatisfied = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("NOT_IN").value("hot,cold").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("NOT_IN").value("hot,cold").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -513,8 +591,8 @@ class FaultLocalizerTest {
         // NOT_IN "hot,warm": sensor is "warm" → IN set → condition NOT satisfied
         RuleDto ruleNotSatisfied = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("NOT_IN").value("hot,warm").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                        .deviceName("sensor_1").attribute("state").relation("NOT_IN").value("hot,warm").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         assertTrue(localizer.localize(states, List.of(ruleNotSatisfied), deviceMap).isEmpty(),
@@ -538,8 +616,8 @@ class FaultLocalizerTest {
         // Same-device → evaluated on Si where hvac state is "cool;high" → matches first tuple
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("HVAC").attribute("state").relation("IN").value("cool;high,heat;low").build()))
-                .command(RuleDto.Command.builder().deviceName("HVAC").action("set_heat").build())
+                        .deviceName("hvac_1").attribute("state").relation("IN").value("cool;high,heat;low").build()))
+                .command(RuleDto.Command.builder().deviceName("hvac_1").action("set_heat").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -567,8 +645,8 @@ class FaultLocalizerTest {
         // "cool" uniquely belongs to PowerMode → should match if device's PowerMode is "cool"
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("HVAC").attribute("state").relation("IN").value("cool,heat").build()))
-                .command(RuleDto.Command.builder().deviceName("HVAC").action("set_heat").build())
+                        .deviceName("hvac_1").attribute("state").relation("IN").value("cool,heat").build()))
+                .command(RuleDto.Command.builder().deviceName("hvac_1").action("set_heat").build())
                 .build();
 
         // Same-device → evaluated on Si. At Si, hvac is "cool;high" → PowerMode=cool → matches "cool"
@@ -602,18 +680,18 @@ class FaultLocalizerTest {
 
         Map<String, DeviceSmvData> deviceMap = Map.of("thermo_1", thermostatSmv, "light_1", lightSmv);
 
-        // Cross-device: condition on thermostat, command on light → condition evaluated on Si+1
+        // Cross-device: condition on thermostat, command on light; condition is evaluated on Si.
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Thermostat").attribute("state").relation("EQ").value(";cool").build()))
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
+                        .deviceName("thermo_1").attribute("state").relation("EQ").value(";cool").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
                 .build();
 
-        // At Si+1: thermostat="auto;cool" → ThermostatMode=cool → matches ";cool"
+        // At Si: thermostat="auto;cool" → ThermostatMode=cool → matches ";cool"
         List<TraceStateDto> states = List.of(
-                buildState(0, List.of(buildDeviceTrace("thermo_1", "auto;heat"),
+                buildState(0, List.of(buildDeviceTrace("thermo_1", "auto;cool"),
                         buildDeviceTrace("light_1", "off"))),
-                buildState(1, List.of(buildDeviceTrace("thermo_1", "auto;cool"),
+                buildState(1, List.of(buildDeviceTrace("thermo_1", "auto;heat"),
                         buildDeviceTrace("light_1", "on")))
         );
 
@@ -639,15 +717,15 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Thermostat").attribute("state").relation("!=").value(";cool").build()))
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
+                        .deviceName("thermo_1").attribute("state").relation("!=").value(";cool").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
                 .build();
 
-        // Cross-device → evaluated on Si+1. At Si+1: thermostat="auto;heat" → ThermostatMode=heat != cool
+        // Cross-device → evaluated on Si. At Si: thermostat="auto;heat" → ThermostatMode=heat != cool
         List<TraceStateDto> states = List.of(
-                buildState(0, List.of(buildDeviceTrace("thermo_1", "auto;cool"),
+                buildState(0, List.of(buildDeviceTrace("thermo_1", "auto;heat"),
                         buildDeviceTrace("light_1", "off"))),
-                buildState(1, List.of(buildDeviceTrace("thermo_1", "auto;heat"),
+                buildState(1, List.of(buildDeviceTrace("thermo_1", "auto;cool"),
                         buildDeviceTrace("light_1", "on")))
         );
 
@@ -672,8 +750,8 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Thermostat").attribute("state").relation("EQ").value("auto").build()))
-                .command(RuleDto.Command.builder().deviceName("Light").action("turn_on").build())
+                        .deviceName("thermo_1").attribute("state").relation("EQ").value("auto").build()))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -689,9 +767,8 @@ class FaultLocalizerTest {
     }
 
     @Test
-    void localize_apiSignalCondition_nullEndState_permissive() {
-        // Signal API with endState=null: NuSMV guard is api_signal=TRUE
-        // FaultLocalizer should be permissive (return true) since api_signal is filtered from traces
+    void localize_apiSignalCondition_nullEndState_failsClosed() {
+        // A persisted legacy API without an end state cannot produce a modeled event pulse.
         DeviceSmvData sensorSmv = buildDevice("sensor_1", "Sensor", List.of("SensorMode"),
                 Map.of("SensorMode", List.of("active", "idle")),
                 buildManifest("Sensor", List.of(buildSignalApi("detect", null, null))));
@@ -704,9 +781,9 @@ class FaultLocalizerTest {
         // Rule: if sensor.detect (signal, no relation/value) then alarm.activate
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("detect")
+                        .deviceName("sensor_1").attribute("detect")
                         .relation(null).value(null).build()))
-                .command(RuleDto.Command.builder().deviceName("Alarm").action("activate").build())
+                .command(RuleDto.Command.builder().deviceName("alarm_1").action("activate").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -715,8 +792,8 @@ class FaultLocalizerTest {
         );
 
         List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
-        assertEquals(1, faults.size(),
-                "Signal API condition with null endState should be permissive");
+        assertTrue(faults.isEmpty(),
+                "Signal API condition without a modeled state change must fail closed");
     }
 
     @Test
@@ -726,7 +803,7 @@ class FaultLocalizerTest {
                 List.of("PowerMode", "FanMode"),
                 new LinkedHashMap<>(Map.of("PowerMode", List.of("cool", "heat", "off"),
                         "FanMode", List.of("high", "low"))),
-                buildManifest("HVAC", List.of(buildSignalApi("start_cooling", null, "cool"))));
+                buildManifest("HVAC", List.of(buildSignalApi("start_cooling", "off;", "cool;"))));
         DeviceSmvData alarmSmv = buildDevice("alarm_1", "Alarm", List.of("AlarmMode"),
                 Map.of("AlarmMode", List.of("on", "off")),
                 buildManifest("Alarm", List.of(buildApi("activate", null, "on"))));
@@ -734,22 +811,23 @@ class FaultLocalizerTest {
         Map<String, DeviceSmvData> deviceMap = Map.of("hvac_1", hvacSmv, "alarm_1", alarmSmv);
 
         // Rule: if hvac.start_cooling (signal) then alarm.activate
-        // hvac state is "cool;high" — endState "cool" should match PowerMode
+        // The event occurs on S0 -> S1; the dependent rule then fires on S1 -> S2.
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("HVAC").attribute("start_cooling")
+                        .deviceName("hvac_1").attribute("start_cooling")
                         .relation(null).value(null).build()))
-                .command(RuleDto.Command.builder().deviceName("Alarm").action("activate").build())
+                .command(RuleDto.Command.builder().deviceName("alarm_1").action("activate").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
-                buildState(0, List.of(buildDeviceTrace("hvac_1", "cool;high"), buildDeviceTrace("alarm_1", "off"))),
-                buildState(1, List.of(buildDeviceTrace("hvac_1", "cool;high"), buildDeviceTrace("alarm_1", "on")))
+                buildState(0, List.of(buildDeviceTrace("hvac_1", "off;high"), buildDeviceTrace("alarm_1", "off"))),
+                buildState(1, List.of(buildDeviceTrace("hvac_1", "cool;high"), buildDeviceTrace("alarm_1", "off"))),
+                buildState(2, List.of(buildDeviceTrace("hvac_1", "cool;high"), buildDeviceTrace("alarm_1", "on")))
         );
 
         List<FaultRuleDto> faults = localizer.localize(states, List.of(rule), deviceMap);
         assertEquals(1, faults.size(),
-                "Signal API endState should resolve to specific mode for multi-mode devices");
+                "A complete multi-mode API transition should produce one event pulse");
     }
 
     @Test
@@ -771,9 +849,9 @@ class FaultLocalizerTest {
 
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("HVAC").attribute("mystery_signal")
+                        .deviceName("hvac_1").attribute("mystery_signal")
                         .relation(null).value(null).build()))
-                .command(RuleDto.Command.builder().deviceName("Alarm").action("activate").build())
+                .command(RuleDto.Command.builder().deviceName("alarm_1").action("activate").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -803,9 +881,9 @@ class FaultLocalizerTest {
         // "nonexistent" is not in SensorMode's state list → unresolvable → fail-closed
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
-                        .deviceName("Sensor").attribute("state").relation("NOT_IN")
+                        .deviceName("sensor_1").attribute("state").relation("NOT_IN")
                         .value("nonexistent,also_bad").build()))
-                .command(RuleDto.Command.builder().deviceName("AC").action("turn_on").build())
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turn_on").build())
                 .build();
 
         List<TraceStateDto> states = List.of(
@@ -824,6 +902,7 @@ class FaultLocalizerTest {
                                        DeviceManifest manifest) {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setVarName(varName);
+        smv.setDeviceLabel(varName);
         smv.setTemplateName(templateName);
         smv.setModes(modes);
         smv.setModeStates(new LinkedHashMap<>(modeStates));
@@ -854,6 +933,13 @@ class FaultLocalizerTest {
         TraceDeviceDto dto = new TraceDeviceDto();
         dto.setDeviceId(deviceId);
         dto.setState(state);
+        return dto;
+    }
+
+    private TraceVariableDto traceVar(String name, String value) {
+        TraceVariableDto dto = new TraceVariableDto();
+        dto.setName(name);
+        dto.setValue(value);
         return dto;
     }
 }

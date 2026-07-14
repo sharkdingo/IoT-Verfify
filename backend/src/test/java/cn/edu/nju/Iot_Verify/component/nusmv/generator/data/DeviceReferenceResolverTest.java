@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.data;
 
-import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -18,78 +17,70 @@ class DeviceReferenceResolverTest {
     }
 
     @Test
-    void resolve_prefersPrimaryExactMatchOverSecondary() {
+    void resolve_usesExactReferenceOnly() {
         DeviceSmvData primary = device("primary_var", "PrimaryTemplate");
-        DeviceSmvData secondary = device("secondary_var", "SecondaryTemplate");
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
-        map.put("primaryLabel", primary);
-        map.put("secondaryLabel", secondary);
+        map.put("primaryId", primary);
 
-        assertSame(primary, DeviceReferenceResolver.resolve("primaryLabel", "secondaryLabel", map));
+        assertSame(primary, DeviceReferenceResolver.resolve("primaryId", map));
     }
 
     @Test
-    void resolve_fallsBackToSecondaryWhenPrimaryDoesNotResolve() {
+    void resolve_doesNotFallBackToDisplayLabel() {
         DeviceSmvData secondary = device("LivingRoomAC", "AC");
         Map<String, DeviceSmvData> map = Map.of("LivingRoomAC", secondary);
 
-        assertSame(secondary, DeviceReferenceResolver.resolve("ac_1", "LivingRoomAC", map));
+        assertNull(DeviceReferenceResolver.resolve("ac_1", map));
     }
 
     @Test
-    void resolve_usesNormalizedDigitLeadingReference() {
-        DeviceSmvData lamp = device("d_1Lamp", "Lamp");
-        Map<String, DeviceSmvData> map = Map.of("d_1Lamp", lamp);
+    void resolve_rejectsNonCanonicalDigitLeadingReference() {
+        DeviceSmvData lamp = device("_1lamp", "Lamp");
+        Map<String, DeviceSmvData> map = Map.of("_1lamp", lamp);
 
-        assertSame(lamp, DeviceReferenceResolver.resolve("1Lamp", null, map));
+        assertNull(DeviceReferenceResolver.resolve("1Lamp", map));
     }
 
     @Test
-    void resolvableReference_returnsResolvableInputReferenceNotSmvVarName() {
-        DeviceSmvData lamp = device("d_1lamp", "Lamp");
-        Map<String, DeviceSmvData> map = Map.of("d_1Lamp", lamp);
+    void resolvableReference_returnsCanonicalInputReferenceOnly() {
+        DeviceSmvData lamp = device("_1lamp", "Lamp");
+        Map<String, DeviceSmvData> map = Map.of("_1lamp", lamp);
 
-        assertEquals("d_1Lamp", DeviceReferenceResolver.resolvableReference("1Lamp", null, map));
+        assertEquals("_1lamp", DeviceReferenceResolver.resolvableReference("_1lamp", map));
+        assertNull(DeviceReferenceResolver.resolvableReference("1Lamp", map));
     }
 
     @Test
-    void canonicalReference_normalizesResolvedReferenceForSemanticComparison() {
+    void canonicalReference_returnsResolvedCanonicalReference() {
         DeviceSmvData currentBoardLamp = device("_1lamp", "Lamp");
-        Map<String, DeviceSmvData> map = Map.of("1Lamp", currentBoardLamp);
+        Map<String, DeviceSmvData> map = Map.of("_1lamp", currentBoardLamp);
 
-        assertEquals("d_1Lamp", DeviceReferenceResolver.canonicalReference("1Lamp", null, map));
+        assertEquals("_1lamp", DeviceReferenceResolver.canonicalReference("_1lamp", map));
+        assertNull(DeviceReferenceResolver.canonicalReference("1Lamp", map));
     }
 
     @Test
-    void unresolvedReferences_returnFirstNonBlankFallbacks() {
-        assertNull(DeviceReferenceResolver.resolve("missing", null, Map.of()));
-        assertEquals("missing", DeviceReferenceResolver.resolvableReference(" missing ", null, Map.of()));
-        assertEquals("d_1Lamp", DeviceReferenceResolver.canonicalReference(null, "1Lamp", Map.of()));
+    void unresolvedReferences_returnNull() {
+        assertNull(DeviceReferenceResolver.resolve("missing", Map.of()));
+        assertNull(DeviceReferenceResolver.resolvableReference(" missing ", Map.of()));
+        assertNull(DeviceReferenceResolver.canonicalReference(null, Map.of()));
     }
 
     @Test
-    void resolve_throwsAmbiguousTemplateFallbackWhenNoExactOrSecondaryMatch() {
+    void resolve_doesNotUseTemplateFallback() {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ac_1", device("ac_1", "AC"));
         map.put("ac_2", device("ac_2", "AC"));
 
-        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> DeviceReferenceResolver.resolve("AC", null, map));
-
-        assertEquals(SmvGenerationException.ErrorCategories.AMBIGUOUS_DEVICE_REFERENCE,
-                ex.getErrorCategory());
+        assertNull(DeviceReferenceResolver.resolve("AC", map));
     }
 
     @Test
-    void resolvableReference_throwsAmbiguousTemplateFallback() {
+    void resolvableReference_doesNotUseTemplateFallback() {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("ac_1", device("ac_1", "AC"));
         map.put("ac_2", device("ac_2", "AC"));
 
-        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> DeviceReferenceResolver.resolvableReference("AC", null, map));
-
-        assertEquals(SmvGenerationException.ErrorCategories.AMBIGUOUS_DEVICE_REFERENCE,
-                ex.getErrorCategory());
+        assertNull(DeviceReferenceResolver.resolvableReference("AC", map));
     }
 }

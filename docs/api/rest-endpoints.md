@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-06.
+Verified against code on 2026-07-14.
 
 ---
 
@@ -26,45 +26,65 @@ Verified against code on 2026-07-06.
 | POST | `/api/auth/register` | Register a new user | `docs/api/auth.md` |
 | POST | `/api/auth/login` | Log in, returns JWT token | `docs/api/auth.md` |
 | POST | `/api/auth/logout` | Log out, blacklists token | `docs/api/auth.md` |
+| DELETE | `/api/auth/account` | Permanently delete the current account and user-owned data | `docs/api/auth.md` |
 
 ## Board storage — `BoardStorageController`
 
 | Method | Path | Note | Detail |
 | :--- | :--- | :--- | :--- |
 | GET | `/api/board/nodes` | List device instances | `docs/api/board.md` |
-| POST | `/api/board/nodes` | Save device instances (full replace) | `docs/api/board.md` |
-| GET | `/api/board/edges` | List optional persisted canvas-geometry connections | `docs/api/board.md` |
-| POST | `/api/board/edges` | Save optional persisted canvas-geometry connections (full replace) | `docs/api/board.md` |
+| POST | `/api/board/nodes` | Atomically append one or more device instances | `docs/api/board.md` |
+| PUT | `/api/board/nodes/{nodeId}/layout` | Replace only one device's complete canvas layout | `docs/api/board.md` |
+| PUT | `/api/board/nodes/{nodeId}/runtime` | Replace only one device's complete device-local runtime configuration | `docs/api/board.md` |
+| PATCH | `/api/board/nodes/{nodeId}/label` | Rename one device instance and refresh spec display labels | `docs/api/board.md` |
+| GET | `/api/board/nodes/{nodeId}/deletion-preview` | Preview every rule, specification, and Environment Pool effect of deleting one device | `docs/api/board.md` |
+| POST | `/api/board/nodes/{nodeId}/delete` | Confirmed atomic device/rule/spec cascade delete | `docs/api/board.md` |
+| GET | `/api/board/environment` | List and self-heal the board environment pool | `docs/api/board.md` |
+| POST | `/api/board/environment` | Apply itemized field-level patches to the board environment pool | `docs/api/board.md` |
 | GET | `/api/board/specs` | List specifications | `docs/api/board.md` |
-| POST | `/api/board/specs` | Save specifications | `docs/api/board.md` |
+| POST | `/api/board/specs` | Create one specification | `docs/api/board.md` |
+| DELETE | `/api/board/specs/{specId}` | Delete one specification | `docs/api/board.md` |
 | GET | `/api/board/rules` | List automation rules | `docs/api/board.md` |
-| POST | `/api/board/rules` | Save rules | `docs/api/board.md` |
-| POST | `/api/board/batch` | Atomic save of nodes+rules+specs (one transaction) | `docs/api/board.md` |
+| POST | `/api/board/rules` | Create one automation rule | `docs/api/board.md` |
+| PUT | `/api/board/rules/order` | Atomically replace rule execution order | `docs/api/board.md` |
+| DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule | `docs/api/board.md` |
+| GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
+| POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
 | GET | `/api/board/layout` | Get board layout | `docs/api/board.md` |
 | POST | `/api/board/layout` | Save board layout | `docs/api/board.md` |
 | GET | `/api/board/templates` | List device templates | `docs/api/board.md` |
+| GET | `/api/board/templates/schema` | Download the authoritative device-template JSON Schema | `docs/api/board.md` |
 | POST | `/api/board/templates` | Create custom template | `docs/api/board.md` |
-| DELETE | `/api/board/templates/{id}` | Delete template | `docs/api/board.md` |
-| POST | `/api/board/templates/reload` | Reset to default templates (returns count) | `docs/api/board.md` |
+| GET | `/api/board/templates/{id}/deletion-preview` | Preview exact template-deletion blockers and obtain an impact token | `docs/api/board.md` |
+| POST | `/api/board/templates/{id}/delete` | Confirm deletion against the unchanged preview | `docs/api/board.md` |
+| GET | `/api/board/templates/defaults/reset-preview` | Preview exact default-type reset effects | `docs/api/board.md` |
+| POST | `/api/board/templates/defaults/reset` | Confirm and atomically apply the previewed default-type reset | `docs/api/board.md` |
 | GET | `/api/board/rules/recommend` | AI rule recommendations | `docs/api/board.md` |
 | POST | `/api/board/devices/recommend` | AI device recommendations | `docs/api/board.md` |
-| POST | `/api/board/rules/check-duplicate` | AI duplicate-rule check; available from `RuleBuilderDialog` as an optional manual check | `docs/api/board.md` |
+| POST | `/api/board/rules/check-duplicate` | Deterministic duplicate-rule check used before saving a rule | `docs/api/board.md` |
+| POST | `/api/board/rules/check-similarity` | Explicit AI rule-similarity check available from `RuleBuilderDialog` | `docs/api/board.md` |
 | GET | `/api/board/specs/recommend` | AI specification recommendations | `docs/api/board.md` |
+| POST | `/api/board/scenario/recommend` | AI importable scene-draft recommendation | `docs/api/board.md` |
 
 ## Verification — `VerificationController`
 
 | Method | Path | Note | Detail |
 | :--- | :--- | :--- | :--- |
 | POST | `/api/verify` | Synchronous verification | `docs/api/verification.md` |
-| POST | `/api/verify/async` | Async verification, returns `taskId` (Long) | `docs/api/verification.md` |
-| GET | `/api/verify/tasks` | Verification task inbox (summary list) | `docs/api/verification.md` |
+| POST | `/api/verify/async` | Submit async verification; returns the accepted task snapshot for polling | `docs/api/verification.md` |
+| GET | `/api/verify/tasks` | Active/failed/cancelled verification task status (completed results excluded) | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}` | Task status | `docs/api/verification.md` |
+| DELETE | `/api/verify/tasks/{id}` | Dismiss a failed/cancelled task with no result | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}/progress` | Task progress (0–100) | `docs/api/verification.md` |
-| POST | `/api/verify/tasks/{id}/cancel` | Cancel task | `docs/api/verification.md` |
+| POST | `/api/verify/tasks/{id}/cancel` | Request cancellation and return the actual outcome | `docs/api/verification.md` |
+| GET | `/api/verify/runs` | Completed verification result summaries | `docs/api/verification.md` |
+| GET | `/api/verify/runs/{id}` | Completed verification result detail | `docs/api/verification.md` |
+| GET | `/api/verify/runs/{id}/traces` | Replayable counterexamples nested under one verification result | `docs/api/verification.md` |
+| DELETE | `/api/verify/runs/{id}` | Delete a verification result and all linked counterexamples | `docs/api/verification.md` |
 | GET | `/api/verify/traces` | List verification traces | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}` | Trace detail | `docs/api/verification.md` |
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
-| GET | `/api/verify/traces/{id}/fault-rules` | Fault localization | `docs/api/verification.md` |
+| GET | `/api/verify/traces/{id}/fault-rules` | Counterexample rule involvement with source-model completeness and limitations | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix` | Fix suggestions | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix/apply` | Apply a fix suggestion (server re-verifies) to board rules | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}/traces` | Traces for a specific async verification task | `docs/api/verification.md` |
@@ -74,11 +94,12 @@ Verified against code on 2026-07-06.
 | Method | Path | Note | Detail |
 | :--- | :--- | :--- | :--- |
 | POST | `/api/simulate` | Synchronous simulation (not persisted) | `docs/api/verification.md` |
-| POST | `/api/simulate/async` | Async simulation, returns `taskId` (Long) | `docs/api/verification.md` |
-| GET | `/api/simulate/tasks` | Simulation task inbox (summary list) | `docs/api/verification.md` |
+| POST | `/api/simulate/async` | Submit async simulation; returns the accepted task snapshot for polling | `docs/api/verification.md` |
+| GET | `/api/simulate/tasks` | Active/failed/cancelled simulation task status (completed results excluded) | `docs/api/verification.md` |
 | GET | `/api/simulate/tasks/{id}` | Task status | `docs/api/verification.md` |
+| DELETE | `/api/simulate/tasks/{id}` | Dismiss a failed/cancelled task with no result | `docs/api/verification.md` |
 | GET | `/api/simulate/tasks/{id}/progress` | Task progress (0–100) | `docs/api/verification.md` |
-| POST | `/api/simulate/tasks/{id}/cancel` | Cancel task | `docs/api/verification.md` |
+| POST | `/api/simulate/tasks/{id}/cancel` | Request cancellation and return the actual outcome | `docs/api/verification.md` |
 | POST | `/api/simulate/traces` | Simulate and persist | `docs/api/verification.md` |
 | GET | `/api/simulate/traces` | List saved simulations (summary) | `docs/api/verification.md` |
 | GET | `/api/simulate/traces/{id}` | Simulation detail (full states) | `docs/api/verification.md` |
@@ -91,6 +112,7 @@ Verified against code on 2026-07-06.
 | GET | `/api/chat/sessions` | List chat sessions | `docs/api/chat-sse.md` |
 | POST | `/api/chat/sessions` | Create session | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/messages` | Message history | `docs/api/chat-sse.md` |
+| GET | `/api/chat/sessions/{sessionId}/activity` | Check whether server work is still active for the session | `docs/api/chat-sse.md` |
 | POST | `/api/chat/completions` | Send message — **SSE stream** (not `Result<T>`) | `docs/api/chat-sse.md` |
 | DELETE | `/api/chat/sessions/{sessionId}` | Delete session | `docs/api/chat-sse.md` |
 

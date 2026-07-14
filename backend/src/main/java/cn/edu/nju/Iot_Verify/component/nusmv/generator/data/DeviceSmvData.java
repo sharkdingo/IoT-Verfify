@@ -16,11 +16,12 @@ public class DeviceSmvData {
 
     // ── 设备标识 ──
     private String templateName;   // 模板名称（如 "Light"）
+    private String deviceLabel;    // 用户可见实例名称；仅用于结果展示
 
     // ── NuSMV 标识符（由 Factory 计算填充） ──
     private String moduleName;    // MODULE 名称（如 "Light_light1"）
     private String varName;       // 实例变量名（如 "light_1"），同时作为 deviceSmvMap 的 key
-    private boolean sensor;       // 是否为传感器（无 API）
+    private boolean sensor;       // 无控制 API 的传感器型设备；复合设备的外部读数仍单独建模攻击影响
 
     // ── 模式与状态（从模板 Modes + WorkingStates 解析） ──
     private List<String> modes = new ArrayList<>();
@@ -31,8 +32,9 @@ public class DeviceSmvData {
     private List<DeviceManifest.InternalVariable> variables = new ArrayList<>();
     private Map<String, DeviceManifest.InternalVariable> envVariables = new HashMap<>();
     private List<String> impactedVariables = new ArrayList<>();
+    private Map<String, DeviceManifest.InternalVariable> impactedEnvironmentVariables = new HashMap<>();
 
-    // ── 信号变量（从模板 Transitions[signal=true] + APIs[signal=true] 解析） ──
+    // ── API event signal variables (APIs[Signal=true]) ──
     private List<SignalInfo> signalVars = new ArrayList<>();
 
     // ── 内容（从模板 Contents 解析，如 Mobile Phone 的 photo） ──
@@ -49,6 +51,7 @@ public class DeviceSmvData {
     // ── 信任/隐私（模板默认 + 用户实例覆盖） ──
     private Map<String, String> modeStateTrust = new LinkedHashMap<>();
     private String instanceStateTrust;
+    private String instanceStatePrivacy;
     private Map<String, String> instanceVariableTrust = new HashMap<>();
     private Map<String, String> instanceVariablePrivacy = new HashMap<>();
 
@@ -60,16 +63,11 @@ public class DeviceSmvData {
     @Data
     public static class SignalInfo {
         private String name;
-        private String start;
-        private String end;
-        private String trigger;
-        private String type;
     }
 
     @Data
     public static class ContentInfo {
         private String name;       // content 名称（如 "photo"）
         private String privacy;    // 初始隐私（如 "private"）
-        private boolean changeable; // IsChangeable → FROZENVAR(false) / VAR(true)
     }
 }

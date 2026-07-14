@@ -39,25 +39,52 @@ public class NusmvExecutor {
     // ==================== 批处理验证 ====================
 
     public NusmvResult execute(File smvFile) throws InterruptedException {
+        return executeInternal(smvFile, null);
+    }
+
+    /**
+     * Execute within a caller-owned total budget. The budget includes waiting for the global
+     * concurrency permit and process execution; the configured NuSMV timeout remains an upper bound.
+     */
+    public NusmvResult execute(File smvFile, long totalBudgetMs) throws InterruptedException {
+        if (totalBudgetMs <= 0) {
+            return NusmvResult.error("NuSMV execution was not started because the caller deadline expired");
+        }
+        return executeInternal(smvFile, totalBudgetMs);
+    }
+
+    private NusmvResult executeInternal(File smvFile, Long totalBudgetMs) throws InterruptedException {
         if (smvFile == null || !smvFile.exists()) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
         }
 
-        boolean permitAcquired = acquireExecutionPermit();
+        long startedNanos = System.nanoTime();
+        long configuredPermitTimeoutMs = Math.max(0, nusmvConfig.getAcquirePermitTimeoutMs());
+        long permitTimeoutMs = totalBudgetMs == null
+                ? configuredPermitTimeoutMs
+                : Math.min(configuredPermitTimeoutMs, totalBudgetMs);
+        boolean permitAcquired = acquireExecutionPermit(permitTimeoutMs);
         if (!permitAcquired) {
+            if (totalBudgetMs != null && totalBudgetMs <= configuredPermitTimeoutMs) {
+                return NusmvResult.error("NuSMV execution deadline expired while waiting for capacity");
+            }
             return NusmvResult.busy("NuSMV execution is busy, please retry later");
         }
 
         List<String> command = buildCommand(smvFile, List.of());
-        log.info("Executing NuSMV command: {}", String.join(" ", command));
+        log.info("Executing NuSMV verification");
+        log.debug("NuSMV command: {}", String.join(" ", command));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true);
 
         Process process = null;
         try {
+            long timeout = effectiveProcessTimeout(totalBudgetMs, startedNanos);
+            if (timeout <= 0) {
+                return NusmvResult.error("NuSMV execution was not started because the caller deadline expired");
+            }
             process = processBuilder.start();
-            long timeout = getTimeout();
 
             final Process finalProcess = process;
             StringBuilder outputBuilder = new StringBuilder();
@@ -131,7 +158,7 @@ public class NusmvExecutor {
                     new java.io.OutputStreamWriter(new java.io.FileOutputStream(outputFile), StandardCharsets.UTF_8))) {
                 writer.print(output);
             }
-            log.info("NuSMV output saved to: {}", outputFile.getAbsolutePath());
+            log.debug("NuSMV output saved to: {}", outputFile.getAbsolutePath());
         } catch (IOException e) {
             log.warn("Failed to save NuSMV output to file: {}", e.getMessage());
         }
@@ -192,8 +219,22 @@ public class NusmvExecutor {
     }
 
     private boolean acquireExecutionPermit() throws InterruptedException {
-        long timeoutMs = Math.max(0, nusmvConfig.getAcquirePermitTimeoutMs());
+        return acquireExecutionPermit(Math.max(0, nusmvConfig.getAcquirePermitTimeoutMs()));
+    }
+
+    private boolean acquireExecutionPermit(long timeoutMs) throws InterruptedException {
         return executionSemaphore().tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    private long effectiveProcessTimeout(Long totalBudgetMs, long startedNanos) {
+        long configuredTimeoutMs = Math.max(1, getTimeout());
+        if (totalBudgetMs == null) {
+            return configuredTimeoutMs;
+        }
+        long elapsedNanos = Math.max(0, System.nanoTime() - startedNanos);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
+        long remainingMs = Math.max(0, totalBudgetMs - elapsedMs);
+        return Math.min(configuredTimeoutMs, remainingMs);
     }
 
     private void releaseExecutionPermit() {
@@ -241,7 +282,8 @@ public class NusmvExecutor {
         }
 
         List<String> command = buildCommand(smvFile, List.of("-int"));
-        log.info("Executing NuSMV interactive simulation: {}", String.join(" ", command));
+        log.info("Executing NuSMV interactive simulation");
+        log.debug("NuSMV interactive simulation command: {}", String.join(" ", command));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         // 不合并 stderr，以便区分错误信息

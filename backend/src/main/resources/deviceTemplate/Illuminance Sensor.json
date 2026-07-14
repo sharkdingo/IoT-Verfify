@@ -6,7 +6,7 @@
 			"Name": "illuminance",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "public",
 			"LowerBound": 0,

@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.fixer;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
@@ -27,6 +29,7 @@ class BoardSemanticFingerprintTest {
         s.setId(id);
         s.setTemplateId("1");
         SpecConditionDto c = new SpecConditionDto();
+        c.setDeviceId("sensor");
         c.setDeviceLabel("sensor");
         c.setTargetType("variable");
         c.setKey("temperature");
@@ -45,6 +48,20 @@ class BoardSemanticFingerprintTest {
     private Map<String, DeviceSmvData> deviceMap(String key, String varName) {
         DeviceSmvData smv = new DeviceSmvData();
         smv.setVarName(varName);
+        return Map.of(key, smv);
+    }
+
+    private Map<String, DeviceSmvData> deviceMapWithModes(String key, String varName, List<String> modes) {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName(varName);
+        smv.setManifest(DeviceManifest.builder().modes(modes).build());
+        return Map.of(key, smv);
+    }
+
+    private Map<String, DeviceSmvData> deviceMapWithManifest(String key, String varName, DeviceManifest manifest) {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName(varName);
+        smv.setManifest(manifest);
         return Map.of(key, smv);
     }
 
@@ -70,9 +87,9 @@ class BoardSemanticFingerprintTest {
 
     @Test
     void digitLeadingNameNormalization_snapshotMatchesRawBoard() {
-        // Snapshot carries the frontend-transformed name (d_1Lamp); the current board read from storage
-        // carries the raw label (1Lamp). Both must canonicalize to the same fingerprint.
-        List<DeviceVerificationDto> snapshot = List.of(device("d_1Lamp", "t1"));
+        // Snapshot carries the SMV-safe name (_1lamp); the current board read from storage carries
+        // the raw node id (1Lamp). Both must canonicalize to the same fingerprint.
+        List<DeviceVerificationDto> snapshot = List.of(device("_1lamp", "t1"));
         List<DeviceVerificationDto> board = List.of(device("1Lamp", "t1"));
         assertEquals(
                 BoardSemanticFingerprint.of(snapshot, List.of(), Map.of()),
@@ -98,7 +115,7 @@ class BoardSemanticFingerprintTest {
     }
 
     @Test
-    void specConditionDeviceIdAndLabel_resolveToSameSemanticDevice() {
+    void specConditionDeviceLabelDoesNotResolveUnknownDeviceId() {
         SpecificationDto idBacked = spec("s0", "30");
         idBacked.getIfConditions().get(0).setDeviceId("ac_1");
         idBacked.getIfConditions().get(0).setDeviceLabel("LivingRoomAC");
@@ -108,26 +125,26 @@ class BoardSemanticFingerprintTest {
         labelBacked.getIfConditions().get(0).setDeviceLabel("LivingRoomAC");
 
         Map<String, DeviceSmvData> map = deviceMap("LivingRoomAC");
-        assertEquals(
+        assertNotEquals(
                 BoardSemanticFingerprint.of(List.of(), List.of(idBacked), map),
                 BoardSemanticFingerprint.of(List.of(), List.of(labelBacked), map));
     }
 
     @Test
-    void digitLeadingSpecReference_matchesEvenWhenSmvVarNamesDiffer() {
+    void digitLeadingSpecReference_doesNotNormalizeInvalidSpecReference() {
         SpecificationDto snapshotSpec = spec("s0", "30");
-        snapshotSpec.getIfConditions().get(0).setDeviceId("d_1Lamp");
-        snapshotSpec.getIfConditions().get(0).setDeviceLabel("d_1Lamp");
+        snapshotSpec.getIfConditions().get(0).setDeviceId("_1lamp");
+        snapshotSpec.getIfConditions().get(0).setDeviceLabel("_1lamp");
 
         SpecificationDto boardSpec = spec("s0", "30");
         boardSpec.getIfConditions().get(0).setDeviceId("1Lamp");
         boardSpec.getIfConditions().get(0).setDeviceLabel("1Lamp");
 
-        assertEquals(
+        assertNotEquals(
                 BoardSemanticFingerprint.of(
-                        List.of(device("d_1Lamp", "t1")),
+                        List.of(device("_1lamp", "t1")),
                         List.of(snapshotSpec),
-                        deviceMap("d_1Lamp", "d_1lamp")),
+                        deviceMap("_1lamp", "_1lamp")),
                 BoardSemanticFingerprint.of(
                         List.of(device("1Lamp", "t1")),
                         List.of(boardSpec),
@@ -163,6 +180,23 @@ class BoardSemanticFingerprintTest {
     }
 
     @Test
+    void specificationPropertyScope_changesFingerprint() {
+        SpecificationDto stateLabel = spec("property-scope", "private");
+        stateLabel.getIfConditions().get(0).setTargetType("privacy");
+        stateLabel.getIfConditions().get(0).setPropertyScope("state");
+        stateLabel.getIfConditions().get(0).setKey("Mode");
+
+        SpecificationDto variableLabel = spec("property-scope", "private");
+        variableLabel.getIfConditions().get(0).setTargetType("privacy");
+        variableLabel.getIfConditions().get(0).setPropertyScope("variable");
+        variableLabel.getIfConditions().get(0).setKey("Mode");
+
+        assertNotEquals(
+                BoardSemanticFingerprint.of(List.of(), List.of(stateLabel), Map.of()),
+                BoardSemanticFingerprint.of(List.of(), List.of(variableLabel), Map.of()));
+    }
+
+    @Test
     void changedInitialState_changesFingerprint() {
         DeviceVerificationDto off = device("sensor", "t1");
         off.setState("off");
@@ -171,6 +205,21 @@ class BoardSemanticFingerprintTest {
         assertNotEquals(
                 BoardSemanticFingerprint.of(List.of(off), List.of(), Map.of()),
                 BoardSemanticFingerprint.of(List.of(on), List.of(), Map.of()));
+    }
+
+    @Test
+    void modeLessDevice_ignoresUiFallbackState() {
+        DeviceVerificationDto snapshot = device("smoke", "Smoke Sensor");
+
+        DeviceVerificationDto board = device("smoke", "Smoke Sensor");
+        board.setState("Working");
+        board.setCurrentStateTrust("trusted");
+
+        Map<String, DeviceSmvData> map = deviceMapWithModes("smoke", "smoke", List.of());
+
+        assertEquals(
+                BoardSemanticFingerprint.of(List.of(snapshot), List.of(), map),
+                BoardSemanticFingerprint.of(List.of(board), List.of(), map));
     }
 
     @Test
@@ -183,5 +232,167 @@ class BoardSemanticFingerprintTest {
         assertEquals(
                 BoardSemanticFingerprint.of(List.of(explicit), List.of(), Map.of()),
                 BoardSemanticFingerprint.of(List.of(defaulted), List.of(), Map.of()));
+    }
+
+    @Test
+    void omittedStateTrust_matchesTemplateWorkingStateTrust() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("SwitchState"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("auto")
+                                .trust("trusted")
+                                .build(),
+                        DeviceManifest.WorkingState.builder()
+                                .name("cool")
+                                .trust("untrusted")
+                                .build()))
+                .build();
+
+        DeviceVerificationDto implicit = device("ac", "Air Conditioner");
+        implicit.setState("cool");
+        DeviceVerificationDto explicit = device("ac", "Air Conditioner");
+        explicit.setState("cool");
+        explicit.setCurrentStateTrust("untrusted");
+
+        Map<String, DeviceSmvData> map = deviceMapWithManifest("ac", "ac", manifest);
+        assertEquals(
+                BoardSemanticFingerprint.of(List.of(implicit), List.of(), map),
+                BoardSemanticFingerprint.of(List.of(explicit), List.of(), map));
+    }
+
+    @Test
+    void explicitStateTrustOverride_changesTemplateWorkingStateTrust() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("SwitchState"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("cool")
+                                .trust("untrusted")
+                                .build()))
+                .build();
+
+        DeviceVerificationDto implicit = device("ac", "Air Conditioner");
+        implicit.setState("cool");
+        DeviceVerificationDto override = device("ac", "Air Conditioner");
+        override.setState("cool");
+        override.setCurrentStateTrust("trusted");
+
+        Map<String, DeviceSmvData> map = deviceMapWithManifest("ac", "ac", manifest);
+        assertNotEquals(
+                BoardSemanticFingerprint.of(List.of(implicit), List.of(), map),
+                BoardSemanticFingerprint.of(List.of(override), List.of(), map));
+    }
+
+    @Test
+    void currentStatePrivacyOverride_changesFingerprint() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("SwitchState"))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder()
+                        .name("on")
+                        .privacy("public")
+                        .build()))
+                .build();
+        Map<String, DeviceSmvData> map = deviceMapWithManifest("light", "light", manifest);
+
+        DeviceVerificationDto publicState = device("light", "Light");
+        publicState.setState("on");
+        DeviceVerificationDto privateState = device("light", "Light");
+        privateState.setState("on");
+        privateState.setCurrentStatePrivacy("private");
+
+        assertNotEquals(
+                BoardSemanticFingerprint.of(List.of(publicState), List.of(), map),
+                BoardSemanticFingerprint.of(List.of(privateState), List.of(), map));
+    }
+
+    @Test
+    void omittedInternalVariable_matchesGeneratorEffectiveDefault() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .internalVariables(List.of(
+                        DeviceManifest.InternalVariable.builder()
+                                .name("mode")
+                                .isInside(true)
+                                .values(List.of("idle", "active"))
+                                .trust("trusted")
+                                .privacy("public")
+                                .build(),
+                        DeviceManifest.InternalVariable.builder()
+                                .name("level")
+                                .isInside(true)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .trust("trusted")
+                                .privacy("public")
+                                .build()))
+                .build();
+
+        DeviceVerificationDto implicit = device("sensor", "t1");
+        DeviceVerificationDto explicit = device("sensor", "t1");
+        explicit.setVariables(List.of(
+                new VariableStateDto("mode", "idle", "trusted"),
+                new VariableStateDto("level", "0", "trusted")));
+        explicit.setPrivacies(List.of(
+                new PrivacyStateDto("mode", "public"),
+                new PrivacyStateDto("level", "public")));
+
+        Map<String, DeviceSmvData> map = deviceMapWithManifest("sensor", "sensor", manifest);
+        assertEquals(
+                BoardSemanticFingerprint.of(List.of(implicit), List.of(), map),
+                BoardSemanticFingerprint.of(List.of(explicit), List.of(), map));
+    }
+
+    @Test
+    void environmentPoolValue_participatesInFingerprint() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .internalVariables(List.of(
+                        DeviceManifest.InternalVariable.builder()
+                                .name("temperature")
+                                .isInside(false)
+                                .lowerBound(0)
+                                .upperBound(100)
+                                .trust("trusted")
+                                .privacy("public")
+                                .build()))
+                .build();
+
+        DeviceVerificationDto sensor = device("sensor", "t1");
+        Map<String, DeviceSmvData> map = deviceMapWithManifest("sensor", "sensor", manifest);
+        assertNotEquals(
+                BoardSemanticFingerprint.of(List.of(sensor), List.of(), List.of(), map),
+                BoardSemanticFingerprint.of(
+                        List.of(sensor),
+                        List.of(),
+                        List.of(new BoardEnvironmentVariableDto("temperature", "28", "trusted", "public")),
+                        map));
+    }
+
+    @Test
+    void impactedOnlyEnvironmentPoolValue_participatesInFingerprint() {
+        DeviceManifest.InternalVariable temperature = DeviceManifest.InternalVariable.builder()
+                .name("temperature")
+                .isInside(false)
+                .lowerBound(0)
+                .upperBound(100)
+                .trust("trusted")
+                .privacy("public")
+                .build();
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("ac");
+        smv.setImpactedEnvironmentVariables(Map.of("temperature", temperature));
+        Map<String, DeviceSmvData> map = Map.of("ac", smv);
+        DeviceVerificationDto actuator = device("ac", "Air Conditioner");
+
+        assertNotEquals(
+                BoardSemanticFingerprint.of(
+                        List.of(actuator),
+                        List.of(),
+                        List.of(new BoardEnvironmentVariableDto("temperature", "28", "trusted", "public")),
+                        map),
+                BoardSemanticFingerprint.of(
+                        List.of(actuator),
+                        List.of(),
+                        List.of(new BoardEnvironmentVariableDto("temperature", "30", "trusted", "public")),
+                        map));
     }
 }

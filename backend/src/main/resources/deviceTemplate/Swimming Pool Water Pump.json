@@ -3,6 +3,17 @@
 	"Description": "",
 	"InternalVariables": [
 	],
+	"EnvironmentDomains": [
+		{
+			"Name": "waterQuality",
+			"Description": "Swimming pool water quality",
+			"Trust": "untrusted",
+			"Privacy": "public",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[0, 1]"
+		}
+	],
 	"ImpactedVariables": ["waterQuality"],
 	"Modes": ["MachineState"],
 	"InitState": "off",
@@ -10,7 +21,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -23,7 +33,6 @@
 					"ChangeRate":"-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

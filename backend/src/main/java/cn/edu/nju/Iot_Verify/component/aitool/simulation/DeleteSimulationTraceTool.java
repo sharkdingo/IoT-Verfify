@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -35,13 +37,19 @@ public class DeleteSimulationTraceTool extends AbstractAiTool {
 
     @Override
     public LlmToolSpec getDefinition() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("simulationId", Map.of("type", "integer", "description", "Simulation trace ID."));
+        properties.put("confirmed", Map.of(
+                "type", "boolean",
+                "description", "Use false to preview the saved run. Use true only in a later turn after explicit user confirmation."
+        ));
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
-                Map.of("simulationId", Map.of("type", "integer", "description", "Simulation trace ID.")),
-                List.of("simulationId")
+                properties,
+                List.of("simulationId", "confirmed")
         );
 
-        return LlmToolSpec.of(getName(), "Delete a saved simulation trace by simulationId.", schema);
+        return LlmToolSpec.of(getName(), "Preview or, after explicit two-turn confirmation, delete a saved simulation trace.", schema);
     }
 
     @Override
@@ -54,16 +62,22 @@ public class DeleteSimulationTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            if (!args.has("simulationId") || !args.path("simulationId").canConvertToLong()) {
-                return errorJson("'simulationId' is required.", "VALIDATION_ERROR", 400);
-            }
-            long simulationId = args.path("simulationId").asLong();
-            if (simulationId <= 0) {
-                return errorJson("'simulationId' must be positive.", "VALIDATION_ERROR", 400);
+            requireOnlyFields(args, "arguments", Set.of("simulationId", "confirmed"));
+            long simulationId = positiveLongArg(args, "simulationId");
+
+            SimulationTraceDto trace = simulationService.getSimulation(userId, simulationId);
+            boolean confirmed = booleanArg(args, "confirmed", false);
+            if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+                Map<String, Object> preview = new LinkedHashMap<>();
+                preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this saved simulation run.");
+                preview.put("operation", "preview");
+                preview.put("requiresUserConfirmation", true);
+                preview.put("simulationId", simulationId);
+                preview.put("steps", trace.getSteps());
+                preview.put("modelComplete", trace.isModelComplete());
+                return readOnlySuccessJson(preview, "Simulation trace deletion preview prepared; no changes were made.");
             }
 
-            // Pre-check to provide explicit not-found error before deletion.
-            SimulationTraceDto trace = simulationService.getSimulation(userId, simulationId);
             simulationService.deleteSimulation(userId, simulationId);
 
             Map<String, Object> body = new LinkedHashMap<>();
@@ -72,6 +86,8 @@ public class DeleteSimulationTraceTool extends AbstractAiTool {
             body.put("deleted", true);
             body.put("message", "Simulation trace deleted.");
             return successJson(body, "Simulation trace deleted.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("delete_simulation_trace busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

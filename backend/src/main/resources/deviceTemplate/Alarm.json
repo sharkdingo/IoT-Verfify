@@ -9,7 +9,6 @@
 		{
 			"Name": "both",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -17,7 +16,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -25,7 +23,6 @@
 		{
 			"Name": "siren",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -33,7 +30,6 @@
 		{
 			"Name": "strobe",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.device;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -14,15 +15,19 @@ import java.util.List;
  *
  * 字段语义：
  * - varName / templateName / state: 设备身份和当前状态
- * - currentStateTrust: 设备级信任覆盖 → smv.instanceStateTrust
+ * - currentStateTrust/currentStatePrivacy: current-state label overrides
  * - variables: 每变量的值和信任 → smv.variableValues + smv.instanceVariableTrust
- * - privacies: 每状态/变量的隐私覆盖 → smv.instanceVariablePrivacy
+ * - privacies: device-local variable sensitivity overrides
  */
 @Data
 public class DeviceVerificationDto {
 
     @NotBlank(message = "Device varName is required")
     private String varName;
+
+    /** Display-only instance label captured with the model request; never used for resolution. */
+    @Size(max = 200, message = "Device label must be at most 200 characters")
+    private String deviceLabel;
 
     @NotBlank(message = "Template name is required")
     private String templateName;
@@ -31,6 +36,7 @@ public class DeviceVerificationDto {
 
     // 运行时验证状态
     private String currentStateTrust;
+    private String currentStatePrivacy;
     private List<@Valid @NotNull(message = "Variable item cannot be null") VariableStateDto> variables;
     private List<@Valid @NotNull(message = "Privacy item cannot be null") PrivacyStateDto> privacies;
 }

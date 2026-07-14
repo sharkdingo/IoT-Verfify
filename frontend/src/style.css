@@ -10,3 +10,36 @@ html, body {
     flex-direction: column;
 }
 
+/*
+ * Material icon fonts are fetched from Google Fonts. If that request is slow or
+ * unavailable, the ligature text (for example "play_circle") must not resize the
+ * UI. Keep every icon slot to a single glyph box so controls remain usable while
+ * the font is loading or missing.
+ */
+.material-symbols-outlined,
+.material-icons-round {
+    font-family: 'Material Symbols Outlined', 'Material Icons Round', sans-serif;
+    font-style: normal;
+    font-weight: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'liga';
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+    width: 1em;
+    min-width: 1em;
+    max-width: 1em;
+    overflow: hidden;
+    white-space: nowrap;
+    vertical-align: -0.125em;
+}
+
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.material-icons-round {
+    font-family: 'Material Icons Round', 'Material Symbols Outlined', sans-serif;
+}

@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 
 import java.util.List;
 
@@ -27,15 +29,19 @@ public final class SmvGenerationContext {
         return new SmvGenerationContext(null);
     }
 
-    public void disabledRule(RuleDto rule, String reason) {
+    public void disabledRule(RuleDto rule,
+                             ModelGenerationIssueReasonCode reasonCode,
+                             String reason) {
         if (warnings != null) {
-            warnings.disabledRule(rule, reason);
+            warnings.disabledRule(rule, reasonCode, reason);
         }
     }
 
-    public void skippedSpec(SpecificationDto spec, String reason) {
+    public void skippedSpec(SpecificationDto spec,
+                            ModelGenerationIssueReasonCode reasonCode,
+                            String reason) {
         if (warnings != null) {
-            warnings.skippedSpec(spec, reason);
+            warnings.skippedSpec(spec, reasonCode, reason);
         }
     }
 
@@ -53,6 +59,7 @@ public final class SmvGenerationContext {
                 warnings.checkLogWarnings(),
                 warnings.disabledRuleCount(),
                 warnings.skippedSpecCount(),
+                warnings.generationIssues(),
                 warnings.emittedSpecs()
         );
     }
@@ -60,9 +67,10 @@ public final class SmvGenerationContext {
     public record WarningSnapshot(List<String> checkLogWarnings,
                                   int disabledRuleCount,
                                   int skippedSpecCount,
+                                  List<ModelGenerationIssueDto> generationIssues,
                                   List<EmittedSpec> emittedSpecs) {
         public static WarningSnapshot empty() {
-            return new WarningSnapshot(List.of(), 0, 0, List.of());
+            return new WarningSnapshot(List.of(), 0, 0, List.of(), List.of());
         }
     }
 

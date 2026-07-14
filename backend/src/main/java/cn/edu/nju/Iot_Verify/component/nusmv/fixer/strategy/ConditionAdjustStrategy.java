@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.fix.ConditionAdjustment;
@@ -90,16 +91,19 @@ public class ConditionAdjustStrategy implements FixStrategy {
             File smvFile = null;
             try {
                 // Pass augmentedRules (with candidate conditions appended) to NuSMV
-                SmvGenerator.GenerateResult genResult = smvGenerator.generateParameterized(
-                        ctx.getUserId(), ctx.getDevices(), prep.augmentedRules, ctx.getSpecs(),
-                        ctx.isAttack(), ctx.getIntensity(), ctx.isEnablePrivacy(), config);
+                SmvGenerator.GenerateResult genResult =
+                        smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
+                                prep.augmentedRules, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
+                                ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
+                                ctx.getDeviceSmvMap());
                 if (genResult == null) {
                     log.warn("ConditionAdjust attempt {}: SMV generation returned null", attempt + 1);
                     continue;
                 }
                 smvFile = genResult.smvFile();
 
-                NusmvResult result = nusmvExecutor.execute(smvFile);
+                NusmvResult result = FixStrategyUtils.executeWithinDeadline(nusmvExecutor, smvFile, ctx);
                 if (!result.isSuccess()) {
                     log.warn("ConditionAdjust attempt {}: NuSMV execution failed: {}",
                             attempt + 1, result.getErrorMessage());
@@ -146,7 +150,7 @@ public class ConditionAdjustStrategy implements FixStrategy {
                 consecutivePartials = 0;
 
                 // Interpret results: determine removals and additions
-                InterpretedResult ir = interpretResults(prep, extractedValues, allRules);
+                InterpretedResult ir = interpretResults(prep, extractedValues, allRules, deviceSmvMap);
 
                 boolean anyChange = ir.adjustments.stream()
                         .anyMatch(a -> "remove".equals(a.getAction()) || "add".equals(a.getAction()));
@@ -253,7 +257,8 @@ public class ConditionAdjustStrategy implements FixStrategy {
     private InterpretedResult interpretResults(
             PreparedData prep,
             Map<String, String> extractedValues,
-            List<RuleDto> allRules) {
+            List<RuleDto> allRules,
+            Map<String, DeviceSmvData> deviceSmvMap) {
 
         List<ConditionAdjustment> adjustments = new ArrayList<>();
         Map<Integer, List<Integer>> conditionsToRemove = new LinkedHashMap<>();
@@ -274,6 +279,8 @@ public class ConditionAdjustStrategy implements FixStrategy {
 
             int originalCount = prep.originalCondCounts.getOrDefault(ruleIdx, 0);
             RuleDto.Condition cond = prep.augmentedRules.get(ruleIdx).getConditions().get(condIdx);
+            String ruleDescription = describeRule(allRules, ruleIdx);
+            String deviceLabel = displayDeviceLabel(cond == null ? null : cond.getDeviceName(), deviceSmvMap);
 
             // [C4] fail-safe: missing lambda → keep for existing, ignore for candidate
             if (lambdaValue == null) {
@@ -291,8 +298,14 @@ public class ConditionAdjustStrategy implements FixStrategy {
                         .ruleIndex(ruleIdx).conditionIndex(condIdx)
                         .action(action)
                         .attribute(cond != null ? cond.getAttribute() : "unknown")
-                        .description(action + " condition " + condIdx + " of rule " + ruleIdx
-                                + " (" + (cond != null ? cond.getAttribute() : "?") + ")")
+                        .targetType(cond != null ? cond.getTargetType() : null)
+                        .ruleDescription(ruleDescription)
+                        .deviceLabel(deviceLabel)
+                        .deviceName(cond != null ? cond.getDeviceName() : null)
+                        .relation(cond != null ? cond.getRelation() : null)
+                        .value(cond != null ? cond.getValue() : null)
+                        .description(action + " " + conditionSummary(deviceLabel, cond)
+                                + " from " + ruleDescription)
                         .build());
             } else {
                 // Candidate condition
@@ -302,11 +315,14 @@ public class ConditionAdjustStrategy implements FixStrategy {
                             .ruleIndex(ruleIdx).conditionIndex(condIdx)
                             .action("add")
                             .attribute(cond.getAttribute())
+                            .targetType(cond.getTargetType())
+                            .ruleDescription(ruleDescription)
+                            .deviceLabel(deviceLabel)
                             .deviceName(cond.getDeviceName())
                             .relation(cond.getRelation())
                             .value(cond.getValue())
-                            .description("add condition to rule " + ruleIdx
-                                    + " (" + cond.getDeviceName() + "." + cond.getAttribute() + ")")
+                            .description("add " + conditionSummary(deviceLabel, cond)
+                                    + " to " + ruleDescription)
                             .build());
                 }
                 // lambda=FALSE for candidate → ignore, not recorded
@@ -367,16 +383,53 @@ public class ConditionAdjustStrategy implements FixStrategy {
     private static String buildDescription(List<ConditionAdjustment> adjustments) {
         return adjustments.stream()
                 .filter(a -> "remove".equals(a.getAction()) || "add".equals(a.getAction()))
-                .map(a -> {
-                    if ("remove".equals(a.getAction())) {
-                        return "Remove condition " + a.getConditionIndex()
-                                + " of rule " + a.getRuleIndex() + " (" + a.getAttribute() + ")";
-                    } else {
-                        return "Add condition to rule " + a.getRuleIndex()
-                                + " (" + a.getDeviceName() + "." + a.getAttribute() + ")";
-                    }
-                })
+                .map(ConditionAdjustStrategy::sentenceCase)
                 .collect(Collectors.joining("; "));
+    }
+
+    private static String sentenceCase(ConditionAdjustment adjustment) {
+        String description = adjustment.getDescription();
+        if (description == null || description.isBlank()) {
+            return adjustment.getAction();
+        }
+        return Character.toUpperCase(description.charAt(0)) + description.substring(1);
+    }
+
+    private static String describeRule(List<RuleDto> rules, int ruleIndex) {
+        if (rules != null && ruleIndex >= 0 && ruleIndex < rules.size()) {
+            RuleDto rule = rules.get(ruleIndex);
+            if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+                return "'" + rule.getRuleString() + "'";
+            }
+        }
+        return "affected rule";
+    }
+
+    private static String displayDeviceLabel(String deviceRef, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (deviceRef != null && deviceSmvMap != null) {
+            try {
+                DeviceSmvData smv = DeviceReferenceResolver.resolve(deviceRef, deviceSmvMap);
+                if (smv != null && smv.getDeviceLabel() != null && !smv.getDeviceLabel().isBlank()) {
+                    return smv.getDeviceLabel();
+                }
+            } catch (RuntimeException ignored) {
+                // The adjustment remains structurally useful; do not expose the unresolved model id.
+            }
+        }
+        return "unknown device";
+    }
+
+    private static String conditionSummary(String deviceLabel, RuleDto.Condition condition) {
+        if (condition == null) return deviceLabel + ".unknown condition";
+        StringBuilder summary = new StringBuilder(deviceLabel)
+                .append('.').append(condition.getAttribute() == null ? "unknown" : condition.getAttribute());
+        if (condition.getRelation() != null && !condition.getRelation().isBlank()) {
+            summary.append(' ').append(condition.getRelation());
+        }
+        if (condition.getValue() != null && !condition.getValue().isBlank()) {
+            summary.append(' ').append(condition.getValue());
+        }
+        return summary.toString();
     }
 
     // -------- Helpers --------

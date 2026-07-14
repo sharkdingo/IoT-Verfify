@@ -15,6 +15,12 @@ public interface TaskView {
     /** 判断任务是否处于终态（COMPLETED / FAILED / CANCELLED）。 */
     boolean isTerminalStatus();
 
+    /** 判断任务是否已经取消。 */
+    boolean isCancelledStatus();
+
+    /** Stable public task status name (PENDING / RUNNING / terminal states). */
+    String getTaskStatusName();
+
     String getCheckLogsJson();
 
     void setCheckLogsJson(String json);

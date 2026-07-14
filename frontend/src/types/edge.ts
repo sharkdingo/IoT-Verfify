@@ -1,3 +1,5 @@
+import type { RuleSourceItemType } from './rule'
+
 export interface DeviceEdge {
     id: string
     from: string
@@ -6,11 +8,14 @@ export interface DeviceEdge {
     toLabel: string
     fromPos: { x: number; y: number }
     toPos: { x: number; y: number }
-    // Rule-derived display metadata. These fields are not part of the backend
-    // DeviceEdgeDto; boardApi.saveEdges strips them before sending edge payloads.
+    // Rule-derived display metadata. DeviceEdge is a canvas display shape; visible
+    // rule connections are derived from persisted rules instead of a backend edge DTO.
     fromApi?: string
     toApi?: string
-    itemType?: 'api' | 'variable'
+    itemType?: RuleSourceItemType
     relation?: string
     value?: string
+    ruleId?: string
+    ruleIndex?: number
+    sourceIndex?: number
 }

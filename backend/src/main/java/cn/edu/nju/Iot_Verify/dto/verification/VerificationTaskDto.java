@@ -1,6 +1,10 @@
 package cn.edu.nju.Iot_Verify.dto.verification;
 
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -50,10 +54,20 @@ public class VerificationTaskDto {
      */
     private Long processingTimeMs;
 
-    /**
-     * 是否安全
-     */
-    private Boolean isSafe;
+    @JsonProperty("isAttack")
+    private Boolean isAttack;
+
+    private Integer attackBudget;
+
+    private Boolean enablePrivacy;
+
+    private ModelSemanticsDto modelSemantics;
+
+    private ModelRunSnapshotDto modelSnapshot;
+
+    private VerificationOutcome outcome;
+
+    private Boolean modelComplete;
 
     /**
      * 违规规格数量
@@ -63,6 +77,8 @@ public class VerificationTaskDto {
     private Integer disabledRuleCount;
 
     private Integer skippedSpecCount;
+
+    private List<ModelGenerationIssueDto> generationIssues;
 
     /**
      * 每个规格的检查结果（完成后返回）

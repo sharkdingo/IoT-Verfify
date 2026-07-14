@@ -1,0 +1,245 @@
+{
+  "schema": "iot-verify.board-scene",
+  "version": 4,
+  "templates": [
+    {
+      "name": "Alarm",
+      "manifest": {
+        "Name": "Alarm",
+        "Description": "",
+        "InternalVariables": [],
+        "Modes": ["AlertState"],
+        "InitState": "both",
+        "WorkingStates": [
+          { "Name": "both", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "public" },
+          { "Name": "off", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "public" },
+          { "Name": "siren", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "public" },
+          { "Name": "strobe", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "public" }
+        ],
+        "Transitions": [],
+        "APIs": [
+          { "Name": "both", "StartState": "", "EndState": "both", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "off", "StartState": "", "EndState": "off", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "siren", "StartState": "", "EndState": "siren", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "strobe", "StartState": "", "EndState": "strobe", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" }
+        ]
+      }
+    },
+    {
+      "name": "Camera",
+      "manifest": {
+        "Name": "Camera",
+        "Description": "",
+        "InternalVariables": [],
+        "Modes": ["MachineState"],
+        "InitState": "on",
+        "WorkingStates": [
+          { "Name": "on", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "private" },
+          { "Name": "off", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "private" },
+          { "Name": "taking photo", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "private" }
+        ],
+        "Transitions": [
+          {
+            "Name": "token photo",
+            "StartState": "taking photo",
+            "EndState": "on",
+            "Trigger": { "Attribute": "MachineState", "Relation": "=", "Value": "taking photo" },
+            "Assignments": [],
+            "Description": ""
+          }
+        ],
+        "APIs": [
+          { "Name": "on", "StartState": "off", "EndState": "on", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "off", "StartState": "on", "EndState": "off", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "take photo", "StartState": "on", "EndState": "taking photo", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" }
+        ]
+      }
+    },
+    {
+      "name": "Light",
+      "manifest": {
+        "Name": "Light",
+        "Description": "",
+        "InternalVariables": [],
+        "EnvironmentDomains": [
+          {
+            "Name": "illuminance",
+            "Description": "Ambient illuminance",
+            "Trust": "untrusted",
+            "Privacy": "public",
+            "LowerBound": 0,
+            "UpperBound": 100,
+            "NaturalChangeRate": "[-1, 1]"
+          }
+        ],
+        "ImpactedVariables": ["illuminance"],
+        "Modes": ["SwitchState"],
+        "InitState": "on",
+        "WorkingStates": [
+          {
+            "Name": "on",
+            "Dynamics": [{ "VariableName": "illuminance", "ChangeRate": "1" }],
+            "Description": "",
+            "Trust": "trusted",
+            "Privacy": "public"
+          },
+          { "Name": "off", "Dynamics": [], "Description": "", "Trust": "trusted", "Privacy": "public" }
+        ],
+        "Transitions": [],
+        "APIs": [
+          { "Name": "on", "StartState": "", "EndState": "on", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" },
+          { "Name": "off", "StartState": "", "EndState": "off", "Trigger": null, "Assignments": [], "Signal": true, "Description": "" }
+        ]
+      }
+    },
+    {
+      "name": "Motion Detector",
+      "manifest": {
+        "Name": "Motion Detector",
+        "Description": "",
+        "InternalVariables": [
+          {
+            "Name": "motion",
+            "Description": "",
+            "IsInside": false,
+            "FalsifiableWhenCompromised": true,
+            "Trust": "trusted",
+            "Privacy": "private",
+            "Values": ["active", "inactive"]
+          }
+        ],
+        "Modes": [],
+        "InitState": "",
+        "WorkingStates": [],
+        "Transitions": [],
+        "APIs": []
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "motion_1",
+      "templateName": "Motion Detector",
+      "label": "Hall Motion Sensor",
+      "position": { "x": 80, "y": 120 },
+      "width": 176,
+      "height": 128
+    },
+    {
+      "id": "camera_1",
+      "templateName": "Camera",
+      "label": "Hall Camera",
+      "position": { "x": 340, "y": 40 },
+      "state": "on",
+      "currentStateTrust": "trusted",
+      "currentStatePrivacy": "private",
+      "width": 176,
+      "height": 128
+    },
+    {
+      "id": "alarm_1",
+      "templateName": "Alarm",
+      "label": "Hall Alarm",
+      "position": { "x": 340, "y": 210 },
+      "state": "off",
+      "currentStateTrust": "trusted",
+      "currentStatePrivacy": "public",
+      "width": 176,
+      "height": 128
+    },
+    {
+      "id": "light_1",
+      "templateName": "Light",
+      "label": "Hall Light",
+      "position": { "x": 600, "y": 120 },
+      "state": "off",
+      "currentStateTrust": "trusted",
+      "currentStatePrivacy": "public",
+      "width": 176,
+      "height": 128
+    }
+  ],
+  "environmentVariables": [
+    { "name": "illuminance", "value": "20", "trust": "untrusted", "privacy": "public" },
+    { "name": "motion", "value": "active", "trust": "untrusted", "privacy": "private" }
+  ],
+  "rules": [
+    {
+      "name": "When an untrusted hall motion signal is active, take a camera photo",
+      "sources": [
+        { "fromId": "motion_1", "fromApi": "motion", "itemType": "variable", "relation": "=", "value": "active" }
+      ],
+      "toId": "camera_1",
+      "toApi": "take photo"
+    },
+    {
+      "name": "When the hall camera takes a photo, sound the alarm",
+      "sources": [
+        { "fromId": "camera_1", "fromApi": "take photo", "itemType": "api" }
+      ],
+      "toId": "alarm_1",
+      "toApi": "siren"
+    },
+    {
+      "name": "When the hall alarm sounds, turn on the hall light",
+      "sources": [
+        { "fromId": "alarm_1", "fromApi": "siren", "itemType": "api" }
+      ],
+      "toId": "light_1",
+      "toApi": "on"
+    }
+  ],
+  "specs": [
+    {
+      "templateId": "3",
+      "aConditions": [
+        { "deviceId": "camera_1", "targetType": "state", "key": "state", "relation": "=", "value": "taking photo" }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    },
+    {
+      "templateId": "4",
+      "aConditions": [],
+      "ifConditions": [
+        { "deviceId": "camera_1", "targetType": "api", "key": "take photo", "relation": "=", "value": "TRUE" }
+      ],
+      "thenConditions": [
+        { "deviceId": "alarm_1", "targetType": "mode", "key": "AlertState", "relation": "=", "value": "siren" }
+      ]
+    },
+    {
+      "templateId": "4",
+      "aConditions": [],
+      "ifConditions": [
+        { "deviceId": "alarm_1", "targetType": "api", "key": "siren", "relation": "=", "value": "TRUE" }
+      ],
+      "thenConditions": [
+        { "deviceId": "light_1", "targetType": "mode", "key": "SwitchState", "relation": "=", "value": "on" }
+      ]
+    },
+    {
+      "templateId": "1",
+      "aConditions": [
+        {
+          "deviceId": "camera_1",
+          "targetType": "privacy",
+          "key": "MachineState",
+          "propertyScope": "state",
+          "relation": "=",
+          "value": "private"
+        }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    },
+    {
+      "templateId": "7",
+      "aConditions": [
+        { "deviceId": "camera_1", "targetType": "mode", "key": "MachineState", "relation": "=", "value": "taking photo" }
+      ],
+      "ifConditions": [],
+      "thenConditions": []
+    }
+  ]
+}

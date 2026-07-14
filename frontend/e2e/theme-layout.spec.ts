@@ -4,15 +4,26 @@ type ThemeMode = 'light' | 'dark'
 const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
 
 const parseRgb = (color: string) => {
-  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
-  if (!match) {
-    throw new Error(`Unsupported color format: ${color}`)
+  const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  if (rgbMatch) {
+    return {
+      r: Number(rgbMatch[1]),
+      g: Number(rgbMatch[2]),
+      b: Number(rgbMatch[3])
+    }
   }
 
-  return {
-    r: Number(match[1]),
-    g: Number(match[2]),
-    b: Number(match[3])
+  const srgbMatch = color.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/)
+  if (srgbMatch) {
+    return {
+      r: Number(srgbMatch[1]) * 255,
+      g: Number(srgbMatch[2]) * 255,
+      b: Number(srgbMatch[3]) * 255
+    }
+  }
+
+  {
+    throw new Error(`Unsupported color format: ${color}`)
   }
 }
 
@@ -72,7 +83,7 @@ const createAuthenticatedUser = async (request: APIRequestContext) => {
   expect(registerResponse.ok()).toBeTruthy()
 
   const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { phone, password }
+    data: { identifier: username, password }
   })
   expect(loginResponse.ok()).toBeTruthy()
 
@@ -106,7 +117,7 @@ const openWorkspace = async (page: Page, auth: Awaited<ReturnType<typeof createA
 
 test.describe('public theme and layout', () => {
   test('register validation blocks invalid input before any network request', async ({ page }) => {
-    await openPublicRoute(page, '/#/register', 'light')
+    await openPublicRoute(page, '/#/?mode=register', 'light')
 
     let registerCalls = 0
     await page.route('**/api/auth/register', async (route) => {
@@ -114,9 +125,9 @@ test.describe('public theme and layout', () => {
       await route.abort()
     })
 
-    await page.locator('.submit-btn').click()
+    await page.locator('.auth-submit').click()
 
-    await expect(page.locator('.el-form-item__error')).toHaveCount(4)
+    await expect(page.locator('.auth-form small')).toHaveCount(4)
     expect(registerCalls).toBe(0)
   })
 
@@ -126,20 +137,20 @@ test.describe('public theme and layout', () => {
     const password = 'Pass1234'
     const username = `ui${Date.now().toString(36).slice(-10)}`
 
-    await openPublicRoute(page, '/#/register', 'light')
-    const registerInputs = page.locator('.custom-input input')
+    await openPublicRoute(page, '/#/?mode=register', 'light')
+    const registerInputs = page.locator('.auth-form input')
     await registerInputs.nth(0).fill(phone)
     await registerInputs.nth(1).fill(username)
     await registerInputs.nth(2).fill(password)
     await registerInputs.nth(3).fill(password)
-    await page.locator('.submit-btn').click()
+    await page.locator('.auth-submit').click()
 
-    await expect(page).toHaveURL(/#\/login/)
+    await expect(page).toHaveURL(/mode=login/)
 
-    const loginInputs = page.locator('.custom-input input')
+    const loginInputs = page.locator('.auth-form input')
     await loginInputs.nth(0).fill(phone)
     await loginInputs.nth(1).fill(password)
-    await page.locator('.submit-btn').click()
+    await page.locator('.auth-submit').click()
 
     await expect(page.locator('.iot-board')).toBeVisible({ timeout: 15_000 })
     const token = await page.evaluate(() => window.localStorage.getItem('iot_verify_token'))
@@ -153,33 +164,35 @@ test.describe('public theme and layout', () => {
     await expect(page.locator('.language-toggle')).toHaveCount(1)
     await expect(page.locator('.theme-toggle')).toHaveCount(0)
     await expect(page.locator('.global-chat-wrapper')).toHaveCount(0)
+    await expect(page.locator('.hero-title')).toBeVisible()
+    await expect(page.locator('.auth-panel')).toBeHidden()
   })
 
-  test('login header actions stay right aligned in light theme', async ({ page }) => {
-    await openPublicRoute(page, '/#/login', 'light')
+  test('landing login state opens the right floating auth card in light theme', async ({ page }) => {
+    await openPublicRoute(page, '/#/?mode=login', 'light')
 
     await expectAuthHeaderActionsOnRight(page)
-    await expectLightSurface(page.locator('.form-panel'))
-    await expectLightSurface(page.locator('.custom-input .el-input__wrapper').first())
+    await expect(page.locator('.hero-title')).toBeVisible()
+    await expect(page.locator('.auth-panel')).toBeVisible()
+    await expectDarkSurface(page.locator('.auth-panel'))
     await expect(page.locator('.global-chat-wrapper')).toHaveCount(0)
   })
 
-  test('login dark theme recolors the header, form, and Element Plus inputs', async ({ page }) => {
-    await openPublicRoute(page, '/#/login', 'dark')
+  test('login dark theme keeps the integrated auth card readable', async ({ page }) => {
+    await openPublicRoute(page, '/#/?mode=login', 'dark')
 
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await expectAuthHeaderActionsOnRight(page)
-    await expectDarkSurface(page.locator('.public-header--auth'))
-    await expectDarkSurface(page.locator('.form-panel'))
-    await expectDarkSurface(page.locator('.custom-input .el-input__wrapper').first())
+    await expectDarkSurface(page.locator('.auth-panel'))
+    await expect(page.locator('.auth-form input').first()).toBeVisible()
   })
 
   test('login mobile layout keeps header controls and form usable', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
-    await openPublicRoute(page, '/#/login', 'dark')
+    await openPublicRoute(page, '/#/?mode=login', 'dark')
 
     const actions = page.locator('.public-header__actions')
-    const formPanel = page.locator('.form-container')
+    const formPanel = page.locator('.auth-panel')
     await expect(actions).toBeVisible()
     await expect(formPanel).toBeVisible()
     await expect(page.locator('.public-header__button')).toBeHidden()
@@ -192,18 +205,16 @@ test.describe('public theme and layout', () => {
     if (!actionsBox || !formBox) return
     expect(actionsBox.x).toBeGreaterThan(190)
     expect(actionsBox.x + actionsBox.width).toBeLessThanOrEqual(376)
-    expect(formBox.y).toBeGreaterThanOrEqual(72)
-    expect(formBox.y).toBeLessThan(340)
+    expect(formBox.y).toBeGreaterThanOrEqual(210)
     expect(formBox.y + formBox.height).toBeLessThanOrEqual(844)
   })
 
   test('register dark theme uses the same auth layout system', async ({ page }) => {
-    await openPublicRoute(page, '/#/register', 'dark')
+    await openPublicRoute(page, '/#/?mode=register', 'dark')
 
     await expectAuthHeaderActionsOnRight(page)
-    await expectDarkSurface(page.locator('.public-header--auth'))
-    await expectDarkSurface(page.locator('.form-panel'))
-    await expectDarkSurface(page.locator('.custom-input .el-input__wrapper').first())
+    await expectDarkSurface(page.locator('.auth-panel'))
+    await expect(page.locator('.auth-form input')).toHaveCount(4)
   })
 
   test('workspace dark theme keeps floating panel surfaces coherent', async ({ page, request }) => {
@@ -213,23 +224,25 @@ test.describe('public theme and layout', () => {
     await expectDarkSurface(page.locator('.board-nav-bar'))
     await expectDarkSurface(page.locator('.modern-panel'))
     await expectDarkSurface(page.locator('.glass-panel'))
-    await expectDarkSurface(page.locator('.modern-panel input').first())
+    await expectDarkSurface(page.locator('.modern-panel input:not(.hidden)').first())
     await expectDarkSurface(page.locator('.canvas-map'))
     await expectDarkSurface(page.locator('.canvas-map__viewport'))
-    await page.locator('.board-floating-actions button').first().click()
+    await page.locator('[data-testid="open-simulation-panel"]').click()
 
-    const panel = page.locator('.board-floating-panel').first()
+    const panel = page.locator('[data-testid="simulation-panel"]')
     await expectDarkSurface(panel)
     await expectDarkSurface(panel.locator(':scope > .p-3'))
     await expectDarkSurface(panel.locator(':scope > .p-3 > .bg-white').first())
 
-    await page.locator('.board-floating-actions button').nth(2).click()
-    const historyPanel = page.locator('.board-floating-panel').first()
+    await page.locator('[data-testid="close-simulation-panel"]').click()
+    await page.locator('[data-testid="open-history-panel"]').click()
+    const historyPanel = page.locator('[data-testid="trace-history-panel"]')
     await expectDarkSurface(historyPanel)
     await expectDarkSurface(historyPanel.locator(':scope > div.p-3').nth(0))
     await expectDarkSurface(historyPanel.locator(':scope > div.p-3').nth(1))
 
-    await page.locator('.ai-assistant-btn').click()
-    await expect(page.locator('.chat-panel')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.locator('.ai-assistant-btn').click({ force: true })
+    await expect(page.locator('.chat-panel')).toBeVisible({ timeout: 15_000 })
   })
 })

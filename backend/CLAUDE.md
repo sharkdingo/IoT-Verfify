@@ -25,7 +25,7 @@ mvn test               # unit tests
 mvn clean package -DskipTests   # build jar → target/Iot-Verify-0.0.1-SNAPSHOT.jar
 ```
 
-Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `OPENAI_API_KEY`,
+Required env vars before running: `DB_PASSWORD`, `JWT_SECRET`, `IOT_VERIFY_OPENAI_API_KEY`,
 `NUSMV_PATH`. Full list and defaults: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md).
 
 ## Codebase map
@@ -41,7 +41,7 @@ component/
     executor/      NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/        SmvTraceParser — counterexample parsing
     fixer/         FaultLocalizer + parameter/condition/disable fix strategies
-  aitool/          30 AI tools (board/node/rule/spec/template/simulation/verification)
+  aitool/          33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
 security/          JWT + Spring Security
@@ -69,33 +69,40 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 
 ## Gotchas (the "why", not the "what")
 
-- **`saveRules` is incremental, not full-replace** (unlike nodes/edges/specs). It
-  upserts by `id` and preserves `createdAt`, because fault localization keys off stable
-  rule identity — a delete-and-recreate would churn ids and break fixes. Send existing
-  `id`s back. See [../docs/api/board.md](../docs/api/board.md).
+- **Ordinary board mutations are targeted and serialized per user.** Do not expose the
+  internal collection rewrite helpers as full-list REST contracts. `/api/board/batch`
+  is reserved for explicit scene replacement/clear and commits supplied semantic
+  collections plus template dependencies atomically. See
+  [../docs/api/board.md](../docs/api/board.md).
 - **NuSMV identifiers**: mode/state names are sanitized at generation time
   (`sanitizeSmvToken`), but InternalVariable/ImpactedVariable names are validated (and
   rejected) at persist time — they are cross-referenced by `.equals()`, so sanitizing
   them would break matching. Don't "fix" this by sanitizing them later. See
   [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
+- **Environment domains are active-template and same-manifest scoped.** An
+  `ImpactedVariables` name is defined by an external `InternalVariable` or
+  `EnvironmentDomains` entry in that same manifest. Never scan the user's whole template
+  library to fill a missing domain: unused templates must not alter the current board.
 - **Async task state** uses atomic conditional UPDATEs (`WHERE status <> CANCELLED`) to
   avoid TOCTOU races — don't replace with read-then-write.
 - **NuSMV generation must fail closed and be observable.** Invalid/empty rule
   conditions must not become `TRUE`; route them through the request-scoped
   `SmvGenerationContext` so `checkLogs`, `disabledRuleCount`, and `skippedSpecCount`
   stay accurate without global mutable state.
-- **AI rule/spec tools are label-first.** Recommendation prompts and parsed output should
-  use board device labels as the public reference; node ids are only a legacy fallback.
-  Specification recommendation `templateId` values must stay constrained to `"1"` through
-  `"7"`.
+- **AI rule/spec tools are node-id authoritative.** Recommendation prompts and parsed
+  output must use canonical board device node ids (`deviceId` / `deviceName` DTO fields)
+  for identity. Display labels are readability snapshots only. Specification
+  recommendation `templateId` values must stay constrained to `"1"` through `"7"`.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
   make request flow hard-depend on it.
 - **Temp files are kept on purpose**: `cleanupTempFile()` is a no-op so `nusmv_*` dirs
   (`model.smv`, `request.json`, `output.txt`, `result.json`) survive for debugging.
 - **`ProductionSafetyCheck`** refuses to start under a `prod`/`production` profile if
-  `JWT_SECRET` / `DB_PASSWORD` / `OPENAI_API_KEY` hold unsafe defaults.
-- Attack-mode transitions take priority over template transitions in `next()` — an
-  attacked device can jump to any mode regardless of rules.
+  `JWT_SECRET` / `DB_PASSWORD` / `IOT_VERIFY_OPENAI_API_KEY` hold unsafe defaults.
+- **Attack behavior is capability-scoped.** Compromise may falsify only variables whose
+  manifest explicitly sets `FalsifiableWhenCompromised=true`; compromised targets or
+  logical automation links drop matching commands. It does not add an arbitrary actuator
+  state-transition branch. See [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
 
 ## Reference (don't duplicate here — link)
 
@@ -103,6 +110,8 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - API contracts: [auth](../docs/api/auth.md) · [board](../docs/api/board.md) ·
   [verification/simulation/fix](../docs/api/verification.md) ·
   [chat SSE](../docs/api/chat-sse.md) · [AI tools](../docs/api/ai-tools.md)
+- Data authority & identity: [data authority](../docs/architecture/data-authority-model.md) ·
+  [device identity](../docs/architecture/device-identity.md)
 - Verification pipeline & trace format: [../docs/architecture/verification-flow.md](../docs/architecture/verification-flow.md)
 - Spec templates & P1–P5 validation: [../docs/architecture/spec-templates.md](../docs/architecture/spec-templates.md)
 - Auto-fix (Salus §4–§5): [../docs/architecture/auto-fix.md](../docs/architecture/auto-fix.md)
@@ -110,12 +119,15 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 
 ## Data model
 
-13 tables, auto-created by Hibernate (`ddl-auto: update`): `user`, `device_node`,
-`device_edge`, `rules`, `specification`, `board_layout`, `device_templates`,
-`verification_task`, `simulation_task`, `trace`,
+13 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
+`board_environment_variable`, `rules`, `specification`, `board_layout`,
+`device_templates`, `verification_task`, `simulation_task`, `trace`,
 `simulation_trace`, `chat_session`, `chat_message`. Notable: `device_node` has a
-composite PK `(id, user_id)` for user isolation; `device_templates` has a unique
-constraint on `(user_id, name)`; `specification` carries `formula` (TEXT) and
-`devices_json` (JSON) for authored-formula/device-binding persistence; `verification_task`
-carries `disabled_rule_count` / `skipped_spec_count` mirroring the generation-warning
-counts surfaced in `VerificationResultDto`.
+composite PK `(id, user_id)` for user isolation; `board_environment_variable` has a
+composite PK `(name, user_id)` for per-user shared environment state;
+`device_templates` has a unique constraint on `(user_id, name)`; `specification`
+carries `formula` (TEXT) and `devices_json` (JSON) for authored-formula/device-binding
+persistence; `verification_task` carries `disabled_rule_count` / `skipped_spec_count`
+mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
+rows also back verification run history for both synchronous and asynchronous checks;
+the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.

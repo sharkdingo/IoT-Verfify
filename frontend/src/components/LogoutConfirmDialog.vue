@@ -1,30 +1,38 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 const { t } = useI18n()
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean
-}>()
+  loading?: boolean
+}>(), {
+  loading: false
+})
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   'confirm': []
   'cancel': []
+  'delete-account': []
 }>()
 
-const loading = ref(false)
-
-const handleConfirm = async () => {
-  loading.value = true
+const handleConfirm = () => {
+  if (props.loading) return
   emit('confirm')
-  loading.value = false
 }
 
 const handleCancel = () => {
+  if (props.loading) return
   emit('cancel')
+  emit('update:visible', false)
+}
+
+const handleDeleteAccount = () => {
+  if (props.loading) return
+  emit('delete-account')
   emit('update:visible', false)
 }
 
@@ -66,6 +74,15 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               <span v-else>{{ t('app.logout') }}</span>
             </button>
           </div>
+
+          <button
+            type="button"
+            class="delete-account-link"
+            :disabled="loading"
+            @click="handleDeleteAccount"
+          >
+            {{ t('app.deleteAccountEntry') }}
+          </button>
         </div>
       </div>
     </Transition>
@@ -154,6 +171,28 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
 .logout-actions {
   display: flex;
   gap: 1rem;
+}
+
+.delete-account-link {
+  margin-top: 1.25rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: #fca5a5;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.delete-account-link:hover:not(:disabled) {
+  color: #fecaca;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.delete-account-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .logout-btn {

@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.controller;
 
+import cn.edu.nju.Iot_Verify.component.model.ModelRequestParser;
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
@@ -9,7 +11,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
-import jakarta.validation.Valid;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -23,21 +25,24 @@ import java.util.List;
 public class SimulationController {
 
     private final SimulationService simulationService;
+    private final ModelRequestParser modelRequestParser;
 
     @PostMapping
     public Result<SimulationResultDto> simulate(
             @CurrentUser Long userId,
-            @Valid @RequestBody SimulationRequestDto request) {
+            @RequestBody JsonNode body) {
+        SimulationRequestDto request = modelRequestParser.parseSimulation(body);
         SimulationResultDto result = simulationService.simulate(userId, request);
         return Result.success(result);
     }
 
     @PostMapping("/async")
-    public Result<Long> simulateAsync(
+    public Result<SimulationTaskDto> simulateAsync(
             @CurrentUser Long userId,
-            @Valid @RequestBody SimulationRequestDto request) {
+            @RequestBody JsonNode body) {
+        SimulationRequestDto request = modelRequestParser.parseSimulation(body);
         Long taskId = simulationService.submitSimulation(userId, request);
-        return Result.success(taskId);
+        return Result.success(simulationService.getTask(userId, taskId));
     }
 
     @GetMapping("/tasks")
@@ -54,6 +59,14 @@ public class SimulationController {
         return Result.success(simulationService.getTask(userId, id));
     }
 
+    @DeleteMapping("/tasks/{id}")
+    public Result<Void> deleteTask(
+            @CurrentUser Long userId,
+            @PathVariable Long id) {
+        simulationService.deleteTask(userId, id);
+        return Result.success();
+    }
+
     @GetMapping("/tasks/{id}/progress")
     public Result<Integer> getTaskProgress(
             @CurrentUser Long userId,
@@ -62,7 +75,7 @@ public class SimulationController {
     }
 
     @PostMapping("/tasks/{id}/cancel")
-    public Result<Boolean> cancelTask(
+    public Result<TaskCancellationResultDto> cancelTask(
             @CurrentUser Long userId,
             @PathVariable Long id) {
         return Result.success(simulationService.cancelTask(userId, id));
@@ -71,7 +84,8 @@ public class SimulationController {
     @PostMapping("/traces")
     public Result<SimulationTraceDto> simulateAndSave(
             @CurrentUser Long userId,
-            @Valid @RequestBody SimulationRequestDto request) {
+            @RequestBody JsonNode body) {
+        SimulationRequestDto request = modelRequestParser.parseSimulation(body);
         return Result.success(simulationService.simulateAndSave(userId, request));
     }
 

@@ -284,6 +284,20 @@
 
 /* ---------- MessageBox 蒙层颜色（深/浅主题分别控制透明度） ---------- */
 
+:root {
+    --iot-z-message-box: 30000;
+    --iot-z-toast: 30010;
+}
+
+.el-overlay.is-message-box,
+.el-overlay-message-box {
+    z-index: var(--iot-z-message-box) !important;
+}
+
+.el-message {
+    z-index: var(--iot-z-toast) !important;
+}
+
 :root[data-theme='dark'] .el-overlay.is-message-box {
     background-color: rgba(15, 23, 42, 0.65);
 }

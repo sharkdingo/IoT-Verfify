@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const apiBase = process.env.REAL_CHECK_API || 'http://127.0.0.1:8080/api'
-const appUrl = process.env.REAL_CHECK_APP || 'http://127.0.0.1:5173/board'
+const appUrl = process.env.REAL_CHECK_APP || 'http://127.0.0.1:3000/#/board'
 const outDir = path.resolve('..', 'artifacts', 'playwright-real')
 fs.mkdirSync(outDir, { recursive: true })
 for (const entry of fs.readdirSync(outDir)) {
@@ -53,23 +53,57 @@ const varsFor = manifest => (manifest.InternalVariables || []).map(variable => (
 }))
 
 const privaciesFor = manifest => [
-  ...(manifest.InternalVariables || []).map(variable => ({ name: variable.Name, privacy: variable.Privacy || 'public' })),
-  ...(manifest.WorkingStates || []).map(state => ({ name: state.Name, privacy: state.Privacy || 'public' })),
-  ...(manifest.Contents || []).map(content => ({ name: content.Name, privacy: content.Privacy || 'public' }))
+  ...(manifest.InternalVariables || []).map(variable => ({ name: variable.Name, privacy: variable.Privacy || 'public' }))
 ]
 
-const initialState = manifest => manifest.InitState || manifest.WorkingStates?.[0]?.Name || 'idle'
+const hasModes = manifest => Array.isArray(manifest?.Modes) && manifest.Modes.length > 0
+const initialState = manifest => hasModes(manifest)
+  ? (manifest.InitState || manifest.WorkingStates?.[0]?.Name || '')
+  : 'Working'
+
+const nusmvReservedWords = new Set([
+  'module', 'var', 'assign', 'init', 'trans', 'define', 'spec', 'ltlspec',
+  'invars', 'ivar', 'fairness', 'justice', 'compassion',
+  'true', 'false', 'case', 'esac', 'next',
+  'ex', 'ax', 'ef', 'af', 'eg', 'ag',
+  'e', 'f', 'o', 'g', 'h', 'x', 'y', 'z', 'w', 'a', 'u', 's', 'v', 't',
+  'bu', 'ebf', 'abf', 'ebg', 'abg'
+])
+
+function normalizeNuSmvDeviceName(name) {
+  if (!name) return name
+  let normalized = String(name).replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase()
+  if (!normalized || /^_+$/.test(normalized)) normalized = 'device_0'
+  if (/^\d/.test(normalized)) normalized = `_${normalized}`
+  return nusmvReservedWords.has(normalized) ? `_${normalized}` : normalized
+}
+
+const modelRule = rule => ({
+  ...rule,
+  conditions: (rule.conditions || []).map(condition => ({
+    ...condition,
+    deviceName: normalizeNuSmvDeviceName(condition.deviceName)
+  })),
+  command: rule.command
+    ? {
+        ...rule.command,
+        deviceName: normalizeNuSmvDeviceName(rule.command.deviceName),
+        contentDevice: rule.command.contentDevice
+          ? normalizeNuSmvDeviceName(rule.command.contentDevice)
+          : rule.command.contentDevice
+      }
+    : rule.command
+})
 
 async function seedScenario() {
   const suffix = String(Date.now()).slice(-8)
   const phone = `138${suffix}`
   const password = '123456'
   await post('/auth/register', { phone, username: `real${suffix}`, password })
-  const auth = await post('/auth/login', { phone, password })
+  const auth = await post('/auth/login', { identifier: phone, password })
   const token = auth.token
   const user = { userId: auth.userId, phone: auth.phone, username: auth.username }
 
-  await post('/board/templates/reload', {}, token)
   const templates = await get('/board/templates', token)
   const templateByName = new Map(templates.map(template => [template.manifest.Name, template]))
   const template = name => {
@@ -92,34 +126,31 @@ async function seedScenario() {
     { id: 'node_shade_south', label: 'South_Window_Shade', template: windowShade, x: 520, y: 560, width: 164, height: 118, state: 'closed' }
   ]
 
-  const nodes = nodeSpecs.map(node => ({
-    id: node.id,
-    templateName: node.template.manifest.Name,
-    label: node.label,
-    position: { x: node.x, y: node.y },
-    state: node.state,
-    width: node.width,
-    height: node.height,
-    currentStateTrust: 'trusted',
-    variables: varsFor(node.template.manifest),
-    privacies: privaciesFor(node.template.manifest)
-  }))
-
-  const edges = [
-    { id: 'edge_door_light', from: 'node_door_entry', to: 'node_light_lobby', fromLabel: nodes[0].label, toLabel: nodes[1].label, fromPos: { x: -10, y: 170 }, toPos: { x: 350, y: 240 } },
-    { id: 'edge_light_alarm', from: 'node_light_lobby', to: 'node_alarm_core', fromLabel: nodes[1].label, toLabel: nodes[2].label, fromPos: { x: 440, y: 240 }, toPos: { x: 790, y: -30 } },
-    { id: 'edge_thermostat_shade', from: 'node_thermostat_west', to: 'node_shade_south', fromLabel: nodes[3].label, toLabel: nodes[4].label, fromPos: { x: 1050, y: 460 }, toPos: { x: 590, y: 590 } }
-  ]
+  const nodes = nodeSpecs.map(node => {
+    const modeDevice = hasModes(node.template.manifest)
+    return {
+      id: node.id,
+      templateName: node.template.manifest.Name,
+      label: node.label,
+      position: { x: node.x, y: node.y },
+      state: modeDevice ? node.state : 'Working',
+      width: node.width,
+      height: node.height,
+      ...(modeDevice ? { currentStateTrust: 'trusted' } : {}),
+      variables: varsFor(node.template.manifest),
+      privacies: privaciesFor(node.template.manifest)
+    }
+  })
 
   const rules = [
     {
-      conditions: [{ deviceName: 'Entrance_Door_Long_Label_01', attribute: 'state', relation: '=', value: 'unlocked' }],
-      command: { deviceName: 'Lobby_Light_Ceiling_Extended_Label', action: 'on', contentDevice: null, content: null },
+      conditions: [{ deviceName: 'node_door_entry', attribute: 'state', targetType: 'state', relation: '=', value: 'unlocked' }],
+      command: { deviceName: 'node_light_lobby', action: 'on', contentDevice: null, content: null },
       ruleString: 'If the entrance door is unlocked, turn on the lobby light'
     },
     {
-      conditions: [{ deviceName: 'Thermostat_West_Wing', attribute: 'state', relation: '=', value: initialState(thermostat.manifest) }],
-      command: { deviceName: 'South_Window_Shade', action: 'open', contentDevice: null, content: null },
+      conditions: [{ deviceName: 'node_thermostat_west', attribute: 'state', targetType: 'state', relation: '=', value: initialState(thermostat.manifest) }],
+      command: { deviceName: 'node_shade_south', action: 'open', contentDevice: null, content: null },
       ruleString: 'If thermostat is active, open the south shade'
     }
   ]
@@ -129,21 +160,21 @@ async function seedScenario() {
       id: 'spec_light_eventually_on',
       templateId: '2',
       templateLabel: 'A will happen later',
-      aConditions: [{ id: 'cond_light_on', side: 'a', deviceId: 'Lobby_Light_Ceiling_Extended_Label', deviceLabel: 'Lobby_Light_Ceiling_Extended_Label', targetType: 'state', key: 'state', relation: '=', value: 'on' }],
+      aConditions: [{ id: 'cond_light_on', side: 'a', deviceId: 'node_light_lobby', deviceLabel: 'Lobby_Light_Ceiling_Extended_Label', targetType: 'state', key: 'state', relation: '=', value: 'on' }],
       ifConditions: [],
       thenConditions: [],
       formula: '',
-      devices: [{ deviceId: 'Lobby_Light_Ceiling_Extended_Label', deviceLabel: 'Lobby_Light_Ceiling_Extended_Label', selectedApis: ['on'] }]
+      devices: [{ deviceId: 'node_light_lobby', deviceLabel: 'Lobby_Light_Ceiling_Extended_Label', selectedApis: ['on'] }]
     },
     {
       id: 'spec_alarm_never_siren',
       templateId: '3',
       templateLabel: 'A never happens',
-      aConditions: [{ id: 'cond_alarm_siren', side: 'a', deviceId: 'Alarm_Core_Hallway', deviceLabel: 'Alarm_Core_Hallway', targetType: 'state', key: 'state', relation: '=', value: 'siren' }],
+      aConditions: [{ id: 'cond_alarm_siren', side: 'a', deviceId: 'node_alarm_core', deviceLabel: 'Alarm_Core_Hallway', targetType: 'state', key: 'state', relation: '=', value: 'siren' }],
       ifConditions: [],
       thenConditions: [],
       formula: '',
-      devices: [{ deviceId: 'Alarm_Core_Hallway', deviceLabel: 'Alarm_Core_Hallway', selectedApis: ['siren'] }]
+      devices: [{ deviceId: 'node_alarm_core', deviceLabel: 'Alarm_Core_Hallway', selectedApis: ['siren'] }]
     }
   ]
 
@@ -156,27 +187,26 @@ async function seedScenario() {
     }
   }
 
-  await post('/board/nodes', nodes, token)
-  await post('/board/edges', edges, token)
-  await post('/board/rules', rules, token)
-  await post('/board/specs', specs, token)
+  await post('/board/batch', { nodes, rules, specs }, token)
   await post('/board/layout', layout, token)
   const savedLayout = await get('/board/layout', token)
 
-  const activeEndpoint = await fetch(`${apiBase}/board/active`, {
-    headers: { Authorization: `Bearer ${token}` }
-  })
-
   const simRequest = {
-    devices: nodes.map(node => ({
-      varName: node.label,
-      templateName: node.templateName,
-      state: node.state,
-      currentStateTrust: node.currentStateTrust,
-      variables: node.variables,
-      privacies: node.privacies
-    })),
-    rules,
+    devices: nodes.map(node => {
+      const templateInfo = templateByName.get(node.templateName)
+      const modeDevice = hasModes(templateInfo?.manifest)
+      return {
+        varName: normalizeNuSmvDeviceName(node.id),
+        templateName: node.templateName,
+        ...(modeDevice ? {
+          state: node.state,
+          currentStateTrust: node.currentStateTrust
+        } : {}),
+        variables: node.variables,
+        privacies: node.privacies
+      }
+    }),
+    rules: rules.map(modelRule),
     steps: 6,
     isAttack: false,
     intensity: 3,
@@ -200,7 +230,6 @@ async function seedScenario() {
     token,
     user,
     savedLayout,
-    activeEndpointStatus: activeEndpoint.status,
     savedSimulationTrace: standardSimulation.trace,
     shortSimulationTrace: shortSimulation.trace,
     longSimulationTrace: longSimulation.trace,
@@ -211,6 +240,17 @@ async function seedScenario() {
 
 function rectsOverlap(a, b, gap = 0) {
   return !(!a || !b || a.x + a.width <= b.x + gap || b.x + b.width <= a.x + gap || a.y + a.height <= b.y + gap || b.y + b.height <= a.y + gap)
+}
+
+function rectContains(outer, inner, gap = 0) {
+  return Boolean(
+    outer &&
+    inner &&
+    inner.x >= outer.x - gap &&
+    inner.y >= outer.y - gap &&
+    inner.x + inner.width <= outer.x + outer.width + gap &&
+    inner.y + inner.height <= outer.y + outer.height + gap
+  )
 }
 
 async function runUiChecks(seed) {
@@ -305,9 +345,11 @@ async function runUiChecks(seed) {
     const panelBox = await box(panel)
     const currentControlBox = await box('[data-testid="control-center"]')
     const currentInspectorBox = await box('[data-testid="system-inspector"]')
+    const currentMapBox = await box('[data-testid="canvas-map"]')
     checkInViewport(panelBox, label, viewport || page.viewportSize() || undefined)
     soft(!rectsOverlap(panelBox, currentControlBox, -2), `${label} overlaps control panel`)
     soft(!rectsOverlap(panelBox, currentInspectorBox, -2), `${label} overlaps inspector panel`)
+    soft(!currentMapBox || !rectsOverlap(panelBox, currentMapBox, -2), `${label} overlaps canvas map`)
     await checkNoInlineOverflow(`${panel} button, ${panel} label, ${panel} h3`, `${label} controls`)
     await closeIfVisible(panel, close)
   }
@@ -351,19 +393,30 @@ async function runUiChecks(seed) {
   soft(controlBox && controlBox.width >= 300 && controlBox.width <= 360, `control width unexpected: ${controlBox?.width}`)
   soft(inspectorBox && inspectorBox.width >= 320 && inspectorBox.width <= 370, `inspector width unexpected: ${inspectorBox?.width}`)
   soft(canvasBox && canvasBox.width > 1000, `canvas too narrow: ${canvasBox?.width}`)
+  soft(Boolean(mapBox), 'canvas map did not render inside inspector panel')
   soft(!rectsOverlap(mapBox, controlBox, -2), 'canvas map overlaps control panel')
-  soft(!rectsOverlap(mapBox, inspectorBox, -2), 'canvas map overlaps inspector panel')
+  soft(rectContains(inspectorBox, mapBox, 2), 'canvas map is not contained by inspector panel')
   soft(!rectsOverlap(actionRailBox, inspectorBox, -2), 'floating action rail overlaps inspector panel')
-  soft(actionRailBox && actionRailBox.height < 340, `floating action rail too tall: ${actionRailBox?.height}`)
+  soft(actionRailBox && actionRailBox.height < 390, `floating action rail too tall: ${actionRailBox?.height}`)
   soft(await page.locator('.board-floating-actions .absolute.-top-1').count() === 0, 'floating action rail still renders an unexplained corner badge')
   const toolRailAudit = await page.locator('.board-floating-actions').evaluate(rail => ({
     role: rail.getAttribute('role'),
     ariaLabel: rail.getAttribute('aria-label'),
+    toggle: (() => {
+      const button = rail.querySelector('[data-testid="toggle-action-dock"]')
+      return button
+        ? {
+            ariaLabel: button.getAttribute('aria-label'),
+            ariaPressed: button.getAttribute('aria-pressed'),
+            icon: button.querySelector('.material-symbols-outlined')?.textContent?.trim() || ''
+          }
+        : null
+    })(),
     groups: Array.from(rail.querySelectorAll('[role="group"]')).map(group => ({
       testId: group.getAttribute('data-testid'),
       ariaLabel: group.getAttribute('aria-label')
     })),
-    buttons: Array.from(rail.querySelectorAll('button')).map(button => ({
+    buttons: Array.from(rail.querySelectorAll('.board-tool-button')).map(button => ({
       testId: button.getAttribute('data-testid'),
       ariaLabel: button.getAttribute('aria-label'),
       ariaPressed: button.getAttribute('aria-pressed'),
@@ -382,6 +435,7 @@ async function runUiChecks(seed) {
   soft(toolRailAudit.groups.length === 2, `floating action rail expected 2 groups, got ${toolRailAudit.groups.length}`)
   soft(toolRailAudit.groups.some(group => group.testId === 'run-tool-group' && group.ariaLabel), 'run tool group missing accessible name')
   soft(toolRailAudit.groups.some(group => group.testId === 'ai-tool-group' && group.ariaLabel), 'AI tool group missing accessible name')
+  soft(toolRailAudit.toggle && toolRailAudit.toggle.ariaLabel && toolRailAudit.toggle.ariaPressed !== null, `action dock toggle missing aria metadata: ${JSON.stringify(toolRailAudit.toggle)}`)
   soft(toolRailAudit.buttons.length === 6, `floating action rail expected 6 buttons, got ${toolRailAudit.buttons.length}`)
   soft(toolRailAudit.buttons.every(button => button.ariaLabel && button.ariaPressed !== null), `tool buttons missing aria metadata: ${JSON.stringify(toolRailAudit.buttons)}`)
   soft(new Set(toolRailAudit.buttons.map(button => button.icon)).size === 6, `tool icons are not visually distinct: ${JSON.stringify(toolRailAudit.buttons.map(button => button.icon))}`)
@@ -430,8 +484,6 @@ async function runUiChecks(seed) {
   await page.waitForTimeout(200)
   const canvasAfterFit = await page.locator('.canvas-inner').evaluate(el => getComputedStyle(el).transform)
   soft(canvasAfterFit !== canvasBeforeFit, 'canvas map fit button did not adjust viewport transform')
-  await page.locator('[data-testid="canvas-map-center"]').click()
-  await page.waitForTimeout(100)
 
   const gridRendering = await page.evaluate(() => {
     const canvas = document.querySelector('[data-testid="canvas-board"]')
@@ -650,6 +702,23 @@ async function runUiChecks(seed) {
   })
   soft(darkColors.controlBg && !/rgb\(255, 255, 255\)/.test(darkColors.controlBg), `dark control panel is white: ${darkColors.controlBg}`)
   soft(darkColors.mapBg && !/rgb\(255, 255, 255\)/.test(darkColors.mapBg), `dark canvas map is white: ${darkColors.mapBg}`)
+  await page.locator('[data-testid="open-rule-recommendations"]').click()
+  await page.waitForSelector('[data-testid="rule-recommendation-panel"]', { timeout: 5000 })
+  await page.screenshot({ path: path.join(outDir, 'rule-recommendations-dark.png'), fullPage: true })
+  darkColors.rulePanel = await page.locator('[data-testid="rule-recommendation-panel"]').evaluate(panel => {
+    const content = panel.querySelector(':scope > .p-3')
+    const title = panel.querySelector('h3')
+    const subtitle = panel.querySelector('p')
+    return {
+      contentBg: content ? getComputedStyle(content).backgroundColor : null,
+      titleColor: title ? getComputedStyle(title).color : null,
+      subtitleColor: subtitle ? getComputedStyle(subtitle).color : null,
+      mapVisible: Boolean(document.querySelector('[data-testid="canvas-map"]')?.getClientRects().length)
+    }
+  })
+  soft(darkColors.rulePanel.contentBg && !/rgb\(255, 255, 255\)/.test(darkColors.rulePanel.contentBg), `dark rule panel content is white: ${darkColors.rulePanel.contentBg}`)
+  soft(darkColors.rulePanel.titleColor === 'rgb(255, 255, 255)', `dark rule panel title is not white: ${darkColors.rulePanel.titleColor}`)
+  soft(darkColors.rulePanel.mapVisible === false, 'canvas map remains visible while a floating panel is open')
 
   await closeFloatingPanels()
   await page.evaluate(() => {
@@ -682,6 +751,13 @@ async function runUiChecks(seed) {
   await page.goto(appUrl, { waitUntil: 'networkidle' })
   await page.waitForSelector('[data-testid="board-root"]')
   await page.waitForFunction(() => document.querySelectorAll('.device-node').length >= 5, null, { timeout: 20000 })
+  await page.waitForFunction(() => {
+    const control = document.querySelector('[data-testid="control-center"]')
+    const inspector = document.querySelector('[data-testid="system-inspector"]')
+    if (!control || !inspector) return false
+    return control.getBoundingClientRect().width <= 88
+      && inspector.getBoundingClientRect().width <= 88
+  }, null, { timeout: 3000 }).catch(() => {})
   await page.screenshot({ path: path.join(outDir, 'board-mobile-dark.png'), fullPage: true })
   const mobile = await page.evaluate(() => {
     const rect = selector => {
@@ -700,7 +776,7 @@ async function runUiChecks(seed) {
   })
   soft(mobile.control && mobile.control.width <= 88, `mobile control panel should start collapsed, got ${mobile.control?.width}`)
   soft(mobile.inspector && mobile.inspector.width <= 88, `mobile inspector panel should start collapsed, got ${mobile.inspector?.width}`)
-  soft(mobile.map && mobile.map.right <= mobile.vp.w + 1, 'mobile canvas map overflows right edge')
+  soft(!mobile.map || mobile.map.right <= mobile.vp.w + 1, 'mobile canvas map overflows right edge')
   soft(mobile.nodes >= 5, 'mobile did not render seeded nodes')
 
   await browser.close()
@@ -712,7 +788,6 @@ const ui = await runUiChecks(seed)
 const summary = {
   user: seed.user,
   layoutPanels: seed.savedLayout.panels,
-  activeEndpointStatus: seed.activeEndpointStatus,
   savedSimulationTraceId: seed.savedSimulationTrace?.id ?? null,
   shortSimulationTraceId: seed.shortSimulationTrace?.id ?? null,
   longSimulationTraceId: seed.longSimulationTrace?.id ?? null,

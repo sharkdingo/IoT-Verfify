@@ -1,300 +1,424 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
-import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
-import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
+import cn.edu.nju.Iot_Verify.exception.DeviceLabelConflictException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceCreationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceMutationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
+import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
-import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
+import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.NodeService;
-import cn.edu.nju.Iot_Verify.util.LevenshteinDistanceUtil;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
+import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Objects;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class NodeServiceImpl implements NodeService {
 
-    private final DeviceNodeRepository nodeRepo;
+    private final BoardStorageService boardStorageService;
     private final DeviceTemplateService deviceTemplateService;
     private final ObjectMapper objectMapper;
 
     private static final String HARD_FALLBACK_STATE = "Working";
     private static final double DEFAULT_POSITION_X = 250.0;
     private static final double DEFAULT_POSITION_Y = 250.0;
-    private static final int DEFAULT_WIDTH = 110;
-    private static final int DEFAULT_HEIGHT = 90;
-    private static final int VARIABLE_NODE_WIDTH = 60;
-    private static final int VARIABLE_NODE_HEIGHT = 60;
-    private static final double VARIABLE_NODE_OFFSET_X = 160.0;
-    private static final double VARIABLE_NODE_SPACING_Y = 70.0;
-    private static final int RANDOM_ID_RANGE = 1000;
-    private static final int MAX_RETRY_COUNT = 10;
-    private static final int UUID_SUFFIX_LENGTH = 6;
+    private static final int DEFAULT_WIDTH = 176;
+    private static final int DEFAULT_HEIGHT = 128;
 
     @Override
-    public String searchNodes(Long userId, String keyword) {
-        List<DeviceNodePo> results;
-        if (keyword == null || keyword.trim().isEmpty() || "all devices".equalsIgnoreCase(keyword.trim())) {
-            results = nodeRepo.findByUserId(userId);
-        } else {
-            results = nodeRepo.searchByUserIdAndTemplateOrLabel(userId, keyword);
+    public List<DeviceNodeDto> searchNodes(Long userId, String keyword) {
+        List<DeviceNodeDto> nodes = boardStorageService.getNodes(userId);
+        String query = keyword == null ? "" : keyword.trim();
+        if (query.isEmpty() || "all devices".equalsIgnoreCase(query)) {
+            return new ArrayList<>(nodes);
         }
-
-        try {
-            if (results.isEmpty()) {
-                return "No devices found matching '" + keyword + "'.";
-            }
-            return objectMapper.writeValueAsString(results);
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize search result", e);
-            return "[]";
-        }
+        String normalizedQuery = query.toLowerCase(Locale.ROOT);
+        return nodes.stream()
+                .filter(node -> containsIgnoreCase(node.getLabel(), normalizedQuery)
+                        || containsIgnoreCase(node.getTemplateName(), normalizedQuery)
+                        || containsIgnoreCase(node.getId(), normalizedQuery))
+                .toList();
     }
 
     @Override
-    @Transactional
-    public String addNode(Long userId,
-                          String reqTemplate,
-                          String label,
-                          Double x,
-                          Double y,
-                          String state,
-                          Integer w,
-                          Integer h) {
+    public DeviceCreationResultDto addNode(Long userId,
+                                           String reqTemplate,
+                                           String label,
+                                           Double x,
+                                           Double y,
+                                           DeviceRuntimeConfigDto runtime,
+                                           Integer w,
+                                           Integer h) {
 
         String rawTemplate = reqTemplate != null ? reqTemplate.trim() : "";
         String finalTemplate = rawTemplate;
-        StringBuilder resultMsg = new StringBuilder();
-
+        if (rawTemplate.isBlank()) {
+            throw new BadRequestException("Create device failed: templateName is required.");
+        }
         if (!deviceTemplateService.checkTemplateExists(userId, rawTemplate)) {
-            List<String> allTemplates = deviceTemplateService.getAllTemplateNames(userId);
-            log.info("User requested template: [{}], available templates: {}", rawTemplate, allTemplates);
-
-            String bestMatch = findBestMatch(rawTemplate, allTemplates);
-            if (bestMatch != null) {
-                finalTemplate = bestMatch;
-                String normalizedRaw = rawTemplate.replace(" ", "").toLowerCase();
-                String normalizedMatch = bestMatch.replace(" ", "").toLowerCase();
-                if (!normalizedRaw.equals(normalizedMatch)) {
-                    resultMsg.append(String.format(
-                            "[System] Template '%s' not found. Auto-matched to '%s'. ",
-                            rawTemplate,
-                            finalTemplate));
-                } else {
-                    log.info("Template name auto-corrected: {} -> {}", rawTemplate, finalTemplate);
-                }
-            } else {
-                String fallbackTemplate = chooseFallbackTemplate(allTemplates);
-                if (fallbackTemplate == null) {
-                    throw new BadRequestException(String.format(
-                            "Create device failed: cannot resolve template '%s' and no fallback template is available.",
-                            rawTemplate));
-                }
-                finalTemplate = fallbackTemplate;
-                resultMsg.append(String.format(
-                        "[System] Template '%s' not recognized. Fallback template '%s' is used. ",
-                        rawTemplate,
-                        finalTemplate));
-            }
+            throw new BadRequestException(String.format(
+                    "Create device failed: template '%s' does not exist.",
+                    rawTemplate));
         }
 
-        String finalState = state;
-        if (finalState == null || finalState.trim().isEmpty() || "null".equals(finalState)) {
-            finalState = getInitStateFromTemplate(userId, finalTemplate);
-        }
+        DeviceManifest manifest = loadTemplateManifest(userId, finalTemplate);
+        String requestedState = normalizeOptionalValue(runtime != null ? runtime.getState() : null);
+        InitialStateResolution stateResolution = requestedState != null
+                ? new InitialStateResolution(requestedState, "requested", null)
+                : resolveInitialState(finalTemplate, manifest);
+        String nodeState = stateResolution.state();
+
+        List<String> defaultsApplied = new ArrayList<>();
+        DeviceRuntimeConfigDto effectiveRuntime = effectiveRuntime(manifest, nodeState, runtime, defaultsApplied);
 
         double posX = x != null ? x : DEFAULT_POSITION_X;
         double posY = y != null ? y : DEFAULT_POSITION_Y;
         int width = w != null ? w : DEFAULT_WIDTH;
         int height = h != null ? h : DEFAULT_HEIGHT;
+        String requestedLabel = normalizeLabel(label);
 
-        String generatedId;
-        if (label != null && !label.equals("null") && !label.isEmpty() && !nodeRepo.existsByUserIdAndId(userId, label)) {
-            generatedId = label;
-        } else {
-            if (label != null && !label.equals("null") && !label.isEmpty() && nodeRepo.existsByUserIdAndId(userId, label)) {
-                resultMsg.append(String.format(
-                        "[System] Requested name '%s' already exists. Auto-generated a new name. ",
-                        label));
-            }
-
-            int retryCount = 0;
-            do {
-                generatedId = finalTemplate + "_ai_" + ThreadLocalRandom.current().nextInt(RANDOM_ID_RANGE);
-                retryCount++;
-                if (retryCount > MAX_RETRY_COUNT) {
-                    generatedId = finalTemplate + "_ai_" + UUID.randomUUID().toString().substring(0, UUID_SUFFIX_LENGTH);
-                    break;
+        DeviceMutationResultDto mutation = boardStorageService.createNode(userId, currentNodes -> {
+            String finalLabel;
+            if (requestedLabel != null) {
+                String suggestedLabel = chooseAvailableLabel(requestedLabel, currentNodes);
+                if (!requestedLabel.equals(suggestedLabel)) {
+                    throw new DeviceLabelConflictException(requestedLabel, suggestedLabel);
                 }
-            } while (nodeRepo.existsByUserIdAndId(userId, generatedId));
+                finalLabel = requestedLabel;
+            } else {
+                finalLabel = chooseAvailableLabel(finalTemplate, currentNodes);
+            }
+            String generatedId = chooseAvailableId(currentNodes);
+
+            DeviceNodeDto node = new DeviceNodeDto();
+            node.setId(generatedId);
+            node.setTemplateName(finalTemplate);
+            node.setLabel(finalLabel);
+            DeviceNodeDto.Position position = new DeviceNodeDto.Position();
+            position.setX(posX);
+            position.setY(posY);
+            node.setPosition(position);
+            node.setWidth(width);
+            node.setHeight(height);
+            node.setState(nodeState);
+            node.setCurrentStateTrust(effectiveRuntime.getCurrentStateTrust());
+            node.setCurrentStatePrivacy(effectiveRuntime.getCurrentStatePrivacy());
+            node.setVariables(effectiveRuntime.getVariables());
+            node.setPrivacies(effectiveRuntime.getPrivacies());
+            return node;
+        });
+        DeviceNodeDto createdNode = mutation.getAffectedDevices().stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Device creation completed without an affected device"));
+
+        if (x == null) defaultsApplied.add("position.x");
+        if (y == null) defaultsApplied.add("position.y");
+        if (w == null) defaultsApplied.add("width");
+        if (h == null) defaultsApplied.add("height");
+        if (requestedState == null) defaultsApplied.add("state");
+        if (requestedLabel == null) defaultsApplied.add("label");
+
+        List<String> warnings = new ArrayList<>();
+        if (stateResolution.warning() != null) {
+            warnings.add(stateResolution.warning());
         }
 
-        DeviceNodePo po = DeviceNodePo.builder()
-                .id(generatedId)
-                .userId(userId)
-                .templateName(finalTemplate)
-                .label(generatedId)
-                .posX(posX)
-                .posY(posY)
-                .width(width)
-                .height(height)
-                .state(finalState)
+        return DeviceCreationResultDto.builder()
+                .device(createdNode)
+                .initialStateSource(stateResolution.source())
+                .defaultsApplied(defaultsApplied)
+                .warnings(warnings)
+                .environmentVariables(mutation.getEnvironmentVariables())
+                .environmentChanges(mutation.getEnvironmentChanges())
                 .build();
-
-        nodeRepo.save(Objects.requireNonNull(po, "node to save must not be null"));
-
-        List<DeviceNodePo> variableNodes = buildVariableNodesFromTemplateManifest(
-                userId, finalTemplate, generatedId, posX, posY);
-        if (!variableNodes.isEmpty()) {
-            nodeRepo.saveAll(variableNodes);
-        }
-
-        resultMsg.insert(0, String.format("Created device successfully: %s. ", generatedId));
-        return resultMsg.toString();
     }
 
-    @Override
-    @Transactional
-    public String deleteNode(Long userId, String label) {
-        Optional<DeviceNodePo> nodeOpt = nodeRepo.findByUserIdAndLabel(userId, label);
-        if (nodeOpt.isPresent()) {
-            DeviceNodePo node = nodeOpt.get();
-            nodeRepo.delete(Objects.requireNonNull(node, "node to delete must not be null"));
-            log.info("Deleted device successfully: {}", label);
-            return "Deleted device successfully: " + label;
-        }
-        throw new ResourceNotFoundException(String.format("Device not found for deletion: '%s'.", label));
+    private boolean containsIgnoreCase(String value, String normalizedQuery) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(normalizedQuery);
     }
 
-    private String findBestMatch(String target, List<String> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
+    private String normalizeLabel(String label) {
+        if (label == null || label.isBlank() || "null".equalsIgnoreCase(label.trim())) {
             return null;
         }
-
-        String best = null;
-        int minDistance = Integer.MAX_VALUE;
-        String normalizedTarget = target.toLowerCase();
-
-        for (String candidate : candidates) {
-            String normalizedCandidate = candidate.toLowerCase();
-            if (normalizedCandidate.contains(normalizedTarget) || normalizedTarget.contains(normalizedCandidate)) {
-                return candidate;
-            }
-
-            int dist = LevenshteinDistanceUtil.calculate(normalizedTarget, normalizedCandidate);
-            if (dist < minDistance) {
-                minDistance = dist;
-                best = candidate;
-            }
-        }
-
-        if (minDistance > target.length() / 2 + 2) {
-            return null;
-        }
-        return best;
+        return label.trim();
     }
 
-    private String chooseFallbackTemplate(List<String> templates) {
-        if (templates == null || templates.isEmpty()) {
-            return null;
-        }
-        for (String template : templates) {
-            if (template != null && template.trim().equalsIgnoreCase("Air Conditioner")) {
-                return template;
-            }
-        }
-        return templates.stream().filter(t -> t != null && !t.isBlank()).findFirst().orElse(null);
+    private String chooseAvailableId(List<DeviceNodeDto> nodes) {
+        String candidate;
+        do {
+            candidate = "device_" + UUID.randomUUID();
+        } while (!isDeviceIdAvailable(candidate, nodes));
+        return candidate;
     }
 
-    private String getInitStateFromTemplate(Long userId, String templateName) {
+    private String chooseAvailableLabel(String baseLabel, List<DeviceNodeDto> nodes) {
+        Set<String> used = new HashSet<>();
+        for (DeviceNodeDto node : nodes) {
+            if (node != null && node.getLabel() != null) {
+                used.add(node.getLabel().trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        String candidate = baseLabel;
+        int suffix = 1;
+        while (used.contains(candidate.toLowerCase(Locale.ROOT))) {
+            candidate = baseLabel + "_" + suffix++;
+        }
+        return candidate;
+    }
+
+    private boolean isDeviceIdAvailable(String candidate, List<DeviceNodeDto> nodes) {
+        if (candidate == null || candidate.isBlank()) {
+            return false;
+        }
+        String normalizedCandidate = DeviceNameNormalizer.normalize(candidate);
+        for (DeviceNodeDto node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            String id = node.getId();
+            if (candidate.equals(id)) {
+                return false;
+            }
+            if (id != null && normalizedCandidate.equals(DeviceNameNormalizer.normalize(id))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String normalizeOptionalValue(String value) {
+        if (value == null || value.isBlank() || "null".equalsIgnoreCase(value.trim())) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private DeviceManifest loadTemplateManifest(Long userId, String templateName) {
         try {
             Optional<DeviceTemplatePo> templateOpt = deviceTemplateService.findTemplateByName(userId, templateName);
             if (templateOpt.isEmpty()) {
-                log.warn("Template {} not found, using fallback state", templateName);
-                return HARD_FALLBACK_STATE;
+                throw new PersistedDataIntegrityException(
+                        "device template", templateName, "manifestJson", "template disappeared during device creation");
             }
 
             String json = templateOpt.get().getManifestJson();
-            if (json == null || json.isEmpty()) {
-                return HARD_FALLBACK_STATE;
+            if (json == null || json.isBlank()) {
+                throw new PersistedDataIntegrityException(
+                        "device template", templateOpt.get().getId(), "manifestJson", "manifest is missing");
             }
-
-            JsonNode rootNode = objectMapper.readTree(json);
-            if (rootNode.has("InitState")) {
-                String initState = rootNode.get("InitState").asText();
-                if (initState != null && !initState.isBlank()) {
-                    return initState;
-                }
-            }
-
-            log.warn("Template {} manifest has missing or blank InitState", templateName);
-            return HARD_FALLBACK_STATE;
+            return objectMapper.readValue(json, DeviceManifest.class);
+        } catch (PersistedDataIntegrityException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Failed to parse template manifest for {}", templateName, e);
-            return HARD_FALLBACK_STATE;
+            throw new PersistedDataIntegrityException("device template", templateName, "manifestJson", e);
         }
     }
 
-    private List<DeviceNodePo> buildVariableNodesFromTemplateManifest(Long userId,
-                                                                      String templateName,
-                                                                      String deviceId,
-                                                                      double deviceX,
-                                                                      double deviceY) {
-        Optional<DeviceTemplatePo> templateOpt = deviceTemplateService.findTemplateByName(userId, templateName);
-        if (templateOpt == null || templateOpt.isEmpty()) {
-            return List.of();
+    private InitialStateResolution resolveInitialState(String templateName, DeviceManifest manifest) {
+        if (manifest != null && manifest.getInitState() != null && !manifest.getInitState().isBlank()) {
+            return new InitialStateResolution(manifest.getInitState().trim(), "templateDefault", null);
         }
+        log.warn("Template {} manifest has missing or blank InitState", templateName);
+        return fallbackState(templateName);
+    }
 
-        String json = templateOpt.get().getManifestJson();
-        if (json == null || json.isBlank()) {
-            return List.of();
-        }
+    private DeviceRuntimeConfigDto effectiveRuntime(DeviceManifest manifest,
+                                                    String state,
+                                                    DeviceRuntimeConfigDto requested,
+                                                    List<String> defaultsApplied) {
+        DeviceRuntimeConfigDto result = new DeviceRuntimeConfigDto();
+        result.setState(state);
 
-        try {
-            JsonNode variables = objectMapper.readTree(json).path("InternalVariables");
-            if (!variables.isArray() || variables.isEmpty()) {
-                return List.of();
+        boolean hasStateMachine = manifest != null
+                && manifest.getModes() != null && !manifest.getModes().isEmpty()
+                && manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
+        if (hasStateMachine) {
+            DeviceManifest.WorkingState workingState = manifest.getWorkingStates().stream()
+                    .filter(item -> item != null && item.getName() != null
+                            && item.getName().trim().equalsIgnoreCase(state))
+                    .findFirst()
+                    .orElse(null);
+            String defaultTrust = workingState != null ? normalizeTrust(workingState.getTrust()) : "trusted";
+            String defaultPrivacy = workingState != null ? normalizePrivacy(workingState.getPrivacy()) : "public";
+            result.setCurrentStateTrust(requested != null && normalizeOptionalValue(requested.getCurrentStateTrust()) != null
+                    ? requested.getCurrentStateTrust().trim().toLowerCase(Locale.ROOT) : defaultTrust);
+            result.setCurrentStatePrivacy(requested != null && normalizeOptionalValue(requested.getCurrentStatePrivacy()) != null
+                    ? requested.getCurrentStatePrivacy().trim().toLowerCase(Locale.ROOT) : defaultPrivacy);
+            if (requested == null || normalizeOptionalValue(requested.getCurrentStateTrust()) == null) {
+                defaultsApplied.add("currentStateTrust");
             }
-
-            List<DeviceNodePo> result = new ArrayList<>();
-            int index = 0;
-            for (JsonNode variable : variables) {
-                String name = variable.path("Name").asText("").trim();
-                if (name.isEmpty()) {
-                    continue;
-                }
-
-                result.add(DeviceNodePo.builder()
-                        .id(deviceId + "_" + name)
-                        .userId(userId)
-                        .templateName("variable_" + name)
-                        .label(name)
-                        .posX(deviceX + VARIABLE_NODE_OFFSET_X)
-                        .posY(deviceY + index * VARIABLE_NODE_SPACING_Y)
-                        .state("variable")
-                        .width(VARIABLE_NODE_WIDTH)
-                        .height(VARIABLE_NODE_HEIGHT)
-                        .build());
-                index++;
+            if (requested == null || normalizeOptionalValue(requested.getCurrentStatePrivacy()) == null) {
+                defaultsApplied.add("currentStatePrivacy");
             }
-            return result;
-        } catch (Exception e) {
-            log.warn("Failed to parse InternalVariables for template {}, skipping variable nodes", templateName, e);
-            return List.of();
+        } else {
+            result.setCurrentStateTrust(requested != null ? requested.getCurrentStateTrust() : null);
+            result.setCurrentStatePrivacy(requested != null ? requested.getCurrentStatePrivacy() : null);
         }
+
+        List<VariableStateDto> defaultVariables = defaultLocalVariables(manifest);
+        List<PrivacyStateDto> defaultPrivacies = defaultLocalPrivacies(manifest);
+        if (requested != null && requested.getVariables() != null) {
+            result.setVariables(mergeLocalVariables(
+                    requested.getVariables(), defaultVariables, defaultsApplied));
+        } else if (!defaultVariables.isEmpty()) {
+            result.setVariables(defaultVariables);
+            defaultsApplied.add("variables");
+        }
+        if (requested != null && requested.getPrivacies() != null) {
+            result.setPrivacies(mergeLocalPrivacies(
+                    requested.getPrivacies(), defaultPrivacies, defaultsApplied));
+        } else if (!defaultPrivacies.isEmpty()) {
+            result.setPrivacies(defaultPrivacies);
+            defaultsApplied.add("privacies");
+        }
+        return result;
+    }
+
+    private List<VariableStateDto> mergeLocalVariables(List<VariableStateDto> requested,
+                                                       List<VariableStateDto> defaults,
+                                                       List<String> defaultsApplied) {
+        Map<String, VariableStateDto> defaultsByName = new LinkedHashMap<>();
+        for (VariableStateDto value : defaults) {
+            if (value != null && value.getName() != null) {
+                defaultsByName.put(value.getName().toLowerCase(Locale.ROOT), value);
+            }
+        }
+        Set<String> supplied = new HashSet<>();
+        List<VariableStateDto> result = new ArrayList<>();
+        for (VariableStateDto value : requested) {
+            if (value == null || value.getName() == null) {
+                result.add(value);
+                continue;
+            }
+            String key = value.getName().toLowerCase(Locale.ROOT);
+            supplied.add(key);
+            VariableStateDto fallback = defaultsByName.get(key);
+            String trust = normalizeOptionalValue(value.getTrust()) != null
+                    ? value.getTrust().trim().toLowerCase(Locale.ROOT)
+                    : fallback == null ? value.getTrust() : fallback.getTrust();
+            String name = fallback == null ? value.getName() : fallback.getName();
+            result.add(new VariableStateDto(name, value.getValue(), trust));
+            if (fallback != null && normalizeOptionalValue(value.getTrust()) == null) {
+                defaultsApplied.add("variables." + fallback.getName() + ".trust");
+            }
+        }
+        for (Map.Entry<String, VariableStateDto> entry : defaultsByName.entrySet()) {
+            if (!supplied.contains(entry.getKey())) {
+                result.add(entry.getValue());
+                defaultsApplied.add("variables." + entry.getValue().getName());
+            }
+        }
+        return result;
+    }
+
+    private List<PrivacyStateDto> mergeLocalPrivacies(List<PrivacyStateDto> requested,
+                                                      List<PrivacyStateDto> defaults,
+                                                      List<String> defaultsApplied) {
+        Map<String, PrivacyStateDto> defaultsByName = new LinkedHashMap<>();
+        for (PrivacyStateDto value : defaults) {
+            if (value != null && value.getName() != null) {
+                defaultsByName.put(value.getName().toLowerCase(Locale.ROOT), value);
+            }
+        }
+        Set<String> supplied = new HashSet<>();
+        List<PrivacyStateDto> result = new ArrayList<>();
+        for (PrivacyStateDto value : requested) {
+            if (value == null || value.getName() == null) {
+                result.add(value);
+                continue;
+            }
+            String key = value.getName().toLowerCase(Locale.ROOT);
+            supplied.add(key);
+            PrivacyStateDto fallback = defaultsByName.get(key);
+            String privacy = normalizeOptionalValue(value.getPrivacy()) != null
+                    ? value.getPrivacy().trim().toLowerCase(Locale.ROOT)
+                    : fallback == null ? value.getPrivacy() : fallback.getPrivacy();
+            String name = fallback == null ? value.getName() : fallback.getName();
+            result.add(new PrivacyStateDto(name, privacy));
+            if (fallback != null && normalizeOptionalValue(value.getPrivacy()) == null) {
+                defaultsApplied.add("privacies." + fallback.getName() + ".privacy");
+            }
+        }
+        for (Map.Entry<String, PrivacyStateDto> entry : defaultsByName.entrySet()) {
+            if (!supplied.contains(entry.getKey())) {
+                result.add(entry.getValue());
+                defaultsApplied.add("privacies." + entry.getValue().getName());
+            }
+        }
+        return result;
+    }
+
+    private List<VariableStateDto> defaultLocalVariables(DeviceManifest manifest) {
+        if (manifest == null || manifest.getInternalVariables() == null) return List.of();
+        List<VariableStateDto> result = new ArrayList<>();
+        for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
+            if (variable == null || !Boolean.TRUE.equals(variable.getIsInside())
+                    || variable.getName() == null || variable.getName().isBlank()) continue;
+            String value = null;
+            if (variable.getValues() != null && !variable.getValues().isEmpty()) {
+                value = variable.getValues().get(0);
+            } else if (variable.getLowerBound() != null && variable.getUpperBound() != null) {
+                value = String.valueOf(variable.getLowerBound());
+            }
+            if (value != null) {
+                result.add(new VariableStateDto(variable.getName(), value, normalizeTrust(variable.getTrust())));
+            }
+        }
+        return result;
+    }
+
+    private List<PrivacyStateDto> defaultLocalPrivacies(DeviceManifest manifest) {
+        if (manifest == null || manifest.getInternalVariables() == null) return List.of();
+        LinkedHashMap<String, PrivacyStateDto> result = new LinkedHashMap<>();
+        for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
+            if (variable != null && Boolean.TRUE.equals(variable.getIsInside())
+                    && variable.getName() != null && !variable.getName().isBlank()) {
+                result.put(variable.getName(),
+                        new PrivacyStateDto(variable.getName(), normalizePrivacy(variable.getPrivacy())));
+            }
+        }
+        return new ArrayList<>(result.values());
+    }
+
+    private String normalizeTrust(String value) {
+        return "untrusted".equalsIgnoreCase(normalizeOptionalValue(value)) ? "untrusted" : "trusted";
+    }
+
+    private String normalizePrivacy(String value) {
+        return "private".equalsIgnoreCase(normalizeOptionalValue(value)) ? "private" : "public";
+    }
+
+    private InitialStateResolution fallbackState(String templateName) {
+        return new InitialStateResolution(
+                HARD_FALLBACK_STATE,
+                "systemFallback",
+                "Template '" + templateName + "' has no usable initial state; system fallback '"
+                        + HARD_FALLBACK_STATE + "' was applied."
+        );
+    }
+
+    private record InitialStateResolution(String state, String source, String warning) {
     }
 }

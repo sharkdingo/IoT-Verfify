@@ -1,22 +1,37 @@
 package cn.edu.nju.Iot_Verify.dto.fix;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class FixRequestDto {
-    /** Strategies to attempt, e.g. ["parameter","condition","disable"]. When null/empty, defaults to all three in order. */
-    private List<String> strategies;
+    /** Strategies to attempt. Null/omitted uses the default order; an explicit list is exact. */
+    @Size(min = 1, message = "strategies must be non-empty when provided; omit it to use defaults")
+    private List<
+            @NotBlank(message = "strategy item must not be blank")
+            @Pattern(regexp = "parameter|condition|remove",
+                    message = "strategy must be one of parameter, condition, remove")
+            String> strategies;
 
     /**
-     * Optional per-parameter preferred ranges, keyed by "r{ruleIdx}_c{condIdx}".
-     * Validation is handled by {@link cn.edu.nju.Iot_Verify.service.impl.FixServiceImpl#validatePreferredRanges}
-     * rather than Bean Validation, because {@code @Valid} on Map values has inconsistent
-     * cascade behavior across Spring Boot versions.
+     * Optional preferred ranges chosen from concrete parameter-adjustment targets.
+     * The controller converts these selections to the fixer's internal locator map.
      */
-    private Map<String, PreferredRange> preferredRanges;
+    private List<@Valid @NotNull(message = "preferredRangeSelections item must not be null")
+            PreferredRangeSelection> preferredRangeSelections;
+
+    @JsonIgnore
+    @AssertTrue(message = "strategies must not contain duplicates")
+    public boolean isStrategyOrderUnique() {
+        return strategies == null || new HashSet<>(strategies).size() == strategies.size();
+    }
 }

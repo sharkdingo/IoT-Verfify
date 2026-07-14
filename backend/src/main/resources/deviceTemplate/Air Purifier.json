@@ -2,6 +2,26 @@
 	"Name": "Air Purifier",
 	"Description": "",
 	"InternalVariables": [],
+	"EnvironmentDomains": [
+		{
+			"Name": "airQuality",
+			"Description": "Ambient air quality index",
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		},
+		{
+			"Name": "carbonDioxide",
+			"Description": "Ambient carbon dioxide level",
+			"Trust": "untrusted",
+			"Privacy": "private",
+			"LowerBound": 0,
+			"UpperBound": 100,
+			"NaturalChangeRate": "[-1, 1]"
+		}
+	],
 	"ImpactedVariables": ["airQuality", "carbonDioxide"],
 	"Modes": ["MachineState"],
 	"InitState": "on",
@@ -18,7 +38,6 @@
 					"ChangeRate":"-1"
 				}
 			],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -26,7 +45,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

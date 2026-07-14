@@ -36,10 +36,13 @@ api.interceptors.response.use(
       // Token无效或已加入黑名单，清除登录状态并跳转登录页
       const { logout } = useAuth();
       logout();
-      // 跳转到登录页（排除登录/注册页避免死循环）
-      const currentPath = router.currentRoute.value.path;
-      if (!['/login', '/register'].includes(currentPath)) {
-        router.push({ path: '/login', query: { redirect: currentPath } });
+      const currentRoute = router.currentRoute.value;
+      if (currentRoute.path !== '/') {
+        const query: Record<string, string> = { mode: 'login' };
+        if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
+          query.redirect = currentRoute.fullPath;
+        }
+        router.push({ path: '/', query });
       }
     }
     return Promise.reject(error);

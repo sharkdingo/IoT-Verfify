@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
+import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -18,6 +20,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -50,11 +54,6 @@ class ManageSpecToolTest {
 
     @Test
     void add_withUnknownTemplateId_shouldReject() {
-        DeviceNodeDto node = new DeviceNodeDto();
-        node.setId("dev_1");
-        node.setLabel("Device1");
-        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-
         String argsJson = """
                 {
                   "action":"add",
@@ -78,7 +77,30 @@ class ManageSpecToolTest {
     }
 
     @Test
-    void add_withDeviceLabelOnly_shouldResolveToDeviceId() {
+    void add_withoutTemplateId_shouldRejectInsteadOfDefaultingToAlways() {
+        String argsJson = """
+                {
+                  "action":"add",
+                  "aConditions":[
+                    {
+                      "deviceId":"dev_1",
+                      "targetType":"state",
+                      "key":"state",
+                      "relation":"=",
+                      "value":"On"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("arguments.templateId is required"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_withDeviceLabelOnly_shouldReject() {
         DeviceNodeDto node = new DeviceNodeDto();
         node.setId("ac_1");
         node.setLabel("LivingRoomAC");
@@ -92,11 +114,6 @@ class ManageSpecToolTest {
         node.setPosition(position);
 
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.addSpec(eq(1L), any(SpecificationDto.class))).thenAnswer(invocation -> {
-            SpecificationDto s = invocation.getArgument(1);
-            return List.of(s);
-        });
-
         String argsJson = """
                 {
                   "action":"add",
@@ -114,17 +131,12 @@ class ManageSpecToolTest {
                 """;
 
         String result = tool.execute(argsJson);
-        assertTrue(result.contains("Specification added successfully."));
-
-        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
-        verify(boardStorageService).addSpec(eq(1L), captor.capture());
-        SpecificationDto savedSpec = captor.getValue();
-        assertEquals("ac_1", savedSpec.getAConditions().get(0).getDeviceId());
-        assertEquals("LivingRoomAC", savedSpec.getAConditions().get(0).getDeviceLabel());
+        assertTrue(result.contains("must include an existing deviceId"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
     }
 
     @Test
-    void add_withAmbiguousDeviceLabel_shouldRejectAndNotSave() {
+    void add_withDuplicateLabelsAndDeviceId_shouldUseDeviceId() throws Exception {
         DeviceNodeDto node1 = new DeviceNodeDto();
         node1.setId("ac_1");
         node1.setLabel("LivingRoomAC");
@@ -134,6 +146,7 @@ class ManageSpecToolTest {
         node2.setLabel("LivingRoomAC");
 
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node1, node2));
+        stubSuccessfulSpecAdd();
 
         String argsJson = """
                 {
@@ -141,6 +154,7 @@ class ManageSpecToolTest {
                   "templateId":"1",
                   "aConditions":[
                     {
+                      "deviceId":"ac_1",
                       "deviceLabel":"LivingRoomAC",
                       "targetType":"state",
                       "key":"state",
@@ -153,12 +167,24 @@ class ManageSpecToolTest {
 
         String result = tool.execute(argsJson);
 
-        assertTrue(result.contains("ambiguous deviceLabel"));
-        verify(boardStorageService, never()).addSpec(anyLong(), any());
+        assertTrue(result.contains("not been formally verified"));
+        JsonNode response = new ObjectMapper().readTree(result);
+        assertEquals("NOT_VERIFIED", response.path("verificationStatus").asText());
+        assertTrue(response.path("specification").path("formulaPreview").asText().startsWith("CTL AG"));
+        assertFalse(response.path("specification").path("formulaPreview").asText().contains("ac_1"));
+        assertTrue(response.path("specification").path("formula").isMissingNode());
+        assertEquals("LivingRoomAC",
+                response.path("specification").path("aConditions").get(0).path("deviceLabel").asText());
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        assertEquals("ac_1", captor.getValue().getAConditions().get(0).getDeviceId());
+        assertNull(captor.getValue().getTemplateLabel());
+        assertNull(captor.getValue().getFormula());
+        assertTrue(captor.getValue().getDevices().isEmpty());
     }
 
     @Test
-    void add_withInconsistentDeviceIdAndDeviceLabel_shouldRejectAndNotSave() {
+    void add_withInconsistentDeviceLabel_shouldIgnoreLabelForIdentity() {
         DeviceNodeDto node1 = new DeviceNodeDto();
         node1.setId("ac_1");
         node1.setLabel("LivingRoomAC");
@@ -168,6 +194,7 @@ class ManageSpecToolTest {
         node2.setLabel("KitchenAC");
 
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node1, node2));
+        stubSuccessfulSpecAdd();
 
         String argsJson = """
                 {
@@ -188,7 +215,325 @@ class ManageSpecToolTest {
 
         String result = tool.execute(argsJson);
 
-        assertTrue(result.contains("inconsistent deviceId/deviceLabel"));
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto saved = captor.getValue();
+        assertEquals("ac_1", saved.getAConditions().get(0).getDeviceId());
+        assertEquals("LivingRoomAC", saved.getAConditions().get(0).getDeviceLabel());
+        assertTrue(saved.getDevices().isEmpty());
+        assertEquals("LivingRoomAC",
+                specification(result).path("aConditions").get(0).path("deviceLabel").asText());
+    }
+
+    @Test
+    void add_withLegacyGeneratedEnvironmentAlias_shouldRejectWhenNoLiteralVariableExists() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"variable",
+                      "key":"a_temperature",
+                      "relation":">",
+                      "value":"28"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("Condition 1 on 'A'"));
+        assertFalse(result.contains("Condition index"));
+        assertTrue(result.contains("unknown template variable"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_withActualAPrefixedEnvironmentVariable_shouldTreatKeyLiterally() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("A-prefixed Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(aPrefixedSensorTemplate()));
+        stubSuccessfulSpecAdd();
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"variable",
+                      "key":"a_temperature",
+                      "relation":">",
+                      "value":"28"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto saved = captor.getValue();
+        assertEquals("a_temperature", saved.getAConditions().get(0).getKey());
+        assertNull(saved.getFormula());
+        assertEquals("CTL AG(Environment.\"a_temperature\" > 28)",
+                specification(result).path("formulaPreview").asText());
+        assertFalse(specification(result).path("formulaPreview").asText().contains("a_a_temperature"));
+    }
+
+    @Test
+    void add_withEnvironmentVariable_shouldPersistDeviceRefsAndSharedVariableFormula() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+        stubSuccessfulSpecAdd();
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"variable",
+                      "key":"temperature",
+                      "relation":">",
+                      "value":"28"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto saved = captor.getValue();
+        assertNull(saved.getFormula());
+        assertTrue(saved.getDevices().isEmpty());
+        assertEquals("CTL AG(Environment.\"temperature\" > 28)",
+                specification(result).path("formulaPreview").asText());
+    }
+
+    @Test
+    void add_withOrderedTrustRelation_shouldRejectBeforeStorage() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"trust",
+                      "propertyScope":"variable",
+                      "key":"temperature",
+                      "relation":">",
+                      "value":"trusted"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("targetType='trust' only supports =, !=, in, not in"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_withGeneratedTrustAlias_shouldRejectWhenNoLiteralVariableExists() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"trust",
+                      "propertyScope":"variable",
+                      "key":"trust_temperature",
+                      "relation":"=",
+                      "value":"untrusted"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("unknown property variable"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_withActualTrustPrefixedVariable_shouldTreatTrustKeyLiterally() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Trust-prefixed Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(trustPrefixedSensorTemplate()));
+        stubSuccessfulSpecAdd();
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"sensor_1",
+                      "targetType":"trust",
+                      "propertyScope":"variable",
+                      "key":"trust_temperature",
+                      "relation":"=",
+                      "value":"untrusted"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto saved = captor.getValue();
+        assertEquals("trust_temperature", saved.getAConditions().get(0).getKey());
+        assertNull(saved.getFormula());
+        assertEquals("CTL AG(controlSource(\"Sensor\".\"trust_temperature\") = untrusted)",
+                specification(result).path("formulaPreview").asText());
+    }
+
+    @Test
+    void add_withStateTrustScope_buildsCurrentStateGuardedPreview() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("sensor_1");
+        node.setLabel("Sensor");
+        node.setTemplateName("Sensor");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate()));
+        stubSuccessfulSpecAdd();
+
+        String result = tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[{
+                    "deviceId":"sensor_1",
+                    "targetType":"trust",
+                    "propertyScope":"state",
+                    "key":"Mode",
+                    "relation":"=",
+                    "value":"untrusted"
+                  }]
+                }
+                """);
+
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        SpecificationDto saved = captor.getValue();
+        assertEquals("state", saved.getAConditions().get(0).getPropertyScope());
+        assertEquals("Mode", saved.getAConditions().get(0).getKey());
+        assertNull(saved.getFormula());
+        assertEquals("CTL AG(controlSource(\"Sensor\".current \"Mode\" state) = untrusted)",
+                specification(result).path("formulaPreview").asText());
+    }
+
+    @Test
+    void add_safetyWithMultiModeStatePreviewsAllReliabilityLabels() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("ac_1");
+        node.setLabel("Living Room AC");
+        node.setTemplateName("Two-mode AC");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(twoModeAirConditionerTemplate()));
+        stubSuccessfulSpecAdd();
+
+        String result = tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"7",
+                  "aConditions":[{
+                    "deviceId":"ac_1",
+                    "targetType":"state",
+                    "key":"state",
+                    "relation":"=",
+                    "value":"on;cool"
+                  }]
+                }
+                """);
+
+        assertTrue(result.contains("not been formally verified"));
+        ArgumentCaptor<SpecificationDto> captor = ArgumentCaptor.forClass(SpecificationDto.class);
+        verify(boardStorageService).addSpec(eq(1L), captor.capture());
+        assertNull(captor.getValue().getFormula());
+        assertEquals("CTL AG NOT (\"Living Room AC\".state = \"on;cool\" AND "
+                        + "controlSource(\"Living Room AC\".state) = untrusted)",
+                specification(result).path("formulaPreview").asText());
+    }
+
+    @Test
+    void add_withIllegalStateValue_shouldRejectBeforeStorage() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("ac_1");
+        node.setLabel("LivingRoomAC");
+        node.setTemplateName("Air Conditioner");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(airConditionerTemplate()));
+
+        String argsJson = """
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[
+                    {
+                      "deviceId":"ac_1",
+                      "targetType":"state",
+                      "key":"state",
+                      "relation":"=",
+                      "value":"sleeping"
+                    }
+                  ]
+                }
+                """;
+
+        String result = tool.execute(argsJson);
+
+        assertTrue(result.contains("illegal state value"));
         verify(boardStorageService, never()).addSpec(anyLong(), any());
     }
 
@@ -210,7 +555,7 @@ class ManageSpecToolTest {
     }
 
     @Test
-    void add_whenResponseSerializationFails_shouldReturnFallbackSuccess() throws Exception {
+    void add_whenResponseSerializationFails_shouldReturnResultUnavailable() throws Exception {
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
 
@@ -220,10 +565,7 @@ class ManageSpecToolTest {
         node.setId("ac_1");
         node.setLabel("LivingRoomAC");
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
-        when(boardStorageService.addSpec(eq(1L), any(SpecificationDto.class))).thenAnswer(invocation -> {
-            SpecificationDto s = invocation.getArgument(1);
-            return List.of(s);
-        });
+        stubSuccessfulSpecAdd();
 
         String argsJson = """
                 {
@@ -244,7 +586,207 @@ class ManageSpecToolTest {
         String result = fallbackTool.execute(argsJson);
         JsonNode json = new ObjectMapper().readTree(result);
 
-        assertEquals("Specification added successfully.", json.path("message").asText());
-        assertTrue(json.path("warning").asText().contains("serialization degraded"));
+        assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
+        assertEquals(false, json.path("resultAvailable").asBoolean());
+        assertTrue(json.path("warning").asText().contains("serialization failed"));
+    }
+
+    @Test
+    void delete_requiresPreviewAndExplicitLaterConfirmation() throws Exception {
+        SpecificationDto target = new SpecificationDto();
+        target.setId("spec-9");
+        target.setTemplateLabel("Smoke alarm must eventually sound");
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of(target));
+        when(boardStorageService.removeSpec(1L, "spec-9"))
+                .thenReturn(CollectionMutationResultDto.of("deleted", target, List.of()));
+
+        String preview = tool.execute("{\"action\":\"delete\",\"specId\":\"spec-9\",\"confirmed\":true}");
+        JsonNode previewJson = new ObjectMapper().readTree(preview);
+        assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
+        verify(boardStorageService, never()).removeSpec(anyLong(), any());
+
+        UserContextHolder.setDestructiveActionConfirmed(true);
+        String result = tool.execute("{\"action\":\"delete\",\"specId\":\"spec-9\",\"confirmed\":true}");
+        JsonNode resultJson = new ObjectMapper().readTree(result);
+        assertEquals("deleted", resultJson.path("operation").asText());
+        verify(boardStorageService).removeSpec(1L, "spec-9");
+    }
+
+    @Test
+    void add_rejectsMalformedConditionCollectionsInsteadOfSilentlyTreatingThemAsEmpty() throws Exception {
+        JsonNode result = new ObjectMapper().readTree(tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"4",
+                  "aConditions":"not-an-array",
+                  "ifConditions":[{
+                    "deviceId":"ac_1","targetType":"state","key":"state","relation":"=","value":"On"
+                  }],
+                  "thenConditions":[{
+                    "deviceId":"ac_1","targetType":"state","key":"state","relation":"=","value":"Off"
+                  }]
+                }
+                """));
+
+        assertEquals("VALIDATION_ERROR", result.path("errorCode").asText());
+        assertTrue(result.path("error").asText().contains("aConditions must be a JSON array"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_requiresExplicitRelationForNonApiConditions() throws Exception {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("ac_1");
+        node.setLabel("LivingRoomAC");
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(node));
+
+        JsonNode result = new ObjectMapper().readTree(tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":"1",
+                  "aConditions":[{
+                    "deviceId":"ac_1","targetType":"state","key":"state","value":"On"
+                  }]
+                }
+                """));
+
+        assertEquals("VALIDATION_ERROR", result.path("errorCode").asText());
+        assertTrue(result.path("error").asText().contains("requires relation/value"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    @Test
+    void add_rejectsNumericTemplateIdInsteadOfCoercingItToString() throws Exception {
+        JsonNode result = new ObjectMapper().readTree(tool.execute("""
+                {
+                  "action":"add",
+                  "templateId":1,
+                  "aConditions":[]
+                }
+                """));
+
+        assertEquals("VALIDATION_ERROR", result.path("errorCode").asText());
+        assertTrue(result.path("error").asText().contains("templateId"));
+        verify(boardStorageService, never()).addSpec(anyLong(), any());
+    }
+
+    private void stubSuccessfulSpecAdd() {
+        when(boardStorageService.addSpec(eq(1L), any(SpecificationDto.class))).thenAnswer(invocation -> {
+            SpecificationDto spec = invocation.getArgument(1);
+            return CollectionMutationResultDto.of("created", spec, List.of(spec));
+        });
+    }
+
+    private JsonNode specification(String result) {
+        try {
+            return new ObjectMapper().readTree(result).path("specification");
+        } catch (JsonProcessingException e) {
+            throw new AssertionError("Tool result was not valid JSON", e);
+        }
+    }
+
+    private DeviceTemplateDto airConditionerTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Air Conditioner");
+        DeviceTemplateDto.DeviceManifest manifest = new DeviceTemplateDto.DeviceManifest();
+        manifest.setName("Air Conditioner");
+        manifest.setModes(List.of("Power"));
+        manifest.setInitState("off");
+        manifest.setWorkingStates(List.of(
+                workingState("off"),
+                workingState("on")
+        ));
+        manifest.setInternalVariables(List.of());
+        manifest.setApis(List.of());
+        template.setManifest(manifest);
+        return template;
+    }
+
+    private DeviceTemplateDto aPrefixedSensorTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("A-prefixed Sensor");
+        DeviceTemplateDto.DeviceManifest manifest = new DeviceTemplateDto.DeviceManifest();
+        manifest.setName("A-prefixed Sensor");
+        manifest.setModes(List.of("Mode"));
+        manifest.setInitState("on");
+        manifest.setWorkingStates(List.of(workingState("on")));
+        manifest.setInternalVariables(List.of(
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("a_temperature")
+                        .isInside(false)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()
+        ));
+        manifest.setApis(List.of());
+        template.setManifest(manifest);
+        return template;
+    }
+
+    private DeviceTemplateDto sensorTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Sensor");
+        DeviceTemplateDto.DeviceManifest manifest = new DeviceTemplateDto.DeviceManifest();
+        manifest.setName("Sensor");
+        manifest.setModes(List.of("Mode"));
+        manifest.setInitState("on");
+        manifest.setWorkingStates(List.of(workingState("on")));
+        manifest.setInternalVariables(List.of(
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("temperature")
+                        .isInside(false)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()
+        ));
+        manifest.setApis(List.of());
+        template.setManifest(manifest);
+        return template;
+    }
+
+    private DeviceTemplateDto twoModeAirConditionerTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Two-mode AC");
+        DeviceTemplateDto.DeviceManifest manifest = new DeviceTemplateDto.DeviceManifest();
+        manifest.setName("Two-mode AC");
+        manifest.setModes(List.of("Power", "Mode"));
+        manifest.setInitState("off;idle");
+        manifest.setWorkingStates(List.of(
+                workingState("off;idle"),
+                workingState("on;cool")));
+        manifest.setInternalVariables(List.of());
+        manifest.setApis(List.of());
+        template.setManifest(manifest);
+        return template;
+    }
+
+    private DeviceTemplateDto trustPrefixedSensorTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Trust-prefixed Sensor");
+        DeviceTemplateDto.DeviceManifest manifest = new DeviceTemplateDto.DeviceManifest();
+        manifest.setName("Trust-prefixed Sensor");
+        manifest.setModes(List.of("Mode"));
+        manifest.setInitState("on");
+        manifest.setWorkingStates(List.of(workingState("on")));
+        manifest.setInternalVariables(List.of(
+                DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("trust_temperature")
+                        .isInside(true)
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()
+        ));
+        manifest.setApis(List.of());
+        template.setManifest(manifest);
+        return template;
+    }
+
+    private DeviceTemplateDto.DeviceManifest.WorkingState workingState(String name) {
+        DeviceTemplateDto.DeviceManifest.WorkingState state = new DeviceTemplateDto.DeviceManifest.WorkingState();
+        state.setName(name);
+        state.setTrust("trusted");
+        state.setDescription("");
+        state.setDynamics(List.of());
+        return state;
     }
 }

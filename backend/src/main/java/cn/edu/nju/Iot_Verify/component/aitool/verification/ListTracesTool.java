@@ -2,11 +2,14 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
-import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
+import cn.edu.nju.Iot_Verify.dto.trace.TraceSummaryDto;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -43,27 +46,62 @@ public class ListTracesTool extends AbstractAiTool {
     @Override
     protected String doExecute(Long userId, String argsJson) {
         try {
-            List<TraceDto> traces = verificationService.getUserTraces(userId);
+            JsonNode args;
+            try {
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
+            }
+            requireOnlyFields(args, "arguments", Collections.emptySet());
+
+            List<VerificationRunSummaryDto> runs = verificationService.getRuns(userId);
+            List<Map<String, Object>> summaries = new ArrayList<>();
+            for (VerificationRunSummaryDto run : runs != null ? runs : List.<VerificationRunSummaryDto>of()) {
+                if (run == null || run.getCounterexamples() == null) continue;
+                for (TraceSummaryDto trace : run.getCounterexamples()) {
+                    if (trace == null) continue;
+                    boolean available = Boolean.TRUE.equals(run.getDataAvailable())
+                            && Boolean.TRUE.equals(trace.getDataAvailable());
+                    Map<String, Object> summary = new LinkedHashMap<>();
+                    summary.put("traceId", trace.getId());
+                    summary.put("dataAvailable", available);
+                    summary.put("createdAt", trace.getCreatedAt());
+                    if (!available) {
+                        summary.put("unavailableReasonCode", "PERSISTED_SEMANTIC_DATA_INVALID");
+                    } else {
+                        summary.put("violatedSpecification",
+                                ModelTraceToolPresenter.violatedSpecification(trace.getViolatedSpec()));
+                        summary.put("modelComplete", run.getModelComplete());
+                        summary.put("disabledRuleCount", run.getDisabledRuleCount());
+                        summary.put("skippedSpecCount", run.getSkippedSpecCount());
+                        summary.put("generationIssues", run.getGenerationIssues());
+                        summary.put("stateCount", trace.getStateCount());
+                    }
+                    summaries.add(summary);
+                }
+            }
+            List<Map<String, Object>> traces = List.copyOf(summaries);
             if (traces.isEmpty()) {
-                return objectMapper.writeValueAsString(Map.of(
+                return readOnlySuccessJson(Map.of(
                         "message", "No verification traces found. Traces are created when verification detects property violations.",
                         "count", 0
-                ));
+                ), "No verification traces found.");
             }
 
-            List<Map<String, Object>> summaries = traces.stream().map(t -> {
-                Map<String, Object> s = new LinkedHashMap<>();
-                s.put("id", t.getId());
-                s.put("violatedSpecId", t.getViolatedSpecId());
-                s.put("stateCount", t.getStates() != null ? t.getStates().size() : 0);
-                s.put("createdAt", t.getCreatedAt());
-                return s;
-            }).toList();
+            long unavailableCount = traces.stream()
+                    .filter(trace -> !Boolean.TRUE.equals(trace.get("dataAvailable")))
+                    .count();
 
-            return objectMapper.writeValueAsString(Map.of(
+            return readOnlySuccessJson(Map.of(
+                    "message", "Found " + traces.size() + " saved counterexample trace(s); "
+                            + unavailableCount + " unavailable due to stored-data errors.",
                     "count", traces.size(),
-                    "traces", summaries
-            ));
+                    "availableCount", traces.size() - unavailableCount,
+                    "unavailableCount", unavailableCount,
+                    "traces", traces
+            ), "Saved counterexample traces loaded.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("list_traces busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

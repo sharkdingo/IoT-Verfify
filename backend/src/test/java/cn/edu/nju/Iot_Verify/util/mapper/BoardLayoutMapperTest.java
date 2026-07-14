@@ -17,10 +17,6 @@ class BoardLayoutMapperTest {
         BoardLayoutPo po = BoardLayoutPo.builder()
                 .id(1L)
                 .userId(7L)
-                .inputX(24.0)
-                .inputY(24.0)
-                .statusX(1040.0)
-                .statusY(80.0)
                 .canvasPanX(12.0)
                 .canvasPanY(34.0)
                 .canvasZoom(1.25)
@@ -32,7 +28,7 @@ class BoardLayoutMapperTest {
         assertEquals(1.25, dto.getCanvasZoom());
         assertFalse(dto.getPanels().getControl().getCollapsed());
         assertEquals(320.0, dto.getPanels().getControl().getWidth());
-        assertEquals("devices", dto.getPanels().getControl().getActiveSection());
+        assertEquals("templates", dto.getPanels().getControl().getActiveSection());
         assertFalse(dto.getPanels().getInspector().getCollapsed());
         assertEquals(320.0, dto.getPanels().getInspector().getWidth());
         assertEquals("devices", dto.getPanels().getInspector().getActiveSection());
@@ -140,7 +136,7 @@ class BoardLayoutMapperTest {
 
         BoardLayoutPo po = mapper.toEntity(layout, 9L, 7L);
 
-        assertEquals("devices", po.getControlPanelActiveSection());
+        assertEquals("templates", po.getControlPanelActiveSection());
         assertEquals("devices", po.getInspectorPanelActiveSection());
     }
 }

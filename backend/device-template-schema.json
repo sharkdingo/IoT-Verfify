@@ -15,6 +15,12 @@
       "type": "string",
       "description": "Human-readable description of the device"
     },
+    "Icon": {
+      "type": "string",
+      "maxLength": 262144,
+      "pattern": "^(data:image\\/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+|https:\\/\\/\\S+)$",
+      "description": "Optional template icon. Use a data:image URI for self-contained JSON imports, or an HTTPS image URL. If omitted, the frontend uses a bundled default icon or generates a stable fallback icon."
+    },
     "Modes": {
       "type": "array",
       "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode']). Because this schema validates raw manifests at the API/AI/default-template boundary, each mode must already be a valid NuSMV identifier before submission; use 'ThermostatMode' rather than 'Thermostat Mode'. Runtime NuSMV validation repeats normalization checks as a defensive semantic pass.",
@@ -44,15 +50,15 @@
     },
     "InitState": {
       "type": "string",
-      "description": "Initial state. For single-mode: 'stateName'. For multi-mode: 'mode1State;mode2State'. Empty string or '_' for wildcards allowed.",
-      "examples": ["off", "auto", "auto;cool", ";heat", "on;_"]
+      "description": "For a stateful template, the concrete initial configuration: single-mode 'stateName' or one semicolon-separated value per mode, exactly matching a WorkingStates.Name. Wildcards, partial tuples, and case-different aliases are rejected. A stateless template may omit this field or use an empty string because it has no device state to initialize.",
+      "examples": ["off", "auto", "auto;cool"]
     },
     "WorkingStates": {
       "type": "array",
       "description": "All possible working states of the device",
       "items": {
         "type": "object",
-        "required": ["Name"],
+        "required": ["Name", "Trust", "Privacy"],
         "properties": {
           "Name": {
             "type": "string",
@@ -62,7 +68,7 @@
           },
           "Dynamics": {
             "type": "array",
-            "description": "Variable changes in this state. Can be empty array if no changes. Each item must have either ChangeRate or Value.",
+            "description": "State-dependent variable effects. VariableName must be a local InternalVariable or a declared ImpactedVariable. Numeric domains require ChangeRate; enum/boolean domains require Value. One state may define each target at most once.",
             "items": {
               "type": "object",
               "required": ["VariableName"],
@@ -78,6 +84,7 @@
                 },
                 "Value": {
                   "type": "string",
+                  "minLength": 1,
                   "description": "Direct value assignment (mutually exclusive with ChangeRate)"
                 }
               },
@@ -94,23 +101,18 @@
               ]
             }
           },
-          "Invariant": {
-            "type": "string",
-            "description": "State invariant condition (NuSMV expression)",
-            "default": "true"
-          },
           "Description": {
             "type": "string"
           },
           "Trust": {
             "type": "string",
             "enum": ["trusted", "untrusted", "Trusted", "Untrusted"],
-            "description": "Trust level (will be normalized to lowercase)"
+            "description": "MEDIC control-source trust label for this state component (normalized to lowercase). It records whether the state represents a trusted user-controlled origin when it contributes to an automation; it is not authentication, generic data integrity, or compromise probability."
           },
           "Privacy": {
             "type": "string",
             "enum": ["private", "public", "Private", "Public"],
-            "description": "Privacy level (will be normalized to lowercase)"
+            "description": "Data-sensitivity label for this state component (normalized to lowercase). It propagates through rules when privacy modeling is enabled; it is not access control or encryption."
           }
         },
         "additionalProperties": false
@@ -121,7 +123,7 @@
       "description": "Device internal variables and environment variables",
       "items": {
         "type": "object",
-        "required": ["Name"],
+        "required": ["Name", "IsInside", "FalsifiableWhenCompromised", "Trust", "Privacy"],
         "properties": {
           "Name": {
             "type": "string",
@@ -151,15 +153,16 @@
           },
           "IsInside": {
             "type": "boolean",
-            "description": "true = device-internal variable, false = environment variable (shared across devices). NOTE: Runtime treats null as false (environment variable), not true. Always set explicitly."
+            "description": "Required ownership choice: true = device-local value on this instance; false = scene-wide environment value shared across devices. Omission is rejected because silently choosing shared scope changes rule, import, and attack semantics."
           },
-          "PublicVisible": {
+          "FalsifiableWhenCompromised": {
             "type": "boolean",
-            "description": "Whether variable is visible to external observers"
+            "description": "Whether a compromised instance may report any value from this variable's declared domain and force its trust label to untrusted. Set true only for sensor readings or received data that compromise can falsify; actuator state, progress, and setpoints should normally be false."
           },
           "Trust": {
             "type": "string",
-            "enum": ["trusted", "untrusted", "Trusted", "Untrusted"]
+            "enum": ["trusted", "untrusted", "Trusted", "Untrusted"],
+            "description": "MEDIC control-source trust label. If this value triggers a rule, one trusted contributing source retains a trusted target; only all-untrusted trigger sources make the target untrusted."
           },
           "Privacy": {
             "type": "string",
@@ -180,7 +183,7 @@
           },
           "UpperBound": {
             "type": "integer",
-            "description": "Maximum value for integer range. Attack mode scaling is handled automatically by SmvBoundsUtils.resolveEffectiveUpperBound()."
+            "description": "Maximum accepted value for this variable. Attack modeling never widens the declared domain; a compromised sensor may choose any value within this range."
           },
           "NaturalChangeRate": {
             "type": "string",
@@ -204,15 +207,48 @@
             "not": {
               "required": ["Values"]
             }
+          }
+        ]
+      }
+    },
+    "EnvironmentDomains": {
+      "type": "array",
+      "description": "Domains/default labels for shared environment variables this template affects without necessarily reading. Each ImpactedVariables name must be defined here or by an IsInside=false InternalVariable in the same manifest.",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["Name", "Trust", "Privacy"],
+        "properties": {
+          "Name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+          },
+          "Description": {"type": "string"},
+          "Trust": {"type": "string", "enum": ["trusted", "untrusted"], "description": "MEDIC control-source trust label for this shared environment value; not authentication or generic integrity."},
+          "Privacy": {"type": "string", "enum": ["public", "private"]},
+          "Values": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "LowerBound": {"type": "integer"},
+          "UpperBound": {"type": "integer"},
+          "NaturalChangeRate": {
+            "type": "string",
+            "pattern": "^(-?\\d+|\\[\\s*-?\\d+\\s*,\\s*-?\\d+\\s*\\])$"
+          }
+        },
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["Values"],
+            "not": {"anyOf": [{"required": ["LowerBound"]}, {"required": ["UpperBound"]}]}
           },
           {
-            "not": {
-              "anyOf": [
-                {"required": ["Values"]},
-                {"required": ["LowerBound"]},
-                {"required": ["UpperBound"]}
-              ]
-            }
+            "required": ["LowerBound", "UpperBound"],
+            "not": {"required": ["Values"]}
           }
         ]
       }
@@ -220,6 +256,7 @@
     "ImpactedVariables": {
       "type": "array",
       "description": "List of environment variables this device can affect. Runtime validates as NuSMV identifiers (no spaces, no reserved words) via validateSmvIdentifier().",
+      "uniqueItems": true,
       "items": {
         "type": "string",
         "minLength": 1,
@@ -245,7 +282,7 @@
     },
     "Transitions": {
       "type": "array",
-      "description": "Automatic state transitions triggered by conditions (non-signal by default). Found in 9 templates: Camera, Mobile Phone, Email, Facebook, Home Mode, Online Bank, Sina Weibo, Twitter, Clock.",
+      "description": "Condition-triggered autonomous device behavior with one state or variable effect. Multi-effect actions are rejected because the current formal model cannot preserve them atomically. User-consumable event pulses belong to APIs with Signal=true.",
       "items": {
         "type": "object",
         "required": ["Name"],
@@ -253,7 +290,7 @@
           "Name": {
             "type": "string",
             "minLength": 1,
-            "description": "Transition name. If Signal=true, a boolean variable is generated (sanitized via formatApiSignalName: non-alphanumeric -> '_')"
+            "description": "Transition name used for diagnostics and template display"
           },
           "StartState": {
             "type": "string",
@@ -261,7 +298,7 @@
           },
           "EndState": {
             "type": ["string", "null"],
-            "description": "Target state after transition. Optional: if omitted, null, or empty, no state change occurs but assignments still execute (e.g., Clock.reset only resets variables). For multi-mode: semicolon-separated. Partial changes like ';idle' allowed."
+            "description": "Target state after transition. Optional when one variable assignment is used. For multi-mode templates, semicolon-separated partial tuples are allowed but at most one mode may have a concrete target in one Transition. State and variable effects cannot be combined in one Transition."
           },
           "Trigger": {
             "type": ["object", "null"],
@@ -288,7 +325,8 @@
           },
           "Assignments": {
             "type": "array",
-            "description": "Variable assignments when transition occurs. Validated by SmvModelValidator.validateAssignments().",
+            "maxItems": 1,
+            "description": "At most one internal/shared-variable assignment when the transition occurs. It requires a Trigger and cannot be combined with EndState, so accepted behavior remains one atomic modeled effect.",
             "items": {
               "type": "object",
               "required": ["Attribute", "Value"],
@@ -307,11 +345,6 @@
               "additionalProperties": false
             }
           },
-          "Signal": {
-            "type": "boolean",
-            "description": "If true, creates a boolean signal variable for this transition. Typically false for transitions (default).",
-            "default": false
-          },
           "Description": {
             "type": "string"
           }
@@ -321,10 +354,10 @@
     },
     "APIs": {
       "type": "array",
-      "description": "External APIs that can be called to control the device via rule commands",
+      "description": "Device commands/actions that automation rules can invoke. They change declared device state; they are not network endpoint definitions.",
       "items": {
         "type": "object",
-        "required": ["Name", "EndState"],
+        "required": ["Name", "StartState", "EndState", "Signal"],
         "properties": {
           "Name": {
             "type": "string",
@@ -334,8 +367,7 @@
           },
           "StartState": {
             "type": "string",
-            "description": "Starting state constraint. Empty string '' (default) means 'from any state' (22 of 29 API-bearing templates). Non-empty StartState found in 7 templates: Camera ('on','off'), Mobile Phone ('on'), Email ('idle'), Facebook ('idle'), Online Bank ('idle'), Sina Weibo ('idle'), Twitter ('idle'). For multi-mode: semicolon-separated partial patterns allowed.",
-            "default": ""
+            "description": "Required explicit command precondition. Use empty string '' (or '_' components) to deliberately allow any state; otherwise provide the concrete single/multi-mode start pattern. Omission is rejected because silently choosing any state broadens the modeled action."
           },
           "EndState": {
             "type": "string",
@@ -348,7 +380,8 @@
           },
           "Assignments": {
             "type": "array",
-            "description": "Variable assignments when API is called. The canonical schema validates the assignment shape; NuSMV generation applies additional semantic checks where supported.",
+            "maxItems": 0,
+            "description": "Must be empty. API commands are modeled as state actions through StartState and EndState; variable assignments on APIs are not part of the formal semantics. Use a triggered Transition for internal or shared-variable assignments.",
             "items": {
               "type": "object",
               "required": ["Attribute", "Value"],
@@ -369,8 +402,11 @@
           },
           "Signal": {
             "type": "boolean",
-            "description": "If true, creates a boolean signal variable '<name>_a' for this API. All 45 existing templates use Signal=true for APIs. Signal=true is required for the API to be usable as a rule condition (relation=null, value=null pattern). Signal=false APIs can only be used as rule command actions, not conditions. NOTE: DTO default is null (falsy), not true; omitting this field means no signal variable is generated. Always set explicitly.",
-            "default": false
+            "description": "Required explicit choice. true means this state-changing action is observable as a one-step automation/specification trigger; false means it is command-only. Omission is rejected because silently choosing false changes which rules and specifications are representable."
+          },
+          "AcceptsContent": {
+            "type": "boolean",
+            "description": "Optional capability, default false. true means a rule invoking this action may propagate one explicitly selected Content sensitivity label to the target state. It does not copy payload bytes or imply access control, encryption, or transmission."
           },
           "Description": {
             "type": "string"
@@ -384,7 +420,7 @@
       "description": "Content/data items managed by the device (e.g., photos, data). Used for privacy checking in specifications.",
       "items": {
         "type": "object",
-        "required": ["Name"],
+        "required": ["Name", "Privacy"],
         "properties": {
           "Name": {
             "type": "string",
@@ -392,13 +428,7 @@
           },
           "Privacy": {
             "type": "string",
-            "enum": ["private", "public", "Private", "Public"],
-            "default": "public"
-          },
-          "IsChangeable": {
-            "type": "boolean",
-            "description": "Whether content can be modified",
-            "default": false
+            "enum": ["private", "public", "Private", "Public"]
           }
         },
         "additionalProperties": false
@@ -406,5 +436,5 @@
     }
   },
   "additionalProperties": false,
-  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words are rejected case-insensitively by runtime validation. 4) Trust/Privacy values are normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) InternalVariable and ImpactedVariable are allowed to have the same name (common pattern: device internal var affects environment var). 9) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 10) Transition.EndState is optional: when absent, no state change occurs but assignments (e.g., variable resets) still execute (see Clock.json). 11) Schema limits that are intentionally paired with runtime checks: (a) Reserved word checks are described in schema and enforced case-insensitively at runtime. (b) Modes must be legal identifiers in raw manifests; runtime repeats mode normalization/collision checks as a defensive semantic pass. (c) APIs.Trigger is constrained to null because API triggers have no generator semantics."
+  "$comment": "Validation Notes: 1) Empty StartState ('') is intentional for APIs callable from any state (22/29 API-bearing templates); 7 templates have non-empty API StartState. 2) Name sanitization differs by context: sanitizeSmvToken removes spaces then replaces non-alnum with '_'; formatApiSignalName replaces non-alnum (including spaces) with '_' then appends '_a'. 3) NuSMV reserved words are rejected case-insensitively by runtime validation. 4) Trust/Privacy values are normalized to lowercase. 5) Multi-mode states use semicolon separator (e.g., 'mode1;mode2'). InitState and WorkingStates are complete configurations; only API/Transition endpoints may use partial tuples. 6) Partial state changes use empty parts (e.g., ';cool' changes only mode2). 7) InternalVariable/ImpactedVariable names must not contain spaces (rejected at validation time). 8) ImpactedVariable may share a name only with an environment InternalVariable (IsInside=false), meaning the device can read and affect the same shared environment variable; it must not share a name with a local InternalVariable (IsInside=true). 9) Generator supports state relation operators = != in 'not in' for state attributes; > < >= <= only for internal variables. 10) Transition.EndState is optional: when absent, no state change occurs but triggered assignments (e.g., variable resets) still execute (see Clock.json). 11) Schema limits that are intentionally paired with runtime checks: (a) Reserved word checks are described in schema and enforced case-insensitively at runtime. (b) Modes must be legal identifiers in raw manifests; runtime repeats mode normalization/collision checks as a defensive semantic pass. (c) APIs.Trigger is constrained to null because API triggers have no generator semantics. (d) APIs.Assignments must be empty because API actions have state-transition semantics only. 12) Prefix-like names such as variable_, a_, trust_, and privacy_ are literal business names, not aliases; runtime rejects only concrete generated NuSMV identifier collisions such as api_a, var_rate, trust_var, privacy_var, and is_attack. 13) IsInside is explicit because variable ownership cannot be inferred safely; omission never defaults to shared scope. 14) FalsifiableWhenCompromised is explicit because API presence does not determine whether a variable is sensor data; attack modeling randomizes only variables marked true and never widens their declared domains. 15) Every InternalVariable has an explicit enum Values list or complete numeric bounds; boolean values use an explicit [TRUE, FALSE] enum rather than an omitted domain."
 }

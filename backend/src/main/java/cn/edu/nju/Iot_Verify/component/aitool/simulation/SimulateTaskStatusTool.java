@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -52,22 +53,19 @@ public class SimulateTaskStatusTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            if (!args.has("taskId") || !args.path("taskId").canConvertToLong()) {
-                return errorJson("'taskId' is required.", "VALIDATION_ERROR", 400);
-            }
-            long taskId = args.path("taskId").asLong();
-            if (taskId <= 0) {
-                return errorJson("'taskId' must be positive.", "VALIDATION_ERROR", 400);
-            }
+            requireOnlyFields(args, "arguments", Set.of("taskId"));
+            long taskId = positiveLongArg(args, "taskId");
 
             SimulationTaskDto task = simulationService.getTask(userId, taskId);
             int progress = simulationService.getTaskProgress(userId, taskId);
 
-            return successJson(Map.of(
+            return readOnlySuccessJson(Map.of(
                     "taskId", taskId,
                     "progress", progress,
                     "task", task
             ), "Simulation task status retrieved.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("simulate_task_status busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

@@ -1,5 +1,9 @@
 package cn.edu.nju.Iot_Verify.dto.trace;
 
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -30,12 +34,11 @@ public class TraceDto {
     /**
      * 用户ID
      */
+    @JsonIgnore
     @NotNull(message = "User ID is required")
     private Long userId;
     
-    /**
-     * 关联的验证任务ID（同步验证时可为 null）
-     */
+    /** Owning completed verification-run id. Legacy orphan traces may have no owner. */
     private Long verificationTaskId;
     
     /**
@@ -44,9 +47,17 @@ public class TraceDto {
     private String violatedSpecId;
     
     /**
-     * 违反的规格内容（JSON）
+     * Internal persisted specification snapshot. API clients receive the parsed
+     * {@link #violatedSpec} object instead of having to parse an implementation JSON string.
      */
+    @JsonIgnore
     private String violatedSpecJson;
+
+    /** Structured verification-time specification snapshot for user-facing trace context. */
+    private SpecificationDto violatedSpec;
+
+    /** Exact CTL/LTL expression emitted to NuSMV for the violated specification. */
+    private String checkedExpression;
     
     /**
      * 状态序列
@@ -62,22 +73,40 @@ public class TraceDto {
     @JsonIgnore
     private String requestJson;
 
+    /** Exact manifests used by this run, retained only for server-side replay and drift checks. */
+    @JsonIgnore
+    private String templateSnapshotsJson;
+
+    /** Generation omissions from the verification run that produced this trace. */
+    private Integer disabledRuleCount;
+
+    private Integer skippedSpecCount;
+
+    private Boolean modelComplete;
+
+    private List<ModelGenerationIssueDto> generationIssues;
+
     /**
-     * 验证时的攻击模式开关，从 {@link #requestJson} 派生（由 TraceMapper 填充）。
+     * 验证时的攻击模式开关，与轨迹的模型语义一起持久化。
      * 暴露给前端，使历史 trace 能显示自身的验证上下文，而非当前表单。
      */
     @JsonProperty("isAttack")
     private Boolean attack;
 
     /**
-     * 验证时的攻击强度，从 {@link #requestJson} 派生。
+     * 验证时的攻击预算，与轨迹的模型语义一起持久化。
      */
-    private Integer intensity;
+    private Integer attackBudget;
 
     /**
-     * 验证时的隐私维度开关，从 {@link #requestJson} 派生。
+     * 验证时的隐私维度开关，与轨迹的模型语义一起持久化。
      */
     private Boolean enablePrivacy;
+
+    /** Structured semantics derived from the stored run context. */
+    private ModelSemanticsDto modelSemantics;
+
+    private ModelRunSnapshotDto modelSnapshot;
 
     /**
      * 创建时间

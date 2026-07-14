@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest'
+import {
+  RecommendationCandidateError,
+  materializeRuleRecommendation,
+  materializeSpecificationRecommendationConditions,
+  validateDeviceRecommendationCandidate,
+  validateSpecificationRecommendationCandidate
+} from '../recommendationMaterialization'
+
+describe('recommendation materialization', () => {
+  it('does not invent a missing relation for a value-based rule condition', () => {
+    expect(() => materializeRuleRecommendation({
+      name: 'Cool the room',
+      conditions: [{
+        deviceId: 'sensor-1',
+        deviceName: 'Temperature sensor',
+        attribute: 'temperature',
+        targetType: 'variable',
+        value: '28'
+      }],
+      command: {
+        deviceId: 'ac-1',
+        deviceName: 'Air conditioner',
+        action: 'cool'
+      }
+    }, 'temporary-rule')).toThrow(expect.objectContaining<Partial<RecommendationCandidateError>>({
+      field: 'conditions[1].relation'
+    }))
+  })
+
+  it('rejects scalar coercion and API conditions with value semantics', () => {
+    const base = {
+      name: 'Alert on motion',
+      command: { deviceId: 'alarm-1', deviceName: 'Alarm', action: 'on' }
+    }
+
+    expect(() => materializeRuleRecommendation({
+      ...base,
+      conditions: [{
+        deviceId: 'sensor-1',
+        deviceName: 'Sensor',
+        attribute: 'motion',
+        targetType: 'api',
+        relation: '=',
+        value: 'TRUE'
+      }]
+    }, 'temporary-rule')).toThrow(expect.objectContaining({
+      field: 'conditions[1].relation/value'
+    }))
+
+    expect(() => materializeRuleRecommendation({
+      ...base,
+      name: 42 as any,
+      conditions: [{
+        deviceId: 'sensor-1',
+        deviceName: 'Sensor',
+        attribute: 'motion',
+        targetType: 'api'
+      }]
+    }, 'temporary-rule')).toThrow(expect.objectContaining({ field: 'name' }))
+  })
+
+  it('normalizes declared relation aliases without changing rule intent', () => {
+    const rule = materializeRuleRecommendation({
+      name: 'Cool the room',
+      conditions: [{
+        deviceId: 'sensor-1',
+        deviceName: 'Temperature sensor',
+        attribute: 'temperature',
+        targetType: 'variable',
+        relation: 'GTE',
+        value: '28'
+      }],
+      command: {
+        deviceId: 'ac-1',
+        deviceName: 'Air conditioner',
+        action: 'cool'
+      }
+    }, 'temporary-rule')
+
+    expect(rule.sources[0]).toMatchObject({ relation: '>=', value: '28' })
+  })
+
+  it('requires exact semantic fields for specification recommendations', () => {
+    expect(() => materializeSpecificationRecommendationConditions([{
+      deviceId: 'door-1',
+      targetType: 'state',
+      key: 'state',
+      value: 'open'
+    }], 'a', index => `condition-${index}`)).toThrow(expect.objectContaining({
+      field: 'aConditions[1].relation'
+    }))
+
+    expect(() => materializeSpecificationRecommendationConditions([{
+      deviceId: 'door-1',
+      targetType: 'state',
+      key: 'state',
+      relation: '=',
+      value: 1
+    }], 'a', index => `condition-${index}`)).toThrow(expect.objectContaining({
+      field: 'aConditions[1].value'
+    }))
+  })
+
+  it('keeps trust/privacy property scope explicit', () => {
+    const [condition] = materializeSpecificationRecommendationConditions([{
+      deviceId: 'sensor-1',
+      targetType: 'privacy',
+      key: 'reading',
+      propertyScope: 'variable',
+      relation: '=',
+      value: 'private'
+    }], 'a', index => `condition-${index}`)
+
+    expect(condition).toMatchObject({
+      targetType: 'privacy',
+      propertyScope: 'variable',
+      relation: '=',
+      value: 'private'
+    })
+  })
+
+  it('rejects REST-null fields instead of treating them as omitted device defaults', () => {
+    expect(() => validateDeviceRecommendationCandidate({
+      templateName: 'DoorSensor',
+      suggestedLabel: 'Front door sensor',
+      initialState: null
+    }, 0)).toThrow(expect.objectContaining({ field: 'recommendations[1].initialState' }))
+
+    expect(() => validateDeviceRecommendationCandidate({
+      templateName: 'DoorSensor',
+      suggestedLabel: 'Front door sensor',
+      initialVariables: [{ name: 'battery', value: '90' }]
+    }, 0)).not.toThrow()
+  })
+
+  it('rejects a kept specification candidate before it can be displayed as applicable', () => {
+    expect(() => validateSpecificationRecommendationCandidate({
+      rationale: 'Check the door',
+      templateId: 3,
+      aConditions: [],
+      ifConditions: [],
+      thenConditions: []
+    }, 0)).toThrow(expect.objectContaining({ field: 'recommendations[1].templateId' }))
+  })
+})

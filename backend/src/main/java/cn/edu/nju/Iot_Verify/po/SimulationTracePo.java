@@ -37,11 +37,38 @@ public class SimulationTracePo {
     @Column(name = "logs_json", columnDefinition = "TEXT")
     private String logsJson;
 
+    @Column(name = "generation_issues_json", columnDefinition = "TEXT")
+    private String generationIssuesJson;
+
     @Column(name = "nusmv_output", columnDefinition = "TEXT")
     private String nusmvOutput;
 
     @Column(name = "request_json", columnDefinition = "JSON")
     private String requestJson;
+
+    @Column(name = "template_snapshots_json", columnDefinition = "JSON")
+    private String templateSnapshotsJson;
+
+    @Column(name = "model_snapshot_json", columnDefinition = "TEXT")
+    private String modelSnapshotJson;
+
+    @Column(name = "is_attack")
+    private Boolean isAttack;
+
+    @Column(name = "attack_budget")
+    private Integer attackBudget;
+
+    @Column(name = "enable_privacy")
+    private Boolean enablePrivacy;
+
+    @Column(name = "modeled_device_attack_point_count")
+    private Integer modeledDeviceAttackPointCount;
+
+    @Column(name = "modeled_falsifiable_reading_device_count")
+    private Integer modeledFalsifiableReadingDeviceCount;
+
+    @Column(name = "modeled_automation_link_attack_point_count")
+    private Integer modeledAutomationLinkAttackPointCount;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

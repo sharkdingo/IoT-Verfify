@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationResultDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
@@ -8,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 模拟服务接口
@@ -19,11 +22,23 @@ public interface SimulationService {
      */
     SimulationResultDto simulate(Long userId, SimulationRequestDto request);
 
+    /** Internal board-run path using manifests captured in the same persisted board snapshot. */
+    SimulationResultDto simulateWithTemplateSnapshot(
+            Long userId,
+            SimulationRequestDto request,
+            Map<String, DeviceManifest> templateManifests);
+
     /**
      * 校验请求、创建任务并提交异步模拟。请求非法时不会创建任务；队列拒绝时会
      * 将已创建任务标记为失败并抛出 ServiceUnavailableException。
      */
     Long submitSimulation(Long userId, SimulationRequestDto request);
+
+    /** Internal async board-run path using manifests captured with the request collections. */
+    Long submitSimulationWithTemplateSnapshot(
+            Long userId,
+            SimulationRequestDto request,
+            Map<String, DeviceManifest> templateManifests);
 
     SimulationTaskDto getTask(Long userId, Long taskId);
 
@@ -32,9 +47,12 @@ public interface SimulationService {
      */
     List<SimulationTaskSummaryDto> getTasks(Long userId, List<Long> excludedTaskIds);
 
+    /** Remove a failed or cancelled task that produced no history result. */
+    void deleteTask(Long userId, Long taskId);
+
     int getTaskProgress(Long userId, Long taskId);
 
-    boolean cancelTask(Long userId, Long taskId);
+    TaskCancellationResultDto cancelTask(Long userId, Long taskId);
 
     /**
      * 执行模拟并持久化

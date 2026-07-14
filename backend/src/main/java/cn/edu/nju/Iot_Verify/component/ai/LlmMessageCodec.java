@@ -2,11 +2,12 @@ package cn.edu.nju.Iot_Verify.component.ai;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -19,22 +20,13 @@ import java.util.Map;
  * {@link LlmMessage} conversion. Concentrating this here keeps both the persistence format
  * and history reconstruction in one cohesive place and free of any vendor SDK type.
  *
- * <p>Two persisted encodings are understood, for backward compatibility with existing rows:
- * <ul>
- *   <li><b>structured</b> (current): a JSON object {@code {"type":"tool_calls"|"tool_result", ...}};</li>
- *   <li><b>legacy</b>: a {@code :::TOOL_CALLS:::}-prefixed body, or a
- *       {@code toolCallId:::ID_SEP:::result} separator form.</li>
- * </ul>
- * New rows are always written in the structured form via the {@code serialize*} methods.
+ * <p>The persisted encoding is a structured JSON object:
+ * {@code {"type":"tool_calls"|"tool_result", ...}}. Development data should be migrated
+ * or cleared rather than carrying multiple historical chat wire formats.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class LlmMessageCodec {
-
-    // legacy serialization format
-    public static final String TOOL_CALLS_PREFIX = ":::TOOL_CALLS:::";
-    public static final String TOOL_RESULT_SEPARATOR = ":::ID_SEP:::";
 
     // structured serialization format
     public static final String TOOL_CALLS_JSON_TYPE = "tool_calls";
@@ -53,16 +45,22 @@ public class LlmMessageCodec {
     }
 
     public LlmMessage toMessage(ChatMessagePo po) {
-        String roleStr = po.getRole() == null ? "user" : po.getRole().toLowerCase(Locale.ROOT);
+        if (po == null) {
+            throw new PersistedDataIntegrityException("chat message", null, "message", "record is null");
+        }
+        if (po.getRole() == null || po.getRole().isBlank()) {
+            throw new PersistedDataIntegrityException("chat message", po.getId(), "role", "role is missing");
+        }
+        String roleStr = po.getRole().toLowerCase(Locale.ROOT);
         String content = po.getContent() == null ? "" : po.getContent();
 
         if ("tool".equals(roleStr)) {
-            ToolResultParts parts = parseToolResult(content);
+            ToolResultParts parts = parseToolResult(content, po.getId());
             return LlmMessage.tool(parts.toolCallId(), parts.result());
         }
 
         if ("assistant".equals(roleStr)) {
-            List<LlmToolCall> toolCalls = parseAssistantToolCalls(content);
+            List<LlmToolCall> toolCalls = parseAssistantToolCalls(content, po.getId());
             if (toolCalls != null) {
                 return LlmMessage.assistantToolCalls(toolCalls);
             }
@@ -72,10 +70,8 @@ public class LlmMessageCodec {
         return switch (roleStr) {
             case "system" -> LlmMessage.system(content);
             case "user" -> LlmMessage.user(content);
-            default -> {
-                log.warn("Unknown chat message role '{}', defaulting to USER", roleStr);
-                yield LlmMessage.user(content);
-            }
+            default -> throw new PersistedDataIntegrityException(
+                    "chat message", po.getId(), "role", "unsupported role '" + roleStr + "'");
         };
     }
 
@@ -95,8 +91,7 @@ public class LlmMessageCodec {
                     "type", TOOL_CALLS_JSON_TYPE,
                     "toolCalls", calls));
         } catch (Exception e) {
-            log.warn("Failed to serialize tool calls, persisting empty placeholder", e);
-            return "{\"type\":\"" + TOOL_CALLS_JSON_TYPE + "\",\"toolCalls\":[]}";
+            throw InternalServerException.jsonSerializationFailed(e);
         }
     }
 
@@ -108,7 +103,7 @@ public class LlmMessageCodec {
                     "toolCallId", toolCallId == null ? "" : toolCallId,
                     "result", result == null ? "" : result));
         } catch (Exception e) {
-            return (toolCallId == null ? "" : toolCallId) + TOOL_RESULT_SEPARATOR + (result == null ? "" : result);
+            throw InternalServerException.jsonSerializationFailed(e);
         }
     }
 
@@ -123,9 +118,6 @@ public class LlmMessageCodec {
             return false;
         }
         String content = po.getContent() == null ? "" : po.getContent();
-        if (content.startsWith(TOOL_CALLS_PREFIX)) {
-            return true;
-        }
         try {
             JsonNode root = objectMapper.readTree(content);
             return root.isObject()
@@ -138,58 +130,56 @@ public class LlmMessageCodec {
 
     // ── internal parsing ─────────────────────────────────────────────────
 
-    private ToolResultParts parseToolResult(String content) {
-        if (content != null && !content.isEmpty() && content.stripLeading().startsWith("{")) {
-            try {
-                JsonNode root = objectMapper.readTree(content);
-                if (root.isObject() && TOOL_RESULT_JSON_TYPE.equals(root.path("type").asText(""))) {
-                    return new ToolResultParts(root.path("toolCallId").asText(""),
-                            root.path("result").asText(""));
-                }
-            } catch (Exception e) {
-                log.debug("Tool message is not structured JSON, falling back to separator parsing", e);
+    private ToolResultParts parseToolResult(String content, Long messageId) {
+        try {
+            JsonNode root = objectMapper.readTree(content);
+            if (!root.isObject() || !TOOL_RESULT_JSON_TYPE.equals(root.path("type").asText(""))) {
+                throw new IllegalArgumentException("tool message is not a structured tool_result");
             }
+            String toolCallId = root.path("toolCallId").asText("");
+            if (toolCallId.isBlank() || !root.has("result") || !root.get("result").isTextual()) {
+                throw new IllegalArgumentException("tool_result requires a non-blank toolCallId and textual result");
+            }
+            return new ToolResultParts(toolCallId, root.get("result").asText());
+        } catch (Exception e) {
+            throw new PersistedDataIntegrityException("chat message", messageId, "content", e);
         }
-        if (content != null && content.contains(TOOL_RESULT_SEPARATOR)) {
-            String[] parts = content.split(TOOL_RESULT_SEPARATOR, 2);
-            return new ToolResultParts(parts[0], parts.length > 1 ? parts[1] : "");
-        }
-        return new ToolResultParts("", content != null ? content : "");
     }
 
-    private List<LlmToolCall> parseAssistantToolCalls(String content) {
+    private List<LlmToolCall> parseAssistantToolCalls(String content, Long messageId) {
         if (content != null && !content.isEmpty() && content.stripLeading().startsWith("{")) {
             try {
                 JsonNode root = objectMapper.readTree(content);
                 if (root.isObject() && TOOL_CALLS_JSON_TYPE.equals(root.path("type").asText(""))
                         && root.has("toolCalls")) {
-                    return extractCalls(root.path("toolCalls"));
+                    return extractCalls(root.path("toolCalls"), messageId);
                 }
             } catch (Exception e) {
-                log.debug("Assistant content is not structured tool-calls JSON, trying legacy format", e);
-            }
-        }
-        if (content != null && content.startsWith(TOOL_CALLS_PREFIX)) {
-            try {
-                JsonNode arr = objectMapper.readTree(content.substring(TOOL_CALLS_PREFIX.length()));
-                return extractCalls(arr);
-            } catch (Exception e) {
-                log.error("Failed to parse legacy tool calls from history", e);
+                if (e instanceof PersistedDataIntegrityException integrityException) {
+                    throw integrityException;
+                }
+                throw new PersistedDataIntegrityException("chat message", messageId, "content", e);
             }
         }
         return null;
     }
 
-    private List<LlmToolCall> extractCalls(JsonNode toolCallsNode) {
+    private List<LlmToolCall> extractCalls(JsonNode toolCallsNode, Long messageId) {
         List<LlmToolCall> calls = new ArrayList<>();
-        if (toolCallsNode != null && toolCallsNode.isArray()) {
-            for (JsonNode node : toolCallsNode) {
-                JsonNode fn = node.path("function");
-                calls.add(new LlmToolCall(
-                        node.path("id").asText(""),
-                        fn.path("name").asText(""),
-                        fn.path("arguments").asText("")));
+        if (toolCallsNode == null || !toolCallsNode.isArray() || toolCallsNode.isEmpty()) {
+            throw new PersistedDataIntegrityException(
+                    "chat message", messageId, "content", "toolCalls must be a non-empty array");
+        }
+        for (JsonNode node : toolCallsNode) {
+            JsonNode fn = node.path("function");
+            String id = node.path("id").asText("");
+            String name = fn.path("name").asText("");
+            JsonNode arguments = fn.get("arguments");
+            if (id.isBlank() || name.isBlank() || arguments == null || !arguments.isTextual()) {
+                throw new PersistedDataIntegrityException(
+                        "chat message", messageId, "content", "tool call id, name, or arguments is invalid");
             }
+            calls.add(new LlmToolCall(id, name, arguments.asText()));
         }
         return calls;
     }

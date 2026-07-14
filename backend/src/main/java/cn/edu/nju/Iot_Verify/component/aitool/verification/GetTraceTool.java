@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -53,22 +55,33 @@ public class GetTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            if (!args.has("traceId") || !args.path("traceId").canConvertToLong()) {
-                return errorJson("'traceId' is required.", "VALIDATION_ERROR", 400);
-            }
-            long traceId = args.path("traceId").asLong();
-            if (traceId <= 0) {
-                return errorJson("'traceId' must be positive.", "VALIDATION_ERROR", 400);
-            }
+            requireOnlyFields(args, "arguments", Set.of("traceId"));
+            long traceId = positiveLongArg(args, "traceId");
 
             TraceDto trace = verificationService.getTrace(userId, traceId);
 
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("traceId", traceId);
-            body.put("violatedSpecId", trace.getViolatedSpecId());
+            body.put("violatedSpecification", ModelTraceToolPresenter.violatedSpecification(trace));
+            body.put("modelComplete", trace.getModelComplete());
+            body.put("disabledRuleCount", trace.getDisabledRuleCount());
+            body.put("skippedSpecCount", trace.getSkippedSpecCount());
+            body.put("generationIssues", trace.getGenerationIssues());
             body.put("stateCount", trace.getStates() != null ? trace.getStates().size() : 0);
-            body.put("trace", trace);
-            return successJson(body, "Trace loaded.");
+            body.put("states", ModelTraceToolPresenter.states(trace.getStates()));
+            body.put("isAttack", trace.getAttack());
+            body.put("attackBudget", trace.getAttackBudget());
+            body.put("enablePrivacy", trace.getEnablePrivacy());
+            body.put("modelSemantics", trace.getModelSemantics());
+            body.put("modelSnapshot", trace.getModelSnapshot());
+            body.put("createdAt", trace.getCreatedAt());
+            String message = Boolean.FALSE.equals(trace.getModelComplete())
+                    ? "Counterexample trace loaded, but its source verification used an incomplete generated model."
+                    : "Counterexample trace loaded from its saved model snapshot.";
+            body.put("message", message);
+            return readOnlySuccessJson(body, message);
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("get_trace busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

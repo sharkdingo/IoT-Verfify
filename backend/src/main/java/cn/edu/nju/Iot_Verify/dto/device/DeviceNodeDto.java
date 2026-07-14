@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.dto.device;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -27,18 +29,22 @@ public class DeviceNodeDto {
     @NotNull(message = "Position is required")
     private Position position;
 
-    @NotBlank(message = "State is required")
     @Size(max = 50, message = "State must be at most 50 characters")
     private String state;
 
     @NotNull(message = "Width is required")
+    @Min(value = DeviceLayoutDto.MIN_WIDTH, message = "Width must be at least 80")
+    @Max(value = DeviceLayoutDto.MAX_WIDTH, message = "Width must be at most 2000")
     private Integer width;
 
     @NotNull(message = "Height is required")
+    @Min(value = DeviceLayoutDto.MIN_HEIGHT, message = "Height must be at least 60")
+    @Max(value = DeviceLayoutDto.MAX_HEIGHT, message = "Height must be at most 2000")
     private Integer height;
 
     // 运行时状态（持久化需要，同时可用于从画布数据转换为验证数据）
     private String currentStateTrust;
+    private String currentStatePrivacy;
     private List<VariableStateDto> variables;
     private List<PrivacyStateDto> privacies;
 

@@ -6,8 +6,8 @@
 			"Name": "RFID",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "private",
 			"Values": ["authorized", "not authorized"]
 		}

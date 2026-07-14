@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.generator.data;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvModelValidator;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
@@ -9,7 +10,10 @@ import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
+import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -28,6 +32,7 @@ public class DeviceSmvDataFactory {
     private final ObjectMapper objectMapper;
     private final DeviceTemplateService deviceTemplateService;
     private final SmvModelValidator modelValidator;
+    private final DeviceTemplateSchemaValidator templateSchemaValidator;
 
     // ==================== 公共入口 ====================
 
@@ -39,9 +44,25 @@ public class DeviceSmvDataFactory {
     public Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
                                                         List<DeviceVerificationDto> devices,
                                                         Map<String, DeviceManifest> templateCache) {
+        return buildDeviceSmvMap(userId, devices, templateCache, false);
+    }
+
+    /** Build from an immutable run snapshot and never fall back to the mutable template repository. */
+    public Map<String, DeviceSmvData> buildDeviceSmvMapFromTemplateSnapshots(
+            List<DeviceVerificationDto> devices,
+            Map<String, DeviceManifest> templateSnapshots) {
+        if (templateSnapshots == null) {
+            throw SmvGenerationException.smvGenerationError("Captured device-template manifests are missing");
+        }
+        return buildDeviceSmvMap(null, devices, new LinkedHashMap<>(templateSnapshots), true);
+    }
+
+    private Map<String, DeviceSmvData> buildDeviceSmvMap(Long userId,
+                                                         List<DeviceVerificationDto> devices,
+                                                         Map<String, DeviceManifest> templateCache,
+                                                         boolean snapshotOnly) {
         Map<String, DeviceSmvData> deviceSmvMap = new LinkedHashMap<>();
         List<String> missingTemplateDevices = new ArrayList<>();
-
         for (DeviceVerificationDto device : devices) {
             if (device == null || device.getVarName() == null || device.getVarName().isBlank()
                     || device.getTemplateName() == null || device.getTemplateName().isBlank()) {
@@ -49,8 +70,10 @@ public class DeviceSmvDataFactory {
             }
             DeviceSmvData smv = new DeviceSmvData();
             smv.setTemplateName(device.getTemplateName());
+            smv.setDeviceLabel(displayLabel(device));
             smv.setCurrentState(device.getState());
             smv.setInstanceStateTrust(normalizeTrustPrivacy(device.getCurrentStateTrust()));
+            smv.setInstanceStatePrivacy(normalizeTrustPrivacy(device.getCurrentStatePrivacy()));
 
             if (device.getVariables() != null) {
                 for (VariableStateDto var : device.getVariables()) {
@@ -67,7 +90,8 @@ public class DeviceSmvDataFactory {
                 }
             }
 
-            DeviceManifest manifest = loadManifest(templateCache, userId, smv.getTemplateName());
+            DeviceManifest manifest = loadManifest(
+                    templateCache, userId, smv.getTemplateName(), snapshotOnly);
             if (manifest == null) {
                 log.warn("Template not found or invalid for device: {}", smv.getTemplateName());
                 missingTemplateDevices.add(device.getVarName() + "(template=" + smv.getTemplateName() + ")");
@@ -84,8 +108,10 @@ public class DeviceSmvDataFactory {
             extractSignalVars(smv, manifest);
             if (manifest.getImpactedVariables() != null) smv.getImpactedVariables().addAll(manifest.getImpactedVariables());
             extractEnvVariables(smv, manifest);
+            extractImpactedEnvironmentVariables(smv, manifest);
             extractContents(smv, manifest);
             computeIdentifiers(smv, device.getVarName());
+            assertCanonicalVarName(device.getVarName(), smv.getVarName());
 
             // P2-2: 检测归一化后变量名冲突
             for (DeviceSmvData existing : deviceSmvMap.values()) {
@@ -100,11 +126,7 @@ public class DeviceSmvDataFactory {
             modelValidator.warnUnknownUserVariables(smv, device);
             modelValidator.warnStatelessDeviceWithState(smv, device);
 
-            deviceSmvMap.put(device.getVarName(), smv);
-            // 同时注册清洗后的 varName（如果不同），使规则/规约中用清洗后名称也能查到
-            if (!device.getVarName().equals(smv.getVarName())) {
-                deviceSmvMap.putIfAbsent(smv.getVarName(), smv);
-            }
+            deviceSmvMap.put(smv.getVarName(), smv);
         }
 
         if (!missingTemplateDevices.isEmpty()) {
@@ -116,13 +138,17 @@ public class DeviceSmvDataFactory {
 
     // ==================== 模板加载 ====================
 
-    private DeviceManifest loadManifest(Map<String, DeviceManifest> cache, Long userId, String templateName) {
+    private DeviceManifest loadManifest(Map<String, DeviceManifest> cache, Long userId,
+                                        String templateName, boolean snapshotOnly) {
         if (templateName == null) return null;
         if (cache.containsKey(templateName)) return cache.get(templateName);
+        if (snapshotOnly) return null;
         try {
             Optional<DeviceTemplatePo> po = deviceTemplateService.findTemplateByName(userId, templateName);
             if (po.isEmpty()) return null;
-            DeviceManifest manifest = objectMapper.readValue(po.get().getManifestJson(), DeviceManifest.class);
+            JsonNode rawManifest = objectMapper.readTree(po.get().getManifestJson());
+            templateSchemaValidator.validateRawManifest(templateName, rawManifest);
+            DeviceManifest manifest = objectMapper.treeToValue(rawManifest, DeviceManifest.class);
             cache.put(templateName, manifest);
             return manifest;
         } catch (BaseException e) {
@@ -193,16 +219,6 @@ public class DeviceSmvDataFactory {
                 }
             }
         }
-        if (device.getVariables() != null) {
-            for (VariableStateDto var : device.getVariables()) {
-                if (var.getName() != null && var.getValue() != null) {
-                    if (smv.getModes().contains(var.getName())) {
-                        String cleanVal = sanitizeSmvToken(var.getValue());
-                        smv.getCurrentModeStates().put(var.getName(), cleanVal);
-                    }
-                }
-            }
-        }
     }
 
     private void extractStatesAndTrust(DeviceSmvData smv, DeviceManifest manifest) {
@@ -234,26 +250,11 @@ public class DeviceSmvDataFactory {
     }
 
     private void extractSignalVars(DeviceSmvData smv, DeviceManifest manifest) {
-        if (manifest.getTransitions() != null) {
-            for (DeviceManifest.Transition trans : manifest.getTransitions()) {
-                if (trans.getSignal() != null && trans.getSignal()) {
-                    DeviceSmvData.SignalInfo sig = new DeviceSmvData.SignalInfo();
-                    sig.setName(formatSignalName(trans.getName()));
-                    sig.setStart(trans.getStartState());
-                    sig.setEnd(trans.getEndState());
-                    sig.setTrigger(formatTrigger(trans.getTrigger()));
-                    smv.getSignalVars().add(sig);
-                }
-            }
-        }
         if (manifest.getApis() != null) {
             for (DeviceManifest.API api : manifest.getApis()) {
                 if (api.getSignal() != null && api.getSignal()) {
                     DeviceSmvData.SignalInfo sig = new DeviceSmvData.SignalInfo();
                     sig.setName(formatApiSignalName(api.getName()));
-                    sig.setStart(api.getStartState());
-                    sig.setEnd(api.getEndState());
-                    sig.setType("api");
                     smv.getSignalVars().add(sig);
                 }
             }
@@ -269,14 +270,31 @@ public class DeviceSmvDataFactory {
         }
     }
 
+    private void extractImpactedEnvironmentVariables(DeviceSmvData smv, DeviceManifest manifest) {
+        if (smv.getImpactedVariables() == null || smv.getImpactedVariables().isEmpty()) {
+            return;
+        }
+        for (String impacted : smv.getImpactedVariables()) {
+            if (impacted == null || impacted.isBlank()) {
+                continue;
+            }
+            DeviceManifest.InternalVariable definition = smv.getEnvVariables().get(impacted);
+            if (definition == null) {
+                definition = EnvironmentDomainUtils.resolveImpactDomain(manifest, impacted);
+            }
+            if (definition != null) {
+                smv.getImpactedEnvironmentVariables().put(impacted, definition);
+            }
+        }
+    }
+
     private void extractContents(DeviceSmvData smv, DeviceManifest manifest) {
         if (manifest.getContents() == null) return;
         for (DeviceManifest.Content c : manifest.getContents()) {
             if (c.getName() == null || c.getName().isBlank()) continue;
             DeviceSmvData.ContentInfo info = new DeviceSmvData.ContentInfo();
             info.setName(c.getName());
-            info.setPrivacy(normalizeTrustPrivacy(c.getPrivacy() != null ? c.getPrivacy() : "public"));
-            info.setChangeable(c.getIsChangeable() != null && c.getIsChangeable());
+            info.setPrivacy(normalizeTrustPrivacy(c.getPrivacy()));
             smv.getContents().add(info);
         }
     }
@@ -287,47 +305,16 @@ public class DeviceSmvDataFactory {
      * NuSMV reserved words — identifiers matching these (case-insensitive) must be escaped
      * by prepending '_' to avoid syntax errors in generated SMV models.
      */
-    public static final Set<String> NUSMV_RESERVED_WORDS = Set.of(
-            "MODULE", "VAR", "IVAR", "FROZENVAR", "DEFINE", "CONSTANTS", "ASSIGN",
-            "INIT", "TRANS", "INVAR", "SPEC", "CTLSPEC", "LTLSPEC",
-            "FAIRNESS", "COMPASSION", "JUSTICE", "ISA", "FUN", "PRED",
-            "MIRROR", "INVARSPEC", "COMPUTE",
-            "case", "esac", "next", "init", "self",
-            "TRUE", "FALSE", "boolean", "integer", "word", "signed", "unsigned",
-            "process", "array", "of", "mod", "union", "in", "xor", "xnor",
-            "abs", "max", "min", "count", "toint", "typeof",
-            "swconst", "wordconst", "uwconst", "resize", "extend",
-            "signed_word", "unsigned_word",
-            "EX", "AX", "EF", "AF", "EG", "AG",
-            "E", "F", "O", "G", "H", "X", "Y", "Z", "W", "A", "U", "S", "V", "T",
-            "BU", "EBF", "ABF", "EBG", "ABG"
-    );
+    public static final Set<String> NUSMV_RESERVED_WORDS = DeviceNameNormalizer.NUSMV_RESERVED_WORDS;
 
     // ==================== 工具方法 ====================
-
-    private String formatTrigger(DeviceManifest.Trigger trigger) {
-        if (trigger == null || trigger.getAttribute() == null || trigger.getRelation() == null || trigger.getValue() == null)
-            return null;
-        return trigger.getAttribute() + trigger.getRelation() + trigger.getValue();
-    }
 
     private void computeIdentifiers(DeviceSmvData smv, String rawVarName) {
         // Use one normalization pipeline for both varName and module suffix
         // so module identity cannot diverge from instance identity.
-        String safeId = rawVarName != null ? rawVarName.replaceAll("[^a-zA-Z0-9_]", "_") : "_";
-        String result = safeId.toLowerCase();
-        if (result.isEmpty() || result.matches("^_+$")) {
+        String result = DeviceNameNormalizer.normalize(rawVarName);
+        if (result == null || result.isBlank()) {
             result = "device_0";
-        }
-        // NuSMV identifiers must not start with a digit
-        if (!result.isEmpty() && Character.isDigit(result.charAt(0))) {
-            result = "_" + result;
-        }
-        // Check NuSMV reserved words (same as sanitizeSmvToken)
-        if (NUSMV_RESERVED_WORDS.contains(result)
-                || NUSMV_RESERVED_WORDS.contains(result.toUpperCase())
-                || NUSMV_RESERVED_WORDS.contains(result.toLowerCase())) {
-            result = "_" + result;
         }
         smv.setVarName(result);
 
@@ -363,10 +350,17 @@ public class DeviceSmvDataFactory {
                 && (smv.getManifest().getApis() == null || smv.getManifest().getApis().isEmpty()));
     }
 
-    public static String formatSignalName(String raw) {
-        if (raw == null) return null;
-        String cleaned = raw.replaceAll("[^a-zA-Z0-9_]", "_");
-        return cleaned.isBlank() ? raw : cleaned;
+    private String displayLabel(DeviceVerificationDto device) {
+        String label = device.getDeviceLabel();
+        return label == null || label.isBlank() ? device.getVarName() : label.trim();
+    }
+
+    private void assertCanonicalVarName(String requestedVarName, String canonicalVarName) {
+        if (!Objects.equals(requestedVarName, canonicalVarName)) {
+            throw SmvGenerationException.smvGenerationError(
+                    "Device varName must be the canonical NuSMV-safe node id: '"
+                            + requestedVarName + "' normalizes to '" + canonicalVarName + "'");
+        }
     }
 
     public static String formatApiSignalName(String raw) {
@@ -377,7 +371,7 @@ public class DeviceSmvDataFactory {
     }
 
     /**
-     * Defensive sanitization for NuSMV tokens from legacy/bypass data.
+     * Defensive sanitization for template mode/state tokens.
      * Removes spaces, replaces non-alphanumeric/underscore chars with '_',
      * prepends '_' if starting with digit.
      */
@@ -435,45 +429,20 @@ public class DeviceSmvDataFactory {
         return -1;
     }
 
-    /** 按 varName 或模板名查找设备 SMV 数据 */
+    /** 按 canonical varName 查找设备 SMV 数据 */
     public static DeviceSmvData findDeviceSmvData(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
-        return findDeviceSmvDataInternal(deviceName, deviceSmvMap, false);
+        return findDeviceSmvDataInternal(deviceName, deviceSmvMap);
     }
 
-    /** 严格模式：templateName 回退命中多个实例时抛错，避免静默绑定错误设备 */
+    /** 严格模式：只接受 canonical varName，不按模板名回退。 */
     public static DeviceSmvData findDeviceSmvDataStrict(String deviceName, Map<String, DeviceSmvData> deviceSmvMap) {
-        return findDeviceSmvDataInternal(deviceName, deviceSmvMap, true);
+        return findDeviceSmvDataInternal(deviceName, deviceSmvMap);
     }
 
     private static DeviceSmvData findDeviceSmvDataInternal(String deviceName,
-                                                           Map<String, DeviceSmvData> deviceSmvMap,
-                                                           boolean failOnAmbiguousTemplateMatch) {
+                                                           Map<String, DeviceSmvData> deviceSmvMap) {
         if (deviceName == null || deviceSmvMap == null) return null;
-        DeviceSmvData smv = deviceSmvMap.get(deviceName);
-        if (smv != null) return smv;
-
-        Set<DeviceSmvData> matches = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (DeviceSmvData data : deviceSmvMap.values()) {
-            if (deviceName.equals(data.getTemplateName())) {
-                matches.add(data);
-            }
-        }
-
-        if (matches.isEmpty()) {
-            return null;
-        }
-        if (matches.size() == 1) {
-            return matches.iterator().next();
-        }
-
-        if (failOnAmbiguousTemplateMatch) {
-            List<String> candidates = matches.stream()
-                    .map(DeviceSmvData::getVarName)
-                    .sorted()
-                    .toList();
-            throw SmvGenerationException.ambiguousDeviceReference(deviceName, candidates);
-        }
-        return matches.iterator().next();
+        return deviceSmvMap.get(deviceName);
     }
 
     /** 清理状态名：移除分号后进行 NuSMV 标识符清洗 */
@@ -506,11 +475,7 @@ public class DeviceSmvDataFactory {
 
     /** 将任意设备 ID 转为安全变量名 */
     public static String toVarName(String deviceId) {
-        if (deviceId == null) return "device";
-        String s = deviceId.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
-        if (s.isEmpty() || s.matches("^_+$")) return "device";
-        if (Character.isDigit(s.charAt(0))) s = "_" + s;
-        if (NUSMV_RESERVED_WORDS.contains(s) || NUSMV_RESERVED_WORDS.contains(s.toUpperCase())) s = "_" + s;
-        return s;
+        String normalized = DeviceNameNormalizer.normalize(deviceId);
+        return normalized == null || normalized.isBlank() ? "device_0" : normalized;
     }
 }

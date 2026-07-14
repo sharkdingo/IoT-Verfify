@@ -33,11 +33,18 @@ public class DeviceTemplatePo {
     @Column(name = "manifest_json", columnDefinition = "TEXT")
     private String manifestJson;
 
+    @Builder.Default
+    @Column(name = "default_template")
+    private Boolean defaultTemplate = false;
+
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
     @PrePersist
     protected void onCreate() {
+        if (defaultTemplate == null) {
+            defaultTemplate = false;
+        }
         if (updatedAt == null) {
             updatedAt = LocalDateTime.now();
         }

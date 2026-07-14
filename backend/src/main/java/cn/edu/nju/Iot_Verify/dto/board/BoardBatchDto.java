@@ -2,9 +2,12 @@
 package cn.edu.nju.Iot_Verify.dto.board;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -13,27 +16,78 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Batch save of the three interdependent board collections in one transaction.
+ * Batch save of the interdependent board semantic collections in one transaction.
  *
- * <p>Used by device delete / rename where nodes, rules and specs must change together — persisting
- * them via three separate requests risks a partial save (e.g. node renamed but specs still reference
- * the old label, or a device deleted but its rules left dangling).</p>
+ * <p>Used only for explicitly confirmed scene import/clear, where nodes, environment values,
+ * rules, and specs must change together. Persisting them via separate requests risks a partial
+ * scene (for example, imported nodes/specs beside the previous environment pool).</p>
  *
- * <p>A {@code null} collection means "leave this collection unchanged" (the server returns the current
- * persisted value for it); a non-null collection fully replaces / upserts per the same semantics as the
- * dedicated {@code saveNodes}/{@code saveRules}/{@code saveSpecs} endpoints.</p>
+ * <p>This is an explicit full-scene replacement contract. Nodes, environment variables, rules,
+ * specifications, and template snapshots are all required complete collections. It never means
+ * "patch the supplied collections and preserve the omitted ones".</p>
+ *
+ * <p>The opaque {@code impactToken} binds the destructive command to the exact current board
+ * preview that the user confirmed. Supplying {@code templateSnapshots} makes the replacement
+ * self-contained: every referenced template must have exactly one matching snapshot;
+ * every environment variable required by the snapshots must have an explicit non-blank value,
+ * trust, and privacy.
+ * Every submitted node template must have exactly a matching snapshot, unreferenced snapshots are
+ * rejected, existing templates must have the same manifest, and missing templates are created in the
+ * same transaction. The response reports templates created in {@code createdTemplates}.</p>
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class BoardBatchDto {
 
+    public BoardBatchDto(
+            List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes,
+            List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules,
+            List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs) {
+        this.nodes = nodes;
+        this.environmentVariables = List.of();
+        this.rules = rules;
+        this.specs = specs;
+    }
+
+    public BoardBatchDto(
+            List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes,
+            List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables,
+            List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules,
+            List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs) {
+        this.nodes = nodes;
+        this.environmentVariables = environmentVariables;
+        this.rules = rules;
+        this.specs = specs;
+    }
+
     @Valid
+    @NotNull(message = "Complete scene nodes collection is required")
     private List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes;
 
     @Valid
+    @NotNull(message = "Complete scene environmentVariables collection is required")
+    private List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables;
+
+    @Valid
+    @NotNull(message = "Complete scene rules collection is required")
     private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules;
 
     @Valid
+    @NotNull(message = "Complete scene specs collection is required")
     private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
+
+    /** Request-only exact scene template dependency set; empty only for a scene with no devices. */
+    @Valid
+    @NotNull(message = "Complete scene templateSnapshots collection is required")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private List<@Valid @NotNull(message = "Template snapshot item cannot be null") DeviceTemplateDto> templateSnapshots;
+
+    /** Request-only opaque token from the latest server replacement preview. */
+    @NotBlank(message = "Scene replacement impactToken is required")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String impactToken;
+
+    /** Response-only templates created while resolving scene-import snapshots. */
+    private List<DeviceTemplateDto> createdTemplates;
 }

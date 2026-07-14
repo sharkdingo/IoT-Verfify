@@ -5,6 +5,7 @@ import type {
   LoginResponse, 
   RegisterRequest, 
   RegisterResponse,
+  DeleteAccountRequest,
   Result 
 } from '../types/auth';
 
@@ -24,6 +25,12 @@ export const authApi = {
   // 登出
   async logout(): Promise<Result<void>> {
     const response = await api.post<Result<void>>('/auth/logout');
+    return response.data;
+  },
+
+  // 注销账号
+  async deleteAccount(data: DeleteAccountRequest): Promise<Result<void>> {
+    const response = await api.delete<Result<void>>('/auth/account', { data });
     return response.data;
   }
 };

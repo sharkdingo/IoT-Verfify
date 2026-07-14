@@ -7,14 +7,18 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvMainModuleBuild
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvRuleCommentWriter;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.module.SmvSpecificationBuilder;
+import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,9 +57,20 @@ class SmvGeneratorFixesTest {
 
     private DeviceManifest.InternalVariable numericVar(String name, boolean isInside, int lo, int hi) {
         return DeviceManifest.InternalVariable.builder()
-                .name(name).isInside(isInside).lowerBound(lo).upperBound(hi).build();
+                .name(name)
+                .isInside(isInside)
+                .falsifiableWhenCompromised(!isInside)
+                .lowerBound(lo)
+                .upperBound(hi)
+                .build();
     }
 
+    private DeviceVerificationDto device(String varName, String templateName) {
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName(varName);
+        dto.setTemplateName(templateName);
+        return dto;
+    }
 
     /** 构建一个最小的 DeviceSmvData（单 mode 或多 mode） */
     private DeviceSmvData buildSmvData(String varName, String templateName,
@@ -72,6 +87,15 @@ class SmvGeneratorFixesTest {
         smv.getVariables().addAll(vars);
         smv.setManifest(manifest);
         smv.setSensor(manifest.getApis() == null || manifest.getApis().isEmpty());
+        if (manifest.getImpactedVariables() != null) {
+            for (String impacted : manifest.getImpactedVariables()) {
+                DeviceManifest.InternalVariable definition = vars.stream()
+                        .filter(var -> impacted.equals(var.getName()))
+                        .findFirst()
+                        .orElseGet(() -> numericVar(impacted, false, 0, 100));
+                smv.getImpactedEnvironmentVariables().put(impacted, definition);
+            }
+        }
         return smv;
     }
 
@@ -89,10 +113,136 @@ class SmvGeneratorFixesTest {
     @DisplayName("Builder input: device module builder null data throws categorized exception")
     void deviceBuilder_nullSmv_throwsCategorizedException() {
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> deviceBuilder.build(null, false, 0, false));
+                () -> deviceBuilder.build(null, false, false));
         assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
         assertTrue(ex.getMessage().contains("SmvDeviceModuleBuilder"));
         assertTrue(ex.getMessage().contains("smv"));
+    }
+
+    @Test
+    @DisplayName("Main namespace: device varName cannot collide with generated environment identifier")
+    void mainBuilder_deviceVarNameCollidesWithGeneratedEnvironmentName_throwsCategorizedException() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 50);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of())
+                .internalVariables(List.of(temperature))
+                .workingStates(List.of())
+                .build();
+        DeviceSmvData smv = buildSmvData("a_temperature", "Sensor", List.of(), Map.of(),
+                List.of(temperature), manifest);
+        smv.getEnvVariables().put("temperature", temperature);
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L,
+                        List.of(device("a_temperature", "Sensor")),
+                        List.of(),
+                        Map.of("a_temperature", smv),
+                        false, 0, false));
+
+        assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("main namespace"));
+        assertTrue(ex.getMessage().contains("a_temperature"));
+    }
+
+    @Test
+    @DisplayName("Main namespace: internal attacked-node counter cannot collide with device varName")
+    void mainBuilder_attackCounterCollidesWithDeviceVarName_throwsCategorizedException() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of())
+                .workingStates(List.of())
+                .build();
+        String internalCounter = SmvConstants.NUSMV_COMPROMISED_POINT_COUNT;
+        DeviceSmvData smv = buildSmvData(internalCounter, "Meter", List.of(), Map.of(),
+                List.of(), manifest);
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L,
+                        List.of(device(internalCounter, "Meter")),
+                        List.of(),
+                        Map.of(internalCounter, smv),
+                        true, 3, false));
+
+        assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains(internalCounter));
+    }
+
+    @Test
+    @DisplayName("Main namespace: fix lambda cannot collide with device varName")
+    void mainBuilder_fixLambdaCollidesWithDeviceVarName_throwsCategorizedException() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of())
+                .workingStates(List.of())
+                .build();
+        DeviceSmvData smv = buildSmvData("lambda_r0_c0", "Meter", List.of(), Map.of(),
+                List.of(), manifest);
+        ParameterizationConfig config = ParameterizationConfig.builder()
+                .conditionLambdas(Map.of("r0_c0", "lambda_r0_c0"))
+                .build();
+
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.buildParameterized(1L,
+                        List.of(device("lambda_r0_c0", "Meter")),
+                        null,
+                        List.of(),
+                        Map.of("lambda_r0_c0", smv),
+                        false, 0, false,
+                        config,
+                        SmvGenerationContext.noop()));
+
+        assertEquals("INVALID_BUILDER_INPUT", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("lambda_r0_c0"));
+    }
+
+    @Test
+    @DisplayName("Trace probes record the ordered rule branch that drives the next state")
+    void mainBuilder_ruleExecutionProbes_areDeterministicAndRespectCasePriority() {
+        DeviceManifest sensorManifest = DeviceManifest.builder()
+                .modes(List.of("ButtonMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("idle").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("pressed").trust("trusted").build()))
+                .build();
+        DeviceManifest lightManifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").startState("off").endState("on").build()))
+                .build();
+
+        DeviceSmvData sensor = buildSmvData("button_1", "Button",
+                List.of("ButtonMode"), Map.of("ButtonMode", List.of("idle", "pressed")),
+                List.of(), sensorManifest);
+        DeviceSmvData light = buildSmvData("light_1", "Light",
+                List.of("Power"), Map.of("Power", List.of("off", "on")),
+                List.of(), lightManifest);
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>();
+        deviceMap.put("button_1", sensor);
+        deviceMap.put("light_1", light);
+
+        RuleDto.Condition pressed = RuleDto.Condition.builder()
+                .deviceName("button_1").attribute("state").targetType("state")
+                .relation("=").value("pressed").build();
+        RuleDto first = RuleDto.builder().id(1L).conditions(List.of(pressed))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turnOn").build())
+                .ruleString("First light rule").build();
+        RuleDto second = RuleDto.builder().id(2L).conditions(List.of(pressed))
+                .command(RuleDto.Command.builder().deviceName("light_1").action("turnOn").build())
+                .ruleString("Second light rule").build();
+
+        String model = mainBuilder.build(1L,
+                List.of(device("button_1", "Button"), device("light_1", "Light")),
+                List.of(first, second), deviceMap, false, 0, false);
+
+        assertTrue(model.contains("iot_verify_rule_fired_0: boolean;"));
+        assertTrue(model.contains("init(iot_verify_rule_fired_0) := FALSE;"));
+        assertTrue(model.contains("next(iot_verify_rule_fired_0) := ("));
+        String secondProbe = model.lines()
+                .filter(line -> line.contains("next(iot_verify_rule_fired_1)"))
+                .findFirst().orElseThrow();
+        assertTrue(secondProbe.contains(" & !("),
+                "A later case branch must not be reported as fired when an earlier branch wins");
     }
 
     // ======================== P1: Trigger.Attribute 合法性 ========================
@@ -282,6 +432,66 @@ class SmvGeneratorFixesTest {
         assertDoesNotThrow(() -> validator.validate(map));
     }
 
+    @Test
+    @DisplayName("P3: same-name env var with different natural change rate throws")
+    void envVarConflict_differentNaturalChangeRate_throws() {
+        DeviceManifest.InternalVariable first = numericVar("temperature", false, 0, 100);
+        first.setNaturalChangeRate("[-1,1]");
+        DeviceManifest.InternalVariable second = numericVar("temperature", false, 0, 100);
+        second.setNaturalChangeRate("[0,1]");
+
+        DeviceSmvData firstDevice = buildSmvData("sensor_1", "Sensor A", List.of(), Map.of(), List.of(first),
+                DeviceManifest.builder().internalVariables(List.of(first)).build());
+        firstDevice.getEnvVariables().put("temperature", first);
+        DeviceSmvData secondDevice = buildSmvData("sensor_2", "Sensor B", List.of(), Map.of(), List.of(second),
+                DeviceManifest.builder().internalVariables(List.of(second)).build());
+        secondDevice.getEnvVariables().put("temperature", second);
+
+        SmvGenerationException exception = assertThrows(SmvGenerationException.class, () ->
+                validator.validate(Map.of("sensor_1", firstDevice, "sensor_2", secondDevice)));
+
+        assertTrue(exception.getMessage().contains("natural-change-rate mismatch"), exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("P3: same-name env var with different default trust throws")
+    void envVarConflict_differentDefaultTrust_throws() {
+        DeviceManifest.InternalVariable trusted = numericVar("temperature", false, 0, 100);
+        trusted.setTrust("trusted");
+        DeviceManifest.InternalVariable untrusted = numericVar("temperature", false, 0, 100);
+        untrusted.setTrust("untrusted");
+
+        DeviceSmvData firstDevice = buildSmvData("sensor_1", "Sensor A", List.of(), Map.of(), List.of(trusted),
+                DeviceManifest.builder().internalVariables(List.of(trusted)).build());
+        firstDevice.getEnvVariables().put("temperature", trusted);
+        DeviceSmvData secondDevice = buildSmvData("sensor_2", "Sensor B", List.of(), Map.of(), List.of(untrusted),
+                DeviceManifest.builder().internalVariables(List.of(untrusted)).build());
+        secondDevice.getEnvVariables().put("temperature", untrusted);
+
+        SmvGenerationException exception = assertThrows(SmvGenerationException.class, () ->
+                validator.validate(Map.of("sensor_1", firstDevice, "sensor_2", secondDevice)));
+
+        assertTrue(exception.getMessage().contains("default trust mismatch"), exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("P3: equivalent natural change rate syntax remains compatible")
+    void envVarConflict_equivalentNaturalChangeRate_passes() {
+        DeviceManifest.InternalVariable first = numericVar("temperature", false, 0, 100);
+        first.setNaturalChangeRate("1");
+        DeviceManifest.InternalVariable second = numericVar("temperature", false, 0, 100);
+        second.setNaturalChangeRate("[0,1]");
+
+        DeviceSmvData firstDevice = buildSmvData("sensor_1", "Sensor A", List.of(), Map.of(), List.of(first),
+                DeviceManifest.builder().internalVariables(List.of(first)).build());
+        firstDevice.getEnvVariables().put("temperature", first);
+        DeviceSmvData secondDevice = buildSmvData("sensor_2", "Sensor B", List.of(), Map.of(), List.of(second),
+                DeviceManifest.builder().internalVariables(List.of(second)).build());
+        secondDevice.getEnvVariables().put("temperature", second);
+
+        assertDoesNotThrow(() -> validator.validate(Map.of("sensor_1", firstDevice, "sensor_2", secondDevice)));
+    }
+
     // ======================== P4: env transition 用 a_var ========================
 
     @Test
@@ -320,9 +530,42 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
 
-        // P4 核心断言：条件应为 a_time = 23，而非 clock_1.time = 23
-        assertTrue(result.contains("a_time = 23"), "Should use a_time, got:\n" + result);
-        assertFalse(result.contains("clock_1.time = 23"), "Should NOT use clock_1.time");
+        // P4 核心断言：条件应为 a_time=23，而非 clock_1.time=23
+        assertTrue(result.contains("a_time=23"), "Should use a_time, got:\n" + result);
+        assertFalse(result.contains("clock_1.time=23"), "Should NOT use clock_1.time");
+    }
+
+    @Test
+    @DisplayName("Environment-triggered state transition reads the shared environment variable")
+    void stateTransitionTriggeredByEnvironment_usesSharedReference() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 50);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(temperature))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("warm activation")
+                        .startState("off")
+                        .endState("on")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("temperature").relation(">=").value("30").build())
+                        .build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("heater_1", "Heater",
+                List.of("Mode"), Map.of("Mode", List.of("off", "on")),
+                List.of(temperature), manifest);
+        smv.getEnvVariables().put("temperature", temperature);
+        smv.getCurrentModeStates().put("Mode", "off");
+
+        DeviceVerificationDto dto = device("heater_1", "Heater");
+        dto.setState("off");
+        String result = mainBuilder.build(
+                1L, List.of(dto), List.of(), Map.of("heater_1", smv), false, 0, false);
+
+        assertTrue(result.contains("heater_1.Mode=off & a_temperature>=30: on;"), result);
+        assertFalse(result.contains("heater_1.temperature>=30"), result);
     }
 
     // ======================== P5: trust/privacy next=self ========================
@@ -363,6 +606,33 @@ class SmvGeneratorFixesTest {
                 "Should have next() for trust_Mode_home, got:\n" + result);
         assertTrue(result.contains("TRUE: lock_1.trust_Mode_home;"),
                 "Should self-hold trust_Mode_home, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("State privacy override initializes only the selected current state")
+    void statePrivacyOverride_appliesOnlyToCurrentState() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("off").privacy("public").build(),
+                        DeviceManifest.WorkingState.builder()
+                                .name("on").privacy("public").build()))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").startState("off").endState("on").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("light_1", "Light",
+                List.of("Mode"), Map.of("Mode", List.of("off", "on")),
+                List.of(), manifest);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.setCurrentState("on");
+        smv.setInstanceStatePrivacy("private");
+
+        String result = deviceBuilder.build(smv, false, true);
+
+        assertTrue(result.contains("init(privacy_Mode_on) := private;"), result);
+        assertTrue(result.contains("init(privacy_Mode_off) := public;"), result);
     }
 
     @Test
@@ -498,9 +768,9 @@ class SmvGeneratorFixesTest {
         assertDoesNotThrow(() -> invokeValidateNoPrivacySpecs(List.of()));
     }
 
-    // ======================== P7: intensity=0 时 INVAR 约束 ========================
+    // ======================== P7: attackBudget=0 时 INVAR 约束 ========================
 
-    /** 构建最小传感器设备用于 intensity 测试 */
+    /** 构建最小传感器设备用于 attackBudget 测试 */
     private DeviceSmvData buildSensorSmvForIntensity(String varName, int lo, int hi) {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -519,7 +789,7 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P7: isAttack=true, intensity=0 generates FROZENVAR + INVAR intensity<=0")
+    @DisplayName("P7: isAttack=true, attackBudget=0 generates FROZENVAR + INVAR attackBudget<=0")
     void attackWithZeroIntensity_generatesInvarZero() {
         DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
         DeviceVerificationDto dto = new DeviceVerificationDto();
@@ -533,13 +803,14 @@ class SmvGeneratorFixesTest {
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 0, false);
 
         assertTrue(result.contains("FROZENVAR"), "Should declare FROZENVAR section");
-        assertTrue(result.contains("intensity: 0..50"), "Should declare intensity variable");
-        assertTrue(result.contains("INVAR intensity <= 0"), "Should constrain intensity to 0");
-        assertTrue(result.contains("init(intensity)"), "Should initialize intensity");
+        assertTrue(result.contains("iot_verify_compromised_point_count: 0..1"),
+                "Counter domain should match the current number of attackable points");
+        assertTrue(result.contains("INVAR iot_verify_compromised_point_count <= 0"));
+        assertTrue(result.contains("init(iot_verify_compromised_point_count)"));
     }
 
     @Test
-    @DisplayName("P7: isAttack=true, intensity=3 generates INVAR intensity<=3")
+    @DisplayName("P7: isAttack=true, attackBudget=3 generates INVAR attackBudget<=3")
     void attackWithPositiveIntensity_generatesCorrectInvar() {
         DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
         DeviceVerificationDto dto = new DeviceVerificationDto();
@@ -552,13 +823,14 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 3, false);
 
-        assertTrue(result.contains("INVAR intensity <= 3"), "Should constrain intensity to 3");
+        assertTrue(result.contains("INVAR iot_verify_compromised_point_count <= 3"),
+                "The request budget should constrain the internal attacked-node counter");
     }
 
-    // ======================== P8: 规格不再注入 intensity ========================
+    // ======================== P8: 规格不再注入 attackBudget ========================
 
     @Test
-    @DisplayName("P8: spec does not contain intensity injection in antecedent")
+    @DisplayName("P8: spec does not contain attackBudget injection in antecedent")
     void specNoIntensityInjection() {
         SpecConditionDto cond = new SpecConditionDto();
         cond.setDeviceId("ts_1");
@@ -580,11 +852,11 @@ class SmvGeneratorFixesTest {
 
         String result = specBuilder.build(List.of(spec), true, 3, map, false);
 
-        assertFalse(result.contains("intensity<="), "Spec should not inject intensity constraint");
+        assertFalse(result.contains("attackBudget<="), "Spec should not inject attackBudget constraint");
     }
 
     @Test
-    @DisplayName("P8: templateId=7 safety spec does not contain intensity injection")
+    @DisplayName("P8: templateId=7 safety spec does not contain attackBudget injection")
     void safetySpecNoIntensityInjection() {
         SpecConditionDto cond = new SpecConditionDto();
         cond.setDeviceId("ts_1");
@@ -606,15 +878,16 @@ class SmvGeneratorFixesTest {
 
         String result = specBuilder.build(List.of(spec), true, 3, map, false);
 
-        assertFalse(result.contains("intensity<="), "Safety spec should not inject intensity constraint");
-        assertTrue(result.contains(".is_attack=FALSE"), "Safety spec should still include is_attack guard");
+        assertFalse(result.contains("attackBudget<="), "Safety spec should not inject attackBudget constraint");
+        assertFalse(result.contains(".is_attack=FALSE"),
+                "Safety checks must include attacked target paths instead of excluding them");
     }
 
-    // ======================== P8b: is_attack=TRUE 劫持分支回归 ========================
+    // ======================== P8b: MEDIC attack behavior ========================
 
     @Test
-    @DisplayName("P8b: actuator with isAttack=true generates hijack branch with all legal states")
-    void attackMode_actuator_generatesHijackBranch() {
+    @DisplayName("P8b: attack mode does not freeze an actuator without a TAP rule command")
+    void attackMode_actuator_withoutRuleCommandDoesNotFreezeStateMachine() {
         DeviceManifest actuatorManifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
                 .workingStates(List.of(
@@ -642,13 +915,17 @@ class SmvGeneratorFixesTest {
 
         String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
 
-        assertTrue(smv.contains("light_1.is_attack=TRUE: {off, on};"),
-                "Hijack branch should list all legal states for actuator, got:\n" + smv);
+        assertFalse(smv.contains("light_1.is_attack=TRUE: light_1.Mode;"),
+                "Attack modeling must not freeze the whole actuator state machine, got:\n" + smv);
+        assertFalse(smv.contains("light_1.is_attack=TRUE: {off, on};"),
+                "MEDIC models command-delivery failure, not arbitrary actuator takeover");
+        assertFalse(smv.contains("light_1.is_attack=TRUE: untrusted;"),
+                "Command failure must not relabel a pre-existing actuator state as untrusted");
     }
 
     @Test
-    @DisplayName("P8b: sensor with isAttack=true does NOT generate hijack branch")
-    void attackMode_sensor_noHijackBranch() {
+    @DisplayName("P8b: attacked sensor may report any value within its declared domain")
+    void attackMode_sensor_readingTamperedWithinDomain() {
         DeviceSmvData sensor = buildSensorSmvForIntensity("ts_1", 0, 100);
 
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
@@ -661,13 +938,132 @@ class SmvGeneratorFixesTest {
 
         String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 10, false);
 
-        assertFalse(smv.contains("ts_1.is_attack=TRUE"),
-                "Sensor should not have hijack branch, got:\n" + smv);
+        assertTrue(smv.contains("ts_1.is_attack=TRUE: 0..100;"),
+                "An attacked sensor reading should be nondeterministic within its declared domain, got:\n" + smv);
+        assertFalse(smv.contains("0..120"),
+                "Attack budget must not widen the user-declared sensor domain");
     }
 
     @Test
-    @DisplayName("P8b: actuator hijack branch has highest priority (appears before rule transitions)")
-    void attackMode_actuator_hijackBranchPrecedesRules() {
+    @DisplayName("P8b: device and automation-link compromise are separate command-failure points")
+    void attackMode_deviceAndAutomationLinkAreSeparatePoints() {
+        DeviceManifest.InternalVariable temperature = numericVar("temperature", false, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("heat").trust("trusted").build()))
+                .internalVariables(List.of(temperature))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("heat").startState("off").endState("heat").build()))
+                .build();
+        DeviceSmvData thermostat = buildSmvData(
+                "thermostat_1", "Thermostat",
+                List.of("Mode"),
+                Map.of("Mode", List.of("off", "heat")),
+                List.of(temperature), manifest);
+        thermostat.setSensor(false);
+
+        DeviceVerificationDto dto = device("thermostat_1", "Thermostat");
+        dto.setState("off");
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("thermostat_1")
+                        .attribute("temperature")
+                        .targetType("variable")
+                        .relation(">")
+                        .value("30")
+                        .build()))
+                .command(RuleDto.Command.builder()
+                        .deviceName("thermostat_1")
+                        .action("heat")
+                        .build())
+                .build();
+        String smv = mainBuilder.build(
+                1L, List.of(dto), List.of(rule), Map.of("thermostat_1", thermostat), true, 1, false);
+
+        assertTrue(smv.contains("thermostat_1.is_attack=TRUE: 0..100;"),
+                "A compromised composite device may tamper with its declared external reading");
+        assertTrue(smv.contains("thermostat_1.is_attack=FALSE"),
+                "The same compromised device should drop the TAP rule command when attacked");
+        assertTrue(smv.contains("iot_verify_automation_link_compromised_0: boolean;"));
+        assertTrue(smv.contains("init(iot_verify_automation_link_compromised_0) := {TRUE, FALSE};"));
+        assertTrue(smv.contains("iot_verify_automation_link_compromised_0=FALSE"),
+                "A separately compromised automation delivery link must drop its rule command");
+        assertTrue(smv.contains("iot_verify_compromised_point_count: 0..2"),
+                "One device plus one automation link should produce two countable attack points");
+        assertTrue(smv.contains("+ toint(iot_verify_automation_link_compromised_0)"));
+        assertFalse(smv.contains("thermostat_1.is_attack=TRUE: thermostat_1.Mode;"),
+                "Command loss must not freeze unrelated device-internal transitions");
+        assertTrue(smv.contains("next(thermostat_1.trust_temperature) :=\n\tcase\n"
+                        + "\t\tthermostat_1.is_attack=TRUE: untrusted;"),
+                "Tampered external readings must be labeled untrusted");
+
+        String module = deviceBuilder.build(thermostat, true, false);
+        assertTrue(module.contains("is_attack=TRUE: untrusted;"),
+                "The initial external-reading label must agree with later attack states");
+    }
+
+    @Test
+    @DisplayName("P8b: an explicitly falsifiable local reading is tampered from the initial state")
+    void attackMode_compositeDeviceLocalReadingUsesExplicitTemplateSemantics() {
+        DeviceManifest.InternalVariable location = numericVar("location", true, 0, 10);
+        location.setFalsifiableWhenCompromised(true);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("idle").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("active").trust("trusted").build()))
+                .internalVariables(List.of(location))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("activate").startState("idle").endState("active").build()))
+                .build();
+        DeviceSmvData phone = buildSmvData(
+                "phone_1", "Phone", List.of("Mode"),
+                Map.of("Mode", List.of("idle", "active")), List.of(location), manifest);
+        phone.setSensor(false);
+
+        String deviceModule = deviceBuilder.build(phone, true, false);
+        assertTrue(deviceModule.contains("init(location) :=\n\tcase\n\t\tis_attack=TRUE: 0..10;"));
+        assertTrue(deviceModule.contains("init(trust_location) :=\n\tcase\n\t\tis_attack=TRUE: untrusted;"));
+
+        String main = mainBuilder.build(
+                1L, List.of(device("phone_1", "Phone")), List.of(),
+                Map.of("phone_1", phone), true, 1, false);
+        assertTrue(main.contains("phone_1.is_attack=TRUE: 0..10;"));
+    }
+
+    @Test
+    @DisplayName("P8b: a local actuator value is not randomized unless the template declares it falsifiable")
+    void attackMode_nonFalsifiableLocalActuatorValueRemainsModelDriven() {
+        DeviceManifest.InternalVariable progress = numericVar("progress", true, 0, 100);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("running").build()))
+                .internalVariables(List.of(progress))
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("start").startState("").endState("running").build()))
+                .build();
+        DeviceSmvData washer = buildSmvData(
+                "washer_1", "Washer", List.of("Mode"), Map.of("Mode", List.of("running")),
+                List.of(progress), manifest);
+        washer.setSensor(false);
+
+        String deviceModule = deviceBuilder.build(washer, true, false);
+        assertFalse(deviceModule.contains("is_attack=TRUE: 0..100"));
+
+        String main = mainBuilder.build(
+                1L, List.of(device("washer_1", "Washer")), List.of(),
+                Map.of("washer_1", washer), true, 1, false);
+        assertFalse(main.contains("washer_1.is_attack=TRUE: 0..100"));
+        assertFalse(main.contains("washer_1.is_attack"),
+                "An inert device must not consume or expose a compromise choice");
+        assertTrue(main.contains("iot_verify_compromised_point_count: 0..0"));
+    }
+
+    @Test
+    @DisplayName("P8b: attacked target drops TAP rule command through its transition guard")
+    void attackMode_actuator_ruleCommandRequiresUnattackedTarget() {
         DeviceManifest actuatorManifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
                 .workingStates(List.of(
@@ -675,6 +1071,13 @@ class SmvGeneratorFixesTest {
                         DeviceManifest.WorkingState.builder().name("unlocked").trust("trusted").build()))
                 .apis(List.of(DeviceManifest.API.builder()
                         .name("unlock").startState("locked").endState("unlocked").build()))
+                .transitions(List.of(DeviceManifest.Transition.builder()
+                        .name("autoRelock")
+                        .startState("unlocked")
+                        .endState("locked")
+                        .trigger(DeviceManifest.Trigger.builder()
+                                .attribute("Mode").relation("=").value("unlocked").build())
+                        .build()))
                 .build();
         DeviceSmvData lock = buildSmvData(
                 "lock_1", "Lock",
@@ -716,6 +1119,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition cond = new RuleDto.Condition();
         cond.setDeviceName("sensor_1");
+        cond.setTargetType("variable");
         cond.setAttribute("temperature");
         cond.setRelation(">");
         cond.setValue("30");
@@ -737,17 +1141,17 @@ class SmvGeneratorFixesTest {
         int esacIdx = smv.indexOf("esac;", blockStart);
         assertTrue(esacIdx > blockStart, "case...esac must close lock_1 transition block, got:\n" + smv);
         String block = smv.substring(blockStart, esacIdx);
-        int hijackIdx = block.indexOf("lock_1.is_attack=TRUE: {locked, unlocked};");
         int ruleIdx = block.indexOf("lock_1.is_attack=FALSE");
-        assertTrue(hijackIdx >= 0, "Hijack branch must exist in lock_1 transition block, got:\n" + block);
         assertTrue(ruleIdx >= 0, "Rule with is_attack=FALSE guard must exist in lock_1 transition block, got:\n" + block);
-        assertTrue(hijackIdx < ruleIdx,
-                "Hijack branch must appear before rule transitions (higher priority) within lock_1 block, got:\n" + block);
+        assertFalse(block.contains("lock_1.is_attack=TRUE: lock_1.Mode;"),
+                "A dropped command must not freeze the target's whole state machine, got:\n" + block);
+        assertTrue(block.contains("lock_1.Mode=unlocked") && block.contains(": locked;"),
+                "The target's template-defined auto-relock transition must remain possible, got:\n" + block);
     }
 
     @Test
-    @DisplayName("P8b: multi-mode actuator hijack branch lists per-mode legal states")
-    void attackMode_multiModeActuator_hijackBranchPerMode() {
+    @DisplayName("P8b: attack mode does not freeze unrelated multi-mode state transitions")
+    void attackMode_multiModeActuator_doesNotFreezeEachMode() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode", "FanMode"))
                 .workingStates(List.of(
@@ -776,10 +1180,10 @@ class SmvGeneratorFixesTest {
 
         String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 5, false);
 
-        assertTrue(smv.contains("hvac_1.is_attack=TRUE: {auto, manual};"),
-                "Mode hijack branch should list Mode states, got:\n" + smv);
-        assertTrue(smv.contains("hvac_1.is_attack=TRUE: {high, low};"),
-                "FanMode hijack branch should list FanMode states, got:\n" + smv);
+        assertFalse(smv.contains("hvac_1.is_attack=TRUE: hvac_1.Mode;"),
+                "Attack modeling must not freeze Mode, got:\n" + smv);
+        assertFalse(smv.contains("hvac_1.is_attack=TRUE: hvac_1.FanMode;"),
+                "Attack modeling must not freeze FanMode, got:\n" + smv);
     }
 
     @Test
@@ -833,6 +1237,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition cond = new RuleDto.Condition();
         cond.setDeviceName("sensor_1");
+        cond.setTargetType("variable");
         cond.setAttribute("temperature");
         cond.setRelation(">");
         cond.setValue("30");
@@ -855,41 +1260,49 @@ class SmvGeneratorFixesTest {
                 "Non-attack mode should not have is_attack guard on rules, got:\n" + smv);
     }
 
-    // ======================== P9: 范围扩展按 intensity 缩放 ========================
+    // ======================== P9: attack budget does not alter declared domains ========================
 
     @Test
-    @DisplayName("P9: intensity=0 produces no range expansion for sensor")
-    void rangeExpansion_zeroIntensity_noExpansion() {
+    @DisplayName("P9: zero attack budget preserves the sensor domain")
+    void attackBudgetZero_preservesSensorDomain() {
         DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
-        String result = deviceBuilder.build(smv, true, 0, false);
+        String result = deviceBuilder.build(smv, true, false);
 
-        // temperature: 0..100 — no expansion
-        assertTrue(result.contains("0..100"), "intensity=0 should not expand range");
-        assertFalse(result.contains("0..120"), "intensity=0 should not have old expansion");
+        assertTrue(result.contains("temperature: 0..100"));
+        assertFalse(result.contains("0..120"));
     }
 
     @Test
-    @DisplayName("P9: intensity=50 produces max range expansion for sensor")
-    void rangeExpansion_maxIntensity_fullExpansion() {
+    @DisplayName("P9: high attack budget still preserves the user-declared sensor domain")
+    void highAttackBudget_preservesSensorDomain() {
         DeviceSmvData smv = buildSensorSmvForIntensity("ts_1", 0, 100);
-        String result = deviceBuilder.build(smv, true, 50, false);
+        String result = deviceBuilder.build(smv, true, false);
 
-        // range=100, expansion = (int)(100/5.0 * 50/50.0) = 20, upper = 120
-        assertTrue(result.contains("0..120"), "intensity=50 should expand range to 120");
+        assertTrue(result.contains("temperature: 0..100"));
+        assertFalse(result.contains("0..120"));
     }
 
-    // ======================== P10: SmvGenerator intensity clamp ========================
+    // ======================== P10: SmvGenerator attackBudget clamp ========================
 
     private SmvGenerator buildGeneratorForClampTests() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         DeviceTemplateService templateService = mock(DeviceTemplateService.class);
 
         DeviceManifest manifest = DeviceManifest.builder()
+                .name("SensorTemplate")
                 .modes(List.of("Mode"))
                 .initState("on")
-                .internalVariables(List.of(numericVar("temperature", true, 0, 100)))
+                .internalVariables(List.of(DeviceManifest.InternalVariable.builder()
+                        .name("temperature")
+                        .isInside(true)
+                        .falsifiableWhenCompromised(false)
+                        .trust("trusted")
+                        .privacy("public")
+                        .lowerBound(0)
+                        .upperBound(100)
+                        .build()))
                 .workingStates(List.of(DeviceManifest.WorkingState.builder()
-                        .name("on").trust("trusted").build()))
+                        .name("on").trust("trusted").privacy("public").build()))
                 .build();
 
         DeviceTemplatePo template = DeviceTemplatePo.builder()
@@ -901,7 +1314,8 @@ class SmvGeneratorFixesTest {
         when(templateService.findTemplateByName(anyLong(), eq("SensorTemplate")))
                 .thenReturn(Optional.of(template));
 
-        DeviceSmvDataFactory factory = new DeviceSmvDataFactory(mapper, templateService, new SmvModelValidator());
+        DeviceSmvDataFactory factory = new DeviceSmvDataFactory(
+                mapper, templateService, new SmvModelValidator(), new DeviceTemplateSchemaValidator(mapper));
         return new SmvGenerator(
                 factory,
                 new SmvDeviceModuleBuilder(),
@@ -921,31 +1335,46 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P10: SmvGenerator clamps intensity>50 to 50")
-    void generatorClamp_upperBound() throws Exception {
+    @DisplayName("P10: SmvGenerator rejects attackBudget above the public contract")
+    void generatorRejectsAttackBudgetAboveUpperBound() throws Exception {
         SmvGenerator generator = buildGeneratorForClampTests();
         DeviceVerificationDto dto = buildClampTestDevice();
 
-        SmvGenerator.GenerateResult gen = generator.generate(
-                1L, List.of(dto), List.of(), List.of(), true, 999, false);
-        String smv = Files.readString(gen.smvFile().toPath());
+        SmvGenerationException error = assertThrows(SmvGenerationException.class, () -> generator.generate(
+                1L, List.of(dto), List.of(), List.of(), true, 999, false));
 
-        assertTrue(smv.contains("INVAR intensity <= 50;"), "Upper bound should clamp to 50");
-        assertTrue(smv.contains("temperature: 0..120;"), "Clamp=50 should produce full range expansion");
+        assertEquals(SmvGenerationException.ErrorCategories.INVALID_BUILDER_INPUT, error.getErrorCategory());
+        assertTrue(error.getMessage().contains("attackBudget"));
+        assertTrue(error.getMessage().contains("between 0 and 50"));
     }
 
     @Test
-    @DisplayName("P10: SmvGenerator clamps intensity<0 to 0")
-    void generatorClamp_lowerBound() throws Exception {
+    @DisplayName("P10: SmvGenerator rejects attackBudget below the public contract")
+    void generatorRejectsAttackBudgetBelowLowerBound() throws Exception {
         SmvGenerator generator = buildGeneratorForClampTests();
         DeviceVerificationDto dto = buildClampTestDevice();
 
-        SmvGenerator.GenerateResult gen = generator.generate(
-                1L, List.of(dto), List.of(), List.of(), true, -7, false);
-        String smv = Files.readString(gen.smvFile().toPath());
+        SmvGenerationException error = assertThrows(SmvGenerationException.class, () -> generator.generate(
+                1L, List.of(dto), List.of(), List.of(), true, -7, false));
 
-        assertTrue(smv.contains("INVAR intensity <= 0;"), "Lower bound should clamp to 0");
-        assertTrue(smv.contains("temperature: 0..100;"), "Clamp=0 should produce no range expansion");
+        assertEquals(SmvGenerationException.ErrorCategories.INVALID_BUILDER_INPUT, error.getErrorCategory());
+        assertTrue(error.getMessage().contains("attackBudget"));
+        assertTrue(error.getMessage().contains("between 0 and 50"));
+    }
+
+    @Test
+    @DisplayName("P10: SmvGenerator requires attack mode and budget to agree")
+    void generatorRejectsContradictoryAttackOptions() throws Exception {
+        SmvGenerator generator = buildGeneratorForClampTests();
+        DeviceVerificationDto dto = buildClampTestDevice();
+
+        SmvGenerationException zeroEnabled = assertThrows(SmvGenerationException.class, () -> generator.generate(
+                1L, List.of(dto), List.of(), List.of(), true, 0, false));
+        SmvGenerationException positiveDisabled = assertThrows(SmvGenerationException.class, () -> generator.generate(
+                1L, List.of(dto), List.of(), List.of(), false, 1, false));
+
+        assertTrue(zeroEnabled.getMessage().contains("when attack modeling is enabled"));
+        assertTrue(positiveDisabled.getMessage().contains("must be 0 when attack modeling is disabled"));
     }
 
     // ======================== P11: rule fail-closed + env init conflict ========================
@@ -1032,6 +1461,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("sensor_1");
+        condition.setTargetType("variable");
         condition.setAttribute("temperature");
         condition.setRelation(" EQ ");
         condition.setValue("30");
@@ -1064,6 +1494,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("sensor_1");
+        condition.setTargetType("variable");
         condition.setAttribute("temperature");
         condition.setRelation("IN");
         condition.setValue(" , ; | ");
@@ -1130,6 +1561,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("api");
         condition.setAttribute("fanAuto");
         condition.setRelation(" EQ ");
         condition.setValue(" true ");
@@ -1164,6 +1596,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("api");
         condition.setAttribute("fanAuto");
         condition.setRelation("=");
         condition.setValue("on");
@@ -1177,8 +1610,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P11: API signal condition without relation uses current state when useNext=false")
-    void apiSignalConditionWithoutRelation_useNextFalse_usesCurrentStateExpr() throws Exception {
+    @DisplayName("P11: relation-null API condition is an event pulse, not a persistent end state")
+    void apiSignalConditionWithoutRelation_useNextFalse_usesOnlyCurrentPulse() throws Exception {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("FanMode"))
                 .workingStates(List.of(
@@ -1198,6 +1631,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("api");
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
@@ -1205,12 +1639,12 @@ class SmvGeneratorFixesTest {
         method.setAccessible(true);
         String expr = (String) method.invoke(mainBuilder, condition, map, false, null, null, 0, null);
 
-        assertEquals("(fan_1.fanAuto_a=TRUE | fan_1.FanMode=auto)", expr);
+        assertEquals("fan_1.fanAuto_a=TRUE", expr);
     }
 
     @Test
-    @DisplayName("P11: API signal condition without relation uses next state when useNext=true")
-    void apiSignalConditionWithoutRelation_useNextTrue_usesNextStateExpr() throws Exception {
+    @DisplayName("P11: next-step API condition uses only the next event pulse")
+    void apiSignalConditionWithoutRelation_useNextTrue_usesOnlyNextPulse() throws Exception {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("FanMode"))
                 .workingStates(List.of(
@@ -1230,6 +1664,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("api");
         condition.setAttribute("fanAuto");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
@@ -1237,7 +1672,7 @@ class SmvGeneratorFixesTest {
         method.setAccessible(true);
         String expr = (String) method.invoke(mainBuilder, condition, map, true, null, null, 0, null);
 
-        assertEquals("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto)", expr);
+        assertEquals("next(fan_1.fanAuto_a)=TRUE", expr);
     }
 
     @Test
@@ -1261,6 +1696,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("plug_1");
+        condition.setTargetType("api");
         condition.setAttribute("powerOn");
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
@@ -1272,8 +1708,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P11: main build uses next-state expression for relation-null API signal condition")
-    void mainBuild_ruleWithNullRelationApiSignal_usesNextStateExpr() {
+    @DisplayName("P11: main build uses current expression for relation-null API signal condition")
+    void mainBuild_ruleWithNullRelationApiSignal_usesCurrentExpr() {
         DeviceManifest fanManifest = DeviceManifest.builder()
                 .modes(List.of("FanMode"))
                 .workingStates(List.of(
@@ -1318,6 +1754,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("api");
         condition.setAttribute("fanAuto");
 
         RuleDto.Command command = new RuleDto.Command();
@@ -1330,8 +1767,10 @@ class SmvGeneratorFixesTest {
 
         String smv = mainBuilder.build(1L, List.of(fanDto, lockDto), List.of(rule), map, false, 0, false);
 
-        assertTrue(smv.contains("(next(fan_1.fanAuto_a)=TRUE | next(fan_1.FanMode)=auto) & lock_1.Mode=locked: unlocked;"),
-                "State transition should use next-state API signal condition, got:\n" + smv);
+        assertTrue(smv.contains("fan_1.fanAuto_a=TRUE & lock_1.Mode=locked: unlocked;"),
+                "State transition should use the current rule condition/event, got:\n" + smv);
+        assertFalse(smv.contains("fan_1.FanMode=auto & lock_1.Mode=locked: unlocked;"),
+                "Remaining in the API end state must not retrigger an event rule, got:\n" + smv);
     }
 
     @Test
@@ -1354,6 +1793,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("thermostat_1");
+        condition.setTargetType("state");
         condition.setAttribute("state");
         condition.setRelation("=");
         condition.setValue("auto;on");
@@ -1394,6 +1834,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("fan_1");
+        condition.setTargetType("state");
         condition.setAttribute("state");
         condition.setRelation("=");
         condition.setValue("off");
@@ -1413,8 +1854,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P11: ambiguous template command target throws")
-    void ambiguousTemplateCommandTarget_throws() {
+    @DisplayName("P11: non-canonical template command target is rejected")
+    void nonCanonicalTemplateCommandTarget_throwsDeviceNotFound() {
         DeviceManifest.InternalVariable temperature = numericVar("temperature", true, 0, 100);
         DeviceManifest sensorManifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -1465,6 +1906,7 @@ class SmvGeneratorFixesTest {
 
         RuleDto.Condition condition = new RuleDto.Condition();
         condition.setDeviceName("sensor_1");
+        condition.setTargetType("variable");
         condition.setAttribute("temperature");
         condition.setRelation(">");
         condition.setValue("30");
@@ -1479,32 +1921,40 @@ class SmvGeneratorFixesTest {
 
         SmvGenerationException ex = assertThrows(SmvGenerationException.class,
                 () -> mainBuilder.build(1L, List.of(sensorDto, lightDto1, lightDto2), List.of(rule), map, false, 0, false));
-        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
+        assertEquals("DEVICE_NOT_FOUND", ex.getErrorCategory());
     }
 
     @Test
-    @DisplayName("P11: ambiguous template contentDevice throws")
-    void ambiguousTemplateContentDevice_throws() throws Exception {
+    @DisplayName("P11: non-canonical template contentDevice is rejected")
+    void nonCanonicalTemplateContentDevice_throwsDeviceNotFound() throws Exception {
         DeviceManifest phoneManifest = DeviceManifest.builder().build();
         DeviceSmvData phone1 = buildSmvData("phone_1", "Phone",
                 List.of("Mode"), Map.of("Mode", List.of("on")), List.of(), phoneManifest);
         DeviceSmvData phone2 = buildSmvData("phone_2", "Phone",
                 List.of("Mode"), Map.of("Mode", List.of("on")), List.of(), phoneManifest);
 
+        DeviceManifest targetManifest = DeviceManifest.builder()
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("send").acceptsContent(true).build()))
+                .build();
+        DeviceSmvData target = buildSmvData("target_1", "Target",
+                List.of(), Map.of(), List.of(), targetManifest);
+
         DeviceSmvData.ContentInfo photo = new DeviceSmvData.ContentInfo();
         photo.setName("photo");
-        photo.setChangeable(true);
         phone1.getContents().add(photo);
         DeviceSmvData.ContentInfo photo2 = new DeviceSmvData.ContentInfo();
         photo2.setName("photo");
-        photo2.setChangeable(true);
         phone2.getContents().add(photo2);
 
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("phone_1", phone1);
         map.put("phone_2", phone2);
+        map.put("target_1", target);
 
         RuleDto.Command command = new RuleDto.Command();
+        command.setDeviceName("target_1");
+        command.setAction("send");
         command.setContentDevice("Phone");
         command.setContent("photo");
 
@@ -1513,13 +1963,13 @@ class SmvGeneratorFixesTest {
         rule.setConditions(List.of());
 
         Method method = SmvMainModuleBuilder.class.getDeclaredMethod(
-                "findRulesReferencingContent", List.class, String.class, String.class, Map.class);
+                "buildContentPrivacyCondition", RuleDto.class, Map.class);
         method.setAccessible(true);
 
         java.lang.reflect.InvocationTargetException ex = assertThrows(java.lang.reflect.InvocationTargetException.class,
-                () -> method.invoke(mainBuilder, List.of(rule), "phone_1", "photo", map));
+                () -> method.invoke(mainBuilder, rule, map));
         assertTrue(ex.getCause() instanceof SmvGenerationException);
-        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ((SmvGenerationException) ex.getCause()).getErrorCategory());
+        assertEquals("DEVICE_NOT_FOUND", ((SmvGenerationException) ex.getCause()).getErrorCategory());
     }
 
     @Test
@@ -1563,8 +2013,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P11: API signal transition on no-mode device does not reference undeclared .state")
-    void apiSignalTransition_noModeDevice_noStateFallback() {
+    @DisplayName("P11: API signal transition on no-mode device is rejected")
+    void apiSignalTransition_noModeDevice_isRejected() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .workingStates(List.of(
                         DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
@@ -1587,15 +2037,15 @@ class SmvGeneratorFixesTest {
         dto.setTemplateName("SmartPlug");
         dto.setState("on");
 
-        String smv = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
-        assertTrue(smv.contains("next(plug_1.powerOn_a) :="));
-        assertFalse(smv.contains("plug_1.state"),
-                "No-mode device must not fallback to undeclared '.state' variable");
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
+                () -> mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false));
+        assertEquals("TEMPLATE_INVALID", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("powerOn"));
     }
 
     @Test
-    @DisplayName("P11: conflicting env init values across devices throw conflict exception")
-    void envInitConflict_throws() {
+    @DisplayName("P11: device-expanded env mirrors do not initialize shared env variables")
+    void envInitMirrorsWithoutPool_doNotInitializeSharedVariable() {
         DeviceManifest.InternalVariable time = numericVar("time", false, 0, 23);
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -1631,15 +2081,124 @@ class SmvGeneratorFixesTest {
         map.put("clock_1", d1);
         map.put("clock_2", d2);
 
-        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> mainBuilder.build(1L, List.of(dto1, dto2), List.of(), map, false, 0, false));
-        assertTrue(ex.getMessage().contains("time"));
-        assertTrue(ex.getMessage().contains("conflicting user init values"));
+        String smvText = mainBuilder.build(1L, List.of(dto1, dto2), List.of(), map, false, 0, false);
+        assertTrue(smvText.contains("a_time: 0..23;"), "Environment variable must still be declared globally");
+        assertFalse(smvText.contains("init(a_time)"),
+                "Only the top-level environment pool may initialize shared environment variables");
     }
 
     @Test
-    @DisplayName("P11: env var with default range ignores non-numeric init")
-    void envDefaultRange_nonNumericInit_ignored() {
+    @DisplayName("P11: explicit environment pool value is emitted as init(a_var)")
+    void environmentPoolValue_emitsInitAssignment() {
+        DeviceManifest.InternalVariable time = numericVar("time", false, 0, 23);
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of(time))
+                .workingStates(List.of(DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("clock_1", "Clock",
+                List.of("Mode"), Map.of("Mode", List.of("on")),
+                List.of(time), manifest);
+        smv.getEnvVariables().put("time", time);
+        smv.getCurrentModeStates().put("Mode", "on");
+        smv.getVariableValues().put("time", "12");
+
+        DeviceVerificationDto dto = new DeviceVerificationDto();
+        dto.setVarName("clock_1");
+        dto.setTemplateName("Clock");
+        dto.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("clock_1", smv);
+
+        String smvText = mainBuilder.build(1L, List.of(dto),
+                List.of(new BoardEnvironmentVariableDto("time", "10", "trusted", "public")),
+                List.of(), map, false, 0, false, SmvGenerationContext.noop());
+        assertTrue(smvText.contains("a_time: 0..23;"), "Environment variable must be declared globally");
+        assertTrue(smvText.contains("init(a_time) := 10;"),
+                "Explicit environment pool value must initialize a_time");
+        assertFalse(smvText.contains("init(a_time) := 12;"),
+                "Expanded per-device read mirrors must not override the environment pool");
+    }
+
+    @Test
+    @DisplayName("P11: shared environment trust and visibility labels reach every reading device")
+    void environmentPoolLabels_areAppliedByGenerator() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        DeviceTemplateService templateService = mock(DeviceTemplateService.class);
+        DeviceManifest.InternalVariable temperature = DeviceManifest.InternalVariable.builder()
+                .name("temperature")
+                .isInside(false)
+                .falsifiableWhenCompromised(true)
+                .trust("untrusted")
+                .privacy("public")
+                .lowerBound(0)
+                .upperBound(100)
+                .build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .name("Temperature Sensor")
+                .internalVariables(List.of(temperature))
+                .build();
+        DeviceTemplatePo template = DeviceTemplatePo.builder()
+                .userId(1L)
+                .name("Temperature Sensor")
+                .manifestJson(mapper.writeValueAsString(manifest))
+                .build();
+        when(templateService.findTemplateByName(anyLong(), eq("Temperature Sensor")))
+                .thenReturn(Optional.of(template));
+
+        SmvGenerator generator = new SmvGenerator(
+                new DeviceSmvDataFactory(mapper, templateService, new SmvModelValidator(),
+                        new DeviceTemplateSchemaValidator(mapper)),
+                new SmvDeviceModuleBuilder(),
+                new SmvRuleCommentWriter(),
+                new SmvMainModuleBuilder(),
+                new SmvSpecificationBuilder(),
+                new SmvModelValidator());
+        DeviceVerificationDto sensor = device("temperature_sensor_1", "Temperature Sensor");
+
+        SmvGenerator.GenerateResult generated = generator.generateWithEnvironment(
+                1L,
+                List.of(sensor),
+                List.of(new BoardEnvironmentVariableDto(
+                        "temperature", "20", "trusted", "private")),
+                List.of(),
+                List.of(),
+                false,
+                0,
+                true);
+        String smv = Files.readString(generated.smvFile().toPath());
+
+        assertTrue(smv.contains("init(trust_temperature) := trusted;"),
+                "The board's control-source label must override the template default");
+        assertTrue(smv.contains("init(privacy_temperature) := private;"),
+                "The board's data-visibility label must override the template default");
+    }
+
+    @Test
+    @DisplayName("P11: referencing content propagates its classification without mutating the source")
+    void contentPrivacy_isStableSourceClassification() {
+        DeviceSmvData source = new DeviceSmvData();
+        source.setModuleName("Phone_phone_1");
+        source.setVarName("phone_1");
+        source.setManifest(new DeviceManifest());
+        DeviceSmvData.ContentInfo photo = new DeviceSmvData.ContentInfo();
+        photo.setName("photo");
+        photo.setPrivacy("private");
+        source.getContents().add(photo);
+
+        String module = deviceBuilder.build(source, false, true);
+
+        assertTrue(module.contains("FROZENVAR\n\tprivacy_photo: {public, private};"));
+        assertTrue(module.contains("init(privacy_photo) := private;"));
+        assertFalse(module.contains("next(privacy_photo)"),
+                "A rule reference must not rewrite the source content's visibility classification");
+    }
+
+    @Test
+    @DisplayName("P11: malformed env init is rejected instead of being changed")
+    void envDefaultRange_nonNumericInit_rejected() {
         DeviceManifest.InternalVariable mystery = DeviceManifest.InternalVariable.builder()
                 .name("mystery").isInside(false).build();
         DeviceManifest manifest = DeviceManifest.builder()
@@ -1653,7 +2212,6 @@ class SmvGeneratorFixesTest {
                 List.of(mystery), manifest);
         smv.getEnvVariables().put("mystery", mystery);
         smv.getCurrentModeStates().put("Mode", "on");
-        smv.getVariableValues().put("mystery", "abc");
 
         DeviceVerificationDto dto = new DeviceVerificationDto();
         dto.setVarName("device_1");
@@ -1663,11 +2221,11 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("device_1", smv);
 
-        String smvText = mainBuilder.build(1L, List.of(dto), List.of(), map, false, 0, false);
-        assertTrue(smvText.contains("a_mystery: 0..100;"),
-                "Default env declaration should remain 0..100");
-        assertFalse(smvText.contains("init(a_mystery)"),
-                "Non-numeric init should be ignored for default numeric range");
+        SmvGenerationException ex = assertThrows(SmvGenerationException.class, () -> mainBuilder.build(1L, List.of(dto),
+                List.of(new BoardEnvironmentVariableDto("mystery", "abc", "trusted", "public")),
+                List.of(), map, false, 0, false, SmvGenerationContext.noop()));
+        assertEquals("TEMPLATE_INVALID", ex.getErrorCategory());
+        assertTrue(ex.getMessage().contains("mystery"));
     }
 
     // ======================== P12: spec key validation and env mapping ========================
@@ -1708,8 +2266,119 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P12: ambiguous spec device reference throws explicit generation error")
-    void specAmbiguousDeviceReference_throwsGenerationError() {
+    @DisplayName("P12: state tuple IN condition in spec splits candidates without breaking tuple segments")
+    void specStateTupleInCondition_preservesTupleSegments() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "FanMode"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("auto;on").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("manual;off").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("thermostat_1", "Thermostat",
+                List.of("Mode", "FanMode"),
+                Map.of("Mode", List.of("auto", "manual"), "FanMode", List.of("on", "off")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("thermostat_1", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("thermostat_1");
+        cond.setTargetType("state");
+        cond.setKey("state");
+        cond.setRelation("in");
+        cond.setValue("auto;on,manual;off");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_state_tuple_in");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        assertTrue(result.contains("((thermostat_1.Mode=auto & thermostat_1.FanMode=on) | "
+                        + "(thermostat_1.Mode=manual & thermostat_1.FanMode=off))"),
+                "State tuple IN should preserve semicolon-separated tuple segments, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: mode condition in spec compiles to explicit mode comparison")
+    void specModeCondition_compilesToModeComparison() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "State"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("home;idle").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("sleep;idle").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("home_mode", "Home Mode",
+                List.of("Mode", "State"),
+                Map.of("Mode", List.of("home", "sleep"), "State", List.of("idle")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("home_mode", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("home_mode");
+        cond.setTargetType("mode");
+        cond.setKey("Mode");
+        cond.setRelation("=");
+        cond.setValue("sleep");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_mode");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        assertTrue(result.contains("home_mode.Mode=sleep"),
+                "Mode condition should compile to explicit mode comparison, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: safety spec mode condition injects matching mode trust variable")
+    void safetySpec_modeCondition_injectsModeTrust() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode", "State"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("home;idle").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("sleep;idle").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("home_mode", "Home Mode",
+                List.of("Mode", "State"),
+                Map.of("Mode", List.of("home", "sleep"), "State", List.of("idle")),
+                List.of(), manifest);
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("home_mode", smv);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("home_mode");
+        cond.setTargetType("mode");
+        cond.setKey("Mode");
+        cond.setRelation("=");
+        cond.setValue("sleep");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_safe_mode");
+        spec.setTemplateId("7");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0, map, false);
+        assertTrue(result.contains("home_mode.Mode=sleep"),
+                "Safety spec should keep the mode comparison, got:\n" + result);
+        assertTrue(result.contains("home_mode.trust_Mode_sleep=untrusted"),
+                "Safety spec should inject trust for the concrete mode value, got:\n" + result);
+    }
+
+    @Test
+    @DisplayName("P12: non-canonical spec device reference is omitted with a readable issue")
+    void specNonCanonicalDeviceReference_isSkippedWithReadableIssue() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
                 .workingStates(List.of(
@@ -1740,14 +2409,25 @@ class SmvGeneratorFixesTest {
         spec.setTemplateId("1");
         spec.setAConditions(List.of(a));
 
-        SmvGenerationException ex = assertThrows(SmvGenerationException.class,
-                () -> specBuilder.build(List.of(spec), false, 0, map, false));
-        assertEquals("AMBIGUOUS_DEVICE_REFERENCE", ex.getErrorCategory());
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        SmvGenerationContext.WarningSnapshot snapshot = context.warningsSnapshot();
+
+        assertFalse(result.contains("CTLSPEC FALSE"));
+        assertTrue(result.contains("-- specification skipped:"));
+        assertTrue(result.contains("device 'Sensor' not found"));
+        assertEquals(1, snapshot.skippedSpecCount());
+        assertTrue(snapshot.emittedSpecs().isEmpty());
+        assertEquals("SPECIFICATION_SKIPPED", snapshot.generationIssues().get(0).getIssueType());
+        assertEquals(ModelGenerationIssueReasonCode.SPEC_UNKNOWN_DEVICE,
+                snapshot.generationIssues().get(0).getReasonCode());
+        assertEquals("A referenced device is missing or no longer matches this specification.",
+                snapshot.generationIssues().get(0).getReason());
     }
 
     @Test
-    @DisplayName("P12: ambiguous multi-mode state value degrades to invalid-spec placeholder")
-    void specStateValueAmbiguousAcrossModes_generatesInvalidPlaceholder() {
+    @DisplayName("P12: ambiguous multi-mode state value skips the spec with an actionable issue")
+    void specStateValueAmbiguousAcrossModes_skipsWithActionableIssue() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("M1", "M2"))
                 .workingStates(List.of(
@@ -1775,11 +2455,16 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
-        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
-                "Ambiguous state value should degrade to invalid placeholder, got:\n" + result);
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        assertFalse(result.contains("CTLSPEC FALSE"),
+                "An invalid specification must not become an artificial violation, got:\n" + result);
         assertTrue(result.contains("ambiguous across modes"),
-                "Invalid placeholder should include ambiguity diagnostics, got:\n" + result);
+                "Technical diagnostics should remain in the generated model comment, got:\n" + result);
+        assertEquals("A selected state matches more than one device mode; choose an unambiguous mode and state.",
+                context.warningsSnapshot().generationIssues().get(0).getReason());
+        assertEquals(ModelGenerationIssueReasonCode.SPEC_AMBIGUOUS_STATE,
+                context.warningsSnapshot().generationIssues().get(0).getReasonCode());
     }
 
     @Test
@@ -1821,8 +2506,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P12: unresolved trust key generates invalid-spec placeholder")
-    void unresolvedTrustKey_generatesInvalidSpecPlaceholder() {
+    @DisplayName("P12: unresolved trust key skips the spec with a device-type explanation")
+    void unresolvedTrustKey_skipsWithDeviceTypeExplanation() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
                 .internalVariables(List.of())
@@ -1838,6 +2523,7 @@ class SmvGeneratorFixesTest {
         SpecConditionDto cond = new SpecConditionDto();
         cond.setDeviceId("device_1");
         cond.setTargetType("trust");
+        cond.setPropertyScope("variable");
         cond.setKey("not_exists");
         cond.setRelation("=");
         cond.setValue("trusted");
@@ -1849,11 +2535,53 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
-        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
-                "Invalid trust key should degrade to placeholder, got:\n" + result);
-        assertTrue(result.contains("cannot resolve property key"),
-                "Placeholder should include reason for diagnostics, got:\n" + result);
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        assertFalse(result.contains("CTLSPEC FALSE"),
+                "An invalid trust key must not become an artificial violation, got:\n" + result);
+        assertTrue(result.contains("property variable 'not_exists' not found"),
+                "The generated model comment should retain technical diagnostics, got:\n" + result);
+        assertEquals("A trust or privacy condition references a property that the device type does not define.",
+                context.warningsSnapshot().generationIssues().get(0).getReason());
+        assertEquals(ModelGenerationIssueReasonCode.SPEC_UNDECLARED_SECURITY_PROPERTY,
+                context.warningsSnapshot().generationIssues().get(0).getReasonCode());
+    }
+
+    @Test
+    @DisplayName("State trust specification checks the active state label in the selected mode")
+    void stateTrustCondition_isGuardedByCurrentModeState() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Mode"))
+                .internalVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("light_1", "Light",
+                List.of("Mode"), Map.of("Mode", List.of("off", "on")),
+                List.of(), manifest);
+
+        SpecConditionDto cond = new SpecConditionDto();
+        cond.setDeviceId("light_1");
+        cond.setTargetType("trust");
+        cond.setPropertyScope("state");
+        cond.setKey("Mode");
+        cond.setRelation("=");
+        cond.setValue("untrusted");
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_current_state_trust");
+        spec.setTemplateId("1");
+        spec.setAConditions(List.of(cond));
+        spec.setIfConditions(List.of());
+        spec.setThenConditions(List.of());
+
+        String result = specBuilder.build(List.of(spec), false, 0,
+                Map.of("light_1", smv), false);
+
+        assertTrue(result.contains("light_1.Mode=off & light_1.trust_Mode_off=untrusted"), result);
+        assertTrue(result.contains("light_1.Mode=on & light_1.trust_Mode_on=untrusted"), result);
+        assertFalse(result.contains("CTLSPEC AG(light_1.trust_Mode_on=untrusted)"), result);
     }
 
     @Test
@@ -1893,8 +2621,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("P12: unsupported relation generates invalid-spec placeholder")
-    void unsupportedRelation_generatesInvalidSpecPlaceholder() {
+    @DisplayName("P12: unsupported relation skips the spec with an actionable issue")
+    void unsupportedRelation_skipsWithActionableIssue() {
         DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Mode"))
@@ -1923,15 +2651,20 @@ class SmvGeneratorFixesTest {
         spec.setIfConditions(List.of());
         spec.setThenConditions(List.of());
 
-        String result = specBuilder.build(List.of(spec), false, 0, map, false);
-        assertTrue(result.contains("CTLSPEC FALSE -- invalid spec"),
-                "Unsupported relation should degrade to invalid-spec placeholder, got:\n" + result);
+        SmvGenerationContext context = SmvGenerationContext.collecting();
+        String result = specBuilder.build(List.of(spec), false, 0, map, false, context);
+        assertFalse(result.contains("CTLSPEC FALSE"),
+                "An unsupported relation must not become an artificial violation, got:\n" + result);
         assertTrue(result.contains("unsupported relation"),
-                "Invalid-spec placeholder should include unsupported relation reason, got:\n" + result);
+                "The generated model comment should retain technical diagnostics, got:\n" + result);
+        assertEquals("A condition uses a comparison that is not supported for the selected field.",
+                context.warningsSnapshot().generationIssues().get(0).getReason());
+        assertEquals(ModelGenerationIssueReasonCode.SPEC_UNSUPPORTED_RELATION,
+                context.warningsSnapshot().generationIssues().get(0).getReasonCode());
     }
 
     @Test
-    @DisplayName("P12: safety spec variable key a_var maps trust to trust_var")
+    @DisplayName("P12: safety spec environment variable key maps trust to trust_var")
     void safetySpec_envVariableKey_mapsTrustWithoutPrefix() {
         DeviceManifest.InternalVariable tempEnv = numericVar("temperature", false, 0, 100);
         DeviceManifest manifest = DeviceManifest.builder()
@@ -1950,7 +2683,7 @@ class SmvGeneratorFixesTest {
         SpecConditionDto cond = new SpecConditionDto();
         cond.setDeviceId("sensor_1");
         cond.setTargetType("variable");
-        cond.setKey("a_temperature");
+        cond.setKey("temperature");
         cond.setRelation("GT");
         cond.setValue("30");
 
@@ -2104,7 +2837,7 @@ class SmvGeneratorFixesTest {
         assertDoesNotThrow(() -> validator.validate(map));
 
         // Build device module and verify lowercase output
-        String deviceModule = deviceBuilder.build(smv, false, 0, true);
+        String deviceModule = deviceBuilder.build(smv, false, true);
         // All trust/privacy init values in SMV must be lowercase enum literals
         assertFalse(deviceModule.contains("Trusted"), "SMV must not contain 'Trusted' (uppercase), got:\n" + deviceModule);
         assertFalse(deviceModule.contains("Public"), "SMV must not contain 'Public' (uppercase), got:\n" + deviceModule);
@@ -2183,27 +2916,12 @@ class SmvGeneratorFixesTest {
 
         String result = mainBuilder.build(1L, List.of(dto), List.of(), map, true, 50, false);
 
-        // Attack mode expands declared env range from 15..35 to 15..39.
-        assertTrue(result.contains("a_temperature: 15..39;"),
-                "Declaration range should match attack expansion, got:\n" + result);
-        // Candidate expressions must be clamped into the same declared range.
-        assertTrue(result.contains("max(15, min(39, a_temperature+ac_1.temperature_rate))"),
-                "Base candidate should be clamped to 15..39, got:\n" + result);
-        assertTrue(result.contains("TRUE: {max(15, min(39, a_temperature - 2+ac_1.temperature_rate)), max(15, min(39, a_temperature+ac_1.temperature_rate)), max(15, min(39, a_temperature + 3+ac_1.temperature_rate))}"),
-                "TRUE branch should clamp all three candidates, got:\n" + result);
-    }
-
-    @Test
-    @DisplayName("SmvBoundsUtils: resolveEffectiveUpperBound single-point definition")
-    void smvBoundsUtils_resolveEffectiveUpperBound() {
-        // Non-attack: upper unchanged
-        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, false, 50));
-        // Attack intensity=50: expansion = (20/5.0 * 50/50.0) = 4 → 35+4=39
-        assertEquals(39, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 50));
-        // Attack intensity=0: no expansion
-        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 0));
-        // Attack intensity=100: expansion = (20/5.0 * 100/50.0) = 8 → 35+8=43
-        assertEquals(43, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, 100));
+        assertTrue(result.contains("a_temperature: 15..35;"),
+                "Attack mode must preserve the environment domain declared by the template, got:\n" + result);
+        assertTrue(result.contains("max(15, min(35, a_temperature+ac_1.temperature_rate))"),
+                "Candidates should remain clamped to the declared domain, got:\n" + result);
+        assertTrue(result.contains("TRUE: {max(15, min(35, a_temperature - 2+ac_1.temperature_rate)), max(15, min(35, a_temperature+ac_1.temperature_rate)), max(15, min(35, a_temperature + 3+ac_1.temperature_rate))}"),
+                "All candidates should remain within the declared domain, got:\n" + result);
     }
 
     @Test
@@ -2386,12 +3104,44 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("SmvBoundsUtils: edge cases — range=0 and negative intensity")
-    void smvBoundsUtils_edgeCases() {
-        // range=0 (lower==upper): no expansion regardless of intensity
-        assertEquals(10, SmvBoundsUtils.resolveEffectiveUpperBound(10, 10, true, 50));
-        // Negative intensity clamped to 0: no expansion
-        assertEquals(35, SmvBoundsUtils.resolveEffectiveUpperBound(15, 35, true, -100));
+    @DisplayName("mainBuilder: local numeric WorkingState.Dynamics works without ImpactedVariables")
+    void mainBuilder_localNumericDynamicsWithoutImpactedVariables_updatesLocalVariable() {
+        DeviceManifest.InternalVariable var = numericVar("waterTemperature", true, 0, 100);
+        var.setNaturalChangeRate("[-1, 1]");
+
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("MachineState"))
+                .initState("on")
+                .internalVariables(List.of(var))
+                .impactedVariables(List.of())
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("waterTemperature").changeRate("1").build()))
+                                .build()))
+                .build();
+
+        DeviceSmvData smv = buildSmvData("dev_1", "Water Heater",
+                List.of("MachineState"),
+                Map.of("MachineState", List.of("off", "on")),
+                List.of(var),
+                manifest);
+
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("dev_1");
+        device.setTemplateName("Water Heater");
+        device.setState("on");
+
+        Map<String, DeviceSmvData> map = new LinkedHashMap<>();
+        map.put("dev_1", smv);
+
+        String result = mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false);
+
+        assertFalse(result.contains("next(dev_1.waterTemperature_rate)"),
+                "Local-only dynamics should not create environment-impact rate variables, got:\n" + result);
+        assertTrue(result.contains("dev_1.MachineState=on: {max(0, min(100, dev_1.waterTemperature - 1 + 1)), max(0, min(100, dev_1.waterTemperature + 1)), max(0, min(100, dev_1.waterTemperature + 1 + 1))};"),
+                "WorkingState.Dynamics.ChangeRate should update local numeric variable directly, got:\n" + result);
     }
 
     // ======================== NPE guard: ImpactedVariables without InternalVariables ========================
@@ -2442,8 +3192,8 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
-    @DisplayName("FIX-2: non-integer ChangeRate is skipped but _rate transition still generated with TRUE: 0 fallback")
-    void mainBuilder_nonIntegerChangeRate_skippedGracefully() {
+    @DisplayName("Non-integer ChangeRate is rejected instead of silently omitting one state effect")
+    void mainBuilder_nonIntegerChangeRate_rejected() {
         DeviceManifest manifest = DeviceManifest.builder()
                 .modes(List.of("Power"))
                 .initState("on")
@@ -2456,14 +3206,16 @@ class SmvGeneratorFixesTest {
                                 .dynamics(List.of(DeviceManifest.Dynamic.builder()
                                         .variableName("humidity").changeRate("2").build()))
                                 .build()))
-                .internalVariables(List.of(numericVar("temp", true, 0, 50)))
+                .internalVariables(List.of(
+                        numericVar("temp", true, 0, 50),
+                        numericVar("humidity", false, 0, 100)))
                 .impactedVariables(List.of("humidity"))
                 .build();
 
         DeviceSmvData smv = buildSmvData("dev_1", "Heater",
                 List.of("Power"),
                 Map.of("Power", List.of("on", "off")),
-                List.of(numericVar("temp", true, 0, 50)),
+                List.of(numericVar("temp", true, 0, 50), numericVar("humidity", false, 0, 100)),
                 manifest);
         smv.getImpactedVariables().add("humidity");
         smv.setCurrentState("on");
@@ -2477,20 +3229,104 @@ class SmvGeneratorFixesTest {
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();
         map.put("dev_1", smv);
 
-        String result = assertDoesNotThrow(() ->
-                mainBuilder.build(1L, List.of(device), List.of(), map, false, 0, false));
+        SmvGenerationException exception = assertThrows(SmvGenerationException.class, () ->
+                validator.validate(map));
+        assertEquals("TEMPLATE_INVALID", exception.getErrorCategory());
+        assertTrue(exception.getMessage().contains("non-integer ChangeRate 'abc'"), exception.getMessage());
+    }
 
-        // _rate transition should still be generated (not skipped entirely)
-        assertTrue(result.contains("next(dev_1.humidity_rate)"),
-                "Expected _rate transition block even with non-integer ChangeRate, got:\n" + result);
-        // The valid "off" state with ChangeRate "2" should produce a CASE branch
-        assertTrue(result.contains(": 2;"),
-                "Expected valid ChangeRate '2' to appear as CASE branch, got:\n" + result);
-        // The non-integer "abc" branch should be skipped — no "abc" in output
-        assertFalse(result.contains("abc"),
-                "Non-integer ChangeRate 'abc' should NOT appear in generated SMV, got:\n" + result);
-        // TRUE: 0 fallback should always be present
-        assertTrue(result.contains("TRUE: 0;"),
-                "Expected TRUE: 0 fallback in _rate transition, got:\n" + result);
+    @Test
+    @DisplayName("Boolean WorkingState Dynamics executes Value without a numeric rate variable")
+    void mainBuilder_booleanDynamicsUsesDiscreteValue() {
+        DeviceManifest.InternalVariable occupied = DeviceManifest.InternalVariable.builder()
+                .name("occupied")
+                .isInside(true)
+                .falsifiableWhenCompromised(false)
+                .build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .initState("off")
+                .internalVariables(List.of(occupied))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("occupied").value("FALSE").build()))
+                                .build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted")
+                                .dynamics(List.of(DeviceManifest.Dynamic.builder()
+                                        .variableName("occupied").value("TRUE").build()))
+                                .build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("presence_1", "Presence",
+                List.of("Power"), Map.of("Power", List.of("off", "on")), List.of(occupied), manifest);
+        smv.getCurrentModeStates().put("Power", "off");
+        DeviceVerificationDto dto = device("presence_1", "Presence");
+        dto.setState("off");
+
+        validator.validate(Map.of("presence_1", smv));
+        String result = mainBuilder.build(
+                1L, List.of(dto), List.of(), Map.of("presence_1", smv), false, 0, false);
+
+        assertTrue(result.contains("presence_1.Power=off: FALSE;"), result);
+        assertTrue(result.contains("presence_1.Power=on: TRUE;"), result);
+        assertTrue(result.contains("TRUE: presence_1.occupied;"),
+                "A local boolean value must hold when no declared evolution applies, got:\n" + result);
+        assertFalse(result.contains("occupied_rate"), result);
+    }
+
+    @Test
+    @DisplayName("Local enum variable stutters when no declared evolution applies")
+    void mainBuilder_localEnumWithoutEvolutionStutters() {
+        DeviceManifest.InternalVariable phase = DeviceManifest.InternalVariable.builder()
+                .name("phase")
+                .isInside(true)
+                .falsifiableWhenCompromised(false)
+                .values(List.of("idle", "running"))
+                .build();
+        DeviceManifest manifest = DeviceManifest.builder()
+                .internalVariables(List.of(phase))
+                .build();
+        DeviceSmvData smv = buildSmvData(
+                "device_1", "Device", List.of(), Map.of(), List.of(phase), manifest);
+        DeviceVerificationDto dto = device("device_1", "Device");
+
+        validator.validate(Map.of("device_1", smv));
+        String result = mainBuilder.build(
+                1L, List.of(dto), List.of(), Map.of("device_1", smv), false, 0, false);
+
+        assertTrue(result.contains("TRUE: device_1.phase;"), result);
+        assertFalse(result.contains("TRUE: {idle, running};"), result);
+    }
+
+    @Test
+    @DisplayName("Stateful sensor exposes read-only state trust and privacy labels")
+    void deviceBuilder_statefulSensorDeclaresStateLabels() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Detection"))
+                .initState("clear")
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder()
+                                .name("clear").trust("trusted").privacy("public").build(),
+                        DeviceManifest.WorkingState.builder()
+                                .name("motion").trust("untrusted").privacy("private").build()))
+                .apis(List.of())
+                .build();
+        DeviceSmvData sensor = buildSmvData(
+                "motion_1", "Stateful Motion Sensor",
+                List.of("Detection"), Map.of("Detection", List.of("clear", "motion")),
+                List.of(), manifest);
+        sensor.setCurrentState("clear");
+        sensor.getCurrentModeStates().put("Detection", "clear");
+
+        String module = deviceBuilder.build(sensor, true, true);
+
+        assertTrue(module.contains("trust_Detection_clear: {untrusted, trusted};"), module);
+        assertTrue(module.contains("trust_Detection_motion: {untrusted, trusted};"), module);
+        assertTrue(module.contains("privacy_Detection_motion: {private, public};"), module);
+        assertTrue(module.contains("init(trust_Detection_clear) := trusted;"), module);
+        assertTrue(module.contains("init(trust_Detection_motion) := untrusted;"), module);
+        assertTrue(module.contains("init(privacy_Detection_motion) := private;"), module);
+        assertFalse(module.contains("next(trust_Detection_motion)"),
+                "A sensor with no command API keeps template-authored state labels read-only");
     }
 }

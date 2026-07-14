@@ -22,7 +22,7 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     description: 'The system must always maintain a given state or condition.',
     descriptionKey: 'app.specTemplates.always.description',
     requiredSides: ['a'],
-    ltlFormula: '□A'
+    formulaPreview: '□A'
   },
   {
     id: '2',
@@ -32,7 +32,7 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     description: 'A state or condition must eventually occur.',
     descriptionKey: 'app.specTemplates.eventually.description',
     requiredSides: ['a'],
-    ltlFormula: '◇A'
+    formulaPreview: '◇A'
   },
   {
     id: '3',
@@ -42,7 +42,7 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     description: 'A state or condition must never occur.',
     descriptionKey: 'app.specTemplates.never.description',
     requiredSides: ['a'],
-    ltlFormula: '□¬A'
+    formulaPreview: '□¬A'
   },
   {
     id: '4',
@@ -52,7 +52,7 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     description: 'When condition A occurs, condition B must hold in the next state.',
     descriptionKey: 'app.specTemplates.immediate.description',
     requiredSides: ['if', 'then'],
-    ltlFormula: '□(A → ○B)'
+    formulaPreview: '□(A → ○B)'
   },
   {
     id: '5',
@@ -62,31 +62,31 @@ export const specTemplateDetails: SpecTemplateDetail[] = [
     description: 'After condition A occurs, condition B must eventually occur.',
     descriptionKey: 'app.specTemplates.response.description',
     requiredSides: ['if', 'then'],
-    ltlFormula: '□(A → ◇B)'
+    formulaPreview: '□(A → ◇B)'
   },
   {
     id: '6',
     type: 'persistence',
     label: 'IF A happens, B should happen later and last forever',
     labelKey: 'app.specTemplates.persistence.label',
-    description: 'After condition A occurs, condition B must hold forever.',
+    description: 'After condition A occurs, condition B must eventually become true and then remain true.',
     descriptionKey: 'app.specTemplates.persistence.description',
     requiredSides: ['if', 'then'],
-    ltlFormula: '□(A → □B)'
+    formulaPreview: '□(A → ◇□B)'
   },
   {
     id: '7',
     type: 'safety',
-    label: 'A will not happen because of something untrusted',
+    label: 'A with an untrusted control-source label must not occur',
     labelKey: 'app.specTemplates.safety.label',
-    description: 'When an untrusted operation is detected, event A must not occur.',
+    description: 'A must not hold when any protected condition carries an untrusted control-source label. For an automation target, that label becomes untrusted only when all actual trigger sources were untrusted.',
     descriptionKey: 'app.specTemplates.safety.description',
     requiredSides: ['a'],
-    ltlFormula: '□(untrusted → ¬A)'
+    formulaPreview: '□(untrusted → ¬A)'
   }
 ]
 
-// 兼容旧版本的简单模板列表（用于下拉选择）
+// 简化模板列表（用于下拉选择）
 export const defaultSpecTemplates: SpecTemplate[] = specTemplateDetails.map(t => ({
   id: t.id,
   label: t.label
@@ -102,12 +102,13 @@ export const relationOperators = [
   { value: '<=', label: '≤' },
 
   { value: 'in', label: 'in' },
-  { value: 'not_in', label: 'not in' }
+  { value: 'not in', label: 'not in' }
 ]
 
 // 可用的目标类型（与后端 SpecConditionDto.targetType 一致）
 export const targetTypes = [
   { value: 'state', label: 'State' },
+  { value: 'mode', label: 'Mode' },
   { value: 'variable', label: 'Variable' },
   { value: 'api', label: 'API' },
   { value: 'trust', label: 'Trust' },

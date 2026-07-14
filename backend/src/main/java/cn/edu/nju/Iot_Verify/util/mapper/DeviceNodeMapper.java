@@ -1,10 +1,10 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
-import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.po.DeviceNodePo;
+import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.stereotype.Component;
@@ -37,25 +37,27 @@ public class DeviceNodeMapper {
         dto.setPosition(pos);
 
         String state = po.getState();
-        dto.setState(state != null && !state.isBlank() ? state : FALLBACK_STATE);
+        if (state == null || state.isBlank()) {
+            throw new PersistedDataIntegrityException("device", po.getId(), "state", "state is missing");
+        }
+        dto.setState(state);
         dto.setWidth(po.getWidth());
         dto.setHeight(po.getHeight());
         dto.setCurrentStateTrust(po.getCurrentStateTrust());
+        dto.setCurrentStatePrivacy(po.getCurrentStatePrivacy());
 
-        if (po.getVariablesJson() != null && !po.getVariablesJson().isEmpty()) {
-            dto.setVariables(JsonUtils.fromJsonOrDefault(
-                    po.getVariablesJson(),
-                    new TypeReference<List<VariableStateDto>>() {},
-                    null
-            ));
+        if (po.getVariablesJson() != null) {
+            dto.setVariables(JsonUtils.readPersistedJsonOptional(
+                    "device", po.getId(), "variablesJson", po.getVariablesJson(),
+                    () -> JsonUtils.fromJson(
+                            po.getVariablesJson(), new TypeReference<List<VariableStateDto>>() {})));
         }
 
-        if (po.getPrivaciesJson() != null && !po.getPrivaciesJson().isEmpty()) {
-            dto.setPrivacies(JsonUtils.fromJsonOrDefault(
-                    po.getPrivaciesJson(),
-                    new TypeReference<List<PrivacyStateDto>>() {},
-                    null
-            ));
+        if (po.getPrivaciesJson() != null) {
+            dto.setPrivacies(JsonUtils.readPersistedJsonOptional(
+                    "device", po.getId(), "privaciesJson", po.getPrivaciesJson(),
+                    () -> JsonUtils.fromJson(
+                            po.getPrivaciesJson(), new TypeReference<List<PrivacyStateDto>>() {})));
         }
 
         return dto;
@@ -78,10 +80,12 @@ public class DeviceNodeMapper {
             po.setPosY(dto.getPosition().getY());
         }
 
-        po.setState(dto.getState());
+        String state = dto.getState();
+        po.setState(state != null && !state.isBlank() ? state.trim() : FALLBACK_STATE);
         po.setWidth(dto.getWidth());
         po.setHeight(dto.getHeight());
         po.setCurrentStateTrust(dto.getCurrentStateTrust());
+        po.setCurrentStatePrivacy(dto.getCurrentStatePrivacy());
 
         po.setVariablesJson(JsonUtils.toJsonOrEmpty(dto.getVariables()));
         po.setPrivaciesJson(JsonUtils.toJsonOrEmpty(dto.getPrivacies()));
@@ -100,20 +104,4 @@ public class DeviceNodeMapper {
         return po;
     }
 
-    /**
-     * DeviceNodeDto -> DeviceVerificationDto
-     */
-    public DeviceVerificationDto toVerificationDto(DeviceNodeDto dto) {
-        if (dto == null) {
-            return null;
-        }
-        DeviceVerificationDto vDto = new DeviceVerificationDto();
-        vDto.setVarName(dto.getId());
-        vDto.setTemplateName(dto.getTemplateName());
-        vDto.setState(dto.getState());
-        vDto.setCurrentStateTrust(dto.getCurrentStateTrust());
-        vDto.setVariables(dto.getVariables());
-        vDto.setPrivacies(dto.getPrivacies());
-        return vDto;
-    }
 }

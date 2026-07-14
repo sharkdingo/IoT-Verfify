@@ -38,13 +38,15 @@ The browser blocks requests from the frontend origin.
 
 ## NuSMV execution failure
 
-**Synchronous verification** returns HTTP 200 with `safe: false` and details in `checkLogs`:
+**Synchronous verification** returns HTTP 200 with `outcome: "INCONCLUSIVE"`,
+`modelComplete: false`, and details in `checkLogs`:
 
 ```json
 {
   "code": 200,
   "data": {
-    "safe": false,
+    "outcome": "INCONCLUSIVE",
+    "modelComplete": false,
     "traces": [],
     "specResults": [],
     "checkLogs": ["NuSMV execution failed: <error details>"]
@@ -70,21 +72,25 @@ Checklist:
 - Review the specific error in `checkLogs` and, for async tasks, `errorMessage`.
 
 When verification completes and NuSMV per-spec results are available, `specResults`
-contains objects shaped as `{ "specId": "...", "passed": true, "expression": "..." }`;
-execution failures can still return an empty array because no trustworthy per-spec result
-was produced.
+contains objects shaped as `{ "specId": "...", "outcome": "SATISFIED", "expression": "..." }`.
+An emitted property with missing or unreliable parser output uses
+`"outcome": "INCONCLUSIVE"`; a property omitted during generation does not appear in
+`specResults` and is instead explained by `generationIssues`. Execution failures can
+still return an empty array because no trustworthy per-spec result was produced.
 
 See NuSMV keys in [../getting-started/configuration.md](../getting-started/configuration.md) and the model details in [../architecture/nusmv-model.md](../architecture/nusmv-model.md).
 
 ## Verification timeout
 
-**Synchronous verification** returns HTTP 200 with `safe: false` and a timeout note in `checkLogs`:
+**Synchronous verification** returns HTTP 200 with `outcome: "INCONCLUSIVE"`,
+`modelComplete: false`, and a timeout note in `checkLogs`:
 
 ```json
 {
   "code": 200,
   "data": {
-    "safe": false,
+    "outcome": "INCONCLUSIVE",
+    "modelComplete": false,
     "traces": [],
     "specResults": [],
     "checkLogs": ["Verification timed out"]

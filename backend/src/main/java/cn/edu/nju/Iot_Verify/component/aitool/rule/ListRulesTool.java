@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.rule;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -15,8 +16,8 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -39,6 +40,7 @@ public class ListRulesTool extends AbstractAiTool {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
+                "maxLength", 100,
                 "description", "Optional keyword to filter rules by device name, attribute, relation, value, or action. Leave empty to return all rules."
         ));
 
@@ -55,26 +57,33 @@ public class ListRulesTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String keyword = args.path("keyword").asText("").trim().toLowerCase(Locale.ROOT);
+            requireOnlyFields(args, "arguments", Set.of("keyword"));
+            String keyword = optionalTextArg(args, "keyword", "", 100);
 
             List<RuleDto> rules = safeList(boardStorageService.getRules(userId));
+            List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
             if (!keyword.isEmpty()) {
                 rules = rules.stream()
-                        .filter(rule -> containsRuleKeyword(rule, keyword))
+                        .filter(rule -> RuleToolPresenter.containsKeyword(rule, nodes, keyword))
                         .toList();
             }
 
             if (rules.isEmpty()) {
-                return objectMapper.writeValueAsString(Map.of(
+                return readOnlySuccessJson(Map.of(
                         "message", "No rules found on the board.",
                         "count", 0
-                ));
+                ), "No rules found on the board.");
             }
 
-            return objectMapper.writeValueAsString(Map.of(
+            List<Map<String, Object>> presentedRules = rules.stream()
+                    .map(rule -> RuleToolPresenter.present(rule, nodes))
+                    .toList();
+            return readOnlySuccessJson(Map.of(
                     "count", rules.size(),
-                    "rules", rules
-            ));
+                    "rules", presentedRules
+            ), "Rules loaded.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("list_rules busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -87,35 +96,4 @@ public class ListRulesTool extends AbstractAiTool {
         }
     }
 
-    private boolean containsRuleKeyword(RuleDto rule, String keyword) {
-        if (rule == null) {
-            return false;
-        }
-        if (contains(rule.getRuleString(), keyword)) {
-            return true;
-        }
-        if (rule.getCommand() != null) {
-            if (contains(rule.getCommand().getDeviceName(), keyword) || contains(rule.getCommand().getAction(), keyword)) {
-                return true;
-            }
-        }
-        if (rule.getConditions() != null) {
-            for (RuleDto.Condition condition : rule.getConditions()) {
-                if (condition == null) {
-                    continue;
-                }
-                if (contains(condition.getDeviceName(), keyword)
-                        || contains(condition.getAttribute(), keyword)
-                        || contains(condition.getRelation(), keyword)
-                        || contains(condition.getValue(), keyword)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean contains(String value, String keyword) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
-    }
 }

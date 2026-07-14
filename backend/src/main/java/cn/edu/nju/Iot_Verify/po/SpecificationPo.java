@@ -6,7 +6,7 @@ import lombok.*;
 
 @Entity
 @Table(name = "specification", indexes = {
-        @Index(name = "idx_specification_user_id", columnList = "user_id")
+        @Index(name = "idx_specification_user_order", columnList = "user_id, list_order")
 })
 @Data
 @NoArgsConstructor
@@ -22,6 +22,10 @@ public class SpecificationPo {
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    /** Internal persistence of the user-visible specification list order. */
+    @Column(name = "list_order", nullable = false)
+    private Integer listOrder;
 
     @Column(name = "template_id", nullable = false, length = 10)
     private String templateId;

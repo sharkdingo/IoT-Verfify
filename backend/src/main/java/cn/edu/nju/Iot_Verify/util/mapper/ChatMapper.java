@@ -38,7 +38,7 @@ public class ChatMapper {
         ChatSessionResponseDto dto = new ChatSessionResponseDto();
         dto.setId(chatSessionPo.getId());
         dto.setUserId(chatSessionPo.getUserId());
-        dto.setTitle(chatSessionPo.getTitle());
+        dto.setTitle(userFacingSessionTitle(chatSessionPo.getTitle()));
         dto.setCreatedAt(chatSessionPo.getCreatedAt());
         dto.setUpdatedAt(chatSessionPo.getUpdatedAt());
         return dto;
@@ -46,5 +46,13 @@ public class ChatMapper {
 
     public List<ChatSessionResponseDto> toChatSessionDtoList(List<ChatSessionPo> list) {
         return list.stream().map(this::toChatSessionDto).toList();
+    }
+
+    private String userFacingSessionTitle(String title) {
+        if (title == null || title.isBlank() || "New Chat".equals(title)
+                || title.matches("Chat \\d+")) {
+            return null;
+        }
+        return title;
     }
 }

@@ -55,6 +55,16 @@ in `rest-endpoints.md` (index) + one domain doc; config defaults live only in
 `api/overview.md`. Elsewhere, link — do not restate. If you find the same fact in two
 docs, one is wrong: delete the copy and link to the owner.
 
+## Product-first development stage
+
+This project is still in active development. Do **not** preserve a flawed legacy design
+only for compatibility with an old implementation. When documentation, interfaces,
+business logic, frontend interaction, or modeling semantics do not match the user's
+mental model, the project goals, or sound human-computer interaction principles, you may
+boldly adjust code, docs, type definitions, tests, and examples. Keep every change
+evidence-based, scoped, and verifiable. The primary goal is the user's need and mental
+model.
+
 ## Shared conventions
 
 - **Language**: all documentation is written in **English** (README, `docs/`,
@@ -93,18 +103,22 @@ Full git/PR conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Safety / gotchas that bite across the stack
 
 - **`ProductionSafetyCheck`** refuses to start the backend under a `prod`/`production`
-  profile if `JWT_SECRET` / `DB_PASSWORD` / `OPENAI_API_KEY` hold unsafe defaults.
+  profile if `JWT_SECRET` / `DB_PASSWORD` / `IOT_VERIFY_OPENAI_API_KEY` hold unsafe defaults.
 - **Redis is fail-open**: logout token-revocation degrades silently if Redis is down —
   never make request flow hard-depend on it.
 - **NuSMV 2.6–2.7 only** (not nuXmv); the trace parser depends on its English output
   format.
-- **`saveRules` is an incremental upsert**, not full-replace (unlike nodes/edges/specs)
-  — send existing `id`s back; details in [docs/api/board.md](docs/api/board.md).
+- **Ordinary board mutations are targeted**: add/update/delete only the intended
+  device/rule/spec and reconcile from the returned current snapshot. `/api/board/batch`
+  is the explicit full-scene replacement command and requires user confirmation in the UI.
+  Details in [docs/api/board.md](docs/api/board.md).
 
 ## Open decisions (do not resolve silently)
 
 - **LICENSE**: no license file exists; the authorization stance is unconfirmed. Do not
   add a LICENSE or assert a license until the user decides.
 
-Note: there is no separate `AGENTS.md`; the three CLAUDE.md files (this root file plus
-`backend/CLAUDE.md` and `frontend/CLAUDE.md`) are the coding-AI-agent guidance.
+Note: the three CLAUDE.md files (this root file plus `backend/CLAUDE.md` and
+`frontend/CLAUDE.md`) are the stack-specific coding-AI-agent guidance. If a root
+`AGENTS.md` Codex mirror is present, keep it aligned with this file; do not add
+backend/frontend AGENTS files.

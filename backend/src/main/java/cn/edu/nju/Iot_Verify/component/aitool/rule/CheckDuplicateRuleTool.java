@@ -1,6 +1,5 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
-import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -8,6 +7,7 @@ import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import cn.edu.nju.Iot_Verify.util.RuleSemanticSignature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -17,56 +17,18 @@ import java.util.*;
 
 /**
  * 规则重复检查工具
- * 当用户添加一条规则后，检查该规则是否与现有规则重复
+ * 当用户添加一条规则后，使用确定性规则签名检查该规则是否与现有规则重复。
  */
 @Slf4j
 @Component
 public class CheckDuplicateRuleTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
-    private final PromptCompletionService promptCompletionService;
-
-    private static final double TEMPERATURE = 0.3;
-    private static final int MAX_TOKENS = 2000;
-
-    private static final String SYSTEM_PROMPT = """
-你是智能物联网(IoT)规则重复性检查助手。你的任务是检查用户新添加的规则是否与现有规则重复。
-
-## 输入信息
-- 新添加的规则详情（触发条件、执行动作等）
-- 用户面板上已有的所有规则列表
-
-## 输出要求
-请分析新规则与现有规则的关系，返回符合以下JSON格式的结果：
-
-```json
-{
-  "isDuplicate": true或false,
-  "duplicateWith": "重复的现有规则ID（如果有）",
-  "similarity": 0.0-1.0,
-  "reason": "判断理由"
-}
-```
-
-## 重复判定标准
-1. **完全相同**: 触发条件和执行动作完全相同
-2. **高度相似**: 触发条件和执行动作几乎相同，仅参数略有不同
-3. **包含关系**: 新规则是现有规则的子集或超集
-4. **不重复**: 触发条件或执行动作有明显不同
-
-## 重要约束
-- 必须准确匹配设备的实际变量名和API名称
-- 如果发现重复，返回重复的规则ID和相似度
-- 考虑规则的语义相似性，不仅是字面匹配
-- 如果没有现有规则，返回isDuplicate为false
-""";
 
     public CheckDuplicateRuleTool(BoardStorageService boardStorageService,
-                                  PromptCompletionService promptCompletionService,
                                   ObjectMapper objectMapper) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
-        this.promptCompletionService = promptCompletionService;
     }
 
     @Override
@@ -78,10 +40,7 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
-        props.put("newRule", Map.of(
-                "type", "object",
-                "description", "The new rule to check for duplicates"
-        ));
+        props.put("newRule", RuleCandidateArgument.schema());
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", props, List.of("newRule")
@@ -89,7 +48,7 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
 
         return LlmToolSpec.of(getName(),
                 "Check if a new rule is duplicate with existing rules on the board. " +
-                        "Analyzes trigger conditions and actions to determine if the rule already exists.",
+                        "Uses deterministic typed trigger/action signatures so rule creation is not blocked by LLM latency.",
                 schema);
     }
 
@@ -102,68 +61,43 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
+            requireOnlyFields(args, "arguments", Set.of("newRule"));
+
             JsonNode newRuleNode = args.path("newRule");
-            if (newRuleNode.isMissingNode() || newRuleNode.isNull()) {
-                return errorJson("newRule is required", "VALIDATION_ERROR", 400);
+            RuleDto newRule;
+            try {
+                newRule = RuleCandidateArgument.parse(newRuleNode);
+            } catch (RuleCandidateArgument.ValidationException e) {
+                return errorJson(e.getMessage(), "VALIDATION_ERROR", 400);
             }
-
-            log.info("=== CHECK DUPLICATE RULE DEBUG ===");
-            log.info("User ID: {}", userId);
-
-            // 解析新规则
-            RuleDto newRule = objectMapper.convertValue(newRuleNode, RuleDto.class);
-
-            if (!isValidRule(newRule)) {
-                return errorJson("Invalid rule format", "VALIDATION_ERROR", 400);
-            }
-
-            log.info("New rule: trigger={}, action={}",
-                    getTriggerDescription(newRule),
-                    getActionDescription(newRule));
 
             // 获取现有规则
             List<RuleDto> existingRules = safeList(boardStorageService.getRules(userId));
 
-            log.info("Existing rules count: {}", existingRules.size());
-
-            // 打印现有规则
-            for (RuleDto rule : existingRules) {
-                log.info("Existing rule: id={}, trigger={}, action={}",
-                        rule.getId(),
-                        getTriggerDescription(rule),
-                        getActionDescription(rule));
-            }
+            log.debug("Duplicate rule check request: userId={}, existingRules={}", userId, existingRules.size());
 
             if (existingRules.isEmpty()) {
                 // 没有现有规则，直接返回不重复。
-                // 注意：不能用 Map.of(...)，因为它禁止 null 值，会在 "duplicateWith"=null 时抛 NPE，
+                // 注意：不能用 Map.of(...)，因为它禁止 null 值，会在 "matchedRule"=null 时抛 NPE，
                 // 导致库中第一条规则做重复检查时被 catch(Exception) 转成 500 而非 {isDuplicate:false}。
                 Map<String, Object> body = new HashMap<>();
                 body.put("isDuplicate", false);
-                body.put("duplicateWith", null);
+                body.put("requiresReview", false);
+                body.put("matchedRule", null);
                 body.put("similarity", 0.0);
+                body.put("matchType", "none");
+                body.put("reasonCode", "NO_EXISTING_RULES");
+                body.put("reason", "no existing rules");
                 body.put("message", "No existing rules to compare. This is the first rule.");
                 return objectMapper.writeValueAsString(body);
             }
 
-            // 构建新规则信息
-            String newRuleInfo = buildRuleInfoJson(newRule, "new");
-
-            // 构建现有规则列表
-            String existingRulesInfo = buildRulesListJson(existingRules);
-
-            // 调用 LLM 进行重复检查
-            String aiResponse = checkDuplicateWithAI(newRuleInfo, existingRulesInfo);
-
-            log.info("AI Response: {}", aiResponse);
-
-            // 解析 AI 响应
-            String result = parseAiResponse(aiResponse, existingRules);
-
-            log.info("Final Result: {}", result);
-
+            String result = objectMapper.writeValueAsString(checkDuplicateDeterministically(newRule, existingRules));
+            log.debug("Duplicate rule check result length: {} chars", result.length());
             return result;
 
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("check_duplicate_rule busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
@@ -176,210 +110,120 @@ public class CheckDuplicateRuleTool extends AbstractAiTool {
         }
     }
 
-    private boolean isValidRule(RuleDto rule) {
-        if (rule == null) return false;
-        if (rule.getConditions() == null || rule.getConditions().isEmpty()) return false;
-        if (rule.getCommand() == null) return false;
-        return true;
-    }
+    private Map<String, Object> checkDuplicateDeterministically(RuleDto newRule, List<RuleDto> existingRules) {
+        RuleSemanticSignature.Signature newSignature = RuleSemanticSignature.from(newRule);
+        DuplicateCandidate best = DuplicateCandidate.none();
 
-    private String getTriggerDescription(RuleDto rule) {
-        if (rule.getConditions() == null || rule.getConditions().isEmpty()) {
-            return "none";
-        }
-        var cond = rule.getConditions().get(0);
-        return String.format("%s.%s%s%s",
-                cond.getDeviceName() != null ? cond.getDeviceName() : "",
-                cond.getAttribute() != null ? cond.getAttribute() : "",
-                cond.getRelation() != null ? cond.getRelation() : "",
-                cond.getValue() != null ? cond.getValue() : "");
-    }
-
-    private String getActionDescription(RuleDto rule) {
-        if (rule.getCommand() == null) {
-            return "none";
-        }
-        return String.format("%s.%s(%s)",
-                rule.getCommand().getDeviceName() != null ? rule.getCommand().getDeviceName() : "",
-                rule.getCommand().getAction() != null ? rule.getCommand().getAction() : "",
-                rule.getCommand().getContent() != null ? rule.getCommand().getContent() : "");
-    }
-
-    private String buildRuleInfoJson(RuleDto rule, String prefix) {
-        try {
-            Map<String, Object> ruleMap = new LinkedHashMap<>();
-            ruleMap.put("ruleId", prefix + "_" + System.currentTimeMillis());
-
-            // 条件
-            if (rule.getConditions() != null && !rule.getConditions().isEmpty()) {
-                List<Map<String, Object>> conditions = new ArrayList<>();
-                for (var cond : rule.getConditions()) {
-                    Map<String, Object> condMap = new LinkedHashMap<>();
-                    condMap.put("deviceName", cond.getDeviceName());
-                    condMap.put("attribute", cond.getAttribute());
-                    condMap.put("relation", cond.getRelation());
-                    condMap.put("value", cond.getValue());
-                    conditions.add(condMap);
-                }
-                ruleMap.put("conditions", conditions);
+        for (RuleDto existingRule : existingRules) {
+            if (newRule.getId() != null && newRule.getId().equals(existingRule.getId())) {
+                continue;
             }
-
-            // 命令
-            if (rule.getCommand() != null) {
-                Map<String, Object> commandMap = new LinkedHashMap<>();
-                commandMap.put("deviceName", rule.getCommand().getDeviceName());
-                commandMap.put("action", rule.getCommand().getAction());
-                commandMap.put("contentDevice", rule.getCommand().getContentDevice());
-                commandMap.put("content", rule.getCommand().getContent());
-                ruleMap.put("command", commandMap);
+            DuplicateCandidate candidate = compare(
+                    newSignature, RuleSemanticSignature.from(existingRule), existingRule);
+            if (candidate.similarity > best.similarity) {
+                best = candidate;
             }
+        }
 
-            return objectMapper.writeValueAsString(ruleMap);
-        } catch (Exception e) {
-            log.error("Failed to build rule info JSON", e);
-            return "{}";
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("isDuplicate", best.isDuplicate);
+        result.put("requiresReview", best.requiresReview);
+        result.put("matchedRule", best.matchedRule);
+        result.put("similarity", best.similarity);
+        result.put("matchType", best.matchType);
+        result.put("reasonCode", best.reasonCode);
+        result.put("reason", best.reason);
+        result.put("message", best.isDuplicate
+                ? "This rule is identical to: " + best.matchedRule
+                : best.requiresReview
+                    ? "This rule may overlap with: " + best.matchedRule
+                    : "No obvious duplicate rule found; this is not a conflict-free proof.");
+        return result;
+    }
+
+    private DuplicateCandidate compare(RuleSemanticSignature.Signature candidate,
+                                       RuleSemanticSignature.Signature existing,
+                                       RuleDto existingRule) {
+        if (!candidate.commandKey().equals(existing.commandKey())) {
+            return DuplicateCandidate.none();
+        }
+
+        String matchedRule = displayRule(existingRule);
+        if (candidate.conditionKeys().equals(existing.conditionKeys())) {
+            return new DuplicateCandidate(true, true, matchedRule, 1.0, "exact",
+                    "EXACT_MATCH",
+                    "same trigger conditions and same action");
+        }
+
+        if (!candidate.conditionKeys().isEmpty() && !existing.conditionKeys().isEmpty()) {
+            if (existing.conditionKeys().containsAll(candidate.conditionKeys())
+                    || candidate.conditionKeys().containsAll(existing.conditionKeys())) {
+                double ratio = Math.min(candidate.conditionKeys().size(), existing.conditionKeys().size())
+                        / (double) Math.max(candidate.conditionKeys().size(), existing.conditionKeys().size());
+                return new DuplicateCandidate(false, true, matchedRule, Math.max(0.85, ratio), "contains",
+                        "TRIGGER_SET_CONTAINS_OTHER",
+                        "same action and one trigger set contains the other");
+            }
+        }
+
+        if (candidate.conditionShapeKeys().equals(existing.conditionShapeKeys())) {
+            return new DuplicateCandidate(false, true, matchedRule, 0.82, "same-shape",
+                    "SAME_TRIGGER_SHAPE_DIFFERENT_VALUES",
+                    "same action and trigger structure with different parameter values");
+        }
+
+        Set<String> intersection = new HashSet<>(candidate.conditionShapeKeys());
+        intersection.retainAll(existing.conditionShapeKeys());
+        if (!intersection.isEmpty()) {
+            double similarity = 0.45 + 0.3 * intersection.size()
+                    / Math.max(candidate.conditionShapeKeys().size(), existing.conditionShapeKeys().size());
+            return new DuplicateCandidate(false, false, null, similarity, "partial-shape",
+                    "PARTIAL_TRIGGER_OVERLAP",
+                    "same action with partially overlapping trigger structure");
+        }
+
+        return DuplicateCandidate.none();
+    }
+
+    private record DuplicateCandidate(
+            boolean isDuplicate,
+            boolean requiresReview,
+            String matchedRule,
+            double similarity,
+            String matchType,
+            String reasonCode,
+            String reason
+    ) {
+        static DuplicateCandidate none() {
+            return new DuplicateCandidate(false, false, null, 0.0, "none",
+                    "NO_MATCHING_SIGNATURE", "no matching rule signature");
         }
     }
 
-    private String buildRulesListJson(List<RuleDto> rules) {
-        try {
-            List<Map<String, Object>> rulesList = new ArrayList<>();
-
-            for (RuleDto rule : rules) {
-                Map<String, Object> ruleMap = new LinkedHashMap<>();
-                ruleMap.put("ruleId", rule.getId() != null ? rule.getId() : "unknown");
-
-                if (rule.getConditions() != null && !rule.getConditions().isEmpty()) {
-                    List<Map<String, Object>> conditions = new ArrayList<>();
-                    for (var cond : rule.getConditions()) {
-                        Map<String, Object> condMap = new LinkedHashMap<>();
-                        condMap.put("deviceName", cond.getDeviceName());
-                        condMap.put("attribute", cond.getAttribute());
-                        condMap.put("relation", cond.getRelation());
-                        condMap.put("value", cond.getValue());
-                        conditions.add(condMap);
+    private String displayRule(RuleDto rule) {
+        if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+            return rule.getRuleString();
+        }
+        if (rule == null || rule.getCommand() == null) {
+            return "?";
+        }
+        String conditions = safeList(rule.getConditions()).stream()
+                .filter(java.util.Objects::nonNull)
+                .map(condition -> {
+                    String base = displayText(condition.getDeviceName()) + "." + displayText(condition.getAttribute());
+                    if ("api".equalsIgnoreCase(displayText(condition.getTargetType()))) {
+                        return base;
                     }
-                    ruleMap.put("conditions", conditions);
-                }
-
-                if (rule.getCommand() != null) {
-                    Map<String, Object> commandMap = new LinkedHashMap<>();
-                    commandMap.put("deviceName", rule.getCommand().getDeviceName());
-                    commandMap.put("action", rule.getCommand().getAction());
-                    commandMap.put("contentDevice", rule.getCommand().getContentDevice());
-                    commandMap.put("content", rule.getCommand().getContent());
-                    ruleMap.put("command", commandMap);
-                }
-
-                rulesList.add(ruleMap);
-            }
-
-            return objectMapper.writeValueAsString(rulesList);
-        } catch (Exception e) {
-            log.error("Failed to build rules list JSON", e);
-            return "[]";
-        }
+                    return base + " " + displayText(condition.getRelation()) + " " + displayText(condition.getValue());
+                })
+                .reduce((left, right) -> left + " & " + right)
+                .orElse("?");
+        return conditions + " -> " + displayText(rule.getCommand().getDeviceName())
+                + "." + displayText(rule.getCommand().getAction());
     }
 
-    private String checkDuplicateWithAI(String newRuleInfo, String existingRulesInfo) {
-        String userPrompt = buildUserPrompt(newRuleInfo, existingRulesInfo);
-
-        log.info("Calling LLM for duplicate rule check...");
-        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
-
-        if (content == null || content.isBlank()) {
-            log.warn("AI returned empty content");
-            return "{\"isDuplicate\": false, \"similarity\": 0.0}";
-        }
-
-        log.info("AI response content length: {}", content.length());
-        return content;
+    private String displayText(String value) {
+        return value == null ? "" : value.trim();
     }
 
-    private String buildUserPrompt(String newRuleInfo, String existingRulesInfo) {
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("请检查新添加的规则是否与现有规则重复。\n\n");
-
-        prompt.append("## 新添加的规则\n");
-        prompt.append(newRuleInfo);
-        prompt.append("\n\n");
-
-        prompt.append("## 现有规则列表\n");
-        prompt.append(existingRulesInfo);
-        prompt.append("\n\n");
-
-        prompt.append("请直接返回JSON格式的检查结果，不要包含其他文字。");
-
-        return prompt.toString();
-    }
-
-    private String parseAiResponse(String aiResponse, List<RuleDto> existingRules) {
-        try {
-            // 清理 AI 返回的内容
-            String cleanedResponse = aiResponse.trim();
-            if (cleanedResponse.startsWith("```")) {
-                int firstNewline = cleanedResponse.indexOf('\n');
-                if (firstNewline > 0) {
-                    cleanedResponse = cleanedResponse.substring(firstNewline).trim();
-                }
-            }
-            if (cleanedResponse.endsWith("```")) {
-                cleanedResponse = cleanedResponse.substring(0, cleanedResponse.lastIndexOf("```")).trim();
-            }
-
-            // 解析 JSON
-            JsonNode root = objectMapper.readTree(cleanedResponse);
-
-            boolean isDuplicate = root.path("isDuplicate").asBoolean(false);
-            String duplicateWith = root.path("duplicateWith").asText(null);
-            double similarity = root.path("similarity").asDouble(0.0);
-            String reason = root.path("reason").asText("");
-
-            // 如果 AI 返回了重复的规则 ID，验证它是否有效
-            if (isDuplicate && duplicateWith != null && !duplicateWith.isBlank()) {
-                Long targetId = parseLongSafely(duplicateWith);
-                boolean validId = existingRules.stream()
-                        .anyMatch(r -> r.getId() != null && r.getId().equals(targetId));
-                if (!validId) {
-                    // 如果 ID 无效，尝试找到最相似的规则
-                    isDuplicate = similarity > 0.8;
-                    duplicateWith = isDuplicate ? "unknown" : null;
-                }
-            }
-
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("isDuplicate", isDuplicate);
-            result.put("duplicateWith", duplicateWith);
-            result.put("similarity", similarity);
-            result.put("reason", reason);
-
-            if (isDuplicate) {
-                result.put("message", "This rule is duplicate with existing rule: " + duplicateWith);
-            } else {
-                result.put("message", "No duplicate rules found.");
-            }
-
-            return objectMapper.writeValueAsString(result);
-
-        } catch (Exception e) {
-            log.error("Failed to parse AI response", e);
-            try {
-                return objectMapper.writeValueAsString(Map.of(
-                        "isDuplicate", false,
-                        "similarity", 0.0,
-                        "message", "Failed to check duplicate. Please try again."
-                ));
-            } catch (Exception ex) {
-                return "{\"isDuplicate\":false,\"similarity\":0.0}";
-            }
-        }
-    }
-
-    private Long parseLongSafely(String value) {
-        try {
-            return value == null ? null : Long.valueOf(value.trim());
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
 }

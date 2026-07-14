@@ -1,13 +1,26 @@
+export type RuleSourceItemType = 'api' | 'variable' | 'mode' | 'state'
+
+export type DuplicateRuleReasonCode =
+    | 'NO_EXISTING_RULES'
+    | 'EXACT_MATCH'
+    | 'TRIGGER_SET_CONTAINS_OTHER'
+    | 'SAME_TRIGGER_SHAPE_DIFFERENT_VALUES'
+    | 'PARTIAL_TRIGGER_OVERLAP'
+    | 'NO_MATCHING_SIGNATURE'
+
+export type RuleSimilarityReasonCode =
+    | 'NO_EXISTING_RULES'
+    | 'AI_DUPLICATE'
+    | 'AI_SIMILAR'
+    | 'AI_HIGH_SCORE_REVIEW'
+    | 'AI_NO_SIGNIFICANT_SIMILARITY'
+
 export interface SourceEntry {
-    fromId: string  // 设备ID（仅设备API类型需要）
-    fromApi: string  // API名称或变量名称
-    // 区分来源类型：device=设备API触发，globalVariable=全局变量触发
-    sourceType?: 'device' | 'globalVariable'
-    // 兼容旧字段：itemType 用于区分 API 和变量（设备内部变量）
-    itemType?: 'api' | 'variable'
-    // 后端返回的字段名
-    targetType?: 'api' | 'variable'
-    // 条件关系和值（仅变量类型需要）
+    fromId: string  // Source device id
+    fromApi: string  // API name, variable name, mode name; full-state conditions use state
+    // Maps directly to backend RuleDto.Condition.targetType.
+    itemType: RuleSourceItemType
+    // Required for variable, mode, and state conditions; omitted for API signal events.
     relation?: string
     value?: string
 }
@@ -19,4 +32,6 @@ export interface RuleForm {
     sources: SourceEntry[]
     toId: string
     toApi: string
+    contentDevice?: string
+    content?: string
 }

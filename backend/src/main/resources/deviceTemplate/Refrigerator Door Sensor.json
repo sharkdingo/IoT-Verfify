@@ -6,7 +6,7 @@
 			"Name": "contact",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["closed", "open"]

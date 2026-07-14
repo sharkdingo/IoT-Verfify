@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.repository;
 
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -28,6 +29,15 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      */
     List<VerificationTaskPo> findByUserIdAndIdNotInOrderByCreatedAtDesc(Long userId, List<Long> excludedIds);
 
+    List<VerificationTaskPo> findByUserIdAndStatusNotOrderByCreatedAtDesc(
+            Long userId, VerificationTaskPo.TaskStatus status);
+
+    List<VerificationTaskPo> findByUserIdAndStatusNotAndIdNotInOrderByCreatedAtDesc(
+            Long userId, VerificationTaskPo.TaskStatus status, List<Long> excludedIds);
+
+    List<VerificationTaskPo> findByUserIdAndStatusOrderByCompletedAtDesc(
+            Long userId, VerificationTaskPo.TaskStatus status);
+
     /**
      * 根据ID和用户ID查询任务
      */
@@ -49,47 +59,50 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     void deleteByUserId(Long userId);
 
     /**
-     * Atomically complete a task only if it has not been cancelled.
-     * Returns 1 if updated, 0 if the task was already CANCELLED.
+     * Atomically complete a task only while it is RUNNING.
+     * Terminal states are immutable: CANCELLED/COMPLETED/FAILED must not be overwritten.
      */
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.isSafe = :isSafe, t.violatedSpecCount = :violatedSpecCount, "
+         + "t.progress = 100, t.outcome = :outcome, t.violatedSpecCount = :violatedSpecCount, "
          + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
-         + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, t.nusmvOutput = :nusmvOutput, "
+         + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, "
+         + "t.generationIssuesJson = :generationIssuesJson, t.nusmvOutput = :nusmvOutput, "
          + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
-    int completeTaskIfNotCancelled(@Param("taskId") Long taskId,
-                                   @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
-                                   @Param("completedAt") LocalDateTime completedAt,
-                                   @Param("isSafe") Boolean isSafe,
-                                   @Param("violatedSpecCount") Integer violatedSpecCount,
-                                   @Param("disabledRuleCount") Integer disabledRuleCount,
-                                   @Param("skippedSpecCount") Integer skippedSpecCount,
-                                   @Param("specResultsJson") String specResultsJson,
-                                   @Param("checkLogsJson") String checkLogsJson,
-                                   @Param("nusmvOutput") String nusmvOutput,
-                                   @Param("errorMessage") String errorMessage,
-                                   @Param("processingTimeMs") Long processingTimeMs,
-                                   @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus);
+         + "WHERE t.id = :taskId AND t.status = :runningStatus")
+    int completeTaskIfRunning(@Param("taskId") Long taskId,
+                              @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
+                              @Param("completedAt") LocalDateTime completedAt,
+                              @Param("outcome") VerificationOutcome outcome,
+                              @Param("violatedSpecCount") Integer violatedSpecCount,
+                              @Param("disabledRuleCount") Integer disabledRuleCount,
+                              @Param("skippedSpecCount") Integer skippedSpecCount,
+                              @Param("specResultsJson") String specResultsJson,
+                              @Param("checkLogsJson") String checkLogsJson,
+                              @Param("generationIssuesJson") String generationIssuesJson,
+                              @Param("nusmvOutput") String nusmvOutput,
+                              @Param("errorMessage") String errorMessage,
+                              @Param("processingTimeMs") Long processingTimeMs,
+                              @Param("runningStatus") VerificationTaskPo.TaskStatus runningStatus);
 
     /**
-     * Atomically fail a task only if it has not been cancelled.
+     * Atomically fail a task only while it is still active.
      */
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
-         + "t.progress = 100, t.isSafe = false, t.errorMessage = :errorMessage, "
+         + "t.progress = 100, t.outcome = :outcome, t.errorMessage = :errorMessage, "
          + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status <> :cancelledStatus")
-    int failTaskIfNotCancelled(@Param("taskId") Long taskId,
-                               @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
-                               @Param("completedAt") LocalDateTime completedAt,
-                               @Param("errorMessage") String errorMessage,
-                               @Param("checkLogsJson") String checkLogsJson,
-                               @Param("processingTimeMs") Long processingTimeMs,
-                               @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus);
+         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
+    int failTaskIfActive(@Param("taskId") Long taskId,
+                         @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
+                         @Param("completedAt") LocalDateTime completedAt,
+                         @Param("outcome") VerificationOutcome outcome,
+                         @Param("errorMessage") String errorMessage,
+                         @Param("checkLogsJson") String checkLogsJson,
+                         @Param("processingTimeMs") Long processingTimeMs,
+                         @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
 
     /**
      * Atomically transition a task from PENDING to RUNNING.
@@ -117,11 +130,12 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :cancelledStatus, "
-         + "t.completedAt = :completedAt, t.progress = 100 "
+         + "t.completedAt = :completedAt, t.progress = 100, t.outcome = :outcome "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
     int cancelTaskIfStillActive(@Param("taskId") Long taskId,
                                 @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus,
                                 @Param("completedAt") LocalDateTime completedAt,
+                                @Param("outcome") VerificationOutcome outcome,
                                 @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
 
     /**
@@ -133,4 +147,23 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Query("UPDATE VerificationTaskPo t SET t.progress = :progress "
          + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
     int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
+
+    /** Persist the assumptions under which this task will run without replacing task state. */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.isAttack = :isAttack, "
+         + "t.attackBudget = :attackBudget, t.enablePrivacy = :enablePrivacy, "
+         + "t.modeledDeviceAttackPointCount = :devicePointCount, "
+         + "t.modeledFalsifiableReadingDeviceCount = :falsifiableReadingDeviceCount, "
+         + "t.modeledAutomationLinkAttackPointCount = :linkPointCount, "
+         + "t.modelSnapshotJson = :modelSnapshotJson "
+         + "WHERE t.id = :taskId")
+    int updateModelContext(@Param("taskId") Long taskId,
+                           @Param("isAttack") boolean isAttack,
+                           @Param("attackBudget") int attackBudget,
+                           @Param("enablePrivacy") boolean enablePrivacy,
+                           @Param("devicePointCount") int devicePointCount,
+                           @Param("falsifiableReadingDeviceCount") int falsifiableReadingDeviceCount,
+                           @Param("linkPointCount") int linkPointCount,
+                           @Param("modelSnapshotJson") String modelSnapshotJson);
 }

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
@@ -19,8 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -37,22 +42,14 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<String> getAllTemplateNames(Long userId) {
-        return templateRepo.findByUserId(userId).stream()
-                .map(DeviceTemplatePo::getName)
-                .filter(name -> name != null && !name.isBlank())
-                .toList();
-    }
-
-    @Override
-    @Transactional(readOnly = true)
     public Optional<DeviceTemplatePo> findTemplateByName(Long userId, String targetName) {
         if (targetName == null) {
             return Optional.empty();
         }
-        String normalizedTarget = targetName.trim().toLowerCase();
+        String normalizedTarget = targetName.trim().toLowerCase(Locale.ROOT);
         return templateRepo.findByUserId(userId).stream()
-                .filter(po -> po.getName() != null && po.getName().trim().toLowerCase().equals(normalizedTarget))
+                .filter(po -> po.getName() != null
+                        && po.getName().trim().toLowerCase(Locale.ROOT).equals(normalizedTarget))
                 .findFirst();
     }
 
@@ -70,7 +67,26 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             return 0;
         }
 
-        int count = 0;
+        return importDefaultTemplates(userId);
+    }
+
+    @Override
+    @Transactional
+    public int importDefaultTemplates(Long userId) {
+        List<DeviceTemplatePo> templates = loadDefaultTemplateEntities(userId);
+        templateRepo.saveAllAndFlush(templates);
+        log.info("Imported {} default device templates for user {}", templates.size(), userId);
+        return templates.size();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<DeviceTemplatePo> getDefaultTemplateDefinitions(Long userId) {
+        return List.copyOf(loadDefaultTemplateEntities(userId));
+    }
+
+    private List<DeviceTemplatePo> loadDefaultTemplateEntities(Long userId) {
+        List<DeviceTemplatePo> templates = new ArrayList<>();
         try {
             PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
             Resource[] resources = resolver.getResources("classpath:deviceTemplate/*.json");
@@ -81,7 +97,14 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                 log.info("Fallback found {} device template resources for user {}", resources.length, userId);
             }
 
-            List<DeviceTemplatePo> templates = new ArrayList<>();
+            if (resources.length == 0) {
+                throw new InternalServerException("No bundled default device templates are available.");
+            }
+
+            Arrays.sort(resources, java.util.Comparator.comparing(
+                    resource -> Optional.ofNullable(resource.getFilename()).orElse("")));
+            Set<String> normalizedNames = new HashSet<>();
+
             for (Resource resource : resources) {
                 try (InputStream is = resource.getInputStream()) {
                     String json = new String(is.readAllBytes(), StandardCharsets.UTF_8);
@@ -95,10 +118,13 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                         name = "Unknown";
                     }
 
-                    // Enforce ASCII-only names for Locale.ROOT / LOWER() consistency
                     if (!SAFE_TEMPLATE_NAME.matcher(name).matches()) {
-                        log.warn("Skipping template '{}' with non-ASCII name from {}", name, resource.getFilename());
-                        continue;
+                        throw new InternalServerException("Bundled default template '" + name
+                                + "' has a non-ASCII name in " + resource.getFilename() + ".");
+                    }
+                    String normalizedName = name.trim().toLowerCase(Locale.ROOT);
+                    if (!normalizedNames.add(normalizedName)) {
+                        throw new InternalServerException("Bundled default template name is duplicated: " + name);
                     }
                     deviceTemplateSchemaValidator.validateRawManifest(name, manifestNode);
 
@@ -106,23 +132,24 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                             .userId(userId)
                             .name(name)
                             .manifestJson(json)
+                            .defaultTemplate(true)
                             .build());
-                    count++;
                 } catch (Exception e) {
-                    log.warn("Failed to load template: {}", resource.getFilename(), e);
+                    if (e instanceof InternalServerException internal) {
+                        throw internal;
+                    }
+                    throw new InternalServerException("Bundled default template '"
+                            + Optional.ofNullable(resource.getFilename()).orElse("unknown")
+                            + "' is invalid; no defaults were imported.", e);
                 }
             }
-
-            if (!templates.isEmpty()) {
-                templateRepo.saveAll(templates);
-                log.info("Initialized {} default device templates for user {}", count, userId);
-            } else {
-                log.warn("No device templates found on classpath for user {}", userId);
-            }
         } catch (Exception e) {
-            log.error("Failed to initialize default templates for user {}", userId, e);
+            if (e instanceof InternalServerException internal) {
+                throw internal;
+            }
+            throw new InternalServerException("Failed to load bundled default device templates; no defaults were imported.", e);
         }
-        return count;
+        return List.copyOf(templates);
     }
 
     private String extractManifestName(JsonNode manifestNode) {

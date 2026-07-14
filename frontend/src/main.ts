@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import 'element-plus/theme-chalk/el-message-box.css'
 import './style.css'
 import './styles/base.css'
 import './styles/tailwind.css'

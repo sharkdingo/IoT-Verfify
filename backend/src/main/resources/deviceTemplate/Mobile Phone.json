@@ -6,8 +6,8 @@
 			"Name": "location",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "public",
 			"Values": ["home", "away", "garageDoor", "Shanghai"]
 		},
@@ -15,8 +15,8 @@
 			"Name": "steps",
 			"Description": "",
 			"IsInside": true,
-			"PublicVisible": true,
-			"Trust": "trusted",
+			"FalsifiableWhenCompromised": true,
+			"Trust": "untrusted",
 			"Privacy": "public",
 			"LowerBound": 0,
 			"UpperBound": 100,
@@ -26,8 +26,7 @@
 	"Contents": [
 		{
 			"Name": "photo",
-			"Privacy": "private",
-			"IsChangeable": false
+			"Privacy": "private"
 		}
 	],
 	"Modes": ["State"],
@@ -36,7 +35,6 @@
 		{
 			"Name": "on",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -44,7 +42,6 @@
 		{
 			"Name": "taking photo",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -52,7 +49,6 @@
 		{
 			"Name": "uploading to cloud",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "public"
@@ -69,7 +65,6 @@
 				"Value": "taking photo"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		},
 		{
@@ -82,7 +77,6 @@
 				"Value": "uploading to cloud"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],
@@ -103,6 +97,7 @@
 			"Trigger": null,
 			"Assignments": [],
 			"Signal": true,
+			"AcceptsContent": true,
 			"Description": ""
 		}
 	]

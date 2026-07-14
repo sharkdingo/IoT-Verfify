@@ -7,4 +7,5 @@ import java.util.Optional;
 
 public interface BoardLayoutRepository extends JpaRepository<BoardLayoutPo, Long> {
     Optional<BoardLayoutPo> findByUserId(Long userId);
+    void deleteByUserId(Long userId);
 }

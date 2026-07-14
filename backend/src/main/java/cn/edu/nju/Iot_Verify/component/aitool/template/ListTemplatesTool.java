@@ -36,6 +36,7 @@ public class ListTemplatesTool extends AbstractAiTool {
         Map<String, Object> props = new HashMap<>();
         props.put("keyword", Map.of(
                 "type", "string",
+                "maxLength", 100,
                 "description", "Optional keyword to filter templates by name. Leave empty to return all."
         ));
         props.put("detail", Map.of(
@@ -58,8 +59,9 @@ public class ListTemplatesTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            String keyword = args.path("keyword").asText("").trim();
-            boolean detail = args.path("detail").asBoolean(false);
+            requireOnlyFields(args, "arguments", Set.of("keyword", "detail"));
+            String keyword = optionalTextArg(args, "keyword", "", 100);
+            boolean detail = booleanArg(args, "detail", false);
 
             List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
 
@@ -99,6 +101,8 @@ public class ListTemplatesTool extends AbstractAiTool {
             }).toList();
 
             return objectMapper.writeValueAsString(Map.of("count", summaries.size(), "templates", summaries));
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("list_templates busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

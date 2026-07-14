@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
     plugins: [
         vue(),
         AutoImport({
@@ -20,6 +20,8 @@ export default defineConfig({
             ],
         }),
         Components({
+            // Production builds must not mutate the tracked development declaration file.
+            dts: command === 'serve' ? 'components.d.ts' : false,
             resolvers: [
                 ElementPlusResolver(),
                 AntDesignVueResolver({
@@ -29,6 +31,7 @@ export default defineConfig({
         }),
     ],
     server: {
+        host: '127.0.0.1',
         port: 3000,
         open: false,
         proxy: {
@@ -44,8 +47,4 @@ export default defineConfig({
         },
     },
     base: './',
-    define: {
-        // enable hydration mismatch details in production build
-        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'true',
-    },
-})
+}))

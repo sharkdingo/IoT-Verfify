@@ -27,11 +27,19 @@ public class SpecificationMapper {
         dto.setTemplateId(po.getTemplateId());
         dto.setTemplateLabel(po.getTemplateLabel());
 
-        dto.setAConditions(withSide(JsonUtils.fromJsonList(po.getAConditionsJson(), SpecConditionDto.class), "a"));
-        dto.setIfConditions(withSide(JsonUtils.fromJsonList(po.getIfConditionsJson(), SpecConditionDto.class), "if"));
-        dto.setThenConditions(withSide(JsonUtils.fromJsonList(po.getThenConditionsJson(), SpecConditionDto.class), "then"));
+        dto.setAConditions(withSide(JsonUtils.readPersistedJsonRequired(
+                "specification", po.getId(), "aConditionsJson", po.getAConditionsJson(),
+                () -> JsonUtils.fromJsonList(po.getAConditionsJson(), SpecConditionDto.class)), "a"));
+        dto.setIfConditions(withSide(JsonUtils.readPersistedJsonRequired(
+                "specification", po.getId(), "ifConditionsJson", po.getIfConditionsJson(),
+                () -> JsonUtils.fromJsonList(po.getIfConditionsJson(), SpecConditionDto.class)), "if"));
+        dto.setThenConditions(withSide(JsonUtils.readPersistedJsonRequired(
+                "specification", po.getId(), "thenConditionsJson", po.getThenConditionsJson(),
+                () -> JsonUtils.fromJsonList(po.getThenConditionsJson(), SpecConditionDto.class)), "then"));
         dto.setFormula(po.getFormula());
-        dto.setDevices(JsonUtils.fromJsonList(po.getDevicesJson(), SpecificationDto.DeviceRefDto.class));
+        dto.setDevices(JsonUtils.readPersistedJsonRequired(
+                "specification", po.getId(), "devicesJson", po.getDevicesJson(),
+                () -> JsonUtils.fromJsonList(po.getDevicesJson(), SpecificationDto.DeviceRefDto.class)));
 
         return dto;
     }
@@ -84,6 +92,7 @@ public class SpecificationMapper {
         copy.setDeviceLabel(condition.getDeviceLabel());
         copy.setTargetType(condition.getTargetType());
         copy.setKey(condition.getKey());
+        copy.setPropertyScope(condition.getPropertyScope());
         copy.setRelation(condition.getRelation());
         copy.setValue(condition.getValue());
         return copy;

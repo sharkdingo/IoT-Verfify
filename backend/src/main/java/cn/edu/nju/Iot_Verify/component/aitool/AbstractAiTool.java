@@ -5,13 +5,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * AI Tool 公共基类。
  *
- * <p>提取 29 个 Tool 共享的鉴权检查和辅助方法，消除样板代码。
+ * <p>提取 Tool 共享的鉴权检查和辅助方法，消除样板代码。
  *
  * <h3>基类职责（有限）</h3>
  * <ul>
@@ -58,9 +63,8 @@ public abstract class AbstractAiTool implements AiTool {
     // ── JSON 解析工具方法（子类按需调用，非强制）──────────────────────
 
     /**
-     * 解析 argsJson 为 JsonNode。26 个需要参数的 Tool 在 doExecute() 开头调用。
-     * 3 个无参 Tool（BoardOverviewTool、ListTracesTool、ListSimulationTracesTool）不调用，
-     * 行为与改造前完全一致。
+     * 解析 argsJson 为 JsonNode。所有 Tool 都应在 doExecute() 开头调用；无参 Tool
+     * 也必须解析并拒绝未知字段，避免调用者以为一个不支持的选项已经生效。
      *
      * @return 解析后的 JsonNode
      * @throws ArgParseException 包装了 errorJson 返回值，调用方应直接 catch 并 return
@@ -90,7 +94,224 @@ public abstract class AbstractAiTool implements AiTool {
         }
     }
 
+    /**
+     * Used by helper methods that validate parsed tool arguments.
+     */
+    protected static final class ArgValidationException extends Exception {
+        private final String errorResponse;
+
+        public ArgValidationException(String errorResponse) {
+            this.errorResponse = errorResponse;
+        }
+
+        public String getErrorResponse() {
+            return errorResponse;
+        }
+    }
+
     // ── 共用 helper ─────────────────────────────────────────────────
+
+    protected final int intArgInRange(JsonNode args,
+                                      String field,
+                                      int defaultValue,
+                                      int min,
+                                      int max) throws ArgValidationException {
+        JsonNode value = args == null ? null : args.get(field);
+        if (value == null || value.isNull()) {
+            return defaultValue;
+        }
+        if (!value.isIntegralNumber()) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be an integer between " + min + " and " + max + ".",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        BigInteger parsed = value.bigIntegerValue();
+        if (parsed.compareTo(BigInteger.valueOf(min)) < 0
+                || parsed.compareTo(BigInteger.valueOf(max)) > 0) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be between " + min + " and " + max + ".",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        return parsed.intValue();
+    }
+
+    protected final long positiveLongArg(JsonNode args, String field) throws ArgValidationException {
+        JsonNode value = args == null ? null : args.get(field);
+        if (value == null || value.isNull()) {
+            throw new ArgValidationException(errorJson(
+                    "'" + field + "' is required.",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        if (!value.isIntegralNumber()) {
+            throw new ArgValidationException(errorJson(
+                    "'" + field + "' must be a positive integer.",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        BigInteger parsed = value.bigIntegerValue();
+        if (parsed.compareTo(BigInteger.ONE) < 0) {
+            throw new ArgValidationException(errorJson(
+                    "'" + field + "' must be positive.",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        if (parsed.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+            throw new ArgValidationException(errorJson(
+                    "'" + field + "' is out of range.",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        return parsed.longValue();
+    }
+
+    protected final boolean booleanArg(JsonNode args,
+                                       String field,
+                                       boolean defaultValue) throws ArgValidationException {
+        JsonNode value = args == null ? null : args.get(field);
+        if (value == null || value.isNull()) {
+            return defaultValue;
+        }
+        if (!value.isBoolean()) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be a boolean.",
+                    "VALIDATION_ERROR",
+                    400));
+        }
+        return value.booleanValue();
+    }
+
+    /**
+     * Parses the shared attack-model switch/budget contract without accepting a budget
+     * that would later be silently discarded because attack modeling is disabled.
+     */
+    protected final int attackBudgetArg(JsonNode args,
+                                        boolean attackEnabled) throws ArgValidationException {
+        if (attackEnabled) {
+            return intArgInRange(args, "attackBudget", 1, 1, 50);
+        }
+        JsonNode value = args == null ? null : args.get("attackBudget");
+        if (value == null || value.isNull()) return 0;
+        int disabledBudget = intArgInRange(args, "attackBudget", 0, 0, 50);
+        if (disabledBudget != 0) {
+            throw new ArgValidationException(errorJson(
+                    "attackBudget must be omitted, null, or 0 when isAttack is false. "
+                            + "Set isAttack=true to use a positive attack budget.",
+                    "VALIDATION_ERROR", 400));
+        }
+        return 0;
+    }
+
+    protected final String optionalTextArg(JsonNode args,
+                                           String field,
+                                           String defaultValue,
+                                           int maxLength) throws ArgValidationException {
+        JsonNode value = args == null ? null : args.get(field);
+        if (value == null || value.isNull()) {
+            return defaultValue;
+        }
+        if (!value.isTextual()) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be a string.", "VALIDATION_ERROR", 400));
+        }
+        String normalized = value.textValue().trim();
+        if (normalized.length() > maxLength) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be at most " + maxLength + " characters.",
+                    "VALIDATION_ERROR", 400));
+        }
+        return normalized.isEmpty() ? defaultValue : normalized;
+    }
+
+    protected final String optionalEnumArg(JsonNode args,
+                                           String field,
+                                           String defaultValue,
+                                           Set<String> allowed) throws ArgValidationException {
+        String value = optionalTextArg(args, field, defaultValue, 100).toLowerCase(Locale.ROOT);
+        if (!allowed.contains(value)) {
+            throw new ArgValidationException(errorJson(
+                    field + " must be one of: " + String.join(", ", allowed) + ".",
+                    "VALIDATION_ERROR", 400));
+        }
+        return value;
+    }
+
+    protected final String languageArg(JsonNode args, String field) throws ArgValidationException {
+        String value = optionalTextArg(args, field, "en", 20).toLowerCase(Locale.ROOT);
+        if ("en".equals(value) || value.startsWith("en-") || value.startsWith("en_")) {
+            return "en";
+        }
+        if ("zh".equals(value) || value.startsWith("zh-") || value.startsWith("zh_")) {
+            return "zh-CN";
+        }
+        throw new ArgValidationException(errorJson(
+                field + " must be en or zh-CN.", "VALIDATION_ERROR", 400));
+    }
+
+    /**
+     * Enforces the exact object shape advertised by a tool schema. Tree-model parsing does not
+     * apply Jackson's DTO unknown-property checks, so tools must reject fields they would otherwise
+     * ignore instead of returning a result for a request different from the caller's intent.
+     */
+    protected final void requireOnlyFields(JsonNode value,
+                                           String path,
+                                           Set<String> allowedFields) throws ArgValidationException {
+        String displayPath = path == null || path.isBlank() ? "arguments" : path;
+        if (value == null || !value.isObject()) {
+            throw new ArgValidationException(errorJson(
+                    displayPath + " must be a JSON object.", "VALIDATION_ERROR", 400));
+        }
+        List<String> unknownFields = new ArrayList<>();
+        value.fieldNames().forEachRemaining(field -> {
+            if (!allowedFields.contains(field)) unknownFields.add(field);
+        });
+        if (!unknownFields.isEmpty()) {
+            Collections.sort(unknownFields);
+            throw new ArgValidationException(errorJson(
+                    displayPath + " contains unsupported field(s): "
+                            + String.join(", ", unknownFields) + ".",
+                    "VALIDATION_ERROR", 400));
+        }
+    }
+
+    protected final String requiredTextField(JsonNode object,
+                                             String field,
+                                             String path) throws ArgValidationException {
+        JsonNode value = object == null ? null : object.get(field);
+        String fieldPath = fieldPath(path, field);
+        if (value == null || value.isNull() || !value.isTextual()) {
+            throw new ArgValidationException(errorJson(
+                    fieldPath + " is required and must be a non-empty string.",
+                    "VALIDATION_ERROR", 400));
+        }
+        String normalized = trimToNull(value.textValue());
+        if (normalized == null) {
+            throw new ArgValidationException(errorJson(
+                    fieldPath + " is required and must be a non-empty string.",
+                    "VALIDATION_ERROR", 400));
+        }
+        return normalized;
+    }
+
+    /** Returns null for an omitted, explicit-null, or blank optional string; rejects other JSON types. */
+    protected final String nullableTextField(JsonNode object,
+                                             String field,
+                                             String path) throws ArgValidationException {
+        JsonNode value = object == null ? null : object.get(field);
+        if (value == null || value.isNull()) return null;
+        if (!value.isTextual()) {
+            throw new ArgValidationException(errorJson(
+                    fieldPath(path, field) + " must be a string or null.",
+                    "VALIDATION_ERROR", 400));
+        }
+        return trimToNull(value.textValue());
+    }
+
+    private String fieldPath(String path, String field) {
+        return path == null || path.isBlank() ? field : path + "." + field;
+    }
 
     protected final String errorJson(String message, String errorCode, int status) {
         return AiToolResponseHelper.error(objectMapper, message, errorCode, status);
@@ -103,6 +324,10 @@ public abstract class AbstractAiTool implements AiTool {
 
     protected final String successJson(Map<String, Object> body, String fallbackMessage) {
         return AiToolResponseHelper.success(objectMapper, body, fallbackMessage);
+    }
+
+    protected final String readOnlySuccessJson(Map<String, Object> body, String fallbackMessage) {
+        return AiToolResponseHelper.success(objectMapper, body, fallbackMessage, false);
     }
 
     protected final String successJson(String fallbackMessage) {

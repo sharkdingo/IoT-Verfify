@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -45,30 +46,60 @@ public class ListSimulationTracesTool extends AbstractAiTool {
     @Override
     protected String doExecute(Long userId, String argsJson) {
         try {
+            JsonNode args;
+            try {
+                args = parseArgs(argsJson);
+            } catch (ArgParseException e) {
+                return e.getErrorResponse();
+            }
+            requireOnlyFields(args, "arguments", Collections.emptySet());
+
             List<SimulationTraceSummaryDto> traces = simulationService.getUserSimulations(userId);
             if (traces == null) {
                 traces = List.of();
             }
             if (traces.isEmpty()) {
-                return objectMapper.writeValueAsString(Map.of(
+                return readOnlySuccessJson(Map.of(
                         "message", "No simulation traces found. Run and save a simulation first.",
                         "count", 0
-                ));
+                ), "No simulation traces found.");
             }
 
             List<Map<String, Object>> summaries = traces.stream().map(t -> {
                 Map<String, Object> s = new LinkedHashMap<>();
-                s.put("id", t.getId());
+                s.put("simulationId", t.getId());
+                boolean available = Boolean.TRUE.equals(t.getDataAvailable());
+                s.put("dataAvailable", available);
+                s.put("createdAt", t.getCreatedAt());
+                if (!available) {
+                    s.put("unavailableReasonCode", t.getUnavailableReasonCode());
+                    return s;
+                }
                 s.put("requestedSteps", t.getRequestedSteps());
                 s.put("steps", t.getSteps());
-                s.put("createdAt", t.getCreatedAt());
+                s.put("modelComplete", t.isModelComplete());
+                s.put("disabledRuleCount", t.getDisabledRuleCount());
+                s.put("generationIssues", t.getGenerationIssues());
+                s.put("isAttack", t.getAttack());
+                s.put("attackBudget", t.getAttackBudget());
+                s.put("enablePrivacy", t.getEnablePrivacy());
+                s.put("modelSnapshot", t.getModelSnapshot());
                 return s;
             }).toList();
+            long unavailableCount = traces.stream()
+                    .filter(trace -> !Boolean.TRUE.equals(trace.getDataAvailable()))
+                    .count();
 
-            return objectMapper.writeValueAsString(Map.of(
+            return readOnlySuccessJson(Map.of(
+                    "message", "Found " + traces.size() + " saved model-trace simulation run(s); "
+                            + unavailableCount + " unavailable due to stored-data errors.",
                     "count", traces.size(),
+                    "availableCount", traces.size() - unavailableCount,
+                    "unavailableCount", unavailableCount,
                     "traces", summaries
-            ));
+            ), "Saved simulation runs loaded.");
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("list_simulation_traces busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

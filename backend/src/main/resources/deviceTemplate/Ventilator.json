@@ -6,8 +6,7 @@
 	"Contents": [
 		{
 			"Name": "content",
-			"Privacy": "private",
-			"IsChangeable": true
+			"Privacy": "private"
 		}
 	],
 	"Modes": ["SwitchState"],
@@ -16,7 +15,6 @@
 		{
 			"Name": "on",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -24,7 +22,6 @@
 		{
 			"Name": "off",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"

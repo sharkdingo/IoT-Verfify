@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -38,8 +40,7 @@ public class GetSimulationTraceTool extends AbstractAiTool {
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
                 Map.of(
-                        "simulationId", Map.of("type", "integer", "description", "Simulation trace ID."),
-                        "includeRaw", Map.of("type", "boolean", "description", "Whether to include raw NuSMV output and request JSON. Default false.")
+                        "simulationId", Map.of("type", "integer", "description", "Simulation trace ID.")
                 ),
                 List.of("simulationId")
         );
@@ -57,35 +58,33 @@ public class GetSimulationTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            if (!args.has("simulationId") || !args.path("simulationId").canConvertToLong()) {
-                return errorJson("'simulationId' is required.", "VALIDATION_ERROR", 400);
-            }
-            long simulationId = args.path("simulationId").asLong();
-            if (simulationId <= 0) {
-                return errorJson("'simulationId' must be positive.", "VALIDATION_ERROR", 400);
-            }
-            boolean includeRaw = args.path("includeRaw").asBoolean(false);
+            requireOnlyFields(args, "arguments", Set.of("simulationId"));
+            long simulationId = positiveLongArg(args, "simulationId");
 
             SimulationTraceDto trace = simulationService.getSimulation(userId, simulationId);
 
-            Map<String, Object> traceBody = new LinkedHashMap<>();
-            traceBody.put("id", trace.getId());
-            traceBody.put("requestedSteps", trace.getRequestedSteps());
-            traceBody.put("steps", trace.getSteps());
-            traceBody.put("stateCount", trace.getStates() != null ? trace.getStates().size() : 0);
-            traceBody.put("states", trace.getStates() == null ? List.of() : trace.getStates());
-            traceBody.put("logs", trace.getLogs() == null ? List.of() : trace.getLogs());
-            traceBody.put("createdAt", trace.getCreatedAt());
-            if (includeRaw) {
-                traceBody.put("nusmvOutput", trace.getNusmvOutput());
-                traceBody.put("requestJson", trace.getRequestJson());
-            }
-
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("simulationId", simulationId);
-            body.put("includeRaw", includeRaw);
-            body.put("trace", traceBody);
-            return successJson(body, "Simulation trace loaded.");
+            body.put("requestedSteps", trace.getRequestedSteps());
+            body.put("steps", trace.getSteps());
+            body.put("modelComplete", trace.isModelComplete());
+            body.put("disabledRuleCount", trace.getDisabledRuleCount());
+            body.put("generationIssues", trace.getGenerationIssues());
+            body.put("isAttack", trace.getAttack());
+            body.put("attackBudget", trace.getAttackBudget());
+            body.put("enablePrivacy", trace.getEnablePrivacy());
+            body.put("modelSemantics", trace.getModelSemantics());
+            body.put("modelSnapshot", trace.getModelSnapshot());
+            body.put("stateCount", trace.getStates() != null ? trace.getStates().size() : 0);
+            body.put("states", ModelTraceToolPresenter.states(trace.getStates()));
+            body.put("createdAt", trace.getCreatedAt());
+            String message = trace.isModelComplete()
+                    ? "Saved model-trace simulation loaded. It is one possible model trajectory, not a physical-home prediction."
+                    : "Saved model-trace simulation loaded from an incomplete generated model; inspect generationIssues before interpreting it.";
+            body.put("message", message);
+            return readOnlySuccessJson(body, message);
+        } catch (ArgValidationException e) {
+            return e.getErrorResponse();
         } catch (ServiceUnavailableException e) {
             log.warn("get_simulation_trace busy: {}", e.getMessage());
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);

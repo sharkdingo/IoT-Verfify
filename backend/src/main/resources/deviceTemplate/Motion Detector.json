@@ -6,7 +6,7 @@
 			"Name": "motion",
 			"Description": "",
 			"IsInside": false,
-			"PublicVisible": true,
+			"FalsifiableWhenCompromised": true,
 			"Trust": "trusted",
 			"Privacy": "private",
 			"Values": ["active", "inactive"]

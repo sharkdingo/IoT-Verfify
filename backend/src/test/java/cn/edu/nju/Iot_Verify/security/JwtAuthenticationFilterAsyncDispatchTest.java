@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.security;
 
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.util.JwtUtil;
 import jakarta.servlet.DispatcherType;
@@ -35,11 +36,14 @@ class JwtAuthenticationFilterAsyncDispatchTest {
     @Mock
     private TokenBlacklistService tokenBlacklistService;
 
+    @Mock
+    private UserRepository userRepository;
+
     private JwtAuthenticationFilter filter;
 
     @BeforeEach
     void setUp() {
-        filter = new JwtAuthenticationFilter(jwtUtil, tokenBlacklistService);
+        filter = new JwtAuthenticationFilter(jwtUtil, tokenBlacklistService, userRepository);
         SecurityContextHolder.clearContext();
     }
 
@@ -67,6 +71,7 @@ class JwtAuthenticationFilterAsyncDispatchTest {
         when(jwtUtil.validateToken(token)).thenReturn(true);
         when(tokenBlacklistService.isBlacklisted(token)).thenReturn(false);
         when(jwtUtil.getUserIdFromToken(token)).thenReturn(42L);
+        when(userRepository.existsById(42L)).thenReturn(true);
 
         filter.doFilter(request, response, chain);
 
@@ -95,6 +100,7 @@ class JwtAuthenticationFilterAsyncDispatchTest {
         when(jwtUtil.validateToken(token)).thenReturn(true);
         when(tokenBlacklistService.isBlacklisted(token)).thenReturn(false);
         when(jwtUtil.getUserIdFromToken(token)).thenReturn(42L);
+        when(userRepository.existsById(42L)).thenReturn(true);
 
         filter.doFilter(request1, response1, chain1);
 

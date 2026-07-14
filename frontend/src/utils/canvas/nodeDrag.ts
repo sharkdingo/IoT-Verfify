@@ -21,12 +21,14 @@ export const beginNodeDrag = (e: PointerEvent, node: DeviceNode, dragState: Node
 
 export const updateNodeDrag = (
     e: PointerEvent,
-    dragState: NodeDragState
+    dragState: NodeDragState,
+    zoom = 1
 ): boolean => {
     if (!dragState.node) return false
 
-    const dx = e.clientX - dragState.start.x
-    const dy = e.clientY - dragState.start.y
+    const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+    const dx = (e.clientX - dragState.start.x) / scale
+    const dy = (e.clientY - dragState.start.y) / scale
 
     dragState.node.position.x = dragState.origin.x + dx
     dragState.node.position.y = dragState.origin.y + dy

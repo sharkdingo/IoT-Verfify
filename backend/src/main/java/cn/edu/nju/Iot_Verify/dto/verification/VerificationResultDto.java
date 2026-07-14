@@ -1,6 +1,11 @@
 package cn.edu.nju.Iot_Verify.dto.verification;
 
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
 
@@ -12,10 +17,36 @@ import java.util.List;
 @Data
 @Builder
 public class VerificationResultDto {
+    /** Whether the generated model included compromised device-instance and automation-link behavior. */
+    @JsonProperty("isAttack")
+    private Boolean isAttack;
+
+    /** Maximum compromised device-instance or automation-link points allowed in any checked branch. */
+    private int attackBudget;
+
+    /** Whether private-data propagation variables were included in the model. */
+    private boolean enablePrivacy;
+
+    /** Structured assumptions needed to interpret this result without frontend guesswork. */
+    private ModelSemanticsDto modelSemantics;
+
+    /** Immutable submitted-model scope to which this conclusion applies. */
+    private ModelRunSnapshotDto modelSnapshot;
+
+    /** Whether this synchronous result was also committed to run history. */
+    private RunPersistenceDto historyPersistence;
+
     /**
-     * 是否安全
+     * Explicit user-facing conclusion. This distinguishes a property violation from
+     * an incomplete or unreliable check.
      */
-    private boolean safe;
+    private VerificationOutcome outcome;
+
+    /**
+     * Whether the checked model included every submitted rule and specification and
+     * produced a reliable per-spec result set.
+     */
+    private boolean modelComplete;
 
     /**
      * 错误轨迹列表
@@ -38,9 +69,12 @@ public class VerificationResultDto {
     private int disabledRuleCount;
 
     /**
-     * Number of specifications skipped or replaced with CTLSPEC FALSE during SMV generation.
+     * Number of specifications omitted from NuSMV because they could not be checked.
      */
     private int skippedSpecCount;
+
+    /** Per-item explanations for every rule/specification omitted from the generated model. */
+    private List<ModelGenerationIssueDto> generationIssues;
 
     /**
      * 原始 NuSMV 输出

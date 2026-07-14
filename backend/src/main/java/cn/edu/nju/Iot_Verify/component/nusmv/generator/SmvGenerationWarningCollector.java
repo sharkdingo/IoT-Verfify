@@ -2,6 +2,8 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator;
 
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -11,21 +13,42 @@ import java.util.Set;
 final class SmvGenerationWarningCollector {
 
     private final List<String> checkLogWarnings = new ArrayList<>();
+    private final List<ModelGenerationIssueDto> generationIssues = new ArrayList<>();
     private final Set<String> disabledRuleKeys = new HashSet<>();
     private final Set<String> skippedSpecKeys = new HashSet<>();
     private final List<SmvGenerationContext.EmittedSpec> emittedSpecs = new ArrayList<>();
 
-    public synchronized void disabledRule(RuleDto rule, String reason) {
+    public synchronized void disabledRule(RuleDto rule,
+                                          ModelGenerationIssueReasonCode reasonCode,
+                                          String reason) {
         String key = ruleKey(rule);
         if (disabledRuleKeys.add(key)) {
-            checkLogWarnings.add("Generation warning [rule-disabled]: " + sanitizeReason(reason));
+            String label = ruleLabel(rule);
+            String safeReason = sanitizeReason(reason);
+            checkLogWarnings.add("Generation warning [rule-disabled] " + label + ": " + safeReason);
+            generationIssues.add(ModelGenerationIssueDto.builder()
+                    .issueType("RULE_DISABLED")
+                    .itemLabel(label)
+                    .reasonCode(reasonCode)
+                    .reason(safeReason)
+                    .build());
         }
     }
 
-    public synchronized void skippedSpec(SpecificationDto spec, String reason) {
+    public synchronized void skippedSpec(SpecificationDto spec,
+                                         ModelGenerationIssueReasonCode reasonCode,
+                                         String reason) {
         String key = specKey(spec);
         if (skippedSpecKeys.add(key)) {
-            checkLogWarnings.add("Generation warning [spec-skipped]: " + sanitizeReason(reason));
+            String label = specificationLabel(spec);
+            String safeReason = sanitizeReason(reason);
+            checkLogWarnings.add("Generation warning [spec-skipped] " + label + ": " + safeReason);
+            generationIssues.add(ModelGenerationIssueDto.builder()
+                    .issueType("SPECIFICATION_SKIPPED")
+                    .itemLabel(label)
+                    .reasonCode(reasonCode)
+                    .reason(safeReason)
+                    .build());
         }
     }
 
@@ -47,6 +70,10 @@ final class SmvGenerationWarningCollector {
 
     public synchronized int skippedSpecCount() {
         return skippedSpecKeys.size();
+    }
+
+    public synchronized List<ModelGenerationIssueDto> generationIssues() {
+        return List.copyOf(generationIssues);
     }
 
     public synchronized List<SmvGenerationContext.EmittedSpec> emittedSpecs() {
@@ -78,6 +105,20 @@ final class SmvGenerationWarningCollector {
             return spec.getId();
         }
         return "unknown";
+    }
+
+    private String ruleLabel(RuleDto rule) {
+        if (rule != null && rule.getRuleString() != null && !rule.getRuleString().isBlank()) {
+            return rule.getRuleString().trim();
+        }
+        return "Automation rule";
+    }
+
+    private String specificationLabel(SpecificationDto spec) {
+        if (spec != null && spec.getTemplateLabel() != null && !spec.getTemplateLabel().isBlank()) {
+            return spec.getTemplateLabel().trim();
+        }
+        return "Formal specification";
     }
 
     private String sanitizeReason(String reason) {

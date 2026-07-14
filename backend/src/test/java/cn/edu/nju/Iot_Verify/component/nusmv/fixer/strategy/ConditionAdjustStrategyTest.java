@@ -62,7 +62,7 @@ class ConditionAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(20)
                 .build();
@@ -93,8 +93,10 @@ class ConditionAdjustStrategyTest {
         spec.setId("s1");
         spec.setTemplateId("1");
 
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         // Negated spec universally true → no fix
@@ -124,8 +126,10 @@ class ConditionAdjustStrategyTest {
         spec.setTemplateId("1");
 
         // Parameterized model generation
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         // NuSMV returns counterexample: lambda_r0_c0 = TRUE (keep), lambda_r0_c1 = FALSE (remove)
@@ -139,8 +143,10 @@ class ConditionAdjustStrategyTest {
 
         // Forward verification passes
         SmvGenerator.GenerateResult verifyGenResult = createGenResult();
-        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean()))
+        when(smvGenerator.generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(verifyGenResult);
 
         SpecCheckResult allPass = mock(SpecCheckResult.class);
@@ -182,8 +188,10 @@ class ConditionAdjustStrategyTest {
         spec.setId("s1");
         spec.setTemplateId("1");
 
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         // lambda_r0_c0 = FALSE → remove the only condition → would empty the rule.
@@ -205,7 +213,7 @@ class ConditionAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(2)
                 .build();
@@ -215,8 +223,10 @@ class ConditionAdjustStrategyTest {
         assertNull(strategy.tryFix(context));
         verify(nusmvExecutor, times(2)).execute(any(File.class));
         // Forward verification must never run for the empty-rule candidate.
-        verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean());
+        verify(smvGenerator, never()).generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(SmvGenerator.TempModelContext.class), anyMap());
     }
 
     @Test
@@ -232,8 +242,10 @@ class ConditionAdjustStrategyTest {
         spec.setId("s1");
         spec.setTemplateId("1");
 
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         // NuSMV keeps all conditions (lambda = TRUE for all) — strategy should retry with exclusion
@@ -256,7 +268,7 @@ class ConditionAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(2)
                 .build();
@@ -279,8 +291,10 @@ class ConditionAdjustStrategyTest {
         spec.setId("s1");
         spec.setTemplateId("1");
 
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class)))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         NusmvResult failedResult = mock(NusmvResult.class);
@@ -298,7 +312,7 @@ class ConditionAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(3)
                 .build();
@@ -325,8 +339,10 @@ class ConditionAdjustStrategyTest {
 
         ArgumentCaptor<ParameterizationConfig> configCaptor =
                 ArgumentCaptor.forClass(ParameterizationConfig.class);
-        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture()))
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
                 .thenReturn(createGenResult());
 
         // NuSMV returns counterexample with only 1 of 2 expected lambdas (partial extraction)
@@ -349,7 +365,7 @@ class ConditionAdjustStrategyTest {
                 .violatedSpecIndex(0)
                 .userId(1L)
                 .isAttack(false)
-                .intensity(0)
+                .attackBudget(0)
                 .enablePrivacy(false)
                 .maxAttempts(3)
                 .build();

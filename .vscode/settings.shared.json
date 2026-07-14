@@ -1,0 +1,20 @@
+{
+    "files.encoding": "utf8",
+    "files.eol": "\n",
+    "java.compile.nullAnalysis.mode": "automatic",
+    "cSpell.enabled": true,
+    "cSpell.language": "en",
+    "cSpell.words": [
+        "Configurer",
+        "nusmv",
+        "CTLSPEC",
+        "LTLSPEC",
+        "Precheck"
+    ],
+    "spellright.documentTypes": [],
+    "gitlens.proxy": {},
+    "remote.SSH.httpProxy": "",
+    "remote.SSH.httpsProxy": "",
+    "chatgpt.openOnStartup": false,
+    "java.configuration.updateBuildConfiguration": "interactive"
+}

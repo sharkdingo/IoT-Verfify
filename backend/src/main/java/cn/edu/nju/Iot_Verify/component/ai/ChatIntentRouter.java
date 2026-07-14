@@ -20,12 +20,19 @@ import java.util.regex.Pattern;
 public class ChatIntentRouter {
 
     private static final Pattern EXPLICIT_TOOL_NAME = pattern("""
-            \\b(add_device|delete_device|search_devices|list_rules|manage_rule|check_duplicate_rule|recommend_rules|
+            \\b(add_device|delete_device|search_devices|list_rules|manage_rule|check_duplicate_rule|check_rule_similarity|recommend_rules|
             recommend_related_devices|list_specs|manage_spec|recommend_specifications|list_templates|add_template|
             delete_template|verify_model|verify_model_async|verify_task_status|cancel_verify_task|list_traces|
             get_trace|delete_trace|fix_violation|simulate_model|simulate_model_async|simulate_task_status|cancel_simulate_task|
             list_simulation_traces|get_simulation_trace|delete_simulation_trace|board_overview)\\b
             """.replaceAll("\\s+", ""));
+
+    private static final Pattern ENGLISH_CONFIRMATION = pattern(
+            "^(yes|y|confirm(?:ed)?|i confirm(?: .+)?|yes[, ]+.+|proceed(?: .+)?|go ahead(?: .+)?|delete it|do it)[.! ]*$");
+    private static final Pattern CHINESE_CONFIRMATION = pattern(
+            "^(?:\\u662f\\u7684[\\uff0c, ]*)?(?:\\u6211)?(?:\\u786e\\u8ba4|\\u786e\\u5b9a|\\u540c\\u610f|\\u7ee7\\u7eed)(?:\\u5220\\u9664|\\u6267\\u884c|\\u5e94\\u7528)?[^?\\uff1f]{0,80}[\\u3002\\uff01! ]*$|^(?:\\u5220\\u9664|\\u6267\\u884c)\\u5427[\\u3002\\uff01! ]*$");
+    private static final Pattern CONFIRMATION_NEGATION = pattern(
+            "\\b(no|not|don't|do not|cancel|stop|wait)\\b|\\u4e0d\\u8981|\\u4e0d\\u786e\\u8ba4|\\u53d6\\u6d88|\\u5148\\u522b|\\u7b49\\u7b49|\\u505c\\u6b62");
 
     private static final List<MatcherGroup> MUTATION_ACTIONS = List.of(
             regex("\\b(add|create|build|generate|delete|remove|update|modify|change|save|apply|fix|repair|configure|setup|set\\s+up|set)\\b"),
@@ -164,9 +171,25 @@ public class ChatIntentRouter {
         return Decision.conversation("no_strategy_decision");
     }
 
+    public boolean isExplicitConfirmation(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        String normalized = normalize(content);
+        if (normalized.length() > 160
+                || normalized.contains("?")
+                || normalized.contains("\uff1f")
+                || CONFIRMATION_NEGATION.matcher(normalized).find()) {
+            return false;
+        }
+        return ENGLISH_CONFIRMATION.matcher(normalized).matches()
+                || CHINESE_CONFIRMATION.matcher(normalized).matches();
+    }
+
     private static List<IntentStrategy> defaultStrategies() {
         return List.of(
                 new BlankMessageStrategy(),
+                new ExplicitConfirmationStrategy(),
                 new ExplicitToolNameStrategy(),
                 new NoPlatformTargetStrategy(),
                 new ContentGenerationGuardStrategy(),
@@ -187,6 +210,24 @@ public class ChatIntentRouter {
         public Optional<Decision> decide(IntentContext context) {
             return context.blank()
                     ? Optional.of(Decision.conversation("blank_message"))
+                    : Optional.empty();
+        }
+    }
+
+    private static final class ExplicitConfirmationStrategy implements IntentStrategy {
+        @Override
+        public Optional<Decision> decide(IntentContext context) {
+            String value = context.normalized();
+            if (value.isBlank()
+                    || value.length() > 160
+                    || value.contains("?")
+                    || value.contains("\uff1f")
+                    || CONFIRMATION_NEGATION.matcher(value).find()) {
+                return Optional.empty();
+            }
+            return ENGLISH_CONFIRMATION.matcher(value).matches()
+                    || CHINESE_CONFIRMATION.matcher(value).matches()
+                    ? Optional.of(Decision.tools("explicit_confirmation"))
                     : Optional.empty();
         }
     }

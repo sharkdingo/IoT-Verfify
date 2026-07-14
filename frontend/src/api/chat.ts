@@ -1,17 +1,34 @@
 // src/api/chat.ts - Chat API
 import api from '@/api/http'
-import { ChatMessage, ChatSession, StreamCommand } from "@/types/chat"
+import { ChatMessage, ChatSession, ChatSessionActivity, StreamCommand } from "@/types/chat"
 import { useAuth } from '@/stores/auth'
+
+export type ChatStreamErrorKind =
+    | 'HTTP_ERROR'
+    | 'SERVER_FRAME'
+    | 'MISSING_BODY'
+    | 'EMPTY_STREAM'
+    | 'INVALID_FRAME'
+    | 'UNKNOWN'
 
 export class ChatStreamError extends Error {
     readonly serverFrame: boolean
     readonly status?: number
+    readonly kind: ChatStreamErrorKind
+    readonly detail?: string
 
-    constructor(message: string, options: { serverFrame?: boolean; status?: number } = {}) {
+    constructor(message: string, options: {
+        serverFrame?: boolean
+        status?: number
+        kind?: ChatStreamErrorKind
+        detail?: string
+    } = {}) {
         super(message)
         this.name = 'ChatStreamError'
         this.serverFrame = options.serverFrame ?? false
         this.status = options.status
+        this.kind = options.kind ?? (this.serverFrame ? 'SERVER_FRAME' : 'UNKNOWN')
+        this.detail = options.detail
     }
 }
 
@@ -24,18 +41,27 @@ export const getSessionList = async (): Promise<ChatSession[]> => {
   return unpack<ChatSession[]>(response);
 }
 
-export const createSession = async (): Promise<ChatSession> => {
-  const response = await api.post<any>('/chat/sessions', null);
+export const createSession = async (signal?: AbortSignal): Promise<ChatSession> => {
+  const response = await api.post<any>('/chat/sessions', null, { signal });
   return unpack<ChatSession>(response);
 }
 
-export const getSessionHistory = async (sessionId: string): Promise<ChatMessage[]> => {
-  const response = await api.get<any>(`/chat/sessions/${sessionId}/messages`);
+export const getSessionHistory = async (sessionId: string, signal?: AbortSignal): Promise<ChatMessage[]> => {
+  const response = await api.get<any>(`/chat/sessions/${sessionId}/messages`, { signal });
   return unpack<ChatMessage[]>(response);
 }
 
 export const deleteSession = async (sessionId: string): Promise<void> => {
   await api.delete(`/chat/sessions/${sessionId}`);
+}
+
+export const getSessionActivity = async (sessionId: string): Promise<ChatSessionActivity> => {
+  const response = await api.get<any>(`/chat/sessions/${sessionId}/activity`);
+  const activity = unpack<ChatSessionActivity>(response);
+  if (!activity || activity.sessionId !== sessionId || typeof activity.active !== 'boolean') {
+    throw new Error('Chat session activity response is incomplete');
+  }
+  return activity;
 }
 
 export const sendStreamChat = async (
@@ -74,11 +100,15 @@ export const sendStreamChat = async (
                 logout();
             }
             const detail = await readErrorDetail(response);
-            throw new ChatStreamError(`HTTP ${response.status}: ${detail}`, { status: response.status });
+            throw new ChatStreamError(`HTTP ${response.status}: ${detail}`, {
+                kind: 'HTTP_ERROR',
+                status: response.status,
+                detail
+            });
         }
 
         if (!response.body) {
-            throw new Error('No response body');
+            throw new ChatStreamError('No response body', { kind: 'MISSING_BODY' });
         }
 
         const reader = response.body.getReader();
@@ -99,11 +129,16 @@ export const sendStreamChat = async (
             hasReceivedFrame = true;
 
             if (trimmed.startsWith('{')) {
-                const json = JSON.parse(dataStr);
+                let json: any;
+                try {
+                    json = JSON.parse(dataStr);
+                } catch {
+                    throw new ChatStreamError('Invalid server stream frame', { kind: 'INVALID_FRAME' });
+                }
                 const content = typeof json.content === 'string' ? json.content : '';
                 const errorMessage = content ? serverErrorMessage(content) : '';
                 if (errorMessage) {
-                    throw new ChatStreamError(errorMessage, { serverFrame: true });
+                    throw new ChatStreamError(errorMessage, { kind: 'SERVER_FRAME', serverFrame: true });
                 }
                 if (json.command && callbacks.onCommand) {
                     callbacks.onCommand(json.command);
@@ -116,7 +151,7 @@ export const sendStreamChat = async (
 
             const errorMessage = serverErrorMessage(dataStr);
             if (errorMessage) {
-                throw new ChatStreamError(errorMessage, { serverFrame: true });
+                throw new ChatStreamError(errorMessage, { kind: 'SERVER_FRAME', serverFrame: true });
             }
 
             try {
@@ -164,14 +199,13 @@ export const sendStreamChat = async (
         }
 
         if (!hasReceivedFrame) {
-            throw new ChatStreamError('No content received from server');
+            throw new ChatStreamError('No content received from server', { kind: 'EMPTY_STREAM' });
         }
 
         if (callbacks.onFinish) callbacks.onFinish();
 
     } catch (error: any) {
         if (error.name === 'AbortError') {
-            if (callbacks.onFinish) callbacks.onFinish();
             return;
         }
         console.error('[Chat] Streaming request error:', error.message);

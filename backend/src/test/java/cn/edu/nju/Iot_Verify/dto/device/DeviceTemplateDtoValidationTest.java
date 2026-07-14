@@ -46,6 +46,12 @@ class DeviceTemplateDtoValidationTest {
                 .build();
     }
 
+    private DeviceTemplateDto.DeviceManifest manifestWithApi(DeviceTemplateDto.DeviceManifest.API api) {
+        return DeviceTemplateDto.DeviceManifest.builder()
+                .apis(List.of(api))
+                .build();
+    }
+
     private boolean hasViolationContaining(Set<? extends ConstraintViolation<?>> violations, String substring) {
         return violations.stream().anyMatch(v -> v.getMessage().contains(substring));
     }
@@ -60,7 +66,7 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertFalse(hasViolationContaining(violations, "InternalVariable must have"));
+        assertFalse(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
@@ -72,17 +78,17 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertFalse(hasViolationContaining(violations, "InternalVariable must have"));
+        assertFalse(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
-    void internalVar_neither_shouldBeValid() {
+    void internalVar_neither_shouldRejectInsteadOfImplicitlyBecomingBoolean() {
         var iv = DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
                 .name("isActive")
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertFalse(hasViolationContaining(violations, "InternalVariable must have"));
+        assertTrue(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
@@ -95,7 +101,7 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertTrue(hasViolationContaining(violations, "InternalVariable must have"));
+        assertTrue(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
@@ -106,7 +112,7 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertTrue(hasViolationContaining(violations, "InternalVariable must have"));
+        assertTrue(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
@@ -117,7 +123,7 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertTrue(hasViolationContaining(violations, "InternalVariable must have"));
+        assertTrue(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     @Test
@@ -129,7 +135,7 @@ class DeviceTemplateDtoValidationTest {
                 .build();
 
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifestWithInternalVar(iv)));
-        assertTrue(hasViolationContaining(violations, "InternalVariable must have"));
+        assertTrue(hasViolationContaining(violations, "InternalVariable must explicitly define"));
     }
 
     // ── Dynamic cascade validation ──
@@ -191,5 +197,114 @@ class DeviceTemplateDtoValidationTest {
         Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(dto);
         assertTrue(hasViolationContaining(violations, "Dynamic must have"),
                 "Dynamic validation must cascade through WorkingState.dynamics @Valid");
+    }
+
+    @Test
+    void apiMissingStartState_shouldRejectInsteadOfImplicitlyAllowingAnyState() {
+        var api = DeviceTemplateDto.DeviceManifest.API.builder()
+                .name("turnOn")
+                .endState("on")
+                .signal(false)
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(
+                wrapManifest(manifestWithApi(api)));
+
+        assertTrue(hasViolationContaining(violations, "API StartState must explicitly define"));
+    }
+
+    @Test
+    void apiEmptyStartState_shouldRemainAnExplicitAnyStateChoice() {
+        var api = DeviceTemplateDto.DeviceManifest.API.builder()
+                .name("turnOn")
+                .startState("")
+                .endState("on")
+                .signal(false)
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(
+                wrapManifest(manifestWithApi(api)));
+
+        assertFalse(hasViolationContaining(violations, "API StartState must explicitly define"));
+    }
+
+    @Test
+    void apiMissingSignal_shouldRejectInsteadOfImplicitlyBecomingCommandOnly() {
+        var api = DeviceTemplateDto.DeviceManifest.API.builder()
+                .name("turnOn")
+                .startState("off")
+                .endState("on")
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(
+                wrapManifest(manifestWithApi(api)));
+
+        assertTrue(hasViolationContaining(violations, "API Signal must explicitly choose"));
+    }
+
+    @Test
+    void internalVariableMissingCompromiseChoice_shouldReject() {
+        var variable = DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                .name("reading")
+                .isInside(true)
+                .values(List.of("normal", "alert"))
+                .trust("trusted")
+                .privacy("public")
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(
+                wrapManifest(manifestWithInternalVar(variable)));
+
+        assertTrue(hasViolationContaining(violations,
+                "FalsifiableWhenCompromised must explicitly define"));
+    }
+
+    @Test
+    void workingStateMissingSecurityLabels_shouldReject() {
+        var state = DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                .name("on")
+                .build();
+        var manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .workingStates(List.of(state))
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifest));
+
+        assertTrue(hasViolationContaining(violations, "WorkingState Trust must be explicit"));
+        assertTrue(hasViolationContaining(violations, "WorkingState Privacy must be explicit"));
+    }
+
+    @Test
+    void contentPrivacyValidation_shouldCascadeThroughManifest() {
+        var content = DeviceTemplateDto.DeviceManifest.Content.builder()
+                .name("photo")
+                .privacy("secret")
+                .build();
+        var manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .contents(List.of(content))
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifest));
+
+        assertTrue(hasViolationContaining(violations, "Content Privacy must be public or private"));
+    }
+
+    @Test
+    void environmentDomainSecurityLabels_shouldRejectInvalidValues() {
+        var domain = DeviceTemplateDto.DeviceManifest.EnvironmentDomain.builder()
+                .name("temperature")
+                .lowerBound(0)
+                .upperBound(100)
+                .trust("unknown")
+                .privacy("secret")
+                .build();
+        var manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .environmentDomains(List.of(domain))
+                .build();
+
+        Set<ConstraintViolation<DeviceTemplateDto>> violations = validator.validate(wrapManifest(manifest));
+
+        assertTrue(hasViolationContaining(violations, "EnvironmentDomain Trust must be trusted or untrusted"));
+        assertTrue(hasViolationContaining(violations, "EnvironmentDomain Privacy must be public or private"));
     }
 }

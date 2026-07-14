@@ -12,7 +12,7 @@ Redis 6.0+ optional (fail-open). Full setup:
 
 ```bash
 # Required env vars (defaults & full list: docs/getting-started/configuration.md)
-export DB_PASSWORD="..." JWT_SECRET="..." OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
+export DB_PASSWORD="..." JWT_SECRET="..." IOT_VERIFY_OPENAI_API_KEY="..." NUSMV_PATH="/path/to/NuSMV"
 
 mvn spring-boot:run        # http://localhost:8080, auto-creates tables
 # or
@@ -35,7 +35,7 @@ component/
     executor/     NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/       SmvTraceParser — counterexample parsing
     fixer/        fault localization + parameter/condition/disable fix strategies
-  aitool/         the 30 AI tools
+  aitool/         the 33 AI tools
   ai/             LLM abstraction — LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, repositories
 security/         JWT + Spring Security
@@ -64,7 +64,9 @@ Detailed package/architecture notes:
   [auth](../docs/api/auth.md) · [board](../docs/api/board.md) ·
   [verification](../docs/api/verification.md) · [chat (SSE)](../docs/api/chat-sse.md) ·
   [AI tools](../docs/api/ai-tools.md)
-- Architecture — [verification flow](../docs/architecture/verification-flow.md) ·
+- Architecture — [device identity](../docs/architecture/device-identity.md) ·
+  [data authority](../docs/architecture/data-authority-model.md) ·
+  [verification flow](../docs/architecture/verification-flow.md) ·
   [NuSMV model](../docs/architecture/nusmv-model.md) ·
   [spec templates & P1–P5](../docs/architecture/spec-templates.md) ·
   [auto-fix](../docs/architecture/auto-fix.md)

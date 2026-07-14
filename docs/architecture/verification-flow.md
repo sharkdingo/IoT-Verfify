@@ -1,257 +1,265 @@
 # Verification Flow
 
-End-to-end path of a verification request: from the REST call, through SMV generation
-and NuSMV execution, to a parsed result with counterexample traces and optional
-auto-fix.
+End-to-end behavior from a verification request to an interpretable conclusion,
+counterexample, and optional fix attempt. Field-level contracts live in
+[../api/verification.md](../api/verification.md); model construction lives in
+[nusmv-model.md](nusmv-model.md).
 
-Request/response field contract → [../api/verification.md](../api/verification.md).
-SMV generation internals → [nusmv-model.md](nusmv-model.md).
-
-Verified against code on 2026-07-06. Source: `controller/VerificationController.java`,
-`controller/SimulationController.java`, `service/impl/VerificationServiceImpl.java`,
-`service/impl/SimulationServiceImpl.java`, `component/nusmv/`.
-
----
+Verified against code on 2026-07-13. Primary sources:
+`VerificationController`, `SimulationController`, `VerificationServiceImpl`,
+`SimulationServiceImpl`, `SmvGenerator`, `NusmvExecutor`, and `SmvTraceParser`.
 
 ## Pipeline
 
-```
-User: devices + rules + at least one spec (+ isAttack, intensity, enablePrivacy)
-        │  POST /api/verify   (VerificationRequestDto)
-        ▼
-VerificationController.verify(userId, request)
-        ▼
-VerificationServiceImpl.doVerify()
-        │
-        ├─ [1] SmvGenerator.generate(...)          → model.smv (+ request.json)
-        │        DeviceSmvDataFactory → SmvModelValidator (P1–P5)
-        │        → SmvRuleCommentWriter → SmvDeviceModuleBuilder
-        │        → SmvMainModuleBuilder → SmvSpecificationBuilder
-        │
-        ├─ [2] NusmvExecutor.execute(smvFile)      → run NuSMV, per-spec true/false + counterexample
-        │        (semaphore-bounded, timeout-guarded)
-        │
-        └─ [3] SmvTraceParser.parseCounterexampleStates(...)  → List<TraceStateDto>
-        ▼
-VerificationResultDto { safe, specResults, traces, checkLogs, nusmvOutput,
-disabledRuleCount, skippedSpecCount }
-        │
-        ├─ at least one emitted spec and all emitted specs pass → safe: true
-        ├─ no emitted specs → safe: false + unreliable/no-verification check log
-        └─ a violation      → counterexample trace(s) saved + optional auto-fix
-```
-
-- **[1] Generation** turns the request plus the user's device templates into a `.smv`
-  model. Validation (P1–P5) runs before any text is emitted — see
-  [spec-templates.md](spec-templates.md) for the rules and
-  [nusmv-model.md](nusmv-model.md) for the builders and identifier handling.
-  The REST DTO rejects empty `specs` before this stage; generator-level skipped specs
-  still surface through `skippedSpecCount` and `[spec-skipped]` logs.
-- **[2] Execution** invokes NuSMV as a subprocess through `NusmvExecutor`, which bounds
-  concurrency with a semaphore (`NUSMV_MAX_CONCURRENT`) and enforces `NUSMV_TIMEOUT_MS`.
-  Output parsing depends on NuSMV's standard English output format (2.6–2.7; not
-  nuXmv). The generator records the emitted specification id/expression sequence, and
-  parsed NuSMV pass/fail values are joined back to that sequence as `SpecResultDto`
-  objects (`specId`, `passed`, `expression`). If generation emits no specification at
-  all, verification fails closed with `safe=false` because nothing was actually checked.
-- **[3] Parsing** converts the NuSMV counterexample text into `TraceStateDto` objects.
-
-When a violation is found, the trace is persisted automatically (no `saveTrace` flag),
-and the client can then request fault localization and fixes — see
-[auto-fix.md](auto-fix.md).
-
----
-
-## Sync vs async vs simulation
-
-| Mode | Endpoint | Returns | When |
-| :--- | :--- | :--- | :--- |
-| Sync verify | `POST /api/verify` | `VerificationResultDto` | Small models, immediate result |
-| Async verify | `POST /api/verify/async` | `taskId` (Long) | Large models; poll status/progress, cancellable |
-| Simulation | `POST /api/simulate` | `SimulationResultDto` | Observe N random steps; no spec checking, not persisted |
-| Saved simulation | `POST /api/simulate/traces` | `SimulationTraceDto` | Synchronous simulation plus persisted history entry |
-| Async simulation | `POST /api/simulate/async` | `taskId` (Long) | Runs on the simulation task pool; completed tasks persist a trace and expose `simulationTraceId` |
-
-Async tasks run on a dedicated thread pool; status transitions
-(`complete`/`fail`/`cancel`) are atomic conditional updates to avoid TOCTOU races (see
-`CHANGELOG.md`, 2026-03-03). Progress is exposed 0–100 via
-`GET /api/verify/tasks/{id}/progress` and
-`GET /api/simulate/tasks/{id}/progress`.
-Task inbox UIs use the lightweight summary lists
-`GET /api/verify/tasks` and `GET /api/simulate/tasks`; task details and heavy outputs
-remain behind the per-task detail endpoints.
-The summary-list endpoints accept optional `excludeTaskIds` query values so a frontend
-that is already polling a specific task can refresh the rest of the inbox without
-re-merging that same task.
-
-Simulation history is intentionally separate from verification traces. A plain
-`POST /api/simulate` response is transient, while `POST /api/simulate/traces` and
-completed async simulation tasks store `SimulationTrace` rows that the frontend can
-list, replay, and delete through the history panel. Completed async simulation task
-responses expose the `simulationTraceId`; the full raw NuSMV output lives on that
-trace, whereas completed async verification tasks expose `specResults` and
-`nusmvOutput` directly.
-
-Full endpoint list: [../api/rest-endpoints.md](../api/rest-endpoints.md). Field-level
-shapes: [../api/verification.md](../api/verification.md).
-
----
-
-## Counterexample trace structure
-
-_Migrated from the former `NuSMV_Module_Documentation.md` §8._
-
-When NuSMV reports a spec as false, it emits a counterexample (a violating execution
-path). `SmvTraceParser` parses it into structured data.
-
-### Raw NuSMV counterexample format
-
-The example below matches the `isAttack=true, intensity=50, enablePrivacy=true` scenario
-from the complete SMV example in [nusmv-model.md](nusmv-model.md).
-
-```
--- specification AG (...) is false
--- as demonstrated by the following execution sequence
-Trace Description: CTL Counterexample
-Trace Type: Counterexample
-  -> State: 1.1 <-
-    thermostat_1.ThermostatMode = cool
-    thermostat_1.temperature = 22
-    thermostat_1.is_attack = FALSE
-    thermostat_1.trust_temperature = trusted
-    thermostat_1.privacy_temperature = public
-    thermostat_1.trust_ThermostatMode_cool = trusted
-    thermostat_1.privacy_ThermostatMode_cool = public
-    fan_1.FanMode = off
-    fan_1.is_attack = TRUE
-    fan_1.fanAuto_a = FALSE
-    fan_1.trust_FanMode_auto = trusted
-    fan_1.trust_FanMode_off = trusted
-    fan_1.privacy_FanMode_auto = public
-    fan_1.privacy_FanMode_off = public
-    intensity = 1
-    a_temperature = 22
-  -> State: 1.2 <-
-    thermostat_1.temperature = 35
-    a_temperature = 35
-    fan_1.fanAuto_a = TRUE
-  -> State: 1.3 <-
-    fan_1.FanMode = auto
-    fan_1.fanAuto_a = FALSE
-    fan_1.trust_FanMode_auto = untrusted
+```text
+devices + environmentVariables + rules + specs
+  + isAttack + attackBudget + enablePrivacy
+        |
+        | POST /api/verify or /api/verify/async
+        v
+DTO validation + current-template semantic validation
+  + capture referenced template manifests once
+        |
+        | known invalid references/domains -> 400/422, no task id
+        v
+SmvGenerator
+  -> model.smv
+  -> emitted-spec { specId, expression } mapping
+  -> disabledRuleCount / skippedSpecCount / generationIssues
+        |
+        v
+NusmvExecutor (bounded concurrency + timeout)
+        |
+        v
+result parser + SmvTraceParser
+        |
+        v
+VerificationResultDto {
+  isAttack, attackBudget, enablePrivacy, modelSemantics, modelSnapshot,
+  outcome, modelComplete, specResults, traces,
+  disabledRuleCount, skippedSpecCount, generationIssues,
+  checkLogs, nusmvOutput
+}
 ```
 
-### Parsed TraceStateDto structure
+The request needs at least one device and one specification. There is no `saveTrace`
+input: parsed counterexamples are persisted automatically.
 
-In `TraceDeviceDto`, `state` is the current state value and `mode` is the state-machine
-name. The old `newState` field was removed in favor of `state` + `mode`; historical JSON
-is mapped automatically via `@JsonAlias("newState")`.
+Known semantic mismatches, such as unknown actions, illegal enum values, non-signal API
+conditions, and invalid template-7 reliability sources, are rejected before execution.
+Residual generation failures fail closed:
+
+- an unusable rule receives guard `FALSE`, is counted in `disabledRuleCount`, and gets
+  an item-level `RULE_DISABLED` issue;
+- an unusable specification is not emitted, is counted in `skippedSpecCount`, and gets
+  an item-level `SPECIFICATION_SKIPPED` issue;
+- neither case is silently treated as complete success.
+
+## Outcome and completeness
+
+`outcome` and `modelComplete` answer different questions.
+
+| Outcome | Complete | User-facing meaning |
+| :--- | :--- | :--- |
+| `SATISFIED` | `true` | Every submitted specification was emitted, reliably parsed, and satisfied in the complete generated model |
+| `SATISFIED` | `false` | The emitted subset was satisfied, but one or more submitted rules/specifications were omitted; this is not a full safety conclusion |
+| `VIOLATED` | either | At least one reliably mapped emitted property is false; completeness still states whether the rest of the submitted model was represented |
+| `INCONCLUSIVE` | `false` | No reliable conclusion could be formed, for example no emitted specs or mismatched parser output; this is neither satisfied nor violated |
+
+`specResults[]` contains only emitted properties and identifies each by stable `specId`.
+Its `expression` is the actual generated CTL/LTL input. The persisted
+`SpecificationDto.formula` is only a preview/cache and is never parsed for verification.
+
+The frontend must render every `generationIssues[].itemLabel` and `reason`. Counts alone
+are insufficient because users need to know which automation or specification was not
+part of the claim.
+
+## Run assumptions
+
+Every sync result, async task/detail, and full saved trace returns the run context rather
+than relying on the current form:
+
+- `isAttack` says whether compromised device-instance and automation-link behavior was modeled;
+- `attackBudget` is the maximum, not exact, compromised-point count;
+- `enablePrivacy` says whether sensitivity propagation was modeled;
+- `modelSemantics` defines attack point, nondeterministic selection policy, attack
+  effects actually present in this scene, the falsifiable-reading device subset, and
+  trust/privacy propagation policies.
+- `modelSnapshot` reports capture time and effective device/rule/spec/environment/template
+  counts, with `templatesFrozen=true` proving that generation reused the manifests
+  captured at acceptance rather than mutable current definitions.
+
+Clients should reject or visibly downgrade interpretation if `modelSemantics` is absent
+or contradicts the run flags, or if `modelSnapshot` cannot establish frozen templates.
+The current frontend performs these checks. It compares current modelable input only for
+runs submitted in the same browser tab; historical results explicitly say that the
+current Board was not compared.
+
+Board-backed AI verification and simulation first capture every persisted model-defining
+collection plus device-template definitions in one per-user locked transaction. They
+derive the request and referenced manifest set from that single snapshot and pass both
+to the service layer, so a concurrent edit cannot produce a run assembled from Board
+states that never coexisted. Direct REST callers instead define the device/environment/
+rule/spec request snapshot in their submitted DTO; the service captures the referenced
+templates once during request acceptance and uses that frozen set for the run.
+
+## Sync, async, and simulation
+
+| Mode | Endpoint | Result |
+| :--- | :--- | :--- |
+| Synchronous verification | `POST /api/verify` | Full `VerificationResultDto`; the completed result and any counterexamples are also persisted as one verification run |
+| Asynchronous verification | `POST /api/verify/async` | Accepted `VerificationTaskDto`; use its server-generated `id` to poll |
+| Transient simulation | `POST /api/simulate` | One `SimulationResultDto` trajectory; not persisted |
+| Saved simulation | `POST /api/simulate/traces` | Full persisted `SimulationTraceDto` |
+| Asynchronous simulation | `POST /api/simulate/async` | Accepted `SimulationTaskDto`; a completed task references `simulationTraceId` |
+
+Async validation and template capture complete before task creation. Invalid requests
+return no pollable task. Queue saturation returns 503. A successful submit returns the
+task's persisted current status; acceptance never implies completion.
+Task completion/failure/cancellation uses conditional state transitions so a terminal
+state cannot be overwritten by a late worker.
+
+Run history separates execution lifecycle from completed evidence. Task-list endpoints
+exclude `COMPLETED`; completed verification rows are exposed through `/api/verify/runs`,
+while saved simulation trajectories are exposed through `/api/simulate/traces`.
+Counterexamples remain children of one verification run. Deleting that run deletes its
+counterexamples atomically. `violatedSpecCount` records false properties;
+`counterexampleCount` records only replayable parsed traces and may be smaller.
+
+Simulation has no specifications and therefore no safety conclusion. `states` is one
+possible trajectory through the generated model. `requestedSteps` is the requested
+horizon; `steps` is the parsed trajectory length minus the initial state and may be
+smaller. Timeout, interruption, execution failure, or no parsed states is an error, not
+an empty successful simulation.
+
+Simulation also returns `modelComplete`, `disabledRuleCount`, `generationIssues`, and
+`modelSemantics`. A non-empty trajectory from an incomplete model must be labeled as
+such.
+
+## Counterexample contract
+
+NuSMV prints internal identifiers and state deltas. `SmvTraceParser` converts them into
+complete user-facing snapshots. A representative API state is:
 
 ```json
-[
-  {
-    "stateIndex": 1,
-    "envVariables": [
-      { "name": "intensity", "value": "1" },
-      { "name": "a_temperature", "value": "35" }
-    ],
-    "devices": [
-      {
-        "deviceId": "thermostat_1",
-        "deviceLabel": "thermostat_1",
-        "templateName": "Thermostat",
-        "state": "cool",
-        "mode": "ThermostatMode",
-        "variables": [
-          { "name": "temperature", "value": "22", "trust": "trusted" },
-          { "name": "is_attack", "value": "FALSE" }
-        ],
-        "trustPrivacy": [
-          { "name": "ThermostatMode_cool", "trust": true }
-        ],
-        "privacies": [
-          { "name": "temperature", "privacy": "public" },
-          { "name": "ThermostatMode_cool", "privacy": "public" }
-        ]
-      },
-      {
-        "deviceId": "fan_1",
-        "deviceLabel": "fan_1",
-        "templateName": "Fan",
-        "state": "off",
-        "mode": "FanMode",
-        "variables": [
-          { "name": "is_attack", "value": "TRUE" }
-        ],
-        "trustPrivacy": [
-          { "name": "FanMode_auto", "trust": true },
-          { "name": "FanMode_off", "trust": true }
-        ],
-        "privacies": [
-          { "name": "FanMode_auto", "privacy": "public" },
-          { "name": "FanMode_off", "privacy": "public" }
-        ]
-      }
-    ]
-  },
-  {
-    "stateIndex": 2,
-    "devices": [
-      {
-        "deviceId": "thermostat_1",
-        "deviceLabel": "thermostat_1",
-        "templateName": "Thermostat",
-        "state": "cool",
-        "mode": "ThermostatMode",
-        "variables": [
-          { "name": "temperature", "value": "35" }
-        ]
-      },
-      {
-        "deviceId": "fan_1",
-        "deviceLabel": "fan_1",
-        "templateName": "Fan",
-        "state": "off",
-        "mode": "FanMode"
-      }
-    ]
-  },
-  {
-    "stateIndex": 3,
-    "devices": [
-      {
-        "deviceId": "fan_1",
-        "deviceLabel": "fan_1",
-        "templateName": "Fan",
-        "state": "auto",
-        "mode": "FanMode",
-        "trustPrivacy": [
-          { "name": "FanMode_auto", "trust": false }
-        ]
-      }
-    ]
-  }
-]
+{
+  "stateIndex": 2,
+  "triggeredRules": [
+    {
+      "ruleId": "42",
+      "ruleLabel": "When hallway motion is detected, turn on the light"
+    }
+  ],
+  "compromisedAutomationLinks": [
+    {
+      "ruleId": "42",
+      "ruleLabel": "When hallway motion is detected, turn on the light"
+    }
+  ],
+  "envVariables": [
+    { "name": "temperature", "value": "35" }
+  ],
+  "globalVariables": [
+    { "name": "compromisedPointCount", "value": "2" }
+  ],
+  "devices": [
+    {
+      "deviceId": "hall_sensor",
+      "deviceLabel": "Hall sensor",
+      "templateName": "Motion Detector",
+      "compromised": true,
+      "state": "active",
+      "mode": "SensorMode",
+      "variables": [
+        { "name": "motion", "value": "detected", "trust": "untrusted" }
+      ],
+      "trustPrivacy": [],
+      "privacies": []
+    }
+  ]
+}
 ```
 
-### Parsing and filtering/routing rules
+The ordinary UI displays `deviceLabel`, rule labels, literal variable names, and the
+`compromised` boolean. Canonical ids remain available only for identity/debug details.
 
-- Multiple NuSMV state-line formats are accepted: `State X.Y:` (old), `-> State: X.Y <-`
-  (new), and variants such as `State: X.Y` and `-> State X.Y <-`; the regex tolerates
-  optional whitespace and separators.
-- `device.var = value` matches a device internal variable; `a_varName = value` and other
-  bare variables (such as `intensity = value`) match environment/global variables.
-- `TraceDeviceDto.templateName` and `TraceDeviceDto.deviceLabel` are auto-filled; state
-  names are matched back via `DeviceSmvData.states`.
-- `*_rate` and `*_a` control variables are **filtered out** and do not enter the output.
-- `is_attack` **is kept** in the output, so the frontend can show which devices were
-  attacked along the counterexample path.
-- `trust_` prefix routing: entries matching the `mode_state` format go into
-  `trustPrivacy[]` (with `trust` as a boolean); all others go into `variables[].trust` (a
-  string).
-- `privacy_` prefix: all entries go into `privacies[]` (with the prefix stripped from the
-  entry name).
-- Bare variables (`intensity`, `a_*`) go into `envVariables[]`.
-- Multi-mode devices are first collected into temporary `__mode__*` variables, then the
-  final `state`/`mode` is back-filled during the `finalizeModeStates()` phase.
-- Incremental parsing: only changed variables are emitted (NuSMV prints only the changes).
+### Parser boundaries
+
+- NuSMV delta states are materialized into independent complete snapshots. An omitted
+  value means unchanged, not unknown.
+- Internal rule probes are converted to `{ ruleId, ruleLabel }`. Probe names and list
+  indexes are not serialized.
+- Internal automation-link attack choices are converted to
+  `compromisedAutomationLinks[]` using the same stable rule snapshots. Generated link
+  indexes are not serialized.
+- Internal `device.is_attack` is converted to `device.compromised`; it is not mixed into
+  `variables[]`.
+- The internal device-plus-link counter is exposed as
+  `globalVariables[].name="compromisedPointCount"`.
+- Generated environment aliases are mapped back to literal board names under
+  `envVariables[]`.
+- Generated rate and event-signal control values are filtered. A real template variable
+  with a similar prefix is preserved because routing checks the manifest, not just text
+  prefixes.
+- Generated trust/privacy values are attached to variable or active state labels.
+  Multi-mode state values are finalized before serialization.
+- `TraceDto.violatedSpec` is the structured historical spec snapshot and
+  `checkedExpression` is the exact emitted expression. Internal persistence JSON and
+  ownership ids are not serialized.
+
+## Trace playback
+
+Verification traces and simulation traces share the animation timeline. Playback is a
+read-only historical model snapshot:
+
+- it does not mutate the current board;
+- removed historical devices remain visible in the timeline summary and are marked as
+  historical; playback does not invent a canvas position for a device that no longer exists;
+- active edges come from backend `triggeredRules`, not frontend re-evaluation guesses;
+- edges are static outside playback, and command-flow particles appear only for a
+  backend-reported triggered rule whose delivery link is not compromised. Each selected
+  transition remounts a finite flow animation, including consecutive transitions driven
+  by the same rule; initial states and steps driven only by environment evolution or a
+  device-internal transition deliberately keep rule edges still;
+- the configured attack budget and actual `compromisedPointCount` are shown separately;
+- compromised automation links are named by their rule labels and highlighted as broken
+  links on the canvas;
+- trust/privacy badges describe model labels, not authentication or access control.
+- the selected transition's changed devices receive a canvas highlight, while explicit
+  before/after state, runtime, compromise, trust/privacy, and environment-value facts
+  appear in a separate draggable change panel; the node itself does not carry a tiny
+  delta label that can be hidden by a compact layout. The panel remains present for the
+  initial state and no-delta transitions, where it explains that no previous state or no
+  visible value change exists. It also names backend-reported triggered rules and explains
+  whether matching edges animate, remain still, or represent a compromised command drop.
+  Device icons and state labels cross-fade directly to the selected model state instead of
+  holding a stale value through a decorative flip. The node settle effect and change panel
+  retrigger for each transition, and delivered-rule edge motion completes within the state
+  dwell period. Unchanged devices remain still; reduced-motion preferences remove
+  non-essential movement without hiding the result;
+- simulation summaries distinguish model-state count, actual parsed transitions, and
+  requested steps. A shorter parsed horizon is a visible limitation, not a successful
+  full-length run.
+
+The Board prevents overlapping trace playback, simulation playback, and recommendation
+panels because all three use the same canvas emphasis surface.
+
+## Fix bridge
+
+A counterexample can be analyzed through fault localization and `fix`. Fix generation is
+advisory: `fixable=true` means at least one candidate was forward-verified against the
+stored model context, not that applying it to a later board is guaranteed.
+
+Applying a fix is a separate confirmed mutation. The server recomputes the selected
+strategy against the trace's exact frozen manifests, verifies it again, and rejects
+board/template/environment/spec drift inside
+the same per-user lock and transaction before writing. Stable `targetId` and
+`adjustmentId` values locate user-visible adjustments; rule/condition indexes and
+generated `param_*` names stay internal. Details live in [auto-fix.md](auto-fix.md).
+
+## Related
+
+- [Verification, simulation, and fix API](../api/verification.md)
+- [NuSMV model generation](nusmv-model.md)
+- [Specification templates](spec-templates.md)
+- [Auto-fix](auto-fix.md)

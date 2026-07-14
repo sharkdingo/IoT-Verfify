@@ -1,0 +1,1181 @@
+import { expect, type APIRequestContext, type Page, type Route, test } from '@playwright/test'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
+
+type AuthUser = {
+  userId: number
+  phone: string
+  username: string
+  token: string
+}
+
+const authHeaders = (auth: AuthUser) => ({
+  Authorization: `Bearer ${auth.token}`
+})
+
+const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> => {
+  expect(response.ok(), await response.text()).toBeTruthy()
+  const body = await response.json()
+  expect(body.code, JSON.stringify(body)).toBe(200)
+  return body.data as T
+}
+
+const createAuthenticatedUser = async (request: APIRequestContext): Promise<AuthUser> => {
+  const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
+  const phone = `139${suffix}`
+  const password = 'Pass1234'
+  const username = `flow${Date.now().toString(36).slice(-10)}`
+
+  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
+    data: { phone, username, password }
+  })
+  expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy()
+
+  const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
+    data: { identifier: username, password }
+  })
+  const data = await unwrap<AuthUser>(loginResponse)
+  return data
+}
+
+const openWorkspace = async (page: Page, auth: AuthUser) => {
+  await page.addInitScript(({ token, user }) => {
+    window.localStorage.setItem('iot_verify_token', token)
+    window.localStorage.setItem('iot_verify_user', JSON.stringify(user))
+    window.localStorage.setItem('iot_verify_theme', 'light')
+    window.localStorage.setItem('locale', 'en')
+  }, {
+    token: auth.token,
+    user: {
+      userId: auth.userId,
+      phone: auth.phone,
+      username: auth.username
+    }
+  })
+
+  await page.goto('/#/board')
+  await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('scene-import')).toBeEnabled({ timeout: 30_000 })
+}
+
+const waitForApi = async <T>(
+  request: APIRequestContext,
+  auth: AuthUser,
+  path: string,
+  predicate: (value: T) => boolean,
+  timeoutMs = 30_000
+): Promise<T> => {
+  const deadline = Date.now() + timeoutMs
+  let latest: T | undefined
+
+  while (Date.now() < deadline) {
+    const response = await request.get(`${apiBaseURL}${path}`, { headers: authHeaders(auth) })
+    latest = await unwrap<T>(response)
+    if (predicate(latest)) {
+      return latest
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
+  throw new Error(`Timed out waiting for ${path}; latest=${JSON.stringify(latest)}`)
+}
+
+const saveEmptyBoard = async (request: APIRequestContext, auth: AuthUser) => {
+  const previewResponse = await request.get(`${apiBaseURL}/api/board/replacement-preview`, {
+    headers: authHeaders(auth)
+  })
+  const preview = await unwrap<{ impactToken: string }>(previewResponse)
+  const response = await request.post(`${apiBaseURL}/api/board/batch`, {
+    headers: authHeaders(auth),
+    data: {
+      impactToken: preview.impactToken,
+      nodes: [],
+      environmentVariables: [],
+      rules: [],
+      specs: [],
+      templateSnapshots: []
+    }
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
+}
+
+const waitForTemplateOption = async (page: Page, templateName: string) => {
+  await page.waitForFunction((name) => {
+    const select = document.querySelector<HTMLSelectElement>('[data-testid="single-device-template"]')
+    return !!select && Array.from(select.options).some(option => option.value === name)
+  }, templateName, { timeout: 30_000 })
+}
+
+const openControlSection = async (page: Page, section: 'devices' | 'rules' | 'specs') => {
+  const tab = page.getByTestId(`control-tab-${section}`)
+  const panel = page.getByTestId(`control-section-${section}`)
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await tab.click()
+    try {
+      await expect(panel).toBeVisible({ timeout: 2_000 })
+      return
+    } catch {
+      await page.waitForTimeout(300)
+    }
+  }
+
+  await expect(panel).toBeVisible({ timeout: 5_000 })
+}
+
+const addDeviceViaLeftPanel = async (
+  page: Page,
+  request: APIRequestContext,
+  auth: AuthUser,
+  templateName: string,
+  label: string
+) => {
+  await openControlSection(page, 'devices')
+  await waitForTemplateOption(page, templateName)
+  await page.getByTestId('single-device-template').selectOption(templateName)
+  await page.getByTestId('single-device-name').fill(label)
+  await page.getByTestId('single-device-create').click()
+
+  const nodes = await waitForApi<any[]>(request, auth, '/api/board/nodes',
+    value => value.some(node => node.label === label))
+  const node = nodes.find(item => item.label === label)
+  expect(node.templateName).toBe(templateName)
+  return node
+}
+
+const addMotionRuleViaDialog = async (
+  page: Page,
+  request: APIRequestContext,
+  auth: AuthUser,
+  motionId: string,
+  targetId: string,
+  action: string,
+  name: string,
+  expectedRuleCount: number
+) => {
+  await openControlSection(page, 'rules')
+  await page.getByTestId('open-rule-builder').click()
+  await expect(page.getByTestId('rule-builder-dialog')).toBeVisible()
+
+  await page.locator('#rule-builder-name').fill(name)
+  await page.locator('#rule-source-device').selectOption(motionId)
+  await page.locator('#rule-source-type').selectOption('variable')
+  await page.locator('#rule-source-variable').selectOption('motion')
+  await page.locator('#rule-source-condition').selectOption('=')
+  await page.locator('#rule-source-value').selectOption('active')
+
+  const addSource = page.getByTestId('rule-add-source')
+  await expect(addSource).toBeEnabled()
+  await addSource.click()
+
+  await page.locator('#rule-target-device').selectOption(targetId)
+  await page.locator('#rule-target-action').selectOption(action)
+  await page.getByTestId('rule-save').click()
+  await expect(page.getByTestId('rule-builder-dialog')).toBeHidden({ timeout: 10_000 })
+
+  return waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length === expectedRuleCount)
+}
+
+const fillSpecCondition = async (
+  page: Page,
+  deviceId: string,
+  type: string,
+  key: string | null,
+  relation: string,
+  value: string
+) => {
+  await expect(page.getByTestId('spec-condition-dialog')).toBeVisible()
+  await page.getByTestId('spec-condition-device').selectOption(deviceId)
+  await page.getByTestId('spec-condition-type').selectOption(type)
+  if (key) {
+    await page.getByTestId('spec-condition-key').selectOption(key)
+  }
+  await page.getByTestId('spec-condition-relation').selectOption(relation)
+  const valueControl = page.locator('[data-testid="spec-condition-value"]:visible')
+  const tagName = await valueControl.evaluate(element => element.tagName.toLowerCase())
+  if (tagName === 'select') {
+    await valueControl.selectOption(value)
+  } else {
+    await valueControl.fill(value)
+  }
+  await page.getByTestId('spec-condition-save').click()
+  await expect(page.getByTestId('spec-condition-dialog')).toBeHidden({ timeout: 10_000 })
+}
+
+test.describe('board full-stack NuSMV user flow', () => {
+  test.setTimeout(180_000)
+
+  const additionalDefaultScenarios = [
+    {
+      name: 'fire evacuation',
+      file: 'default-fire-evacuation-scene.json',
+      counts: { devices: 4, environment: 2, rules: 3, specs: 5 },
+      baselineViolations: 1,
+      attackViolations: 4,
+      animatedState: 'unlocked',
+      removedRule: 'When the alarm sounds, unlock the front door for evacuation',
+      repairedRuleCount: 2
+    },
+    {
+      name: 'climate conflict',
+      file: 'default-climate-conflict-scene.json',
+      counts: { devices: 2, environment: 2, rules: 2, specs: 4 },
+      baselineViolations: 2,
+      attackViolations: 3,
+      animatedState: 'heat',
+      removedRule: 'Unsafe conflicting rule: when the room is hot, heat the living room',
+      repairedRuleCount: 1
+    },
+    {
+      name: 'RFID access',
+      file: 'default-rfid-access-scene.json',
+      counts: { devices: 3, environment: 0, rules: 2, specs: 5 },
+      baselineViolations: 0,
+      attackViolations: 3,
+      animatedState: 'unlocked',
+      removedRule: null,
+      repairedRuleCount: 2
+    }
+  ] as const
+
+  for (const scenario of additionalDefaultScenarios) {
+    test(`checks the ${scenario.name} default-template scenario end to end`, async ({ page, request }) => {
+      const auth = await createAuthenticatedUser(request)
+      await saveEmptyBoard(request, auth)
+      await openWorkspace(page, auth)
+
+      const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', scenario.file)
+      await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+      await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+        .getByRole('button', { name: 'Replace in full' })
+        .click()
+
+      await waitForApi<any[]>(request, auth, '/api/board/nodes',
+        value => value.length === scenario.counts.devices)
+      await waitForApi<any[]>(request, auth, '/api/board/environment',
+        value => value.length === scenario.counts.environment)
+      await waitForApi<any[]>(request, auth, '/api/board/rules',
+        value => value.length === scenario.counts.rules)
+      await waitForApi<any[]>(request, auth, '/api/board/specs',
+        value => value.length === scenario.counts.specs)
+
+      await page.getByTestId('open-simulation-panel').click()
+      await page.getByTestId('simulation-mode-sync').click()
+      await page.getByTestId('simulation-privacy-toggle').click()
+      const simulationResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST'
+          && new URL(response.url()).pathname === '/api/simulate/traces')
+      await page.getByTestId('run-simulation').click()
+      const simulation = await unwrap<any>(await simulationResponsePromise as any)
+      expect(simulation.modelComplete).toBe(true)
+      expect(simulation.disabledRuleCount).toBe(0)
+      expect(simulation.states.length).toBeGreaterThanOrEqual(2)
+      expect(JSON.stringify(simulation.states)).toContain(scenario.animatedState)
+      await expect(page.getByTestId('simulation-timeline')).toBeVisible({ timeout: 45_000 })
+      await page.getByTestId('simulation-timeline-play').click()
+      await page.waitForTimeout(300)
+      await page.getByTestId('simulation-timeline-close').click()
+
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-mode-sync').click()
+      const baselineResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const baseline = await unwrap<any>(await baselineResponsePromise as any)
+      expect(baseline.modelComplete).toBe(true)
+      expect(baseline.disabledRuleCount).toBe(0)
+      expect(baseline.skippedSpecCount).toBe(0)
+      expect(baseline.specResults).toHaveLength(scenario.counts.specs)
+      expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED'))
+        .toHaveLength(scenario.baselineViolations)
+      await page.getByTestId('close-verification-result').click()
+
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-attack-toggle').click()
+      await page.getByTestId('verification-attack-budget').fill('1')
+      const attackResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const attacked = await unwrap<any>(await attackResponsePromise as any)
+      expect(attacked.modelComplete).toBe(true)
+      expect(attacked.disabledRuleCount).toBe(0)
+      expect(attacked.skippedSpecCount).toBe(0)
+      expect(attacked.specResults.filter((result: any) => result.outcome === 'VIOLATED'))
+        .toHaveLength(scenario.attackViolations)
+      await page.getByTestId('close-verification-result').click()
+
+      if (scenario.removedRule) {
+        const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces',
+          value => value.some(trace => trace.isAttack === false))
+        let selectedTrace: any = null
+        let selectedFix: any = null
+        for (const trace of traces.filter(item => item.isAttack === false)) {
+          const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${trace.id}/fix`, {
+            headers: authHeaders(auth),
+            data: { strategies: ['remove'] }
+          })
+          const fix = await unwrap<any>(fixResponse)
+          const removal = fix.suggestions?.find((suggestion: any) =>
+            suggestion.strategy === 'remove'
+              && suggestion.verified === true
+              && suggestion.removedRuleDescriptions?.includes(scenario.removedRule))
+          if (removal) {
+            selectedTrace = trace
+            selectedFix = removal
+            break
+          }
+        }
+        expect(selectedTrace).toBeTruthy()
+        expect(selectedFix.removedRuleDescriptions).toEqual([scenario.removedRule])
+
+        const applyResponse = await request.post(
+          `${apiBaseURL}/api/verify/traces/${selectedTrace.id}/fix/apply`,
+          {
+            headers: authHeaders(auth),
+            data: { strategy: 'remove' }
+          }
+        )
+        const applied = await unwrap<any>(applyResponse)
+        expect(applied.currentRuleCount).toBe(scenario.repairedRuleCount)
+
+        await page.reload()
+        await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+        await page.getByTestId('open-verification-panel').click()
+        await page.getByTestId('verification-mode-sync').click()
+        const repairedResponsePromise = page.waitForResponse(response =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+        await page.getByTestId('run-verification').click()
+        const repaired = await unwrap<any>(await repairedResponsePromise as any)
+        expect(repaired.modelComplete).toBe(true)
+        expect(repaired.disabledRuleCount).toBe(0)
+        expect(repaired.skippedSpecCount).toBe(0)
+        expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
+      }
+    })
+  }
+
+  test('imports devices from pasted JSON and selected CSV with precise preview validation', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+    await openControlSection(page, 'devices')
+    await waitForTemplateOption(page, 'Temperature Sensor')
+
+    await page.getByTestId('device-create-mode-batch').click()
+    await page.getByTestId('batch-device-template').selectOption('Door')
+    await page.getByTestId('batch-device-prefix').fill('batch_door_')
+    await page.getByTestId('batch-device-count').fill('0')
+    await expect(page.getByTestId('batch-device-create')).toBeDisabled()
+    await expect(page.getByTestId('batch-device-count').locator('..')).toContainText(/between 1 and 50|1 到 50/i)
+    await page.getByTestId('batch-device-count').fill('51')
+    await expect(page.getByTestId('batch-device-create')).toBeDisabled()
+    await page.getByTestId('batch-device-count').fill('2')
+    await expect(page.getByTestId('batch-device-create')).toBeEnabled()
+
+    await page.getByTestId('device-create-mode-import').click()
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify([
+      {
+        template: 'Mobile Phone',
+        name: 'import_phone',
+        state: 'on',
+        currentStateTrust: 'trusted',
+        variables: [
+          { name: 'location', value: 'home', trust: 'trusted' },
+          { name: 'steps', value: '23', trust: 'trusted' }
+        ],
+        privacies: [
+          { name: 'location', privacy: 'public' },
+          { name: 'steps', privacy: 'public' }
+        ]
+      },
+      {
+        templateName: 'Alarm',
+        label: 'import_alarm',
+        state: 'both',
+        currentStateTrust: 'trusted'
+      }
+    ]))
+    await expect(page.getByTestId('device-import-create')).toBeEnabled()
+    await page.getByTestId('device-import-create').click()
+
+    let nodes = await waitForApi<any[]>(request, auth, '/api/board/nodes',
+      value => value.some(node => node.label === 'import_phone')
+        && value.some(node => node.label === 'import_alarm'))
+    const importedPhone = nodes.find(node => node.label === 'import_phone')
+    const importedAlarm = nodes.find(node => node.label === 'import_alarm')
+    expect(importedPhone.variables).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'location', value: 'home', trust: 'trusted' }),
+      expect.objectContaining({ name: 'steps', value: '23', trust: 'trusted' })
+    ]))
+    expect(importedPhone.privacies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'location', privacy: 'public' }),
+      expect.objectContaining({ name: 'steps', privacy: 'public' })
+    ]))
+    expect(importedAlarm.state).toBe('both')
+    expect(importedAlarm.currentStateTrust).toBe('trusted')
+
+    await page.getByTestId('device-import-file').setInputFiles({
+      name: 'devices.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from('template,name\nDoor,front_csv\nLight,hall_light_csv\n')
+    })
+    await expect(page.getByTestId('device-import-create')).toBeEnabled()
+    await page.getByTestId('device-import-create').click()
+    nodes = await waitForApi<any[]>(request, auth, '/api/board/nodes',
+      value => value.some(node => node.label === 'front_csv')
+        && value.some(node => node.label === 'hall_light_csv'))
+    expect(nodes.find(node => node.label === 'front_csv').templateName).toBe('Door')
+    expect(nodes.find(node => node.label === 'hall_light_csv').templateName).toBe('Light')
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Door',
+      name: 'front_csv'
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeEnabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/renamed|重名/i)
+    await page.getByTestId('device-import-create').click()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes',
+      value => value.some(node => node.label === 'front_csv_1'))
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Temperature Sensor',
+      name: 'import_temp_sensor',
+      variables: [
+        { name: 'temperature', value: '21', trust: 'untrusted' }
+      ],
+      privacies: [
+        { name: 'temperature', privacy: 'public' }
+      ]
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeEnabled()
+    await page.getByTestId('device-import-create').click()
+    nodes = await waitForApi<any[]>(request, auth, '/api/board/nodes',
+      value => value.some(node => node.label === 'import_temp_sensor'))
+    expect(nodes.find(node => node.label === 'import_temp_sensor').variables || []).toHaveLength(0)
+    const environment = await waitForApi<any[]>(request, auth, '/api/board/environment',
+      value => value.some(variable => variable.name === 'temperature' && String(variable.value) === '21'))
+    expect(environment.find(variable => variable.name === 'temperature')).toMatchObject({
+      value: '21',
+      trust: 'untrusted',
+      privacy: 'public'
+    })
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Temperature Sensor',
+      name: 'bad_state',
+      state: 'clear'
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/no state machine|状态机/i)
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Temperature Sensor',
+      name: 'bad_duplicate',
+      variables: [
+        { name: 'temperature', value: '20', trust: 'trusted' },
+        { name: 'temperature', value: '21', trust: 'trusted' }
+      ]
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/Duplicate variable|变量重复/i)
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Missing Template',
+      name: 'ghost'
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/Template not found|模板不存在/i)
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Door',
+      name: 123
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/name must be a JSON string|name 必须是 JSON 字符串/i)
+
+    await page.getByTestId('device-import-text').fill(JSON.stringify({
+      template: 'Door',
+      type: 'Light',
+      name: 'ambiguous_type'
+    }))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText(/multiple aliases|多个字段/i)
+
+    const lateInvalidRow = Array.from({ length: 10 }, (_, index) => ({
+      template: 'Door',
+      name: `visible_row_${index + 1}`
+    }))
+    lateInvalidRow.push({ template: 'Missing Template', name: 'late_error_row' })
+    await page.getByTestId('device-import-text').fill(JSON.stringify(lateInvalidRow))
+    await expect(page.getByTestId('device-import-create')).toBeDisabled()
+    await expect(page.locator('.device-preview-box')).toContainText('late_error_row')
+    await expect(page.locator('.device-preview-box')).toContainText(/Template not found|模板不存在/i)
+  })
+
+  test('AI suggestion panels wait for explicit generation and send scenario context', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    await page.getByTestId('open-scenario-recommendations').click()
+    await expect(page.getByTestId('scenario-recommendation-panel').locator('textarea'))
+      .toHaveAttribute('maxlength', '2000')
+    await page.getByTestId('close-scenario-recommendations').click()
+
+    await page.getByTestId('open-device-recommendations').click()
+    await expect(page.getByTestId('device-recommendation-panel').locator('textarea'))
+      .toHaveAttribute('maxlength', '2000')
+    await page.getByTestId('close-device-recommendations').click()
+
+    const recommendationRequests: string[] = []
+    page.on('request', req => {
+      const url = new URL(req.url())
+      if (url.pathname === '/api/board/rules/recommend' || url.pathname === '/api/board/specs/recommend') {
+        recommendationRequests.push(url.toString())
+      }
+    })
+
+    await page.getByTestId('open-history-panel').click()
+    await expect(page.getByTestId('trace-history-panel')).toBeVisible({ timeout: 10_000 })
+
+    await page.getByTestId('open-rule-recommendations').click()
+    await expect(page.getByTestId('trace-history-panel')).toBeHidden({ timeout: 5_000 })
+    const rulePanel = page.getByTestId('rule-recommendation-panel')
+    await expect(rulePanel).toBeVisible()
+    await expect(rulePanel).toContainText(/Configure recommendation parameters|先配置推荐参数/i)
+    await expect(rulePanel.locator('textarea')).toHaveAttribute('maxlength', '2000')
+    await page.waitForTimeout(500)
+    expect(recommendationRequests).toEqual([])
+
+    const detailedRuleRequirement =
+      `night safety for an elderly resident ${'with explicit context '.repeat(30)}`.trim()
+    expect(detailedRuleRequirement.length).toBeGreaterThan(500)
+    await rulePanel.locator('select').selectOption('security')
+    await rulePanel.locator('input[type="number"]').fill('3')
+    await rulePanel.locator('textarea').fill(detailedRuleRequirement)
+    const ruleResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return response.request().method() === 'GET'
+        && url.pathname === '/api/board/rules/recommend'
+        && url.searchParams.get('maxRecommendations') === '3'
+        && url.searchParams.get('category') === 'security'
+        && url.searchParams.get('userRequirement') === detailedRuleRequirement
+    })
+    await page.getByTestId('generate-rule-recommendations').click()
+    const ruleResponse = await ruleResponsePromise
+    expect(ruleResponse.ok(), await ruleResponse.text()).toBeTruthy()
+    await expect(rulePanel).toContainText(/No devices found|Add more devices|先添加设备|暂无推荐/i)
+
+    const normalizedRuleRoute = async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 200,
+          message: 'Success',
+          data: {
+            message: 'Found one validated rule recommendation.',
+            count: 1,
+            requestedCount: 3,
+            validatedCount: 1,
+            filteredCount: 0,
+            filteredItems: [],
+            adjustedCount: 1,
+            adjustedItems: [{
+              type: 'rule',
+              index: 1,
+              reasonCode: 'apiEventSyntaxNormalized',
+              reason: "The AI expressed the API event as '= TRUE'; it was normalized to event-trigger semantics.",
+              label: 'Motion starts the alarm',
+              appliedValues: { sourceApi: 'motionDetected' }
+            }],
+            rawCandidateCount: 1,
+            inspectedCount: 1,
+            truncatedCount: 0,
+            recommendations: [{
+              category: 'security',
+              name: 'Motion starts the alarm',
+              conditions: [{
+                deviceId: 'motion-device',
+                deviceName: 'Hall motion sensor',
+                attribute: 'motionDetected',
+                targetType: 'api'
+              }],
+              command: {
+                deviceId: 'alarm-device',
+                deviceName: 'Hall alarm',
+                action: 'turnOn'
+              }
+            }]
+          }
+        })
+      })
+    }
+    await page.route('**/api/board/rules/recommend**', normalizedRuleRoute)
+    await page.getByTestId('generate-rule-recommendations').click()
+    await expect(page.getByTestId('rule-adjusted-items')).toContainText(/normalized|规范化/i)
+    await page.unroute('**/api/board/rules/recommend**', normalizedRuleRoute)
+
+    await page.getByTestId('open-spec-recommendations').click()
+    await expect(page.getByTestId('rule-recommendation-panel')).toBeHidden({ timeout: 5_000 })
+    const specPanel = page.getByTestId('spec-recommendation-panel')
+    await expect(specPanel).toBeVisible()
+    await expect(specPanel).toContainText(/Configure recommendation parameters|先配置推荐参数/i)
+    await expect(specPanel.locator('textarea')).toHaveAttribute('maxlength', '2000')
+    await page.waitForTimeout(500)
+    expect(recommendationRequests.filter(url => new URL(url).pathname === '/api/board/specs/recommend')).toHaveLength(0)
+
+    await specPanel.locator('select').selectOption('privacy')
+    await specPanel.locator('input[type="number"]').fill('2')
+    await specPanel.locator('textarea').fill('privacy guard when motion is detected at night')
+    const specResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return response.request().method() === 'GET'
+        && url.pathname === '/api/board/specs/recommend'
+        && url.searchParams.get('maxRecommendations') === '2'
+        && url.searchParams.get('category') === 'privacy'
+        && url.searchParams.get('userRequirement') === 'privacy guard when motion is detected at night'
+    })
+    await page.getByTestId('generate-spec-recommendations').click()
+    const specResponse = await specResponsePromise
+    expect(specResponse.ok(), await specResponse.text()).toBeTruthy()
+    await expect(specPanel).toContainText(/No devices found|Add more devices|先添加设备|暂无推荐/i)
+  })
+
+  test('exports scene JSON that imports and exports byte-identically', async ({ page, request }, testInfo) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const motion = await addDeviceViaLeftPanel(page, request, auth, 'Motion Detector', 'roundtrip_motion')
+    const alarm = await addDeviceViaLeftPanel(page, request, auth, 'Alarm', 'roundtrip_alarm')
+
+    await addMotionRuleViaDialog(
+      page, request, auth, motion.id, alarm.id, 'siren',
+      'roundtrip motion triggers alarm', 1)
+    const rulesBeforeReorder = await addMotionRuleViaDialog(
+      page, request, auth, motion.id, alarm.id, 'strobe',
+      'roundtrip motion triggers strobe', 2)
+
+    await page.getByTestId('inspector-tab-rules').click()
+    await expect(page.getByTestId('rule-execution-order-hint')).toBeVisible()
+    const laterRuleId = String(rulesBeforeReorder[1].id)
+    await page.locator(`[data-rule-id="${laterRuleId}"]`)
+      .getByRole('button', { name: 'Move earlier' })
+      .click()
+    const rulesAfterReorder = await waitForApi<any[]>(request, auth, '/api/board/rules',
+      rules => rules.length === 2 && String(rules[0].id) === laterRuleId)
+    expect(rulesAfterReorder.map(rule => rule.ruleString)).toEqual([
+      'roundtrip motion triggers strobe',
+      'roundtrip motion triggers alarm'
+    ])
+
+    await openControlSection(page, 'specs')
+    await page.getByTestId('spec-template-select').selectOption('5')
+    await page.getByTestId('spec-add-condition-if').click()
+    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'active')
+    await page.getByTestId('spec-add-condition-then').click()
+    await fillSpecCondition(page, alarm.id, 'privacy', JSON.stringify(['state', 'AlertState']), '=', 'private')
+    await page.getByTestId('spec-create').click()
+    await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 1)
+
+    await page.getByTestId('spec-template-select').selectOption('1')
+    await page.getByTestId('spec-add-condition-a').click()
+    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'inactive')
+    await page.getByTestId('spec-create').click()
+    const specsBeforeExport = await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 2)
+    expect(specsBeforeExport.map(spec => spec.templateId)).toEqual(['5', '1'])
+
+    const firstDownloadPromise = page.waitForEvent('download')
+    await page.getByTestId('scene-export').click()
+    const firstDownload = await firstDownloadPromise
+    const firstPath = await firstDownload.path()
+    expect(firstPath).toBeTruthy()
+    const firstJson = fs.readFileSync(firstPath!, 'utf8')
+    const firstScene = JSON.parse(firstJson)
+    expect(firstScene).toMatchObject({ schema: 'iot-verify.board-scene', version: 4 })
+    expect(firstScene).not.toHaveProperty('exportedAt')
+    expect(firstScene.devices).toHaveLength(2)
+    const exportedMotion = firstScene.devices.find((device: any) => device.templateName === 'Motion Detector')
+    expect(exportedMotion).not.toHaveProperty('state')
+    expect(exportedMotion).not.toHaveProperty('currentStateTrust')
+    expect(exportedMotion).not.toHaveProperty('currentStatePrivacy')
+    expect(firstScene.rules).toHaveLength(2)
+    expect(firstScene.rules.map((rule: any) => rule.name)).toEqual([
+      'roundtrip motion triggers strobe',
+      'roundtrip motion triggers alarm'
+    ])
+    expect(firstScene.specs).toHaveLength(2)
+    expect(firstScene.specs.map((spec: any) => spec.templateId)).toEqual(['5', '1'])
+    expect(firstScene.templates[0]).not.toHaveProperty('id')
+    expect(firstScene.templates[0]).not.toHaveProperty('defaultTemplate')
+    expect(firstScene.rules[0]).not.toHaveProperty('id')
+    expect(firstScene.specs[0]).not.toHaveProperty('id')
+    expect(firstScene.specs[0]).not.toHaveProperty('templateLabel')
+    expect(firstScene.specs[0]).not.toHaveProperty('formula')
+    expect(firstScene.specs[0]).not.toHaveProperty('devices')
+    expect(firstScene.specs[0].ifConditions[0]).not.toHaveProperty('id')
+    expect(firstScene.specs[0].ifConditions[0]).not.toHaveProperty('side')
+    expect(firstScene.specs[0].ifConditions[0]).not.toHaveProperty('deviceLabel')
+    expect(firstScene.specs[0].thenConditions[0]).toMatchObject({
+      targetType: 'privacy',
+      propertyScope: 'state',
+      key: 'AlertState',
+      relation: '=',
+      value: 'private'
+    })
+    expect(JSON.stringify(firstScene.specs[0].thenConditions[0])).not.toContain('AlertState_')
+    expect(firstScene.environmentVariables.length).toBeGreaterThan(0)
+
+    await page.getByTestId('scene-clear').click()
+    await page.locator('.el-message-box').getByRole('button', { name: 'Clear' }).click()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+    await waitForApi<any[]>(request, auth, '/api/board/rules', value => value.length === 0)
+    await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 0)
+
+    const emptyDownloadPromise = page.waitForEvent('download')
+    await page.getByTestId('scene-export').click()
+    const emptyDownload = await emptyDownloadPromise
+    const emptyPath = await emptyDownload.path()
+    expect(emptyPath).toBeTruthy()
+    const emptyJson = fs.readFileSync(emptyPath!, 'utf8')
+    const emptyScene = JSON.parse(emptyJson)
+    expect(emptyScene).toMatchObject({ templates: [], devices: [], environmentVariables: [], rules: [], specs: [] })
+    const emptyImportPath = testInfo.outputPath('scene-empty.json')
+    fs.writeFileSync(emptyImportPath, emptyJson, 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(emptyImportPath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const futureScene = { ...firstScene, version: 5 }
+    const futurePath = testInfo.outputPath('scene-future-version.json')
+    fs.writeFileSync(futurePath, JSON.stringify(futureScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(futurePath)
+    await expect(page.locator('.el-message').filter({ hasText: /version 5|版本 5/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const internalFieldScene = JSON.parse(firstJson)
+    internalFieldScene.specs[0].id = 'internal-spec-id'
+    const internalFieldPath = testInfo.outputPath('scene-internal-field.json')
+    fs.writeFileSync(internalFieldPath, JSON.stringify(internalFieldScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(internalFieldPath)
+    await expect(page.locator('.el-message').filter({ hasText: /internal or derived|内部或派生/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const unknownFieldScene = JSON.parse(firstJson)
+    unknownFieldScene.rules[0].futureConflictPolicy = 'merge'
+    const unknownFieldPath = testInfo.outputPath('scene-unknown-field.json')
+    fs.writeFileSync(unknownFieldPath, JSON.stringify(unknownFieldScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(unknownFieldPath)
+    await expect(page.locator('.el-message').filter({ hasText: /futureConflictPolicy|不认识的字段/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const wrongScalarTypeScene = JSON.parse(firstJson)
+    wrongScalarTypeScene.devices[0].label = 123
+    const wrongScalarTypePath = testInfo.outputPath('scene-wrong-scalar-type.json')
+    fs.writeFileSync(wrongScalarTypePath, JSON.stringify(wrongScalarTypeScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(wrongScalarTypePath)
+    await expect(page.locator('.el-message').filter({
+      hasText: /devices\[0\]\.label.*JSON string|devices\[0\]\.label.*JSON 字符串/i
+    })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const missingEnvironmentScene = JSON.parse(firstJson)
+    missingEnvironmentScene.environmentVariables = []
+    const missingEnvironmentPath = testInfo.outputPath('scene-missing-environment.json')
+    fs.writeFileSync(missingEnvironmentPath, JSON.stringify(missingEnvironmentScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(missingEnvironmentPath)
+    await expect(page.locator('.el-message').filter({ hasText: /missing environment variables|缺少.*环境变量/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const emptyEnvironmentValueScene = JSON.parse(firstJson)
+    emptyEnvironmentValueScene.environmentVariables[0].value = null
+    const emptyEnvironmentValuePath = testInfo.outputPath('scene-empty-environment-value.json')
+    fs.writeFileSync(emptyEnvironmentValuePath, JSON.stringify(emptyEnvironmentValueScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(emptyEnvironmentValuePath)
+    await expect(page.locator('.el-message').filter({ hasText: /explicit non-blank value|显式填写非空 value/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const invalidScene = JSON.parse(firstJson)
+    delete invalidScene.rules[0].toApi
+    const invalidPath = testInfo.outputPath('scene-missing-rule-target.json')
+    fs.writeFileSync(invalidPath, JSON.stringify(invalidScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(invalidPath)
+    await expect(page.locator('.el-message').filter({ hasText: 'rules[0].toApi' })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+    await waitForApi<any[]>(request, auth, '/api/board/rules', value => value.length === 0)
+
+    const importPath = testInfo.outputPath('scene-roundtrip.json')
+    fs.writeFileSync(importPath, firstJson, 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(importPath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 2)
+    const importedRules = await waitForApi<any[]>(request, auth, '/api/board/rules', value => value.length === 2)
+    expect(importedRules.map(rule => rule.ruleString)).toEqual([
+      'roundtrip motion triggers strobe',
+      'roundtrip motion triggers alarm'
+    ])
+    const importedSpecs = await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 2)
+    expect(importedSpecs.map(spec => spec.templateId)).toEqual(['5', '1'])
+
+    const secondDownloadPromise = page.waitForEvent('download')
+    await page.getByTestId('scene-export').click()
+    const secondDownload = await secondDownloadPromise
+    const secondPath = await secondDownload.path()
+    expect(secondPath).toBeTruthy()
+    const secondJson = fs.readFileSync(secondPath!, 'utf8')
+    expect(secondJson).toBe(firstJson)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    await page.getByTestId('run-verification').click()
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('verification-result-dialog')).toContainText(/NuSMV|specification|规约/i)
+  })
+
+  test('imports the acceptance scene, animates it, contrasts attacks, applies a verified repair, and re-verifies', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'acceptance-demo-scene.json')
+    await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+
+    const importedNodes = await waitForApi<any[]>(request, auth, '/api/board/nodes', nodes => nodes.length === 4)
+    expect(importedNodes.map(node => node.label).sort()).toEqual([
+      'Hall Alarm', 'Hall Camera', 'Hall Light', 'Hall Motion Sensor'
+    ])
+    await waitForApi<any[]>(request, auth, '/api/board/environment', values => values.length === 2)
+    await waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length === 3)
+    await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === 5)
+
+    await page.getByTestId('open-simulation-panel').click()
+    await page.getByTestId('simulation-mode-sync').click()
+    await page.getByTestId('simulation-privacy-toggle').click()
+    const simulationResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/simulate/traces')
+    await page.getByTestId('run-simulation').click()
+    const simulationResponse = await simulationResponsePromise
+    const simulationResult = await unwrap<any>(simulationResponse as any)
+    expect(simulationResult.modelComplete).toBe(true)
+    expect(simulationResult.disabledRuleCount).toBe(0)
+    expect(simulationResult.states.length).toBeGreaterThanOrEqual(2)
+    expect(JSON.stringify(simulationResult.states)).toContain('takingphoto')
+    expect(JSON.stringify(simulationResult.states)).toContain('siren')
+    expect(JSON.stringify(simulationResult.states)).toContain('"on"')
+    await expect(page.getByTestId('simulation-timeline')).toBeVisible({ timeout: 45_000 })
+    await expect(page.getByTestId('playback-change-popover')).toBeVisible()
+    await expect(page.getByTestId('playback-change-initial-state')).toBeVisible()
+
+    const firstTriggeredStateIndex = simulationResult.states.findIndex((state: any, index: number) =>
+      index > 0 && Array.isArray(state.triggeredRules) && state.triggeredRules.length > 0)
+    expect(firstTriggeredStateIndex).toBeGreaterThan(0)
+    await page.getByTestId('simulation-timeline-step-input').fill(String(firstTriggeredStateIndex + 1))
+    await expect(page.getByTestId('playback-change-popover')).toBeVisible()
+    await expect(page.getByTestId('playback-change-automation')).toContainText(
+      simulationResult.states[firstTriggeredStateIndex].triggeredRules[0].ruleLabel)
+    await expect(page.locator(`.particle-line[data-playback-state="${firstTriggeredStateIndex}"]`).first()).toBeVisible()
+
+    await page.getByTestId('simulation-timeline-play').click()
+    await page.waitForTimeout(500)
+    await page.getByTestId('simulation-timeline-close').click()
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const baselineResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const baselineResponse = await baselineResponsePromise
+    const baseline = await unwrap<any>(baselineResponse as any)
+    expect(baseline).toMatchObject({
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 5 }
+    })
+    expect(baseline.specResults).toHaveLength(5)
+    expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(1)
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 60_000 })
+    await page.getByTestId('close-verification-result').click()
+
+    const baselineTraces = await waitForApi<any[]>(request, auth, '/api/verify/traces', traces =>
+      traces.some(trace => trace.isAttack === false
+        && JSON.stringify(trace.violatedSpec || {}).includes('taking photo')))
+    const baselineTrace = baselineTraces.find(trace => trace.isAttack === false
+      && JSON.stringify(trace.violatedSpec || {}).includes('taking photo'))
+    expect(baselineTrace.states.length).toBeGreaterThanOrEqual(2)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-attack-toggle').click()
+    await page.getByTestId('verification-attack-budget').fill('1')
+    const attackResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const attackResponse = await attackResponsePromise
+    const attacked = await unwrap<any>(attackResponse as any)
+    expect(attacked).toMatchObject({
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      attackBudget: 1,
+      enablePrivacy: true,
+      modelSnapshot: { specificationCount: 5 }
+    })
+    expect(attacked.specResults).toHaveLength(5)
+    expect(attacked.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(4)
+    await page.getByTestId('close-verification-result').click()
+
+    const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${baselineTrace.id}/fix`, {
+      headers: authHeaders(auth),
+      data: { strategies: ['remove'] }
+    })
+    const fix = await unwrap<any>(fixResponse)
+    const removal = fix.suggestions.find((suggestion: any) =>
+      suggestion.strategy === 'remove' && suggestion.verified === true)
+    expect(removal.removedRuleDescriptions).toEqual([
+      'When hall motion is active, take a camera photo'
+    ])
+
+    const applyResponse = await request.post(
+      `${apiBaseURL}/api/verify/traces/${baselineTrace.id}/fix/apply`,
+      {
+        headers: authHeaders(auth),
+        data: { strategy: 'remove' }
+      }
+    )
+    const applied = await unwrap<any>(applyResponse)
+    expect(applied.currentRuleCount).toBe(2)
+    expect(applied.rules.map((rule: any) => rule.ruleString)).not.toContain(
+      'When hall motion is active, take a camera photo')
+
+    await page.reload()
+    await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const repairedResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const repairedResponse = await repairedResponsePromise
+    const repaired = await unwrap<any>(repairedResponse as any)
+    expect(repaired).toMatchObject({
+      outcome: 'SATISFIED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 5 }
+    })
+    expect(repaired.specResults).toHaveLength(5)
+    expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
+  })
+
+  test('imports the multi-violation JSON and repairs both baseline violations through one root removal', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const scenePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'multi-violation-repair-scene.json')
+    await page.getByTestId('scene-import-file').setInputFiles(scenePath)
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', nodes => nodes.length === 4)
+    await waitForApi<any[]>(request, auth, '/api/board/environment', values =>
+      values.length === 2 && values.some(value => value.name === 'motion' && value.trust === 'untrusted'))
+    await waitForApi<any[]>(request, auth, '/api/board/rules', rules => rules.length === 3)
+    await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === 5)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const baselineResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const baseline = await unwrap<any>((await baselineResponsePromise) as any)
+    expect(baseline).toMatchObject({
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 5 }
+    })
+    expect(baseline.specResults).toHaveLength(5)
+    expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(2)
+    await page.getByTestId('close-verification-result').click()
+
+    const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces', rows =>
+      rows.filter(trace => trace.isAttack === false && trace.states?.length >= 2).length >= 2)
+    const cameraNeverTrace = traces.find(trace => trace.isAttack === false
+      && trace.violatedSpec?.templateId === '3'
+      && JSON.stringify(trace.violatedSpec).includes('taking photo'))
+    expect(cameraNeverTrace).toBeTruthy()
+
+    const fixResponse = await request.post(
+      `${apiBaseURL}/api/verify/traces/${cameraNeverTrace.id}/fix`,
+      {
+        headers: authHeaders(auth),
+        data: { strategies: ['remove'] }
+      }
+    )
+    const fix = await unwrap<any>(fixResponse)
+    const removal = fix.suggestions.find((suggestion: any) =>
+      suggestion.strategy === 'remove' && suggestion.verified === true)
+    expect(removal.removedRuleDescriptions).toEqual([
+      'When an untrusted hall motion signal is active, take a camera photo'
+    ])
+
+    const applyResponse = await request.post(
+      `${apiBaseURL}/api/verify/traces/${cameraNeverTrace.id}/fix/apply`,
+      {
+        headers: authHeaders(auth),
+        data: { strategy: 'remove' }
+      }
+    )
+    const applied = await unwrap<any>(applyResponse)
+    expect(applied).toMatchObject({
+      applied: true,
+      verificationRechecked: true,
+      previousRuleCount: 3,
+      currentRuleCount: 2
+    })
+
+    await page.reload()
+    await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const repairedResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const repaired = await unwrap<any>((await repairedResponsePromise) as any)
+    expect(repaired).toMatchObject({
+      outcome: 'SATISFIED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 5 }
+    })
+    expect(repaired.specResults).toHaveLength(5)
+    expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
+  })
+
+  test('builds a board through left-panel dialogs, then simulates, verifies, replays history, and tracks async tasks', async ({ page, request }) => {
+    const browserErrors: string[] = []
+    page.on('pageerror', error => browserErrors.push(error.message))
+    page.on('console', message => {
+      if (message.type() === 'error') browserErrors.push(message.text())
+    })
+
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const motion = await addDeviceViaLeftPanel(page, request, auth, 'Motion Detector', 'motion_entry')
+    const camera = await addDeviceViaLeftPanel(page, request, auth, 'Camera', 'privacy_camera')
+    const alarm = await addDeviceViaLeftPanel(page, request, auth, 'Alarm', 'night_alarm')
+    await expect(page.locator('.device-label').filter({ hasText: 'motion_entry' }).first()).toBeVisible()
+    await expect(page.locator('.device-label').filter({ hasText: 'privacy_camera' }).first()).toBeVisible()
+    await expect(page.locator('.device-label').filter({ hasText: 'night_alarm' }).first()).toBeVisible()
+
+    const cameraRules = await addMotionRuleViaDialog(
+      page, request, auth, motion.id, camera.id, 'take photo',
+      'motion captures camera evidence', 1)
+    expect(cameraRules[0].conditions[0].targetType).toBe('variable')
+    expect(cameraRules[0].conditions[0].deviceName).toBe(motion.id)
+    expect(cameraRules[0].command.action).toBe('take photo')
+
+    const alarmRules = await addMotionRuleViaDialog(
+      page, request, auth, motion.id, alarm.id, 'siren',
+      'motion triggers audible alarm', 2)
+    expect(alarmRules[1].command.deviceName).toBe(alarm.id)
+
+    await openControlSection(page, 'specs')
+    await page.getByTestId('spec-template-select').selectOption('3')
+    await page.getByTestId('spec-add-condition-a').click()
+    await fillSpecCondition(page, camera.id, 'state', null, '=', 'taking photo')
+    await page.getByTestId('spec-create').click()
+    await waitForApi<any[]>(request, auth, '/api/board/specs', specs => specs.length === 1)
+
+    await page.getByTestId('spec-template-select').selectOption('5')
+    await page.getByTestId('spec-add-condition-if').click()
+    await fillSpecCondition(page, motion.id, 'variable', 'motion', '=', 'active')
+    await page.getByTestId('spec-add-condition-then').click()
+    await fillSpecCondition(page, alarm.id, 'mode', 'AlertState', '=', 'siren')
+    await page.getByTestId('spec-create').click()
+    const specs = await waitForApi<any[]>(request, auth, '/api/board/specs', value => value.length === 2)
+    expect(specs.map(spec => spec.templateId)).toEqual(['3', '5'])
+    const focusedSpec = page.locator(`[data-spec-id="${specs[1].id}"]`)
+    await expect(focusedSpec).toBeVisible()
+    await expect(focusedSpec).toHaveClass(/ring-2/)
+    await expect(focusedSpec).toBeFocused()
+
+    await page.getByTestId('open-simulation-panel').click()
+    await page.getByTestId('simulation-mode-sync').click()
+    await page.getByTestId('run-simulation').click()
+    await expect(page.getByTestId('simulation-timeline')).toBeVisible({ timeout: 45_000 })
+    await expect(page.getByTestId('simulation-timeline-state-0')).toBeVisible()
+    await page.getByTestId('simulation-timeline-play').click()
+    await page.waitForTimeout(800)
+    await page.getByTestId('simulation-timeline-close').click()
+    await waitForApi<any[]>(request, auth, '/api/simulate/traces', traces => traces.length >= 1)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    await page.getByTestId('run-verification').click()
+    await expect(page.getByTestId('verification-result-dialog')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('verification-result-dialog')).toContainText(/violation|failed|unsafe/i)
+    await page.getByTestId('close-verification-result').click()
+    const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces',
+      value => value.some(trace => Array.isArray(trace.states) && trace.states.length > 0))
+    expect(JSON.stringify(traces[0].violatedSpec)).toContain('taking photo')
+
+    const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${traces[0].id}/fix`, {
+      headers: authHeaders(auth),
+      data: { strategies: ['remove', 'condition'] }
+    })
+    const fix = await unwrap<any>(fixResponse)
+    expect(fix.traceId).toBe(traces[0].id)
+    expect(Array.isArray(fix.faultRules)).toBeTruthy()
+    expect(fix.faultRules.length).toBeGreaterThanOrEqual(1)
+    expect(Array.isArray(fix.suggestions)).toBeTruthy()
+    expect(fix.suggestions.some((suggestion: any) => suggestion.verified === true)).toBeTruthy()
+
+    await page.getByTestId('open-simulation-panel').click()
+    await page.getByTestId('simulation-mode-async').click()
+    await page.getByTestId('run-simulation').click()
+    await waitForApi<any[]>(request, auth, '/api/simulate/traces', runs => runs.length > 0, 45_000)
+    if (await page.getByTestId('simulation-timeline').isVisible().catch(() => false)) {
+      await page.getByTestId('simulation-timeline-close').click()
+    }
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-async').click()
+    await page.getByTestId('run-verification').click()
+    await waitForApi<any[]>(request, auth, '/api/verify/runs', runs => runs.length > 0, 45_000)
+    if (await page.getByTestId('verification-result-dialog').isVisible().catch(() => false)) {
+      await page.getByTestId('close-verification-result').click()
+    }
+
+    await page.getByTestId('open-history-panel').click()
+    await expect(page.getByTestId('trace-history-panel')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('history-layer-results').click()
+    await page.getByTestId('history-result-filter-verification').click()
+    const viewTrace = page.locator('[data-testid^="view-verification-trace-"]').first()
+    await expect(viewTrace).toBeVisible({ timeout: 30_000 })
+    await viewTrace.click()
+    await expect(page.getByTestId('trace-timeline')).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByTestId('trace-timeline-state-0')).toBeVisible()
+    await page.getByTestId('trace-timeline-state-0').click()
+
+    expect(browserErrors).toEqual([])
+  })
+})

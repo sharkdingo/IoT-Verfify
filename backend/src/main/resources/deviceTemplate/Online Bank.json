@@ -9,7 +9,6 @@
 		{
 			"Name": "idle",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -17,7 +16,6 @@
 		{
 			"Name": "transfering",
 			"Dynamics": [],
-			"Invariant": "true",
 			"Description": "",
 			"Trust": "trusted",
 			"Privacy": "private"
@@ -34,7 +32,6 @@
 				"Value": "transfering"
 			},
 			"Assignments": [],
-			"Signal": false,
 			"Description": ""
 		}
 	],

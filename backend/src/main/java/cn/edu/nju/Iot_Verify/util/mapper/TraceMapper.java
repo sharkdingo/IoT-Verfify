@@ -1,7 +1,10 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.trace.*;
-import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
+import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -30,50 +33,53 @@ public class TraceMapper {
         dto.setVerificationTaskId(tracePo.getVerificationTaskId());
         dto.setViolatedSpecId(tracePo.getViolatedSpecId());
         dto.setViolatedSpecJson(tracePo.getViolatedSpecJson());
+        dto.setViolatedSpec(JsonUtils.readPersistedRequired("verification trace", tracePo.getId(),
+                "violatedSpecJson", () -> JsonUtils.fromJson(tracePo.getViolatedSpecJson(), SpecificationDto.class)));
+        dto.setCheckedExpression(tracePo.getCheckedExpression());
         dto.setRequestJson(tracePo.getRequestJson());
+        dto.setTemplateSnapshotsJson(tracePo.getTemplateSnapshotsJson());
+        dto.setModelSnapshot(JsonUtils.readPersistedRequired("verification trace", tracePo.getId(),
+                "modelSnapshotJson", () -> JsonUtils.fromJson(
+                        tracePo.getModelSnapshotJson(), ModelRunSnapshotDto.class)));
+        dto.setDisabledRuleCount(tracePo.getDisabledRuleCount());
+        dto.setSkippedSpecCount(tracePo.getSkippedSpecCount());
+        dto.setGenerationIssues(JsonUtils.readPersisted("verification trace", tracePo.getId(),
+                "generationIssuesJson", () -> JsonUtils.fromJsonList(
+                        tracePo.getGenerationIssuesJson(), ModelGenerationIssueDto.class)));
+        dto.setModelComplete((tracePo.getDisabledRuleCount() == null || tracePo.getDisabledRuleCount() == 0)
+                && (tracePo.getSkippedSpecCount() == null || tracePo.getSkippedSpecCount() == 0));
         dto.setCreatedAt(tracePo.getCreatedAt());
 
-        // Derive the verification context flags (attack/intensity/privacy) from the stored request
-        // snapshot so the frontend can label a historical trace with the parameters it was run under,
-        // instead of reading the current (possibly-changed) verification form. requestJson is @JsonIgnore
-        // so these derived fields are the only way the client sees them.
-        applyRequestContext(dto, tracePo.getRequestJson());
+        applyPersistedModelContext(dto, tracePo);
 
-        if (tracePo.getStatesJson() != null && !tracePo.getStatesJson().isEmpty()) {
-            List<TraceStateDto> states = JsonUtils.fromJsonOrDefault(
-                    tracePo.getStatesJson(),
-                    new TypeReference<List<TraceStateDto>>() {},
-                    List.of()
-            );
-            dto.setStates(states);
-        } else {
-            dto.setStates(List.of());
+        List<TraceStateDto> states = JsonUtils.readPersistedRequired("verification trace", tracePo.getId(),
+                "statesJson", () -> JsonUtils.fromJson(
+                        tracePo.getStatesJson(), new TypeReference<List<TraceStateDto>>() {}));
+        if (states.isEmpty()) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "verification trace", tracePo.getId(), "statesJson", "trace has no states");
         }
+        dto.setStates(states);
 
         return dto;
     }
 
-    /**
-     * Parse the verification-context flags from the request snapshot JSON and set them on the DTO.
-     * Best-effort: a missing/legacy/unparseable snapshot leaves the derived fields null (the frontend
-     * then simply omits the labels), so this must never throw.
-     */
-    private void applyRequestContext(TraceDto dto, String requestJson) {
-        if (requestJson == null || requestJson.isBlank()) {
+    private void applyPersistedModelContext(TraceDto dto, TracePo po) {
+        if (po.getIsAttack() == null || po.getAttackBudget() == null || po.getEnablePrivacy() == null) {
             return;
         }
-        VerificationRequestDto req;
-        try {
-            req = JsonUtils.fromJson(requestJson, VerificationRequestDto.class);
-        } catch (Exception e) {
-            return;
+        dto.setAttack(po.getIsAttack());
+        dto.setAttackBudget(Boolean.TRUE.equals(po.getIsAttack()) ? po.getAttackBudget() : 0);
+        dto.setEnablePrivacy(po.getEnablePrivacy());
+        if (po.getModeledDeviceAttackPointCount() != null
+                && po.getModeledAutomationLinkAttackPointCount() != null
+                && po.getModeledFalsifiableReadingDeviceCount() != null) {
+            dto.setModelSemantics(ModelSemanticsDto.forRun(
+                    Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
+                    po.getModeledDeviceAttackPointCount(),
+                    po.getModeledAutomationLinkAttackPointCount(),
+                    po.getModeledFalsifiableReadingDeviceCount()));
         }
-        if (req == null) {
-            return;
-        }
-        dto.setAttack(req.isAttack());
-        dto.setIntensity(req.getIntensity());
-        dto.setEnablePrivacy(req.isEnablePrivacy());
     }
 
     /**
@@ -90,8 +96,27 @@ public class TraceMapper {
         po.setViolatedSpecId(traceDto.getViolatedSpecId() != null
                 ? traceDto.getViolatedSpecId()
                 : SmvConstants.UNKNOWN_VIOLATED_SPEC_ID);
-        po.setViolatedSpecJson(traceDto.getViolatedSpecJson());
+        po.setViolatedSpecJson(traceDto.getViolatedSpecJson() != null
+                ? traceDto.getViolatedSpecJson()
+                : JsonUtils.toJson(traceDto.getViolatedSpec()));
+        po.setCheckedExpression(traceDto.getCheckedExpression());
         po.setRequestJson(traceDto.getRequestJson());
+        po.setTemplateSnapshotsJson(traceDto.getTemplateSnapshotsJson());
+        po.setModelSnapshotJson(JsonUtils.toJson(traceDto.getModelSnapshot()));
+        po.setIsAttack(traceDto.getAttack());
+        po.setAttackBudget(Boolean.TRUE.equals(traceDto.getAttack()) ? traceDto.getAttackBudget() : 0);
+        po.setEnablePrivacy(traceDto.getEnablePrivacy());
+        if (traceDto.getModelSemantics() != null) {
+            po.setModeledDeviceAttackPointCount(
+                    traceDto.getModelSemantics().getModeledDeviceAttackPointCount());
+            po.setModeledFalsifiableReadingDeviceCount(
+                    traceDto.getModelSemantics().getModeledFalsifiableReadingDeviceCount());
+            po.setModeledAutomationLinkAttackPointCount(
+                    traceDto.getModelSemantics().getModeledAutomationLinkAttackPointCount());
+        }
+        po.setDisabledRuleCount(traceDto.getDisabledRuleCount());
+        po.setSkippedSpecCount(traceDto.getSkippedSpecCount());
+        po.setGenerationIssuesJson(JsonUtils.toJsonOrEmpty(traceDto.getGenerationIssues()));
         po.setCreatedAt(traceDto.getCreatedAt());
 
         if (traceDto.getStates() != null && !traceDto.getStates().isEmpty()) {
@@ -109,4 +134,29 @@ public class TraceMapper {
     public List<TraceDto> toDtoList(List<TracePo> tracePoList) {
         return tracePoList.stream().map(this::toDto).toList();
     }
+
+    public TraceSummaryDto toSummaryDto(TracePo tracePo) {
+        if (tracePo == null) return null;
+        SpecificationDto violatedSpec = JsonUtils.readPersistedRequired(
+                "verification trace", tracePo.getId(), "violatedSpecJson",
+                () -> JsonUtils.fromJson(tracePo.getViolatedSpecJson(), SpecificationDto.class));
+        List<TraceStateDto> states = JsonUtils.readPersistedRequired(
+                "verification trace", tracePo.getId(), "statesJson",
+                () -> JsonUtils.fromJson(
+                        tracePo.getStatesJson(), new TypeReference<List<TraceStateDto>>() {}));
+        if (states.isEmpty()) {
+            throw new cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException(
+                    "verification trace", tracePo.getId(), "statesJson", "trace has no states");
+        }
+        return TraceSummaryDto.builder()
+                .id(tracePo.getId())
+                .verificationTaskId(tracePo.getVerificationTaskId())
+                .violatedSpecId(tracePo.getViolatedSpecId())
+                .violatedSpec(violatedSpec)
+                .stateCount(states.size())
+                .createdAt(tracePo.getCreatedAt())
+                .dataAvailable(true)
+                .build();
+    }
+
 }

@@ -7,10 +7,14 @@ import lombok.Data;
  */
 @Data
 public class TraceTrustPrivacyDto {
-    /**
-     * 名称（状态名或内容名）
-     */
+    /** User-facing literal state, variable, or content name. */
     private String name;
+
+    /** state | variable | content. Generated trust_/privacy_ namespaces are not exposed. */
+    private String propertyScope;
+
+    /** Mode name for state-scoped labels; null for variable/content labels. */
+    private String mode;
     
     /**
      * 信任度: true=trusted, false=untrusted, null=unknown

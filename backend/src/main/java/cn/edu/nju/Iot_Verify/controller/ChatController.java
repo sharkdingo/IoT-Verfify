@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatRequestDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.ChatService;
@@ -56,6 +57,7 @@ public class ChatController {
     public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
+        chatService.beginStreamRequest(userId, request.getSessionId());
         try {
             executor.execute(() -> {
                 try {
@@ -63,13 +65,22 @@ public class ChatController {
                 } catch (Exception e) {
                     log.error("Error processing chat request for userId={}", userId, e);
                     emitter.completeWithError(e);
+                } finally {
+                    chatService.endStreamRequest(userId, request.getSessionId());
                 }
             });
         } catch (RejectedExecutionException e) {
+            chatService.endStreamRequest(userId, request.getSessionId());
             log.warn("Chat request rejected: executor is saturated, userId={}, sessionId={}", userId, request.getSessionId());
             throw new ServiceUnavailableException("Chat service is busy, please retry later", e);
         }
         return emitter;
+    }
+
+    @GetMapping("/sessions/{sessionId}/activity")
+    public Result<ChatSessionActivityDto> getSessionActivity(
+            @CurrentUser Long userId, @PathVariable String sessionId) {
+        return Result.success(chatService.getSessionActivity(userId, sessionId));
     }
 
     @DeleteMapping("/sessions/{sessionId}")

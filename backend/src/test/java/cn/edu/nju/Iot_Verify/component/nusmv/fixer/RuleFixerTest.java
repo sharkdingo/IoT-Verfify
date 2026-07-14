@@ -48,10 +48,10 @@ class RuleFixerTest {
     void fix_nullStrategies_usesDefaultAndTriesAllThree() {
         FixStrategy paramStrategy = mockStrategy("parameter", true);
         FixStrategy condStrategy = mockStrategy("condition", true);
-        FixStrategy disableStrategy = mockStrategy("disable", false);
+        FixStrategy removeStrategy = mockStrategy("remove", false);
 
         RuleFixer fixer = new RuleFixer(faultLocalizer,
-                List.of(paramStrategy, condStrategy, disableStrategy), fixConfig());
+                List.of(paramStrategy, condStrategy, removeStrategy), fixConfig());
 
         // Setup: faultLocalizer returns non-empty fault rules
         FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
@@ -69,17 +69,17 @@ class RuleFixerTest {
         // All three strategies should have tryFix called
         verify(paramStrategy).tryFix(any(FixContext.class));
         verify(condStrategy).tryFix(any(FixContext.class));
-        verify(disableStrategy).tryFix(any(FixContext.class));
+        verify(removeStrategy).tryFix(any(FixContext.class));
     }
 
     @Test
-    void fix_emptyStrategies_usesDefaultChain() {
+    void fix_emptyStrategies_isRejectedInsteadOfUsingDefaultChain() {
         FixStrategy paramStrategy = mockStrategy("parameter", true);
         FixStrategy condStrategy = mockStrategy("condition", true);
-        FixStrategy disableStrategy = mockStrategy("disable", false);
+        FixStrategy removeStrategy = mockStrategy("remove", false);
 
         RuleFixer fixer = new RuleFixer(faultLocalizer,
-                List.of(paramStrategy, condStrategy, disableStrategy), fixConfig());
+                List.of(paramStrategy, condStrategy, removeStrategy), fixConfig());
 
         FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
         when(faultLocalizer.localize(any(), any(), any())).thenReturn(List.of(fault));
@@ -88,23 +88,23 @@ class RuleFixerTest {
         spec.setId("spec_0");
         RuleDto rule = RuleDto.builder().build();
 
-        // Pass empty list — should fall back to DEFAULT_STRATEGIES
-        fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of(), 20, null);
+        assertThrows(IllegalArgumentException.class, () ->
+                fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
+                        Map.of(), 1L, false, 0, false, List.of(), 20, null));
 
-        verify(paramStrategy).tryFix(any(FixContext.class));
-        verify(condStrategy).tryFix(any(FixContext.class));
-        verify(disableStrategy).tryFix(any(FixContext.class));
+        verify(paramStrategy, never()).tryFix(any(FixContext.class));
+        verify(condStrategy, never()).tryFix(any(FixContext.class));
+        verify(removeStrategy, never()).tryFix(any(FixContext.class));
     }
 
     @Test
-    void fix_explicitDisableOnly_onlyDisableCalled() {
+    void fix_explicitRemoveOnly_onlyRemoveCalled() {
         FixStrategy paramStrategy = mockStrategy("parameter", true);
         FixStrategy condStrategy = mockStrategy("condition", true);
-        FixStrategy disableStrategy = mockStrategy("disable", false);
+        FixStrategy removeStrategy = mockStrategy("remove", false);
 
         RuleFixer fixer = new RuleFixer(faultLocalizer,
-                List.of(paramStrategy, condStrategy, disableStrategy), fixConfig());
+                List.of(paramStrategy, condStrategy, removeStrategy), fixConfig());
 
         FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
         when(faultLocalizer.localize(any(), any(), any())).thenReturn(List.of(fault));
@@ -114,18 +114,38 @@ class RuleFixerTest {
         RuleDto rule = RuleDto.builder().build();
 
         fixer.fix(1L, "spec_0", List.of(), List.of(rule), List.of(), List.of(spec),
-                Map.of(), 1L, false, 0, false, List.of("disable"), 20, null);
+                Map.of(), 1L, false, 0, false, List.of("remove"), 20, null);
 
         verify(paramStrategy, never()).tryFix(any());
         verify(condStrategy, never()).tryFix(any());
-        verify(disableStrategy).tryFix(any(FixContext.class));
+        verify(removeStrategy).tryFix(any(FixContext.class));
+    }
+
+    @Test
+    void fix_numericSpecReferenceIsNotTreatedAsAnInternalListIndex() {
+        FixStrategy paramStrategy = mockStrategy("parameter", true);
+        RuleFixer fixer = new RuleFixer(faultLocalizer, List.of(paramStrategy), fixConfig());
+        when(faultLocalizer.localize(any(), any(), any()))
+                .thenReturn(List.of(FaultRuleDto.builder().ruleIndex(0).build()));
+
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("real-spec-id");
+        FixResultDto result = fixer.fix(1L, "0", List.of(),
+                List.of(RuleDto.builder().build()), List.of(), List.of(spec),
+                Map.of(), 1L, false, 0, false, List.of("parameter"), 20, null);
+
+        verify(paramStrategy, never()).tryFix(any());
+        assertEquals("SKIPPED_NO_SPEC", result.getStrategyAttempts().get(0).getStatus());
+        assertFalse(result.getSummary().contains("violatedSpecId"));
+        assertFalse(result.getSummary().contains("'0'"));
+        assertTrue(result.getSummary().contains("saved verification snapshot"));
     }
 
     @Test
     void fix_expiredDeadline_skipsAllStrategiesAndAppendsSummary() {
         FixStrategy paramStrategy = mockStrategy("parameter", true);
         FixStrategy condStrategy = mockStrategy("condition", true);
-        FixStrategy disableStrategy = mockStrategy("disable", false);
+        FixStrategy removeStrategy = mockStrategy("remove", false);
 
         // Use a fixConfig with 1000ms (minimum allowed), but we don't rely on it expiring —
         // the faultLocalizer mock will return instantly, so the deadline won't expire naturally.
@@ -137,7 +157,7 @@ class RuleFixerTest {
         expiredConfig.setFixTimeoutMs(1000); // minimum allowed
 
         RuleFixer fixer = new RuleFixer(faultLocalizer,
-                List.of(paramStrategy, condStrategy, disableStrategy), expiredConfig);
+                List.of(paramStrategy, condStrategy, removeStrategy), expiredConfig);
 
         FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
         when(faultLocalizer.localize(any(), any(), any())).thenReturn(List.of(fault));
@@ -158,7 +178,9 @@ class RuleFixerTest {
         // After paramStrategy sleeps past deadline, remaining strategies should be skipped
         verify(paramStrategy).tryFix(any(FixContext.class));
         verify(condStrategy, never()).tryFix(any());
-        verify(disableStrategy, never()).tryFix(any());
+        verify(removeStrategy, never()).tryFix(any());
         assertTrue(result.getSummary().contains("timed out"));
+        assertEquals(List.of("TIMED_OUT", "SKIPPED_TIMEOUT", "SKIPPED_TIMEOUT"),
+                result.getStrategyAttempts().stream().map(a -> a.getStatus()).toList());
     }
 }

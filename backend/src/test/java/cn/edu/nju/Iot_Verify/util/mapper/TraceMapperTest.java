@@ -9,62 +9,142 @@ import static org.junit.jupiter.api.Assertions.*;
 class TraceMapperTest {
 
     private final TraceMapper mapper = new TraceMapper();
+    private static final String MODEL_SNAPSHOT_JSON = "{\"capturedAt\":\"2026-07-12T09:30:00\","
+            + "\"deviceCount\":1,\"ruleCount\":1,\"specificationCount\":1,"
+            + "\"environmentVariableCount\":0,\"deviceTemplateCount\":1,\"templatesFrozen\":true}";
 
     private TracePo baseTrace(String requestJson) {
         TracePo po = new TracePo();
         po.setId(1L);
         po.setUserId(1L);
         po.setViolatedSpecId("s0");
+        po.setViolatedSpecJson("{\"id\":\"s0\",\"templateId\":\"3\",\"templateLabel\":\"Never\","
+                + "\"aConditions\":[],\"ifConditions\":[],\"thenConditions\":[],\"devices\":[]}");
+        po.setStatesJson("[{}]");
         po.setRequestJson(requestJson);
+        po.setTemplateSnapshotsJson("{\"light\":{\"Name\":\"Light\"}}");
+        po.setModelSnapshotJson(MODEL_SNAPSHOT_JSON);
         return po;
     }
 
     @Test
-    void derivesAttackContextFromRequestJson() {
+    void usesPersistedAttackContextInsteadOfRecountingRequestDevices() {
         TracePo po = baseTrace("{\"devices\":[{\"varName\":\"d1\",\"templateName\":\"t1\"}],"
-                + "\"rules\":[],\"specs\":[],\"isAttack\":true,\"intensity\":7,\"enablePrivacy\":true}");
+                + "\"rules\":[{}],\"specs\":[],\"isAttack\":true,\"attackBudget\":1,\"enablePrivacy\":true}");
+        po.setIsAttack(true);
+        po.setAttackBudget(1);
+        po.setEnablePrivacy(true);
+        po.setModeledDeviceAttackPointCount(0);
+        po.setModeledFalsifiableReadingDeviceCount(0);
+        po.setModeledAutomationLinkAttackPointCount(1);
 
         TraceDto dto = mapper.toDto(po);
 
         assertEquals(Boolean.TRUE, dto.getAttack());
-        assertEquals(7, dto.getIntensity());
+        assertEquals(1, dto.getAttackBudget());
         assertEquals(Boolean.TRUE, dto.getEnablePrivacy());
+        assertEquals(0, dto.getModelSemantics().getModeledDeviceAttackPointCount());
+        assertEquals(1, dto.getModelSemantics().getModeledAutomationLinkAttackPointCount());
+        assertEquals(1, dto.getModelSemantics().getModeledAttackPointCount());
+        assertEquals(1, dto.getModelSnapshot().getDeviceCount());
+        assertTrue(dto.getModelSnapshot().isTemplatesFrozen());
+        assertEquals(po.getTemplateSnapshotsJson(), dto.getTemplateSnapshotsJson());
     }
 
     @Test
-    void derivesDefaultsWhenFlagsAbsent() {
-        // isAttack/enablePrivacy default false, intensity defaults to 3 per VerificationRequestDto.
+    void normalizesPersistedDisabledAttackBudgetToZero() {
         TracePo po = baseTrace("{\"devices\":[{\"varName\":\"d1\",\"templateName\":\"t1\"}],"
                 + "\"rules\":[],\"specs\":[]}");
+        po.setIsAttack(false);
+        po.setAttackBudget(7);
+        po.setEnablePrivacy(false);
+        po.setModeledDeviceAttackPointCount(0);
+        po.setModeledFalsifiableReadingDeviceCount(0);
+        po.setModeledAutomationLinkAttackPointCount(0);
 
         TraceDto dto = mapper.toDto(po);
 
         assertEquals(Boolean.FALSE, dto.getAttack());
-        assertEquals(3, dto.getIntensity());
+        assertEquals(0, dto.getAttackBudget());
         assertEquals(Boolean.FALSE, dto.getEnablePrivacy());
     }
 
     @Test
-    void legacyTraceWithoutSnapshot_leavesContextNull() {
-        // Traces recorded before the snapshot was saved must not fail mapping; derived fields stay null
-        // so the frontend simply omits the labels.
-        TracePo po = baseTrace(null);
+    void traceWithoutPersistedModelContext_doesNotGuessFromRequestJson() {
+        TracePo po = baseTrace("{\"devices\":[{\"varName\":\"d1\",\"templateName\":\"t1\"}],"
+                + "\"rules\":[],\"specs\":[],\"isAttack\":true,\"attackBudget\":1}");
 
         TraceDto dto = mapper.toDto(po);
 
         assertNull(dto.getAttack());
-        assertNull(dto.getIntensity());
+        assertNull(dto.getAttackBudget());
         assertNull(dto.getEnablePrivacy());
     }
 
     @Test
-    void unparseableSnapshot_doesNotThrow_leavesContextNull() {
+    void unparseableInternalRequestSnapshot_doesNotAffectStructuredContext() {
         TracePo po = baseTrace("{ not valid json ");
 
         TraceDto dto = assertDoesNotThrow(() -> mapper.toDto(po));
 
         assertNull(dto.getAttack());
-        assertNull(dto.getIntensity());
+        assertNull(dto.getAttackBudget());
         assertNull(dto.getEnablePrivacy());
+    }
+
+    @Test
+    void mapsPersistedSpecJsonToStructuredApiSnapshot() {
+        TracePo po = baseTrace(null);
+        po.setViolatedSpecJson("{\"id\":\"s0\",\"templateId\":\"3\",\"templateLabel\":\"Never\","
+                + "\"aConditions\":[],\"ifConditions\":[],\"thenConditions\":[],\"devices\":[]}");
+
+        TraceDto dto = mapper.toDto(po);
+
+        assertNotNull(dto.getViolatedSpec());
+        assertEquals("s0", dto.getViolatedSpec().getId());
+        assertEquals("Never", dto.getViolatedSpec().getTemplateLabel());
+    }
+
+    @Test
+    void preservesActualCheckedExpressionForHistoricalPlayback() {
+        TracePo po = baseTrace(null);
+        po.setCheckedExpression("CTLSPEC AG(!(camera_1.CameraMode=taking_photo))");
+
+        TraceDto dto = mapper.toDto(po);
+        TracePo roundTrip = mapper.toEntity(dto);
+
+        assertEquals(po.getCheckedExpression(), dto.getCheckedExpression());
+        assertEquals(po.getCheckedExpression(), roundTrip.getCheckedExpression());
+    }
+
+    @Test
+    void toEntityPersistsExactRunAttackSurface() {
+        TraceDto dto = new TraceDto();
+        dto.setUserId(1L);
+        dto.setViolatedSpecId("s0");
+        cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto violatedSpec =
+                new cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto();
+        violatedSpec.setId("s0");
+        violatedSpec.setTemplateId("3");
+        dto.setViolatedSpec(violatedSpec);
+        dto.setStates(java.util.List.of(new cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto()));
+        dto.setAttack(true);
+        dto.setAttackBudget(2);
+        dto.setEnablePrivacy(false);
+        dto.setModelSemantics(cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto.forRun(
+                true, false, 1, 2, 1));
+        dto.setTemplateSnapshotsJson("{\"light\":{\"Name\":\"Light\"}}");
+        dto.setModelSnapshot(cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto.captured(
+                java.time.LocalDateTime.of(2026, 7, 12, 9, 30), 1, 1, 1, 0, 1));
+
+        TracePo po = mapper.toEntity(dto);
+
+        assertEquals(Boolean.TRUE, po.getIsAttack());
+        assertEquals(2, po.getAttackBudget());
+        assertEquals(1, po.getModeledDeviceAttackPointCount());
+        assertEquals(1, po.getModeledFalsifiableReadingDeviceCount());
+        assertEquals(2, po.getModeledAutomationLinkAttackPointCount());
+        assertEquals(dto.getTemplateSnapshotsJson(), po.getTemplateSnapshotsJson());
+        assertTrue(po.getModelSnapshotJson().contains("\"templatesFrozen\":true"));
     }
 }

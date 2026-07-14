@@ -1,7 +1,8 @@
 /* ==================== 规约相关类型 ==================== */
 
 export type SpecSide = 'a' | 'if' | 'then'
-export type SpecTargetType = 'state' | 'variable' | 'api' | 'trust' | 'privacy'
+export type SpecTargetType = 'state' | 'mode' | 'variable' | 'api' | 'trust' | 'privacy'
+export type SpecPropertyScope = 'state' | 'variable'
 export type SpecTemplateId = '1' | '2' | '3' | '4' | '5' | '6' | '7'
 
 export interface SpecCondition {
@@ -11,6 +12,7 @@ export interface SpecCondition {
     deviceLabel: string
     targetType: SpecTargetType
     key: string
+    propertyScope?: SpecPropertyScope
     relation: string
     value: string
 }
@@ -30,7 +32,7 @@ export type SpecTemplateType =
     | 'never'       // A never happens - 只有a条件
     | 'immediate'   // A → AX B (next state) - if + then
     | 'response'    // A → ◇B (eventually) - if + then
-    | 'persistence' // A → □B (forever after) - if + then
+    | 'persistence' // A -> eventually always B - if + then
     | 'safety'      // untrusted → ¬A - only a-conditions
 
 export interface SpecTemplateDetail extends SpecTemplate {
@@ -38,7 +40,7 @@ export interface SpecTemplateDetail extends SpecTemplate {
     description: string
     descriptionKey?: string
     requiredSides: SpecSide[]  // 需要配置的条件位置
-    ltlFormula: string         // 对应的LTL公式
+    formulaPreview: string     // Template preview text; actual CTL/LTL is rebuilt from templateId + conditions
 }
 
 export interface Specification {
@@ -48,9 +50,7 @@ export interface Specification {
     aConditions: SpecCondition[]
     ifConditions: SpecCondition[]
     thenConditions: SpecCondition[]
-    formula?: string // LTL formula for simple specifications
-    deviceId?: string // Associated device ID for device-specific specs (legacy)
-    deviceLabel?: string // Associated device label (legacy)
+    formula?: string // Display-only formula preview/cache; verification rebuilds CTL/LTL from templateId + conditions
     devices?: Array<{deviceId: string, deviceLabel: string, selectedApis: string[]}> // Multi-device support
 }
 

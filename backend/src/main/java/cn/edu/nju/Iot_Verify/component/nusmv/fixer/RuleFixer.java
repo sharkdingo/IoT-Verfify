@@ -3,11 +3,14 @@ package cn.edu.nju.Iot_Verify.component.nusmv.fixer;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.localize.FaultLocalizer;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixStrategyAttemptDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
@@ -27,13 +30,13 @@ import java.util.stream.Collectors;
  * RuleFixer: orchestrates fault localization and fix strategy execution.
  *
  * <p>Default strategy order follows Salus paper §5:
- * parameter (§5.1) → condition (§5.2) → disable (fallback).</p>
+ * parameter (§5.1) → condition (§5.2) → permanent rule removal (fallback).</p>
  */
 @Slf4j
 @Component
 public class RuleFixer {
 
-    private static final List<String> DEFAULT_STRATEGIES = List.of("parameter", "condition", "disable");
+    private static final List<String> DEFAULT_STRATEGIES = List.of("parameter", "condition", "remove");
 
     private final FaultLocalizer faultLocalizer;
     private final Map<String, FixStrategy> strategyRegistry;
@@ -74,7 +77,24 @@ public class RuleFixer {
                             List<SpecificationDto> specs,
                             Map<String, DeviceSmvData> deviceSmvMap,
                             Long userId,
-                            boolean isAttack, int intensity, boolean enablePrivacy,
+                            boolean isAttack, int attackBudget, boolean enablePrivacy,
+                            List<String> strategies,
+                            int maxAttempts,
+                            Map<String, PreferredRange> preferredRanges) {
+        return fix(traceId, violatedSpecId, states, rules, devices, List.of(), specs, deviceSmvMap,
+                userId, isAttack, attackBudget, enablePrivacy, strategies, maxAttempts, preferredRanges);
+    }
+
+    public FixResultDto fix(Long traceId,
+                            String violatedSpecId,
+                            List<TraceStateDto> states,
+                            List<RuleDto> rules,
+                            List<DeviceVerificationDto> devices,
+                            List<BoardEnvironmentVariableDto> environmentVariables,
+                            List<SpecificationDto> specs,
+                            Map<String, DeviceSmvData> deviceSmvMap,
+                            Long userId,
+                            boolean isAttack, int attackBudget, boolean enablePrivacy,
                             List<String> strategies,
                             int maxAttempts,
                             Map<String, PreferredRange> preferredRanges) {
@@ -82,6 +102,11 @@ public class RuleFixer {
         // Step 1: Fault localization
         List<FaultRuleDto> faultRules = faultLocalizer.localize(states, rules, deviceSmvMap);
         log.info("Fault localization: found {} fault rule(s) for trace {}", faultRules.size(), traceId);
+        if (strategies != null && strategies.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "strategies must be non-empty when provided; use null for the default order");
+        }
+        List<String> effectiveStrategies = strategies != null ? strategies : DEFAULT_STRATEGIES;
 
         if (faultRules.isEmpty()) {
             String emptyReason = (states == null || states.size() < 2)
@@ -94,8 +119,14 @@ public class RuleFixer {
                     .violatedSpecId(violatedSpecId)
                     .faultRules(faultRules)
                     .suggestions(List.of())
+                    .strategyAttempts(effectiveStrategies.stream()
+                            .map(strategy -> attempt(strategy, "SKIPPED_NO_FAULT_RULES",
+                                    "No user-defined fault rule was localized, so this strategy was not run."))
+                            .toList())
                     .fixable(false)
+                    .sourceModelComplete(true)
                     .summary(emptyReason)
+                    .warnings(List.of())
                     .build();
         }
 
@@ -104,15 +135,17 @@ public class RuleFixer {
 
         // Build shared context for all strategies
         FixContext ctx = FixContext.builder()
+                .traceId(traceId)
                 .faultRules(faultRules)
                 .allRules(rules)
                 .devices(devices)
+                .environmentVariables(environmentVariables == null ? List.of() : environmentVariables)
                 .specs(specs)
                 .deviceSmvMap(deviceSmvMap)
                 .violatedSpecIndex(violatedSpecIndex)
                 .userId(userId)
                 .isAttack(isAttack)
-                .intensity(intensity)
+                .attackBudget(attackBudget)
                 .enablePrivacy(enablePrivacy)
                 .maxAttempts(maxAttempts)
                 .preferredRanges(preferredRanges)
@@ -121,73 +154,110 @@ public class RuleFixer {
 
         // Step 2: Attempt fix strategies via registry
         List<FixSuggestionDto> suggestions = new ArrayList<>();
-        List<String> effectiveStrategies = (strategies != null && !strategies.isEmpty())
-                ? strategies : DEFAULT_STRATEGIES;
+        List<FixStrategyAttemptDto> strategyAttempts = new ArrayList<>();
 
-        for (String strategyName : effectiveStrategies) {
+        for (int strategyIndex = 0; strategyIndex < effectiveStrategies.size(); strategyIndex++) {
+            String strategyName = effectiveStrategies.get(strategyIndex);
             if (ctx.isExpired()) {
                 log.warn("Fix deadline expired before strategy '{}', skipping remaining strategies", strategyName);
+                for (int skippedIndex = strategyIndex; skippedIndex < effectiveStrategies.size(); skippedIndex++) {
+                    strategyAttempts.add(attempt(effectiveStrategies.get(skippedIndex), "SKIPPED_TIMEOUT",
+                            "The automatic-fix time limit expired before this strategy could run."));
+                }
                 break;
             }
             FixStrategy strategy = strategyRegistry.get(strategyName);
             if (strategy == null) {
                 log.info("Unsupported fix strategy '{}', skipping", strategyName);
+                strategyAttempts.add(attempt(strategyName, "SKIPPED_UNSUPPORTED",
+                        "The requested strategy is not supported by this server."));
                 continue;
             }
             // Skip strategies that need a valid violatedSpecIndex when it's missing
             if (violatedSpecIndex < 0 && strategy.requiresViolatedSpec()) {
                 log.info("Skipping '{}' strategy: no valid violated spec index", strategyName);
+                strategyAttempts.add(attempt(strategyName, "SKIPPED_NO_SPEC",
+                        "The violated specification could not be resolved from the trace context."));
                 continue;
             }
             FixSuggestionDto suggestion = strategy.tryFix(ctx);
             if (suggestion != null) {
                 suggestions.add(suggestion);
+                strategyAttempts.add(attempt(strategyName,
+                        suggestion.isVerified() ? "VERIFIED" : "NOT_VERIFIED",
+                        suggestion.isVerified()
+                                ? "A concrete suggestion passed forward verification on the complete generated model."
+                                : "A candidate was generated but did not pass forward verification."));
+            } else if (ctx.isExpired()) {
+                strategyAttempts.add(attempt(strategyName, "TIMED_OUT",
+                        "The automatic-fix time limit expired while this strategy was running; its search was incomplete."));
+            } else {
+                strategyAttempts.add(attempt(strategyName, "NO_VERIFIED_SUGGESTION",
+                        "The strategy was attempted but produced no suggestion that passed forward verification."));
             }
         }
 
-        boolean fixable = !suggestions.isEmpty();
+        boolean fixable = suggestions.stream().anyMatch(FixSuggestionDto::isVerified);
         StringBuilder summaryBuilder = new StringBuilder();
         if (fixable) {
             summaryBuilder.append("Found ").append(suggestions.size())
                     .append(" fix suggestion(s) for ").append(faultRules.size()).append(" fault rule(s).");
         } else {
-            summaryBuilder.append(faultRules.size())
-                    .append(" fault rule(s) identified but no fix strategy resolved the violation.");
+            summaryBuilder.append(faultRules.size()).append(" fault rule(s) identified. ");
+            if (ctx.isExpired()) {
+                summaryBuilder.append("The requested strategy search was incomplete because the fix deadline expired.");
+            } else {
+                summaryBuilder.append("No requested strategy produced a verified suggestion.");
+            }
         }
 
         if (ctx.isExpired()) {
             summaryBuilder.append(" (fix timed out; results may be partial)");
         }
 
-        // UX-4: Append reason if violatedSpecId could not be resolved
+        // Keep the persistence id out of ordinary feedback; it does not help the user repair the model.
         if (violatedSpecIndex < 0) {
-            summaryBuilder.append(" (violatedSpecId '").append(violatedSpecId)
-                    .append("' could not be resolved; parameter and condition strategies were skipped)");
+            summaryBuilder.append(" (the violated specification could not be matched to the saved verification "
+                    + "snapshot; parameter and condition strategies were skipped)");
         }
 
-        // UX-2: Detect unused preferredRange keys
-        List<String> unusedKeys = null;
+        // UX-2: Detect unused preferred range selections without exposing internal locator keys.
+        List<PreferredRangeSelection> unusedSelections = new ArrayList<>();
         if (preferredRanges != null && !preferredRanges.isEmpty()) {
-            Set<String> usedKeys = new LinkedHashSet<>();
+            Set<String> usedTargetIds = new LinkedHashSet<>();
             for (FixSuggestionDto s : suggestions) {
                 if (s.getParameterAdjustments() != null) {
                     for (var adj : s.getParameterAdjustments()) {
-                        usedKeys.add("r" + adj.getRuleIndex() + "_c" + adj.getConditionIndex());
+                        String targetId = adj.getTargetId();
+                        if (targetId == null || targetId.isBlank()) {
+                            targetId = PreferredRangeSelection.targetIdFor(traceId, adj.getRuleIndex(), adj.getConditionIndex());
+                        }
+                        if (PreferredRangeSelection.isValidTargetId(targetId)) {
+                            usedTargetIds.add(targetId);
+                        }
                     }
                 }
             }
-            unusedKeys = new ArrayList<>();
-            for (String key : preferredRanges.keySet()) {
-                if (!usedKeys.contains(key)) {
-                    unusedKeys.add(key);
+            for (Map.Entry<String, PreferredRange> entry : preferredRanges.entrySet()) {
+                String targetId = entry.getKey();
+                PreferredRange range = entry.getValue();
+                if (!usedTargetIds.contains(targetId) && PreferredRangeSelection.isValidTargetId(targetId) && range != null) {
+                    unusedSelections.add(PreferredRangeSelection.builder()
+                            .targetId(targetId)
+                            .lower(range.getLower())
+                            .upper(range.getUpper())
+                            .build());
                 }
             }
-            if (unusedKeys.isEmpty()) {
-                unusedKeys = null;
-            } else {
-                summaryBuilder.append(" Note: preferredRanges keys ")
-                        .append(unusedKeys).append(" were not used in any parameter fix suggestion.");
+            if (!unusedSelections.isEmpty()) {
+                summaryBuilder.append(" Note: some preferred range selections were not used in any parameter fix suggestion.");
             }
+        }
+
+        List<String> warnings = ctx.diagnosticsSnapshot();
+        if (ctx.isExpired()) {
+            warnings = new ArrayList<>(warnings);
+            warnings.add("The automatic-fix time limit expired; some requested strategies were not attempted.");
         }
 
         return FixResultDto.builder()
@@ -195,9 +265,20 @@ public class RuleFixer {
                 .violatedSpecId(violatedSpecId)
                 .faultRules(faultRules)
                 .suggestions(suggestions)
+                .strategyAttempts(strategyAttempts)
                 .fixable(fixable)
+                .sourceModelComplete(true)
                 .summary(summaryBuilder.toString())
-                .unusedPreferredRangeKeys(unusedKeys)
+                .warnings(warnings)
+                .unusedPreferredRangeSelections(unusedSelections)
+                .build();
+    }
+
+    private static FixStrategyAttemptDto attempt(String strategy, String status, String reason) {
+        return FixStrategyAttemptDto.builder()
+                .strategy(strategy)
+                .status(status)
+                .reason(reason)
                 .build();
     }
 
@@ -209,11 +290,6 @@ public class RuleFixer {
                 return i;
             }
         }
-        // Try matching by numeric index (violatedSpecId might be "0", "1", etc.)
-        try {
-            int idx = Integer.parseInt(violatedSpecId);
-            if (idx >= 0 && idx < specs.size()) return idx;
-        } catch (NumberFormatException ignored) {}
         log.warn("Could not resolve violatedSpecId '{}' to spec index", violatedSpecId);
         return -1;
     }

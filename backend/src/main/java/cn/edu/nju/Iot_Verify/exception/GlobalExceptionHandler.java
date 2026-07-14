@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.exception;
 
 import cn.edu.nju.Iot_Verify.dto.Result;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -17,6 +19,8 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.ConstraintViolationException;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -64,6 +68,17 @@ public class GlobalExceptionHandler {
                 .body(Result.notFound(e.getMessage()));
     }
 
+    @ExceptionHandler(BoardReplacementStaleException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleBoardReplacementStaleException(
+            BoardReplacementStaleException e) {
+        log.warn("Board replacement confirmation became stale");
+        Result<Map<String, Object>> result = Result.error(HttpStatus.CONFLICT.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", "BOARD_REPLACEMENT_STALE",
+                "currentPreview", e.getCurrentPreview()));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+    }
+
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Result<Void>> handleConflictException(ConflictException e) {
         log.warn("Conflict: {}", e.getMessage());
@@ -72,12 +87,36 @@ public class GlobalExceptionHandler {
                 .body(Result.conflict(e.getMessage()));
     }
 
+    @ExceptionHandler(ChatSessionBusyException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleChatSessionBusyException(
+            ChatSessionBusyException e) {
+        log.warn("Chat session is busy: {}", e.getSessionId());
+        Result<Map<String, Object>> result = Result.error(HttpStatus.CONFLICT.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", e.getReasonCode(),
+                "sessionId", e.getSessionId()));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+    }
+
+    @ExceptionHandler(TemplateDeletionConflictException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleTemplateDeletionConflictException(
+            TemplateDeletionConflictException e) {
+        log.warn("Template deletion conflict [{}]", e.getReasonCode());
+        Result<Map<String, Object>> result = Result.error(HttpStatus.CONFLICT.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", e.getReasonCode(),
+                "currentPreview", e.getCurrentPreview()));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+    }
+
     @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<Result<Void>> handleValidationException(ValidationException e) {
+    public ResponseEntity<Result<Map<String, Object>>> handleValidationException(ValidationException e) {
         log.warn("Validation error: {}", e.getMessage());
+        Result<Map<String, Object>> result = Result.error(422, e.getMessage());
+        result.setData(Map.of("errors", e.getErrors()));
         return ResponseEntity
                 .status(HttpStatus.UNPROCESSABLE_ENTITY)  // 422
-                .body(Result.validationError(e.getMessage()));
+                .body(result);
     }
 
     @ExceptionHandler(SmvGenerationException.class)
@@ -91,6 +130,23 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(result);
+    }
+
+    @ExceptionHandler(PersistedDataIntegrityException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handlePersistedDataIntegrityException(
+            PersistedDataIntegrityException e) {
+        log.error("Persisted semantic data is invalid: type={}, id={}, field={}",
+                e.getRecordType(), e.getRecordId(), e.getField(), e);
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "Stored model data is invalid; the operation was stopped before using an incomplete model.");
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("reasonCode", e.getReasonCode());
+        details.put("recordType", e.getRecordType());
+        if (e.getRecordId() != null) details.put("recordId", e.getRecordId());
+        details.put("field", e.getField());
+        result.setData(details);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
     }
 
     @ExceptionHandler(InternalServerException.class)
@@ -109,6 +165,18 @@ public class GlobalExceptionHandler {
                 .body(Result.serviceUnavailable(e.getMessage()));
     }
 
+    @ExceptionHandler(SimulationExecutionException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleSimulationExecutionException(
+            SimulationExecutionException e) {
+        log.warn("Simulation did not produce a trace [{}]: {}", e.getReasonCode(), e.getMessage());
+        Result<Map<String, Object>> result = Result.error(e.getCode(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", e.getReasonCode(),
+                "logs", e.getLogs()
+        ));
+        return ResponseEntity.status(e.getCode()).body(result);
+    }
+
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<Result<Void>> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException e) {
         log.warn("Argument type mismatch: {} for parameter '{}'", e.getValue(), e.getName());
@@ -118,11 +186,15 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<Result<Void>> handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
+    public ResponseEntity<Result<Map<String, Object>>> handleHttpMessageNotReadableException(
+            HttpMessageNotReadableException e) {
         log.warn("Malformed request body: {}", e.getMessage());
+        RequestBodyError error = describeRequestBodyError(e);
+        Result<Map<String, Object>> result = Result.error(HttpStatus.BAD_REQUEST.value(), error.message());
+        result.setData(Map.of("errors", Map.of(error.path(), error.reason())));
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Result.badRequest("Malformed request body"));
+                .body(result);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -134,42 +206,96 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Result<Void>> handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
-        String message = e.getBindingResult().getFieldErrors().stream()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .findFirst()
-                .orElse("Validation failed");
+    public ResponseEntity<Result<Map<String, Object>>> handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        e.getBindingResult().getFieldErrors().forEach(error -> mergeValidationError(
+                errors, error.getField(), Objects.toString(error.getDefaultMessage(), "Validation failed")));
+        String message = validationMessage(errors);
         log.warn("Validation failed: {}", message);
+        Result<Map<String, Object>> result = Result.error(400, message);
+        result.setData(Map.of("errors", errors));
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Result.badRequest(message));
+                .body(result);
     }
 
     @ExceptionHandler(org.springframework.web.method.annotation.HandlerMethodValidationException.class)
-    public ResponseEntity<Result<Void>> handleHandlerMethodValidationException(
+    public ResponseEntity<Result<Map<String, Object>>> handleHandlerMethodValidationException(
             org.springframework.web.method.annotation.HandlerMethodValidationException e) {
-        String message = e.getAllErrors().stream()
-                .map(err -> err.getDefaultMessage())
-                .filter(Objects::nonNull)
-                .findFirst()
-                .orElse("Validation failed");
+        Map<String, String> errors = new LinkedHashMap<>();
+        int[] index = {0};
+        e.getAllErrors().forEach(error -> {
+            String reason = error.getDefaultMessage();
+            if (reason != null) errors.put("request[" + index[0]++ + "]", reason);
+        });
+        String message = validationMessage(errors);
         log.warn("Handler method validation failed: {}", message);
+        Result<Map<String, Object>> result = Result.error(400, message);
+        result.setData(Map.of("errors", errors));
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Result.badRequest(message));
+                .body(result);
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<Result<Void>> handleConstraintViolationException(ConstraintViolationException e) {
-        String message = e.getConstraintViolations().stream()
-                .map(cv -> cv.getPropertyPath() + ": " + cv.getMessage())
-                .findFirst()
-                .orElse("Validation failed");
+    public ResponseEntity<Result<Map<String, Object>>> handleConstraintViolationException(ConstraintViolationException e) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        e.getConstraintViolations().forEach(violation -> mergeValidationError(
+                errors, violation.getPropertyPath().toString(), violation.getMessage()));
+        String message = validationMessage(errors);
         log.warn("Constraint violation: {}", message);
+        Result<Map<String, Object>> result = Result.error(400, message);
+        result.setData(Map.of("errors", errors));
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
-                .body(Result.badRequest(message));
+                .body(result);
     }
+
+    private void mergeValidationError(Map<String, String> errors, String field, String reason) {
+        errors.merge(field, reason, (first, next) -> first.equals(next) ? first : first + "; " + next);
+    }
+
+    private String validationMessage(Map<String, String> errors) {
+        return errors.entrySet().stream()
+                .map(entry -> entry.getKey() + ": " + entry.getValue())
+                .findFirst()
+                .orElse("Validation failed");
+    }
+
+    private RequestBodyError describeRequestBodyError(HttpMessageNotReadableException exception) {
+        Throwable cause = exception.getCause();
+        while (cause != null) {
+            if (cause instanceof UnrecognizedPropertyException unknown) {
+                String path = jsonPath(unknown.getPath());
+                if (path.isBlank()) path = unknown.getPropertyName();
+                String message = "Unknown field '" + unknown.getPropertyName() + "'";
+                if (!path.equals(unknown.getPropertyName())) message += " at '" + path + "'";
+                return new RequestBodyError(path, "Unknown field", message);
+            }
+            if (cause instanceof JsonMappingException mapping && !mapping.getPath().isEmpty()) {
+                String path = jsonPath(mapping.getPath());
+                String reason = "Value does not match the declared field type";
+                return new RequestBodyError(path, reason, "Invalid JSON value at '" + path + "': " + reason);
+            }
+            cause = cause.getCause();
+        }
+        return new RequestBodyError("request", "Malformed JSON syntax", "Malformed request body");
+    }
+
+    private String jsonPath(List<JsonMappingException.Reference> references) {
+        StringBuilder path = new StringBuilder();
+        for (JsonMappingException.Reference reference : references) {
+            if (reference.getFieldName() != null) {
+                if (!path.isEmpty()) path.append('.');
+                path.append(reference.getFieldName());
+            } else if (reference.getIndex() >= 0) {
+                path.append('[').append(reference.getIndex()).append(']');
+            }
+        }
+        return path.toString();
+    }
+
+    private record RequestBodyError(String path, String reason, String message) {}
 
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<Result<Void>> handleAuthenticationException(AuthenticationException e) {
