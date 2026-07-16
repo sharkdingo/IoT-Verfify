@@ -5,7 +5,7 @@ module. The endpoint index lives in [rest-endpoints.md](rest-endpoints.md); glob
 authentication, `Result<T>`, and error conventions live in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-15. Source: `controller/FuzzController.java`,
+Verified against code on 2026-07-16. Source: `controller/FuzzController.java`,
 `service/impl/FuzzServiceImpl.java`, and `dto/fuzz/`.
 
 ---
@@ -28,6 +28,22 @@ dependency and its source is not copied into this repository; its top-level code
 confirmed redistribution license.
 
 ## Submit and task lifecycle
+
+### `GET /api/fuzz/model-fingerprint`
+
+This read-only endpoint returns the current authenticated user's canonical bounded-search
+model fingerprint as a 64-character lowercase SHA-256 string in `Result<String>.data`.
+It captures the same normalized devices and runtime values, effective environment,
+ordered rules, structured specifications, and referenced template manifests used by a
+real exploration submission. Canvas coordinates, panel layout, labels, descriptions,
+icons, formula previews, and rule display strings are excluded because they do not
+change exploration behavior.
+
+Completed runs store this fingerprint in `modelSnapshot.modelFingerprint`. The frontend
+uses exact fingerprint equality to decide whether a historical run still matches the
+current Board, including edits that leave all public item counts unchanged. Runs created
+before this field existed remain readable; their UI may use the documented count-based
+comparison as a weaker legacy fallback and must not claim exact semantic equality.
 
 ### `POST /api/fuzz/workload/preview`
 
@@ -286,7 +302,7 @@ page when the current page length equals its requested size. Meanwhile,
 | `iterations` | integer | Completed search iterations |
 | `generatedPaths` | integer | Paths evaluated, including every population member evaluated before early completion |
 | `elapsedMs` | integer | Engine elapsed time |
-| `modelSnapshot` | object | Captured counts/time with `templatesFrozen=true` |
+| `modelSnapshot` | object | Captured counts/time with `templatesFrozen=true` and the canonical `modelFingerprint` used for current-Board drift checks |
 | `eligibility` | object | Eligible IDs plus frozen `eligibleSpecLabels`, itemized ineligible specifications, requested count, and eligible count |
 | `limitations` | `string[]` | Stable limitation codes that apply to this run |
 | `createdAt` / `completedAt` | datetime | Lifecycle timestamps |

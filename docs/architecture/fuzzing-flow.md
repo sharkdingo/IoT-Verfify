@@ -4,7 +4,7 @@ Architecture and semantic boundary for the HAFuzz-inspired bounded search module
 API fields and endpoints are owned by [../api/fuzzing.md](../api/fuzzing.md); formal
 model semantics remain owned by [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-15. Source: `component/fuzz/`,
+Verified against code on 2026-07-16. Source: `component/fuzz/`,
 `service/impl/FuzzServiceImpl.java`, `po/FuzzTaskPo.java`, and
 `po/FuzzFindingPo.java`.
 
@@ -159,8 +159,11 @@ initial value. At later positions, the scheduled Event is recorded before any mo
 choice produced while forming that same state.
 
 The full input snapshot is internal. Public history stores the smaller model-scope
-summary plus run configuration, statistics, eligibility, limitations, and independent
-finding evidence.
+summary, its canonical semantic fingerprint, run configuration, statistics,
+eligibility, limitations, and independent finding evidence. The Board can read the
+current fingerprint without creating a task and uses it to detect same-count semantic
+drift before replay-to-verification handoff; older rows without a fingerprint retain a
+weaker count-based compatibility path.
 
 The frontend keeps the proof handoff explicit: a finding can focus the user's attention
 on one historical target, but the verification request still contains the complete

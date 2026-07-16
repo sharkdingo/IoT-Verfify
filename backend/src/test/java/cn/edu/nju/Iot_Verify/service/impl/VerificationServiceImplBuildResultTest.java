@@ -26,6 +26,7 @@ import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.exception.PersistedDataIntegrityException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
@@ -547,6 +548,19 @@ class VerificationServiceImplBuildResultTest {
                         1L, makeRequest(singleDevice(), List.of(), List.of(), false, 0, false)));
 
         assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+    }
+
+    @Test
+    void createTask_activeUserLimit_rejectsBeforePersisting() {
+        when(taskRepository.countByUserId(1L)).thenReturn(1L);
+        when(taskRepository.countByUserIdAndStatusIn(eq(1L), anyList())).thenReturn(2L);
+
+        AsyncTaskQuotaExceededException error = assertThrows(
+                AsyncTaskQuotaExceededException.class,
+                () -> service.createTask(1L, false, 0, false, 0, 0, 0, null));
+
+        assertEquals("VERIFICATION_ACTIVE_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
     }
 

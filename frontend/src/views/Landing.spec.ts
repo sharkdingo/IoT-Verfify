@@ -49,6 +49,14 @@ describe('Landing authentication usability', () => {
     authApi.login.mockReset()
     authApi.register.mockReset()
     i18n.global.locale.value = 'zh-CN'
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn()
+      })
+    })
   })
 
   afterEach(() => {
@@ -99,6 +107,19 @@ describe('Landing authentication usability', () => {
 
     expect(router.currentRoute.value.query).toEqual({})
     expect(wrapper.get('.hero-cta').isVisible()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not render autoplay video when reduced motion is requested', async () => {
+    vi.mocked(window.matchMedia).mockReturnValue({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    } as unknown as MediaQueryList)
+
+    const { wrapper } = await mountLanding()
+
+    expect(wrapper.find('video').exists()).toBe(false)
     wrapper.unmount()
   })
 })

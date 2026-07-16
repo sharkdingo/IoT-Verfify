@@ -26,6 +26,13 @@ const registerPasswordRef = ref<HTMLInputElement | null>(null)
 const confirmPasswordRef = ref<HTMLInputElement | null>(null)
 const mouseX = ref(0)
 const mouseY = ref(0)
+const prefersReducedMotion = ref(
+  typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+)
+const videoUnavailable = ref(false)
+let reducedMotionQuery: MediaQueryList | null = null
 const authMode = ref<AuthMode>(route.query.mode === 'register' ? 'register' : 'login')
 const showAuthPanel = ref(Boolean(route.query.mode || route.query.redirect))
 
@@ -249,12 +256,31 @@ const handleMouseMove = (e: MouseEvent) => {
   mouseY.value = y
 }
 
+const handleReducedMotionChange = (event: MediaQueryListEvent | MediaQueryList) => {
+  prefersReducedMotion.value = event.matches
+  mouseX.value = 0
+  mouseY.value = 0
+  if (event.matches) {
+    window.removeEventListener('mousemove', handleMouseMove)
+  } else {
+    window.addEventListener('mousemove', handleMouseMove)
+  }
+}
+
 onMounted(() => {
-  window.addEventListener('mousemove', handleMouseMove)
+  if (typeof window.matchMedia !== 'function') {
+    window.addEventListener('mousemove', handleMouseMove)
+    return
+  }
+  reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  handleReducedMotionChange(reducedMotionQuery)
+  reducedMotionQuery.addEventListener('change', handleReducedMotionChange)
 })
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', handleMouseMove)
+  reducedMotionQuery?.removeEventListener('change', handleReducedMotionChange)
+  reducedMotionQuery = null
 })
 </script>
 
@@ -267,12 +293,15 @@ onUnmounted(() => {
     }"
   >
     <video
+      v-if="!prefersReducedMotion && !videoUnavailable"
       class="video-bg"
       autoplay
       loop
       muted
       playsinline
+      preload="metadata"
       poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080'%3E%3Crect fill='%230b1722' width='1920' height='1080'/%3E%3C/svg%3E"
+      @error="videoUnavailable = true"
     >
       <source src="https://cdn.pixabay.com/video/2025/05/06/277096_large.mp4" type="video/mp4">
     </video>
@@ -578,6 +607,22 @@ onUnmounted(() => {
     rgba(10, 20, 35, 0.7) 100%
   );
   z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-wrapper,
+  .hero-section,
+  .auth-panel {
+    scroll-behavior: auto;
+  }
+
+  .landing-wrapper *,
+  .landing-wrapper *::before,
+  .landing-wrapper *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .liquid-glass {

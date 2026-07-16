@@ -34,6 +34,7 @@ type CurrentBoardScope = {
   specificationCount: number
   environmentVariableCount: number
   deviceTemplateCount: number
+  modelFingerprint?: string | null
 }
 
 type TaskItem =
@@ -236,6 +237,12 @@ const fuzzingModeDescription = (mode: FuzzingExplorationMode) => t(
 const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary) => {
   const current = props.currentBoardScope
   if (!current) return false
+  if (run.modelSnapshot.modelFingerprint && current.modelFingerprint) {
+    return run.modelSnapshot.modelFingerprint !== current.modelFingerprint
+  }
+  if (run.modelSnapshot.modelFingerprint && !current.modelFingerprint) {
+    return true
+  }
   return run.modelSnapshot.deviceCount !== current.deviceCount
     || run.modelSnapshot.ruleCount !== current.ruleCount
     || run.modelSnapshot.specificationCount !== current.specificationCount

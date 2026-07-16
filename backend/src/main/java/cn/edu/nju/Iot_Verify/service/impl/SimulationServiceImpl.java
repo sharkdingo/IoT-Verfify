@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.parser.SmvTraceParser;
+import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
@@ -20,6 +21,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -38,6 +40,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -67,7 +70,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final ThreadPoolTaskExecutor simulationTaskExecutor;
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
     private final TransactionTemplate transactionTemplate;
+    private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
 
+    @Autowired
     public SimulationServiceImpl(SmvGenerator smvGenerator,
                                  SmvTraceParser smvTraceParser,
                                  NusmvExecutor nusmvExecutor,
@@ -80,7 +85,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  ObjectMapper objectMapper,
                                  @Qualifier("simulationTaskExecutor") ThreadPoolTaskExecutor simulationTaskExecutor,
                                  @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor,
-                                 TransactionTemplate transactionTemplate) {
+                                 TransactionTemplate transactionTemplate,
+                                 AsyncTaskAdmissionConfig taskAdmissionConfig) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
@@ -94,6 +100,27 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.simulationTaskExecutor = simulationTaskExecutor;
         this.syncSimulationExecutor = syncSimulationExecutor;
         this.transactionTemplate = transactionTemplate;
+        this.taskAdmissionLimits = taskAdmissionConfig.getSimulation();
+    }
+
+    SimulationServiceImpl(SmvGenerator smvGenerator,
+                          SmvTraceParser smvTraceParser,
+                          NusmvExecutor nusmvExecutor,
+                          NusmvConfig nusmvConfig,
+                          SimulationTraceRepository simulationTraceRepository,
+                          SimulationTaskRepository simulationTaskRepository,
+                          UserRepository userRepository,
+                          SimulationTraceMapper simulationTraceMapper,
+                          SimulationTaskMapper simulationTaskMapper,
+                          ObjectMapper objectMapper,
+                          ThreadPoolTaskExecutor simulationTaskExecutor,
+                          ThreadPoolTaskExecutor syncSimulationExecutor,
+                          TransactionTemplate transactionTemplate) {
+        this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
+                simulationTraceRepository, simulationTaskRepository, userRepository,
+                simulationTraceMapper, simulationTaskMapper, objectMapper,
+                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
+                new AsyncTaskAdmissionConfig());
     }
 
     @PostConstruct
@@ -333,6 +360,19 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     ModelRunSnapshotDto modelSnapshot) {
         return transactionTemplate.execute(status -> {
             requireActiveUserForPersistence(userId);
+            long storedTaskCount = simulationTaskRepository.countByUserId(userId);
+            if (storedTaskCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
+                throw new AsyncTaskQuotaExceededException(
+                        "simulation", AsyncTaskQuotaExceededException.QuotaType.STORED,
+                        storedTaskCount, taskAdmissionLimits.getMaxStoredTasksPerUser());
+            }
+            long activeTaskCount = simulationTaskRepository.countByUserIdAndStatusIn(
+                    userId, List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING));
+            if (activeTaskCount >= taskAdmissionLimits.getMaxActiveTasksPerUser()) {
+                throw new AsyncTaskQuotaExceededException(
+                        "simulation", AsyncTaskQuotaExceededException.QuotaType.ACTIVE,
+                        activeTaskCount, taskAdmissionLimits.getMaxActiveTasksPerUser());
+            }
             SimulationTaskPo task = SimulationTaskPo.builder()
                     .userId(userId)
                     .status(SimulationTaskPo.TaskStatus.PENDING)

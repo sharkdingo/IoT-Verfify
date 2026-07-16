@@ -158,6 +158,12 @@ after task creation, the backend marks that task `FAILED` internally and returns
 `503 ServiceUnavailableException`; from the client perspective, a failed submit is
 still "no pollable task".
 
+Before insertion, the service atomically enforces the configured per-user stored-task
+and active-task limits. HTTP 429 returns structured quota data. The stable reason codes
+are `VERIFICATION_ACTIVE_TASK_LIMIT_REACHED` and
+`VERIFICATION_STORED_TASK_LIMIT_REACHED`; clients should localize these codes and use
+the returned counts rather than parsing the English message.
+
 An async task reaches `progress=100` only in the same atomic completion operation that
 stores its final result and counterexamples. If that completion write does not commit,
 the task is marked `FAILED` when possible; clients must never interpret an earlier 100%
@@ -334,6 +340,7 @@ tasks, task summaries, and persisted trace detail/summary DTOs.
 | `environmentVariableCount` | `int` | Effective board environment entries after required defaults were merged |
 | `deviceTemplateCount` | `int` | Distinct referenced template manifests captured for the run |
 | `templatesFrozen` | `boolean` | Always `true`; generation reused the captured manifests and did not reload mutable definitions |
+| `modelFingerprint` | `String` | Optional canonical semantic fingerprint. Counterexample-exploration runs populate it for exact current-Board drift checks; verification and simulation currently omit it |
 
 `modelSnapshot` is scope metadata, not a claim that the current Board still matches.
 The Board compares current modelable input with an in-memory submission signature only
@@ -696,6 +703,12 @@ be disabled fail-closed with warnings in `checkLogs`. Validation failure returns
 `taskId`, and queue saturation marks the
 created task `FAILED` before returning `503`. Clients should start polling only after
 this endpoint successfully returns a task id.
+
+Before insertion, the service atomically enforces the configured per-user stored-task
+and active-task limits. HTTP 429 uses reason codes
+`SIMULATION_ACTIVE_TASK_LIMIT_REACHED` and
+`SIMULATION_STORED_TASK_LIMIT_REACHED` with the same structured quota data as async
+verification.
 
 As with verification, `progress=100` is written only together with the completed task
 and its saved simulation trace. A failed completion write is not exposed as a completed

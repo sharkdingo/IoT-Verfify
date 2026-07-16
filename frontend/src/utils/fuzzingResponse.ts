@@ -241,6 +241,12 @@ const validateSnapshot = (value: unknown, context: string) => {
   if (snapshot.templatesFrozen !== true) {
     throw new FuzzResponseContractError(context, 'modelSnapshot.templatesFrozen must be true')
   }
+  if (snapshot.modelFingerprint !== undefined
+    && snapshot.modelFingerprint !== null
+    && (typeof snapshot.modelFingerprint !== 'string'
+      || !/^[0-9a-f]{64}$/.test(snapshot.modelFingerprint))) {
+    throw new FuzzResponseContractError(context, 'modelSnapshot.modelFingerprint must be a SHA-256 value')
+  }
 }
 
 const validateTraceStateList = (value: unknown, context: string) => {

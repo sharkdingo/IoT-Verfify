@@ -389,6 +389,36 @@ test.describe('bounded counterexample exploration', () => {
       expect(paperRun.limitations).toContain('PAPER_MULTI_TARGET_PRODUCT_EXTENSION')
 
       await page.setViewportSize({ width: 390, height: 844 })
+      await page.reload()
+      await expect(page.getByTestId('canvas-fit-mobile')).toBeVisible()
+      await expect.poll(async () => page.locator('.device-node').evaluateAll(nodes =>
+        nodes.filter(node => {
+          const rect = node.getBoundingClientRect()
+          return rect.right > 0 && rect.bottom > 0
+            && rect.left < window.innerWidth && rect.top < window.innerHeight
+        }).length
+      )).toBeGreaterThan(0)
+      const mobileTargets = page.locator([
+        '.board-nav-bar .logo-left:visible',
+        '.board-nav-bar .nav-actions > button:visible',
+        '.board-nav-bar .nav-actions > details > summary:visible',
+        '[data-testid="control-center"] button:visible',
+        '[data-testid="system-inspector"] button:visible',
+        '[data-testid="canvas-fit-mobile"]:visible'
+      ].join(', '))
+      for (let index = 0; index < await mobileTargets.count(); index++) {
+        const box = await mobileTargets.nth(index).boundingBox()
+        expect(box).not.toBeNull()
+        expect(box!.width).toBeGreaterThanOrEqual(44)
+        expect(box!.height).toBeGreaterThanOrEqual(44)
+      }
+      const sceneActionsMenu = page.locator('details.scene-actions-menu')
+      const sceneActionsTrigger = sceneActionsMenu.locator('summary')
+      await sceneActionsTrigger.click()
+      await expect(sceneActionsMenu).toHaveAttribute('open', '')
+      await sceneActionsTrigger.press('Escape')
+      await expect(sceneActionsMenu).not.toHaveAttribute('open', '')
+      await expect(sceneActionsTrigger).toBeFocused()
       await page.getByTestId('restore-action-dock').click()
       await page.getByTestId('open-fuzzing-panel').click()
       await expect(panel).toBeVisible()
@@ -401,6 +431,50 @@ test.describe('bounded counterexample exploration', () => {
       expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     })
+  })
+
+  test('keeps transient narrow fitting out of the saved wide layout', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await openWorkspace(page, auth)
+
+    const zoomInput = page.getByTestId('canvas-map-zoom-input')
+    await expect(zoomInput).toBeVisible()
+    const widePanelState = await page.evaluate(() => ({
+      controlCollapsed: document.querySelector('[data-testid="control-center"]')
+        ?.classList.contains('is-collapsed') === true,
+      inspectorCollapsed: document.querySelector('[data-testid="system-inspector"]')
+        ?.classList.contains('is-collapsed') === true
+    }))
+    const savedLayouts: Array<{ canvasZoom?: number }> = []
+    const captureLayoutSave = async (route: Route) => {
+      const requestUrl = new URL(route.request().url())
+      if (route.request().method() === 'POST' && requestUrl.pathname === '/api/board/layout') {
+        savedLayouts.push(route.request().postDataJSON())
+      }
+      await route.continue()
+    }
+    await page.route('**/api/board/layout', captureLayoutSave)
+
+    try {
+      await zoomInput.fill('85')
+      await page.setViewportSize({ width: 390, height: 844 })
+      await expect(page.getByTestId('canvas-fit-mobile')).toBeVisible()
+      await expect.poll(() => savedLayouts.length).toBeGreaterThan(0)
+      await page.waitForTimeout(850)
+
+      expect(savedLayouts.every(layout => layout.canvasZoom === 0.85)).toBe(true)
+
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await expect.poll(() => page.evaluate(() => ({
+        controlCollapsed: document.querySelector('[data-testid="control-center"]')
+          ?.classList.contains('is-collapsed') === true,
+        inspectorCollapsed: document.querySelector('[data-testid="system-inspector"]')
+          ?.classList.contains('is-collapsed') === true
+      }))).toEqual(widePanelState)
+      await expect(zoomInput).toHaveValue('85')
+    } finally {
+      await page.unroute('**/api/board/layout', captureLayoutSave)
+    }
   })
 
   test('does not let a stalled layout save block logout', async ({ page, request }) => {

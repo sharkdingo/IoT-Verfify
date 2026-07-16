@@ -18,6 +18,11 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-16
 
 #### Added
+- Added a canonical current-Board exploration fingerprint endpoint and stored that
+  fingerprint with completed exploration snapshots so history detects same-count model
+  edits before replay or formal-verification handoff.
+- Added atomic per-user active and stored task quotas for async verification and
+  simulation, with configurable limits and structured HTTP 429 reason data.
 - Added atomic `GET /api/board/snapshot` hydration so the first Board screen receives
   devices, templates, environment, rules, and specifications as one authoritative model
   snapshot while layout and task history load in parallel.
@@ -30,6 +35,9 @@ history into a technical spec. The spec content itself now lives under
   actions for newly registered users.
 
 #### Changed
+- Made narrow-screen Board layout transient and task-focused: side panels collapse,
+  existing devices fit into view, scene commands move into a compact menu, touch targets
+  remain at least 44px, and the saved wide-screen workspace is restored on expansion.
 - Registration now returns `AuthResponseDto` with a JWT and the frontend enters the Board
   directly. Bundled default device definitions are parsed and schema-validated once per backend
   process before per-user transactional insertion.
@@ -43,6 +51,10 @@ history into a technical spec. The spec content itself now lives under
   copy that does not guess private model phases from elapsed time.
 
 #### Fixed
+- Made rule creation, inspector device cards, delete actions, and copy controls keyboard-operable;
+  copy failures now remain visible and recoverable. Rename and simulation dialogs have named
+  controls, focus trapping, and Escape handling; reduced-motion mode now suppresses landing
+  animation and video playback.
 - Kept chat sessions locked when backend activity could not be confirmed, preventing a second
   interaction from starting while an earlier tool might still be running.
 - Made AI rule/specification deletion compare the confirmed entity snapshot inside the same

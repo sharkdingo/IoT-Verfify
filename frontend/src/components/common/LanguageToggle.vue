@@ -86,9 +86,9 @@ const toggleLocale = () => {
 }
 
 .language-toggle--compact {
-  min-width: 64px;
-  height: 34px;
-  padding: 0 10px;
+  min-width: 56px;
+  height: 44px;
+  padding: 0 8px;
 }
 
 .language-toggle--light {

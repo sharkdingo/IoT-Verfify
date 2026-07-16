@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-14. Source: `frontend/src/api/`,
+Verified against code on 2026-07-16. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/router/index.ts`.
 
 ---
@@ -302,9 +302,10 @@ Its methods return already-unwrapped values. Non-exhaustive:
   stop or finish first because aborting SSE cannot revoke a tool call already started.
 - Verification: `verify(req)`, `verifyAsync(req): Promise<VerificationTask>`, `getTasks`,
   `getTask`, `getTaskProgress`, `cancelTask`, and trace list/detail/delete.
-- Counterexample exploration: `fuzzingApi.startAsync(req)`, task polling/cancellation,
-  run list/detail/delete, and lazy finding detail. The accepted task is authoritative;
-  the client never sends a Board/model payload or fabricates a task ID.
+- Counterexample exploration: `fuzzingApi.getCurrentModelFingerprint()`,
+  `startAsync(req)`, task polling/cancellation, run list/detail/delete, and lazy finding
+  detail. The accepted task is authoritative; the client never sends a Board/model
+  payload or fabricates a task ID.
 - Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?)`.
 
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<VerificationTask>` — it takes
@@ -371,6 +372,10 @@ Board layout and visual shell rules:
 
 - Persist user layout through `BoardLayoutDto.panels` plus `canvasPan`/`canvasZoom`.
   Do not reintroduce a separate active-tabs endpoint.
+- Treat the persisted layout as the wide-screen workspace. At narrow widths, collapse
+  both side panels locally, fit the current nodes into the available canvas, keep a
+  permanent 44px fit control reachable, and do not overwrite the saved pan/zoom or
+  panel state. Restore that saved wide layout when the viewport widens again.
 - Treat node positions as canvas world coordinates. Keep node geometry in pixels, but
   make surrounding UI chrome responsive with CSS grid/flex, `clamp()`, `dvh/dvw`, and
   board-level CSS variables.
@@ -566,6 +571,11 @@ Exploration history requests one bounded page at a time and exposes a localized 
 More action in the exploration filter. Appends are de-duplicated by run ID; deleting a
 run resets offset pagination to the first page so shifted rows are not skipped. Exact
 page bounds remain owned by [the exploration API](../api/fuzzing.md#run-results).
+The Board also reads the current exploration model fingerprint. Fingerprinted history
+must have a matching current fingerprint before it is treated as unchanged, so a
+temporary fingerprint-read failure is shown as unconfirmed rather than silently falling
+back to equal counts. Legacy runs without a fingerprint fall back to the public model
+counts and must not be presented as an exact semantic match.
 
 Treat task `status` as execution lifecycle only. A task's direct polling endpoint may
 return `COMPLETED` so the submitter can obtain the result, but the history UI then moves

@@ -11,7 +11,8 @@ the [Frontend](#frontend-vite) section at the end).
 
 Verified against code on 2026-07-16. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
-`configure/FuzzAdmissionConfig`, `configure/ProductionSafetyCheck`,
+`configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
+`configure/ProductionSafetyCheck`,
 `frontend/src/api/`, `frontend/.env.example`.
 
 ---
@@ -132,6 +133,21 @@ also reserves one in-memory admission permit before reading the Board. The proce
 permit count is derived from
 `THREAD_POOL_FUZZ_TASK_MAX + THREAD_POOL_FUZZ_TASK_QUEUE` and is held until the worker
 ends; this keeps snapshot creation from outrunning the executor's configured capacity.
+
+## Verification and simulation task admission
+
+| Env var | Default | Notes |
+| :--- | :--- | :--- |
+| `VERIFICATION_MAX_ACTIVE_TASKS_PER_USER` | `2` | Maximum combined `PENDING` and `RUNNING` async verification tasks owned by one user. Must be at least `1`. |
+| `VERIFICATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total async verification task rows owned by one user. Must be at least the active-task limit. |
+| `SIMULATION_MAX_ACTIVE_TASKS_PER_USER` | `2` | Maximum combined `PENDING` and `RUNNING` async simulation tasks owned by one user. Must be at least `1`. |
+| `SIMULATION_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total async simulation task rows owned by one user. Must be at least the active-task limit. |
+
+Each submission locks the owning user row and checks stored and active counts in the
+same transaction that inserts the task, so concurrent requests cannot bypass the quota.
+Excess submissions return HTTP 429 with stable `reasonCode`, `taskKind`, `quotaType`,
+`taskCount`, and `maxTasksPerUser` data. Users free stored capacity by deleting old
+completed runs or dismissing failed/cancelled tasks through the documented APIs.
 
 ## Thread pools
 

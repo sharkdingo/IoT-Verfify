@@ -146,6 +146,26 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleAsyncTaskQuotaExceeded_shouldReturnStable429Details() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleAsyncTaskQuotaExceededException(
+                        new AsyncTaskQuotaExceededException(
+                                "verification",
+                                AsyncTaskQuotaExceededException.QuotaType.ACTIVE,
+                                2L,
+                                2));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(429, body.getCode());
+        assertEquals("VERIFICATION_ACTIVE_TASK_LIMIT_REACHED", body.getData().get("reasonCode"));
+        assertEquals("ACTIVE", body.getData().get("quotaType"));
+        assertEquals(2L, body.getData().get("taskCount"));
+        assertEquals(2, body.getData().get("maxTasksPerUser"));
+    }
+
+    @Test
     void handleHttpMessageNotReadable_shouldReturn400() {
         HttpMessageNotReadableException ex = new HttpMessageNotReadableException("bad json");
 

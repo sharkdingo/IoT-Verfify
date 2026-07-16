@@ -495,12 +495,15 @@ let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
 let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null
 let layoutSaveFeedbackSuppressed = false
+let persistedWideLayout: BoardLayoutDto | null = null
 
 type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
 type InspectorSection = 'devices' | 'rules' | 'specs'
 
 const isNarrowViewport = () =>
   typeof window !== 'undefined' && window.innerWidth < 768
+
+let wasNarrowViewport = isNarrowViewport()
 
 const isControlCenterSection = (value?: string): value is ControlCenterSection =>
   value === 'devices' || value === 'templates' || value === 'rules' || value === 'specs'
@@ -592,8 +595,25 @@ const actionDockStyle = computed(() => ({
 
 const updateActionDockViewport = () => {
   if (typeof window === 'undefined') return
+  const narrow = isNarrowViewport()
+  if (!wasNarrowViewport && narrow && layoutHydrated.value) {
+    if (layoutSaveTimer) {
+      clearTimeout(layoutSaveTimer)
+      layoutSaveTimer = null
+    }
+    persistedWideLayout = buildBoardLayoutPayload()
+    void saveBoardLayout({ silent: true })
+  }
   actionDockViewportWidth.value = window.innerWidth
-  applyViewportPanelConstraints()
+  if (narrow) {
+    applyViewportPanelConstraints()
+    if (!wasNarrowViewport && layoutHydrated.value) {
+      void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
+    }
+  } else if (wasNarrowViewport && persistedWideLayout) {
+    applyBoardLayout(persistedWideLayout)
+  }
+  wasNarrowViewport = narrow
 }
 
 const layoutHydrated = ref(false)
@@ -628,6 +648,20 @@ const focusedNodeId = ref<string | null>(null)
 const focusedRuleId = ref<string | null>(null)
 const focusedSpecId = ref<string | null>(null)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
+const sceneActionsMenuRef = ref<HTMLDetailsElement | null>(null)
+const sceneActionsMenuOpen = ref(false)
+const closeSceneActionsMenu = (restoreFocus = false) => {
+  const menu = sceneActionsMenuRef.value
+  if (!menu) return
+  menu.removeAttribute('open')
+  sceneActionsMenuOpen.value = false
+  if (restoreFocus) {
+    void nextTick(() => menu.querySelector<HTMLElement>('summary')?.focus())
+  }
+}
+const handleSceneActionsMenuToggle = () => {
+  sceneActionsMenuOpen.value = sceneActionsMenuRef.value?.open === true
+}
 const isImportingScene = ref(false)
 const isClearingScene = ref(false)
 const isSceneReplacementInProgress = computed(() => isImportingScene.value || isClearingScene.value)
@@ -823,6 +857,28 @@ const fuzzTaskQuotaMessage = (error: any): string | null => {
     stored: storedQuota.storedTaskCount,
     limit: storedQuota.maxStoredTasksPerUser
   })
+}
+
+const asyncTaskQuotaMessage = (
+  error: any,
+  kind: 'verification' | 'simulation'
+): string | null => {
+  if (Number(error?.response?.status) !== 429) return null
+  const data = error?.response?.data?.data
+  const prefix = kind.toUpperCase()
+  if (data?.reasonCode !== `${prefix}_ACTIVE_TASK_LIMIT_REACHED`
+    && data?.reasonCode !== `${prefix}_STORED_TASK_LIMIT_REACHED`) return null
+  const count = Number(data.taskCount)
+  const limit = Number(data.maxTasksPerUser)
+  const detailed = Number.isInteger(count) && Number.isInteger(limit)
+  if (data.quotaType === 'ACTIVE') {
+    return detailed
+      ? t('app.asyncTaskActiveLimitReached', { count, limit })
+      : t('app.asyncTaskActiveLimitGeneric')
+  }
+  return detailed
+    ? t('app.asyncTaskStoredLimitReached', { count, limit })
+    : t('app.asyncTaskStoredLimitGeneric')
 }
 
 const extractRecommendationErrorMessage = (error: any, fallback: string): string => {
@@ -2031,6 +2087,12 @@ const cancelRename = () => {
   renameDialogData.newName = ''
 }
 
+const isRenameDialogOpen = computed(() => renameDialogVisible.value)
+const {
+  setDialogRef: setRenameDialogRef,
+  handleModalKeydown: handleRenameDialogKeydown
+} = useModalAccessibility(isRenameDialogOpen, cancelRename)
+
 const confirmDelete = async () => {
   if (!ensurePlaybackClosedForMutation()) return
   if (!deleteConfirmDialogData.node) return
@@ -2213,18 +2275,17 @@ const deleteSpecification = async (specId: string) => {
  * ================================================================================= */
 
 const buildBoardLayoutPayload = (): BoardLayoutDto => {
-  const forceCollapsed = isNarrowViewport()
   return {
     canvasPan: { x: canvasPan.value.x, y: canvasPan.value.y },
     canvasZoom: canvasZoom.value,
     panels: {
       control: {
-        collapsed: forceCollapsed ? true : boardPanels.control.collapsed,
+        collapsed: boardPanels.control.collapsed,
         width: boardPanels.control.width,
         activeSection: boardPanels.control.activeSection
       },
       inspector: {
-        collapsed: forceCollapsed ? true : boardPanels.inspector.collapsed,
+        collapsed: boardPanels.inspector.collapsed,
         width: boardPanels.inspector.width,
         activeSection: boardPanels.inspector.activeSection
       }
@@ -2281,6 +2342,7 @@ const persistBoardLayout = async (request: QueuedBoardLayoutSave): Promise<boole
   if (!getToken()) return false
   try {
     await boardApi.saveLayout(request.payload)
+    persistedWideLayout = request.payload
     layoutSaveErrorShown = false
     return true
   } catch (e) {
@@ -2353,7 +2415,7 @@ const flushPendingBoardLayout = async (options: {
 
   const flush = async () => {
     let saved = true
-    if (hasPendingSave && layoutHydrated.value && getToken()) {
+    if (hasPendingSave && layoutHydrated.value && getToken() && !isNarrowViewport()) {
       saved = await saveBoardLayout({ silent: options.silent })
     }
     await waitForBoardLayoutSaveIdle()
@@ -2376,7 +2438,7 @@ const flushPendingBoardLayout = async (options: {
 }
 
 const scheduleBoardLayoutSave = () => {
-  if (!layoutHydrated.value || boardLifecycleDisposed || !getToken()) return
+  if (!layoutHydrated.value || boardLifecycleDisposed || !getToken() || isNarrowViewport()) return
   if (layoutSaveTimer) {
     clearTimeout(layoutSaveTimer)
   }
@@ -4056,15 +4118,17 @@ onMounted(async () => {
   window.addEventListener('resize', updateActionDockViewport)
 
   hydrateFuzzNotificationState()
-  const [boardLoaded, , layout] = await Promise.all([
+  const [boardLoaded, , layout, currentModelFingerprint] = await Promise.all([
     refreshBoardSnapshot(),
     loadTaskInbox(false, { showLoading: false }),
-    boardApi.getLayout().catch(() => null)
+    boardApi.getLayout().catch(() => null),
+    fuzzingApi.getCurrentModelFingerprint().catch(() => null)
   ])
   if (boardLifecycleDisposed) return
   if (!boardLoaded || !isBoardDataReady.value) {
     ElMessage.error(t('app.boardDataLoadFailed'))
   }
+  currentFuzzingModelFingerprint.value = currentModelFingerprint
   taskInboxRefreshTimer = setInterval(() => {
     if (activeBackgroundTaskCount.value > 0
       || trackedFuzzTaskIds.value.length > 0
@@ -4075,7 +4139,28 @@ onMounted(async () => {
 
   // 监听 AI 推荐的设备添加事件
 
-  if (layout) applyBoardLayout(layout)
+  persistedWideLayout = layout ?? {
+    canvasPan: { x: 0, y: 0 },
+    canvasZoom: 1,
+    panels: {
+      control: {
+        collapsed: false,
+        width: DEFAULT_CONTROL_PANEL_WIDTH,
+        activeSection: 'templates'
+      },
+      inspector: {
+        collapsed: false,
+        width: DEFAULT_INSPECTOR_PANEL_WIDTH,
+        activeSection: 'devices'
+      }
+    }
+  }
+  if (isNarrowViewport()) {
+    applyViewportPanelConstraints()
+    void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
+  } else if (layout) {
+    applyBoardLayout(layout)
+  }
   layoutHydrated.value = true
 
   if (boardLifecycleDisposed) return
@@ -6630,6 +6715,19 @@ onBeforeUnmount(() => {
   historyDetailRequests.invalidate()
 })
 
+const currentFuzzingModelFingerprint = ref<string | null>(null)
+
+const refreshCurrentFuzzingModelFingerprint = async (): Promise<string | null> => {
+  try {
+    const fingerprint = await fuzzingApi.getCurrentModelFingerprint()
+    if (!boardLifecycleDisposed) currentFuzzingModelFingerprint.value = fingerprint
+    return fingerprint
+  } catch {
+    if (!boardLifecycleDisposed) currentFuzzingModelFingerprint.value = null
+    return null
+  }
+}
+
 const currentFuzzingBoardScope = computed(() => ({
   deviceCount: nodes.value.length,
   ruleCount: rules.value.length,
@@ -6637,18 +6735,29 @@ const currentFuzzingBoardScope = computed(() => ({
   environmentVariableCount: environmentVariables.value.length,
   deviceTemplateCount: new Set(nodes.value
     .map(device => device.templateName?.trim())
-    .filter((name): name is string => Boolean(name))).size
+    .filter((name): name is string => Boolean(name))).size,
+  modelFingerprint: currentFuzzingModelFingerprint.value
 }))
 
-const fuzzingResultBoardDrifted = computed(() => {
-  const snapshot = fuzzingResult.value?.modelSnapshot
+const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary | FuzzingRun): boolean => {
+  const snapshot = run.modelSnapshot
   const current = currentFuzzingBoardScope.value
-  if (!snapshot) return false
+  if (snapshot.modelFingerprint && current.modelFingerprint) {
+    return snapshot.modelFingerprint !== current.modelFingerprint
+  }
+  if (snapshot.modelFingerprint && !current.modelFingerprint) {
+    return true
+  }
   return snapshot.deviceCount !== current.deviceCount
     || snapshot.ruleCount !== current.ruleCount
     || snapshot.specificationCount !== current.specificationCount
     || snapshot.environmentVariableCount !== current.environmentVariableCount
     || snapshot.deviceTemplateCount !== current.deviceTemplateCount
+}
+
+const fuzzingResultBoardDrifted = computed(() => {
+  const run = fuzzingResult.value
+  return run ? fuzzRunHasBoardDrift(run) : false
 })
 
 type HistoryLayer = 'tasks' | 'results'
@@ -7289,7 +7398,10 @@ const executeFuzzingRunsRequest = async (
   append = false
 ): Promise<boolean> => {
   try {
-    const runs = await fuzzingApi.getRuns(page, FUZZ_RUN_HISTORY_PAGE_SIZE)
+    const [runs] = await Promise.all([
+      fuzzingApi.getRuns(page, FUZZ_RUN_HISTORY_PAGE_SIZE),
+      refreshCurrentFuzzingModelFingerprint()
+    ])
     if (!fuzzingHistoryRequests.isCurrent(token)) return true
     if (append) {
       const existingIds = new Set(fuzzingRuns.value.map(run => run.id))
@@ -7737,6 +7849,7 @@ const presentFuzzingRun = (run: FuzzingRun) => {
   upsertFuzzingRunSummary(summary)
   fuzzingError.value = null
   fuzzingResult.value = run
+  void refreshCurrentFuzzingModelFingerprint()
   showFuzzingResultDialog.value = true
   clearFuzzNotifications(undefined, run.id)
 }
@@ -8162,7 +8275,10 @@ const openFuzzingRun = async (runId: number) => {
     fuzzingResult.value = null
     fuzzingResultLoading.value = true
     showFuzzingResultDialog.value = true
-    const run = await fuzzingApi.getRun(runId)
+    const [run] = await Promise.all([
+      fuzzingApi.getRun(runId),
+      refreshCurrentFuzzingModelFingerprint()
+    ])
     if (requestEpoch !== fuzzingResultRequestEpoch
       || !historyDetailRequests.isCurrent(requestToken)
       || boardLifecycleDisposed) return
@@ -8318,7 +8434,7 @@ type FuzzVerificationHandoff = {
   specificationId?: string
   specificationLabel?: string
   targetPresent: boolean
-  scopeCountDrifted: boolean
+  boardDrifted: boolean
 }
 
 const fuzzVerificationHandoff = ref<FuzzVerificationHandoff | null>(null)
@@ -8340,13 +8456,7 @@ const openFormalVerificationForFuzzFinding = (finding: FuzzingFindingSummary | F
     specificationId: finding.violatedSpecId,
     specificationLabel,
     targetPresent: specifications.value.some(spec => spec.id === finding.violatedSpecId),
-    scopeCountDrifted: sourceRun ? (
-      sourceRun.modelSnapshot.deviceCount !== currentFuzzingBoardScope.value.deviceCount
-      || sourceRun.modelSnapshot.ruleCount !== currentFuzzingBoardScope.value.ruleCount
-      || sourceRun.modelSnapshot.specificationCount !== currentFuzzingBoardScope.value.specificationCount
-      || sourceRun.modelSnapshot.environmentVariableCount !== currentFuzzingBoardScope.value.environmentVariableCount
-      || sourceRun.modelSnapshot.deviceTemplateCount !== currentFuzzingBoardScope.value.deviceTemplateCount
-    ) : true
+    boardDrifted: sourceRun ? fuzzRunHasBoardDrift(sourceRun) : true
   }
   closeHistoryPanel()
   closeFuzzingResult()
@@ -8360,7 +8470,7 @@ const openFormalVerificationForCurrentBoard = () => {
   fuzzVerificationHandoff.value = sourceRun ? {
     runId: sourceRun.id,
     targetPresent: true,
-    scopeCountDrifted: fuzzingResultBoardDrifted.value
+    boardDrifted: fuzzingResultBoardDrifted.value
   } : null
   closeHistoryPanel()
   closeFuzzingResult()
@@ -9344,7 +9454,8 @@ const handleVerify = async (): Promise<boolean> => {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = extractApiErrorMessage(error, t('app.verificationFailed'))
+    const message = asyncTaskQuotaMessage(error, 'verification')
+      || extractApiErrorMessage(error, t('app.verificationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       verificationError.value = null
       ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
@@ -9755,7 +9866,8 @@ const handleSimulate = async (simConfig: {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = extractApiErrorMessage(error, t('app.simulationFailed'))
+    const message = asyncTaskQuotaMessage(error, 'simulation')
+      || extractApiErrorMessage(error, t('app.simulationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       simulationError.value = null
       ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
@@ -10000,6 +10112,19 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
 
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
+const isSimulationResultDialogOpen = computed(() => !!simulationResult.value || !!simulationError.value)
+const closeSimulationResultDialog = () => {
+  simulationResult.value = null
+  simulationError.value = null
+}
+const {
+  setDialogRef: setSimulationResultDialogRef,
+  handleModalKeydown: handleSimulationResultDialogKeydown
+} = useModalAccessibility(
+  isSimulationResultDialogOpen,
+  closeSimulationResultDialog,
+  () => document.querySelector<HTMLElement>('[data-testid="open-simulation-panel"]')
+)
 const isResultSurfaceVisible = computed(() =>
   showResultDialog.value || !!simulationResult.value || !!simulationError.value
   || showFuzzingResultDialog.value
@@ -10260,6 +10385,55 @@ const closeResultDialog = () => {
             <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
             <span>{{ t('app.sceneClear') }}</span>
           </button>
+          <details
+            ref="sceneActionsMenuRef"
+            class="scene-actions-menu"
+            @toggle="handleSceneActionsMenuToggle"
+            @keydown.esc.stop.prevent="closeSceneActionsMenu(true)"
+          >
+            <summary
+              class="scene-actions-menu__trigger"
+              role="button"
+              :aria-label="t('app.sceneActions')"
+              :title="t('app.sceneActions')"
+              aria-controls="scene-actions-command-group"
+              :aria-expanded="sceneActionsMenuOpen"
+            >
+              <span class="material-symbols-outlined" aria-hidden="true">more_horiz</span>
+            </summary>
+            <div
+              id="scene-actions-command-group"
+              class="scene-actions-menu__popover"
+              role="group"
+              :aria-label="t('app.sceneActions')"
+            >
+              <button
+                type="button"
+                :disabled="isImportingScene || !isBoardDataReady"
+                @click="closeSceneActionsMenu(); triggerSceneImport()"
+              >
+                <span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
+                <span>{{ t('app.sceneImport') }}</span>
+              </button>
+              <button
+                type="button"
+                :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+                @click="closeSceneActionsMenu(); exportScene()"
+              >
+                <span class="material-symbols-outlined" aria-hidden="true">download</span>
+                <span>{{ t('app.sceneExport') }}</span>
+              </button>
+              <button
+                type="button"
+                class="scene-actions-menu__danger"
+                :disabled="isImportingScene || isClearingScene || !isBoardDataReady"
+                @click="closeSceneActionsMenu(); clearScene()"
+              >
+                <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
+                <span>{{ t('app.sceneClear') }}</span>
+              </button>
+            </div>
+          </details>
           <button
             type="button"
             class="nav-action-btn ai-assistant-btn"
@@ -10689,6 +10863,17 @@ const closeResultDialog = () => {
         </div>
       </template>
     </SystemInspector>
+
+    <button
+      type="button"
+      class="canvas-fit-mobile"
+      data-testid="canvas-fit-mobile"
+      :title="t('app.fitToContent')"
+      :aria-label="t('app.fitToContent')"
+      @click="fitToContent"
+    >
+      <span class="material-symbols-outlined" aria-hidden="true">fit_screen</span>
+    </button>
 
     <!-- Canvas Area -->
     <div class="canvas-container">
@@ -11303,7 +11488,7 @@ const closeResultDialog = () => {
             {{ t('app.fuzzVerificationHandoffTargetMissing') }}
           </p>
           <p
-            v-else-if="fuzzVerificationHandoff.scopeCountDrifted"
+          v-else-if="fuzzVerificationHandoff.boardDrifted"
             class="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-950"
           >
             {{ t('app.fuzzVerificationHandoffScopeChanged') }}
@@ -13163,10 +13348,19 @@ const closeResultDialog = () => {
         v-if="renameDialogVisible"
         class="fixed inset-0 z-[2400] flex items-center justify-center bg-slate-950/20 p-4 backdrop-blur-[2px] dark:bg-slate-950/35"
         @click.self="cancelRename"
+        @keydown="handleRenameDialogKeydown"
       >
-        <div class="w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900" @click.stop>
+        <div
+          :ref="setRenameDialogRef"
+          class="w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rename-device-dialog-title"
+          tabindex="-1"
+          @click.stop
+        >
           <div class="mb-6">
-            <h3 class="mb-4 text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.renameDevice') }}</h3>
+            <h3 id="rename-device-dialog-title" class="mb-4 text-lg font-semibold text-slate-800 dark:text-slate-100">{{ t('app.renameDevice') }}</h3>
             <div class="space-y-2">
               <input
                 v-model="renameDialogData.newName"
@@ -13304,16 +13498,25 @@ const closeResultDialog = () => {
     v-if="simulationResult || simulationError"
     data-testid="simulation-result-dialog"
     class="fixed inset-0 z-[2400] bg-black/60 backdrop-blur-sm flex items-center justify-center"
-    @click="simulationResult = null; simulationError = null"
+    @click="closeSimulationResultDialog"
+    @keydown="handleSimulationResultDialogKeydown"
   >
-    <div class="min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" @click.stop>
+    <div
+      :ref="setSimulationResultDialogRef"
+      class="min-h-0 flex max-h-[90vh] w-[760px] max-w-[95vw] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="simulation-result-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <header class="flex flex-shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4">
           <div class="flex min-w-0 items-center gap-3">
             <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
               <span class="material-symbols-outlined text-2xl" aria-hidden="true">monitoring</span>
             </div>
             <div class="min-w-0">
-              <h3 class="text-base font-bold text-slate-900">{{ t('app.simulationRunDetails') }}</h3>
+              <h3 id="simulation-result-dialog-title" class="text-base font-bold text-slate-900">{{ t('app.simulationRunDetails') }}</h3>
               <p v-if="simulationResult" class="mt-0.5 text-xs leading-5 text-slate-600">
                 {{ t('app.simulationStateStepSummary', {
                   states: getSimulationStateCount(simulationResult),
@@ -13329,7 +13532,7 @@ const closeResultDialog = () => {
             data-testid="close-simulation-result"
             class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800"
             :aria-label="t('app.close')"
-            @click="simulationResult = null; simulationError = null"
+            @click="closeSimulationResultDialog"
           >
             <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
           </button>
@@ -13510,7 +13713,7 @@ const closeResultDialog = () => {
         <button
           type="button"
           class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-300"
-          @click="simulationResult = null; simulationError = null"
+          @click="closeSimulationResultDialog"
         >
           {{ t('app.close') }}
         </button>
