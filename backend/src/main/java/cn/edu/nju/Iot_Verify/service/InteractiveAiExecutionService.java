@@ -27,9 +27,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class InteractiveAiExecutionService {
 
+    private static final long COMPLETED_STATUS_TTL_NANOS = TimeUnit.SECONDS.toNanos(15);
+
     private final ThreadPoolTaskExecutor executor;
     private final Map<RequestKey, ActiveExecution<?>> active = new ConcurrentHashMap<>();
     private final Map<Long, String> activeByUser = new ConcurrentHashMap<>();
+    private final Map<RequestKey, RecentStatus> recentlyCompleted = new ConcurrentHashMap<>();
 
     public InteractiveAiExecutionService(
             @Qualifier("interactiveAiExecutor") ThreadPoolTaskExecutor executor) {
@@ -37,6 +40,7 @@ public class InteractiveAiExecutionService {
     }
 
     public <T> T execute(Long userId, String requestId, Callable<T> operation) {
+        purgeExpiredStatuses();
         String id = validateRequestId(requestId);
         RequestKey key = new RequestKey(userId, id);
         String existing = activeByUser.putIfAbsent(userId, id);
@@ -83,12 +87,14 @@ public class InteractiveAiExecutionService {
     }
 
     public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
+        purgeExpiredStatuses();
         String id = validateRequestId(requestId);
-        ActiveExecution<?> execution = active.get(new RequestKey(userId, id));
-        if (execution == null) {
-            throw new ResourceNotFoundException("AI recommendation request", id);
-        }
-        return execution.status();
+        RequestKey key = new RequestKey(userId, id);
+        ActiveExecution<?> execution = active.get(key);
+        if (execution != null) return execution.status();
+        RecentStatus recent = recentlyCompleted.get(key);
+        if (recent != null) return recent.status();
+        throw new ResourceNotFoundException("AI recommendation request", id);
     }
 
     public void markStage(Long userId, String requestId, InteractiveOperationStage stage) {
@@ -105,6 +111,16 @@ public class InteractiveAiExecutionService {
     }
 
     private record RequestKey(Long userId, String requestId) {
+    }
+
+    private record RecentStatus(InteractiveOperationStatusDto status, long expiresAtNanos) {
+    }
+
+    private void purgeExpiredStatuses() {
+        long now = System.nanoTime();
+        recentlyCompleted.forEach((key, recent) -> {
+            if (recent.expiresAtNanos() <= now) recentlyCompleted.remove(key, recent);
+        });
     }
 
     private enum ExecutionState {
@@ -164,6 +180,8 @@ public class InteractiveAiExecutionService {
 
         private void cleanup() {
             if (!cleaned.compareAndSet(false, true)) return;
+            recentlyCompleted.put(key, new RecentStatus(
+                    status(), System.nanoTime() + COMPLETED_STATUS_TTL_NANOS));
             active.remove(key, this);
             activeByUser.remove(key.userId(), key.requestId());
         }

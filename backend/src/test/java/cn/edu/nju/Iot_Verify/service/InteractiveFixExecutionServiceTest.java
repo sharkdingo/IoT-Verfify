@@ -105,6 +105,18 @@ class InteractiveFixExecutionServiceTest {
     }
 
     @Test
+    void completedStatusRemainsAvailableForTheFinalPollingTick() {
+        service.execute(1L, "request-123", () -> {
+            service.markStage(1L, "request-123", InteractiveOperationStage.FINALIZING);
+            return null;
+        });
+
+        var status = service.getStatus(1L, "request-123");
+        assertEquals("FINISHED", status.getState());
+        assertEquals(InteractiveOperationStage.FINALIZING, status.getStage());
+    }
+
+    @Test
     void cancel_beforeStartRemovesQueuedWorkWithoutInvokingChecker() throws Exception {
         CountDownLatch workerStarted = new CountDownLatch(1);
         CountDownLatch releaseWorker = new CountDownLatch(1);

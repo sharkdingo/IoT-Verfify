@@ -2128,9 +2128,12 @@ const scrollToBottom = (force = false) => {
 }
 
 .chat-execution-trace {
-  min-width: min(30rem, 72vw);
+  width: min(14rem, 68vw);
+  min-width: 0;
+  max-width: 100%;
   color: var(--chat-text);
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .chat-execution-header {

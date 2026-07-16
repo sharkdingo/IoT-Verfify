@@ -842,8 +842,9 @@ is required so the client can cancel this exact search through
 `DELETE /api/verify/fix-requests/{requestId}`.
 
 While the search is active, `GET /api/verify/fix-requests/{requestId}` returns
-`InteractiveOperationStatusDto` as `{ requestId, state, stage, elapsedMs }`; an unknown
-or already-finished request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
+`InteractiveOperationStatusDto` as `{ requestId, state, stage, elapsedMs }`. The final
+`FINISHED` status is retained briefly so the last polling tick does not race cleanup; an
+unknown request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
 `PREPARING_CONTEXT`, `PREPARING_MODEL`, `SEARCHING_AND_VERIFYING`, `FINALIZING`, and
 `CANCELLING` as applicable. These are server-observed operational phases, not inferred
 timers or hidden model reasoning.

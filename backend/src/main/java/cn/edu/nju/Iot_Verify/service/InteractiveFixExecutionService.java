@@ -25,8 +25,11 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class InteractiveFixExecutionService {
 
+    private static final long COMPLETED_STATUS_TTL_NANOS = TimeUnit.SECONDS.toNanos(15);
+
     private final ThreadPoolTaskExecutor executor;
     private final Map<RequestKey, ActiveExecution<?>> active = new ConcurrentHashMap<>();
+    private final Map<RequestKey, RecentStatus> recentlyCompleted = new ConcurrentHashMap<>();
 
     public InteractiveFixExecutionService(
             @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor executor) {
@@ -34,6 +37,7 @@ public class InteractiveFixExecutionService {
     }
 
     public <T> T execute(Long userId, String requestId, Callable<T> operation) {
+        purgeExpiredStatuses();
         String id = validateRequestId(requestId);
         RequestKey key = new RequestKey(userId, id);
         ActiveExecution<T> execution = new ActiveExecution<>(key, operation);
@@ -67,12 +71,14 @@ public class InteractiveFixExecutionService {
     }
 
     public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
+        purgeExpiredStatuses();
         String id = validateRequestId(requestId);
-        ActiveExecution<?> execution = active.get(new RequestKey(userId, id));
-        if (execution == null) {
-            throw new ResourceNotFoundException("automatic-fix request", id);
-        }
-        return execution.status();
+        RequestKey key = new RequestKey(userId, id);
+        ActiveExecution<?> execution = active.get(key);
+        if (execution != null) return execution.status();
+        RecentStatus recent = recentlyCompleted.get(key);
+        if (recent != null) return recent.status();
+        throw new ResourceNotFoundException("automatic-fix request", id);
     }
 
     public void markStage(Long userId, String requestId, InteractiveOperationStage stage) {
@@ -89,6 +95,16 @@ public class InteractiveFixExecutionService {
     }
 
     private record RequestKey(Long userId, String requestId) {
+    }
+
+    private record RecentStatus(InteractiveOperationStatusDto status, long expiresAtNanos) {
+    }
+
+    private void purgeExpiredStatuses() {
+        long now = System.nanoTime();
+        recentlyCompleted.forEach((key, recent) -> {
+            if (recent.expiresAtNanos() <= now) recentlyCompleted.remove(key, recent);
+        });
     }
 
     private enum ExecutionState {
@@ -143,6 +159,8 @@ public class InteractiveFixExecutionService {
 
         private void cleanup() {
             if (!cleaned.compareAndSet(false, true)) return;
+            recentlyCompleted.put(key, new RecentStatus(
+                    status(), System.nanoTime() + COMPLETED_STATUS_TTL_NANOS));
             active.remove(key, this);
         }
     }

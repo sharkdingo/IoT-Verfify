@@ -121,6 +121,7 @@ const mountDialog = () => mount(FixResultDialog, {
 
 describe('FixResultDialog strategy workflow', () => {
   beforeEach(() => {
+    vi.useRealTimers()
     vi.clearAllMocks()
     boardApi.getFaultRules.mockResolvedValue({
       traceId: 7,
@@ -192,12 +193,15 @@ describe('FixResultDialog strategy workflow', () => {
     const wrapper = mountDialog()
     await flush()
 
+    vi.useFakeTimers()
     await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
-    await flush()
+    await vi.advanceTimersByTimeAsync(1000)
+    await wrapper.vm.$nextTick()
 
     expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(expect.any(String))
     expect(wrapper.text()).toContain('fixProgressStage_SEARCHING_AND_VERIFYING')
 
+    vi.useRealTimers()
     pending.resolve(parameterResult())
     await flush()
   })

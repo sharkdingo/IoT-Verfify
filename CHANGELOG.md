@@ -43,6 +43,8 @@ history into a technical spec. The spec content itself now lives under
 - Made terminal background tasks display their completed, failed, or cancelled status
   instead of a stale last active phase, and prevented a closing automatic-fix request
   from stopping progress updates for a newly opened request.
+- Kept assistant execution traces compact and retained completed interactive-operation
+  status briefly so final progress polling no longer produces a spurious 404.
 
 ### 2026-07-16
 

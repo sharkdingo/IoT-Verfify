@@ -406,7 +406,6 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
   activeFixRequestId.value = requestId
   activeFixAbortController.value = controller
   if (fixSearchTimer) clearInterval(fixSearchTimer)
-  void refreshFixProgress(requestId)
   const requestProgressTimer = setInterval(() => {
     fixSearchElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
     void refreshFixProgress(requestId)

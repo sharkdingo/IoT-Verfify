@@ -91,6 +91,18 @@ class InteractiveAiExecutionServiceTest {
     }
 
     @Test
+    void completedStatusRemainsAvailableForTheFinalPollingTick() {
+        service.execute(1L, "request-123", () -> {
+            service.markStage(1L, "request-123", InteractiveOperationStage.VALIDATING_RESULT);
+            return null;
+        });
+
+        var status = service.getStatus(1L, "request-123");
+        assertEquals("FINISHED", status.getState());
+        assertEquals(InteractiveOperationStage.VALIDATING_RESULT, status.getStage());
+    }
+
+    @Test
     void cancel_keepsUserAdmissionUntilInterruptIgnoringProviderActuallyReturns() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch releaseProvider = new CountDownLatch(1);
