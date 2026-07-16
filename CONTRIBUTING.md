@@ -83,7 +83,6 @@ under a version heading.
 ## Git & PR conventions
 
 - Never commit unless explicitly asked; keep unrelated changes out of a commit.
-- Push feature work to a branch, not `main`.
 - Flag any file that may contain secrets (`.env`, credentials) before committing.
 - Keep PR titles concise; put detail (summary, testing, blocked items) in the body.
 
