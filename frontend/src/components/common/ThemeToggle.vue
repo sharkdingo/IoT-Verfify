@@ -84,9 +84,9 @@ const iconName = computed(() => theme.value === 'dark' ? 'light_mode' : 'dark_mo
 }
 
 .theme-toggle--compact {
-  min-width: 40px;
-  width: 40px;
-  height: 34px;
+  min-width: 44px;
+  width: 44px;
+  height: 44px;
   padding: 0;
 }
 

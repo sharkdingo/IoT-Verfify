@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-15. Source: `dto/Result.java`,
+Verified against code on 2026-07-16. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
 
@@ -81,7 +81,7 @@ equals the HTTP status. Domain exceptions and their statuses:
 | 404 | `ResourceNotFoundException` | Resource does not exist |
 | 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
 | 422 | `ValidationException` | Semantic validation failure |
-| 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException` | Per-user active or stored counterexample-search task limit reached; response data includes a stable reason code, current count, and limit |
+| 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException`, `AsyncTaskQuotaExceededException` | Per-user active or stored background-task limit reached; response data includes a stable reason code, task kind, quota type, current count, and limit |
 | 500 | `InternalServerException`, `SmvGenerationException`, `PersistedDataIntegrityException` (and uncaught) | Server-side failure or unusable persisted semantic data |
 | 502 | `BadGatewayException` | The configured AI provider replied, but its output could not be parsed as the requested structured result |
 | 503 | `ServiceUnavailableException` | Thread pool saturated / task rejected |

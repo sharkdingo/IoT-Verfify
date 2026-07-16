@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-15. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-16. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -462,7 +462,7 @@ server-owned persisted JSON and is never exposed through the API.
 | `outcome` | Fuzz engine + service mapping | `FOUND_VIOLATION`, `BUDGET_EXHAUSTED`, or `INCONCLUSIVE`; never a proof of satisfaction | Neutral/red/amber result presentation |
 | `effectiveSeed` | Fuzz engine | Exact reproducibility seed | Retry/research reporting |
 | `iterations` / `generatedPaths` / `elapsedMs` | Fuzz engine | Bounded execution statistics; completed data must have `iterations <= maxIterations` and either `0/0` or `iterations <= generatedPaths <= iterations * populationSize` | Result explanation only; not coverage |
-| `modelSnapshot` | Board capture boundary | Frozen run-scope counts/time | Historical scope explanation |
+| `modelSnapshot` | Board capture boundary | Frozen run-scope counts/time plus an optional canonical semantic fingerprint; bounded-exploration runs populate the fingerprint | Historical scope explanation and exact exploration-history drift checks |
 | `eligibility` | Fuzz model/spec classifier | Eligible IDs plus itemized unsupported/invalid specs | Fail-closed user explanation |
 | `limitations` | Fuzz engine | Stable codes for the run's semantic boundary | Localized result detail |
 | `dataAvailable` / `unavailableReasonCode` | Fuzz mapper | Fail-closed history-row decode status | Disable open/replay while preserving delete |

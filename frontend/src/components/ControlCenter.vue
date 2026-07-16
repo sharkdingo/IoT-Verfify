@@ -45,6 +45,7 @@ import boardApi, {
 import type { ModelEnvironmentVariable } from '@/types/model'
 import { deviceLabelKey, reserveUniqueDeviceLabel } from '@/utils/canvas/nodeCreate'
 import { localizedErrorMessage } from '@/utils/userMessage'
+import { useModalAccessibility } from '@/composables/useModalAccessibility'
 
 defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
@@ -898,6 +899,15 @@ const specForm = reactive({
 const showSpecDialog = ref(false)
 const editingConditionIndex = ref(-1)
 const editingConditionSide = ref<SpecSide>('a')
+
+const closeSpecDialog = () => {
+  showSpecDialog.value = false
+}
+
+const {
+  setDialogRef: setSpecDialogRef,
+  handleModalKeydown: handleSpecDialogKeydown
+} = useModalAccessibility(showSpecDialog, closeSpecDialog)
 
 // Editing condition data
 const editingConditionData = reactive<Partial<SpecCondition>>({
@@ -2160,7 +2170,10 @@ const exportTemplate = (template: any) => {
     :style="{ width: isCollapsed ? '4rem' : panelWidth }"
   >
     <!-- 顶部标题区域 -->
-    <div class="board-panel-header relative overflow-hidden p-4 border-b">
+    <div
+      class="board-panel-header relative overflow-hidden border-b"
+      :class="isCollapsed ? 'p-2.5' : 'p-4'"
+    >
       <div v-if="!isCollapsed" class="relative flex items-center justify-between">
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
@@ -2172,18 +2185,24 @@ const exportTemplate = (template: any) => {
           </div>
         </div>
         <button
+          type="button"
           @click="togglePanel"
-          class="w-8 h-8 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+          class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+          :title="t('app.collapse')"
+          :aria-label="t('app.collapse')"
         >
-          <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200">dock_to_left</span>
+          <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200" aria-hidden="true">dock_to_left</span>
         </button>
       </div>
       <div v-else class="flex items-center justify-center">
         <button
+          type="button"
           @click="togglePanel"
-          class="w-10 h-10 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
+          class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
+          :title="t('app.expand')"
+          :aria-label="t('app.expand')"
         >
-          <span class="material-symbols-outlined text-slate-600 text-base">dock_to_right</span>
+          <span class="material-symbols-outlined text-slate-600 text-base" aria-hidden="true">dock_to_right</span>
         </button>
       </div>
     </div>
@@ -2849,9 +2868,10 @@ const exportTemplate = (template: any) => {
 
         <div class="px-3 pb-4 bg-slate-50/50 pt-2 grid grid-cols-1 gap-3">
           <!-- Rule Creation Block -->
-          <div
+          <button
+            type="button"
             data-testid="open-rule-builder"
-            class="relative overflow-hidden group cursor-pointer rounded-xl bg-blue-500 hover:bg-blue-600 transition-all hover:shadow-lg hover:-translate-y-0.5"
+            class="relative w-full overflow-hidden border-0 text-left group cursor-pointer rounded-xl bg-blue-500 hover:bg-blue-600 transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
             @click="openRuleBuilder"
           >
             <div class="relative p-3 flex items-center gap-3">
@@ -2866,7 +2886,7 @@ const exportTemplate = (template: any) => {
                 <span class="material-symbols-outlined text-white text-sm">arrow_forward</span>
               </div>
             </div>
-          </div>
+          </button>
         </div>
       </details>
 
@@ -3166,8 +3186,22 @@ const exportTemplate = (template: any) => {
   </aside>
 
   <!-- Specification Condition Dialog -->
-  <div v-if="showSpecDialog" data-testid="spec-condition-dialog" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50" @click="showSpecDialog = false">
-    <div class="bg-white rounded-2xl w-full max-w-md shadow-2xl transform transition-all overflow-hidden" @click.stop>
+  <div
+    v-if="showSpecDialog"
+    data-testid="spec-condition-dialog"
+    class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50"
+    @click="closeSpecDialog"
+    @keydown="handleSpecDialogKeydown"
+  >
+    <div
+      :ref="setSpecDialogRef"
+      class="bg-white rounded-2xl w-full max-w-md shadow-2xl transform transition-all overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="spec-condition-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <!-- Header with light background -->
       <div class="relative bg-slate-100 border-b border-slate-200 p-6">
         <div class="absolute top-0 right-0 w-32 h-32 bg-slate-200/50 rounded-full -translate-y-1/2 translate-x-1/2"></div>
@@ -3181,14 +3215,16 @@ const exportTemplate = (template: any) => {
               </svg>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-black">
+              <h3 id="spec-condition-dialog-title" class="text-xl font-bold text-black">
                 {{ editingConditionIndex >= 0 ? t('app.editCondition') : t('app.addConditionTitle') }}
               </h3>
               <p class="text-sm text-slate-600">{{ t('app.configureSpecification') }}</p>
             </div>
           </div>
-          <button 
-            @click="showSpecDialog = false" 
+          <button
+            type="button"
+            :aria-label="t('app.close')"
+            @click="closeSpecDialog"
             class="w-10 h-10 bg-white hover:bg-slate-50 rounded-lg flex items-center justify-center transition-all hover:rotate-90 shadow-sm"
           >
             <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3363,7 +3399,7 @@ const exportTemplate = (template: any) => {
       <!-- Footer Actions -->
       <div class="bg-slate-100 px-6 py-4 flex justify-end gap-3 border-t border-slate-200">
         <button
-          @click="showSpecDialog = false"
+          @click="closeSpecDialog"
           class="px-5 py-2.5 text-sm font-bold text-black bg-white border-2 border-slate-300 rounded-lg hover:bg-slate-50 hover:border-slate-400 transition-all"
         >
           {{ t('app.cancel') }}

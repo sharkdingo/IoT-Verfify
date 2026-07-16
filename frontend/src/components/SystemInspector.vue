@@ -609,13 +609,16 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
     @pointerover="syncFullTextTitle"
     @focusin="syncFullTextTitle"
   >
-    <div class="board-panel-header relative overflow-hidden p-4 border-b">
+    <div
+      class="board-panel-header relative overflow-hidden border-b"
+      :class="isCollapsed ? 'p-0.5' : 'p-4'"
+    >
       <div v-if="!isCollapsed" class="flex items-center justify-between w-full">
         <div class="flex min-w-0 items-center gap-3">
           <button
             type="button"
             @click="togglePanel"
-            class="board-panel-toggle inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
+            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
             :title="t('app.collapse')"
             :aria-label="t('app.collapse')"
           >
@@ -630,11 +633,11 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           </div>
         </div>
       </div>
-      <div v-else class="flex items-center justify-center p-1">
+      <div v-else class="flex items-center justify-center">
         <button
           type="button"
           @click="togglePanel"
-          class="board-panel-toggle inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
+          class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800"
           :title="t('app.expand')"
           :aria-label="t('app.expand')"
         >
@@ -909,17 +912,21 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             v-for="device in filteredDevices"
             :key="device.id"
             :data-device-id="device.id"
-            @click="handleDeviceClick(device.id)"
-            class="group relative p-4 rounded-xl bg-white border border-slate-200/60 hover:border-blue-300/50 shadow-sm hover:shadow-md transition-all cursor-pointer"
+            class="group relative p-4 rounded-xl bg-white border border-slate-200/60 hover:border-blue-300/50 shadow-sm hover:shadow-md transition-all"
             :class="device.id === props.focusedDeviceId ? 'ring-2 ring-blue-400 border-blue-300 bg-blue-50/70 shadow-md' : ''"
           >
             <!-- Hover gradient background -->
-            <div class="absolute inset-0 bg-gradient-to-r from-blue-50/0 to-indigo-50/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div class="pointer-events-none absolute inset-0 bg-gradient-to-r from-blue-50/0 to-indigo-50/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
 
             <div class="relative flex min-w-0 items-center justify-between gap-2">
-              <div class="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                class="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md py-1 text-left focus-visible:outline focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+                :aria-label="device.name"
+                @click="handleDeviceClick(device.id)"
+              >
                 <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-cyan-100 bg-cyan-50 text-cyan-700">
-                  <span class="material-symbols-outlined text-base">devices_other</span>
+                  <span class="material-symbols-outlined text-base" aria-hidden="true">devices_other</span>
                 </div>
                 <span class="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:text-blue-600 transition-colors" :data-full-text="device.name">
                   {{ device.name }}
@@ -930,11 +937,13 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 <span v-if="device.state" class="max-w-[6rem] shrink-0 truncate px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-50 text-cyan-700 border border-cyan-100" :data-full-text="device.state">
                   {{ device.state }}
                 </span>
-              </div>
+              </button>
               <button
+                type="button"
                 @click.stop="handleDeleteDevice(device.id)"
-                class="text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 p-1.5 rounded-lg"
+                class="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
                 :title="t('app.removeDevice')"
+                :aria-label="t('app.removeDevice')"
               >
                 <span class="material-symbols-outlined text-sm">close</span>
               </button>
@@ -1187,9 +1196,11 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                 </h4>
               </div>
               <button
+                type="button"
                 @click="handleDeleteSpec(spec.id)"
-                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                class="text-slate-300 hover:text-red-500 p-1 rounded hover:bg-red-50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-all"
                 :title="t('app.deleteSpecification')"
+                :aria-label="t('app.deleteSpecification')"
               >
                 <span class="material-symbols-outlined text-xs">delete</span>
               </button>

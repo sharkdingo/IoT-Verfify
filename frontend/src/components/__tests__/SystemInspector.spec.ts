@@ -68,4 +68,25 @@ describe('SystemInspector rule execution order', () => {
 
     expect(wrapper.emitted('move-rule')).toEqual([['2', 'up']])
   })
+
+  it('lets keyboard users focus and select a device while revealing its action', async () => {
+    const wrapper = mount(SystemInspector, {
+      props: {
+        activeSection: 'devices',
+        devices,
+        rules: []
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const device = wrapper.get('[data-device-id="sensor-1"]')
+    const openButton = device.get('button[aria-label="Hall sensor"]')
+    expect(openButton.element.tagName).toBe('BUTTON')
+    expect(openButton.attributes('type')).toBe('button')
+    await openButton.trigger('click')
+    expect(wrapper.emitted('device-click')).toEqual([['sensor-1']])
+
+    const deleteButton = device.get('button[aria-label="Remove device"]')
+    expect(deleteButton.classes()).toContain('group-focus-within:opacity-100')
+  })
 })

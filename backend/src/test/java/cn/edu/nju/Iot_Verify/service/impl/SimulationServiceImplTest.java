@@ -21,6 +21,7 @@ import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SimulationExecutionException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
 import cn.edu.nju.Iot_Verify.po.SimulationTracePo;
 import cn.edu.nju.Iot_Verify.po.UserPo;
@@ -475,6 +476,18 @@ class SimulationServiceImplTest {
                         1L, simRequest(List.of(), List.of(), 10, false, 0, false)));
 
         assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
+    }
+
+    @Test
+    void createTask_storedUserLimit_rejectsBeforePersisting() {
+        when(simulationTaskRepository.countByUserId(1L)).thenReturn(100L);
+
+        AsyncTaskQuotaExceededException error = assertThrows(
+                AsyncTaskQuotaExceededException.class,
+                () -> service.createTask(1L, 10, false, 0, false, 0, 0, 0, runSnapshot()));
+
+        assertEquals("SIMULATION_STORED_TASK_LIMIT_REACHED", error.getReasonCode());
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
     }
 

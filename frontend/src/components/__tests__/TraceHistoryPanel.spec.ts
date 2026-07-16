@@ -465,6 +465,105 @@ describe('TraceHistoryPanel two-layer semantics', () => {
     expect(wrapper.findAll('button').some(button => button.text() === 'Verify formally')).toBe(false)
   })
 
+  it('detects semantic drift when counts match but model fingerprints differ', () => {
+    const run: FuzzingRunSummary = {
+      id: 42,
+      explorationMode: 'BOARD_SNAPSHOT',
+      outcome: 'BUDGET_EXHAUSTED',
+      effectiveSeed: 42,
+      iterations: 10,
+      generatedPaths: 20,
+      elapsedMs: 100,
+      modelSnapshot: { ...snapshot(1), modelFingerprint: 'a'.repeat(64) },
+      eligibility: {
+        eligibleSpecIds: ['spec-1'],
+        eligibleSpecLabels: { 'spec-1': 'Door remains closed' },
+        ineligibleSpecs: [],
+        requestedSpecCount: 1,
+        eligibleSpecCount: 1
+      },
+      limitations: [],
+      maxIterations: 10,
+      pathLength: 5,
+      populationSize: 2,
+      createdAt: '2026-07-13T11:00:00',
+      completedAt: '2026-07-13T11:00:01',
+      findingCount: 0,
+      findings: [],
+      dataAvailable: true
+    }
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        resultFilter: 'fuzzing',
+        currentBoardScope: {
+          deviceCount: 4,
+          ruleCount: 3,
+          specificationCount: 1,
+          environmentVariableCount: 0,
+          deviceTemplateCount: 4,
+          modelFingerprint: 'b'.repeat(64)
+        },
+        fuzzingRuns: [run]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[data-testid="fuzzing-history-board-drift"]').text())
+      .toContain('Current Board scope changed.')
+  })
+
+  it('does not claim a fingerprinted run is unchanged when the current fingerprint is unavailable', () => {
+    const run: FuzzingRunSummary = {
+      id: 43,
+      explorationMode: 'BOARD_SNAPSHOT',
+      outcome: 'BUDGET_EXHAUSTED',
+      effectiveSeed: 43,
+      iterations: 10,
+      generatedPaths: 20,
+      elapsedMs: 100,
+      modelSnapshot: { ...snapshot(1), modelFingerprint: 'a'.repeat(64) },
+      eligibility: {
+        eligibleSpecIds: ['spec-1'],
+        eligibleSpecLabels: { 'spec-1': 'Door remains closed' },
+        ineligibleSpecs: [],
+        requestedSpecCount: 1,
+        eligibleSpecCount: 1
+      },
+      limitations: [],
+      maxIterations: 10,
+      pathLength: 5,
+      populationSize: 2,
+      createdAt: '2026-07-13T11:00:00',
+      completedAt: '2026-07-13T11:00:01',
+      findingCount: 0,
+      findings: [],
+      dataAvailable: true
+    }
+
+    const wrapper = mount(TraceHistoryPanel, {
+      props: {
+        ...baseProps,
+        activeLayer: 'results',
+        resultFilter: 'fuzzing',
+        currentBoardScope: {
+          deviceCount: 4,
+          ruleCount: 3,
+          specificationCount: 1,
+          environmentVariableCount: 0,
+          deviceTemplateCount: 4
+        },
+        fuzzingRuns: [run]
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[data-testid="fuzzing-history-board-drift"]').text())
+      .toContain('Current Board scope changed.')
+  })
+
   it('offers an explicit next page only for fuzzing history', async () => {
     const wrapper = mount(TraceHistoryPanel, {
       props: {

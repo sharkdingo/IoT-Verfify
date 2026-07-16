@@ -1,23 +1,42 @@
 <script setup lang="ts">
-import { ref, computed, type VNode } from "vue";
+import { ref, computed, onUnmounted, type VNode } from "vue";
 import { CheckOutlined, CopyOutlined } from '@ant-design/icons-vue';
+import { useI18n } from 'vue-i18n';
 
 const props = defineProps<{
   highlightVnode: VNode;
   language: string;
 }>();
 
-const copied = ref(false);
+const copyState = ref<'idle' | 'copied' | 'failed'>('idle');
 const contentRef = ref<HTMLElement>();
+const { t } = useI18n();
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 
-function copyHandle() {
+function showCopyState(state: 'copied' | 'failed') {
+  copyState.value = state;
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+  copyResetTimer = setTimeout(() => {
+    copyState.value = 'idle';
+    copyResetTimer = null;
+  }, 2000);
+}
+
+async function copyHandle() {
   if (!contentRef.value) return;
   const text = contentRef.value.textContent || "";
-  navigator.clipboard.writeText(text).then(() => {
-    copied.value = true;
-    setTimeout(() => (copied.value = false), 2000);
-  });
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+    await navigator.clipboard.writeText(text);
+    showCopyState('copied');
+  } catch {
+    showCopyState('failed');
+  }
 }
+
+onUnmounted(() => {
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+});
 
 const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
 </script>
@@ -26,14 +45,17 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
   <div class="code-block-container">
     <div class="code-header">
       <span class="lang-label">{{ langLabel }}</span>
-      <div class="copy-btn" @click="copyHandle">
-        <span v-if="copied" class="copy-text">
-          <CheckOutlined /> Copied!
+      <button type="button" class="copy-btn" :aria-label="t('app.copy')" @click="copyHandle">
+        <span v-if="copyState === 'copied'" class="copy-text" aria-live="polite">
+          <CheckOutlined /> {{ t('app.copied') }}
         </span>
-        <span v-else class="copy-text">
-          <CopyOutlined /> Copy
+        <span v-else-if="copyState === 'failed'" class="copy-text" aria-live="polite">
+          <CopyOutlined /> {{ t('app.copyFailed') }}
         </span>
-      </div>
+        <span v-else class="copy-text" aria-live="polite">
+          <CopyOutlined /> {{ t('app.copy') }}
+        </span>
+      </button>
     </div>
 
     <div ref="contentRef" class="code-content">
@@ -81,10 +103,18 @@ const langLabel = computed(() => props.language?.toUpperCase() || "TEXT");
   font-size: 12px;
   color: #666;
   transition: color 0.2s;
+  padding: 4px;
+  border: 0;
+  background: transparent;
 }
 
 .copy-btn:hover {
   color: #000;
+}
+
+.copy-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .copy-text {

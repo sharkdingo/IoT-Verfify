@@ -48,6 +48,7 @@ export interface ModelRunSnapshot {
   specificationCount: number
   environmentVariableCount: number
   deviceTemplateCount: number
+  modelFingerprint?: string | null
   templatesFrozen: true
 }
 

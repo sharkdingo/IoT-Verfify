@@ -19,6 +19,10 @@ import java.util.Optional;
 @Repository
 public interface VerificationTaskRepository extends JpaRepository<VerificationTaskPo, Long> {
 
+    long countByUserId(Long userId);
+
+    long countByUserIdAndStatusIn(Long userId, List<VerificationTaskPo.TaskStatus> statuses);
+
     /**
      * 根据用户ID查询所有任务（按创建时间降序）
      */

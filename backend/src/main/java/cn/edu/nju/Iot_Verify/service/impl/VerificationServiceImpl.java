@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.configure.AsyncTaskAdmissionConfig;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
@@ -31,6 +32,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
+import cn.edu.nju.Iot_Verify.exception.AsyncTaskQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -51,6 +53,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -85,7 +88,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private final ThreadPoolTaskExecutor verificationTaskExecutor;
     private final ThreadPoolTaskExecutor syncVerificationExecutor;
     private final TransactionTemplate transactionTemplate;
+    private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
 
+    @Autowired
     public VerificationServiceImpl(SmvGenerator smvGenerator,
                                    SmvTraceParser smvTraceParser,
                                    NusmvExecutor nusmvExecutor,
@@ -99,7 +104,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                    ObjectMapper objectMapper,
                                    @Qualifier("verificationTaskExecutor") ThreadPoolTaskExecutor verificationTaskExecutor,
                                    @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor,
-                                   TransactionTemplate transactionTemplate) {
+                                   TransactionTemplate transactionTemplate,
+                                   AsyncTaskAdmissionConfig taskAdmissionConfig) {
         super(objectMapper, "VerificationTask");
         this.smvGenerator = smvGenerator;
         this.smvTraceParser = smvTraceParser;
@@ -114,6 +120,27 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         this.verificationTaskExecutor = verificationTaskExecutor;
         this.syncVerificationExecutor = syncVerificationExecutor;
         this.transactionTemplate = transactionTemplate;
+        this.taskAdmissionLimits = taskAdmissionConfig.getVerification();
+    }
+
+    VerificationServiceImpl(SmvGenerator smvGenerator,
+                            SmvTraceParser smvTraceParser,
+                            NusmvExecutor nusmvExecutor,
+                            NusmvConfig nusmvConfig,
+                            VerificationTaskRepository taskRepository,
+                            TraceRepository traceRepository,
+                            TraceMapper traceMapper,
+                            UserRepository userRepository,
+                            SpecificationMapper specificationMapper,
+                            VerificationTaskMapper verificationTaskMapper,
+                            ObjectMapper objectMapper,
+                            ThreadPoolTaskExecutor verificationTaskExecutor,
+                            ThreadPoolTaskExecutor syncVerificationExecutor,
+                            TransactionTemplate transactionTemplate) {
+        this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig, taskRepository,
+                traceRepository, traceMapper, userRepository, specificationMapper,
+                verificationTaskMapper, objectMapper, verificationTaskExecutor,
+                syncVerificationExecutor, transactionTemplate, new AsyncTaskAdmissionConfig());
     }
 
     @PostConstruct
@@ -643,6 +670,19 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     ModelRunSnapshotDto modelSnapshot) {
         return transactionTemplate.execute(status -> {
             requireActiveUserForTracePersistence(userId);
+            long storedTaskCount = taskRepository.countByUserId(userId);
+            if (storedTaskCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
+                throw new AsyncTaskQuotaExceededException(
+                        "verification", AsyncTaskQuotaExceededException.QuotaType.STORED,
+                        storedTaskCount, taskAdmissionLimits.getMaxStoredTasksPerUser());
+            }
+            long activeTaskCount = taskRepository.countByUserIdAndStatusIn(
+                    userId, List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING));
+            if (activeTaskCount >= taskAdmissionLimits.getMaxActiveTasksPerUser()) {
+                throw new AsyncTaskQuotaExceededException(
+                        "verification", AsyncTaskQuotaExceededException.QuotaType.ACTIVE,
+                        activeTaskCount, taskAdmissionLimits.getMaxActiveTasksPerUser());
+            }
             VerificationTaskPo task = VerificationTaskPo.builder()
                     .userId(userId)
                     .status(VerificationTaskPo.TaskStatus.PENDING)

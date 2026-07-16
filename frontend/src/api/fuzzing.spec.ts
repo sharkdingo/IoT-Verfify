@@ -40,6 +40,16 @@ const task = {
 describe('fuzzing API', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('loads and validates the current semantic model fingerprint', async () => {
+    vi.mocked(http.get).mockResolvedValue(envelope('a'.repeat(64)))
+
+    await expect(fuzzingApi.getCurrentModelFingerprint()).resolves.toBe('a'.repeat(64))
+    expect(http.get).toHaveBeenCalledWith('/fuzz/model-fingerprint')
+
+    vi.mocked(http.get).mockResolvedValue(envelope('not-a-fingerprint'))
+    await expect(fuzzingApi.getCurrentModelFingerprint()).rejects.toThrow('fingerprint is invalid')
+  })
+
   it('previews the paper input domain without creating a task', async () => {
     vi.mocked(http.post).mockResolvedValue(envelope({
       pathLength: 20,

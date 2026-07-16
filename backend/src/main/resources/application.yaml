@@ -75,6 +75,14 @@ fuzz:
     max-active-tasks-per-user: ${FUZZ_MAX_ACTIVE_TASKS_PER_USER:2}
     max-stored-tasks-per-user: ${FUZZ_MAX_STORED_TASKS_PER_USER:100}
 
+async-task-admission:
+  verification:
+    max-active-tasks-per-user: ${VERIFICATION_MAX_ACTIVE_TASKS_PER_USER:2}
+    max-stored-tasks-per-user: ${VERIFICATION_MAX_STORED_TASKS_PER_USER:100}
+  simulation:
+    max-active-tasks-per-user: ${SIMULATION_MAX_ACTIVE_TASKS_PER_USER:2}
+    max-stored-tasks-per-user: ${SIMULATION_MAX_STORED_TASKS_PER_USER:100}
+
 thread-pool:
   interactive-ai:
     core-pool-size: ${THREAD_POOL_INTERACTIVE_AI_CORE:2}

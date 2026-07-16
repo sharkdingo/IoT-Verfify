@@ -116,6 +116,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
     }
 
+    @ExceptionHandler(AsyncTaskQuotaExceededException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleAsyncTaskQuotaExceededException(
+            AsyncTaskQuotaExceededException e) {
+        log.warn("{} {}-task limit reached: count={}, limit={}",
+                e.getTaskKind(), e.getQuotaType(), e.getTaskCount(), e.getMaxTasksPerUser());
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.TOO_MANY_REQUESTS.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", e.getReasonCode(),
+                "taskKind", e.getTaskKind(),
+                "quotaType", e.getQuotaType().name(),
+                "taskCount", e.getTaskCount(),
+                "maxTasksPerUser", e.getMaxTasksPerUser()));
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
+    }
+
     @ExceptionHandler(ChatSessionBusyException.class)
     public ResponseEntity<Result<Map<String, Object>>> handleChatSessionBusyException(
             ChatSessionBusyException e) {

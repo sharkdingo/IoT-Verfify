@@ -15,6 +15,10 @@ import java.util.Optional;
 @Repository
 public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo, Long> {
 
+    long countByUserId(Long userId);
+
+    long countByUserIdAndStatusIn(Long userId, List<SimulationTaskPo.TaskStatus> statuses);
+
     Optional<SimulationTaskPo> findByIdAndUserId(Long id, Long userId);
 
     List<SimulationTaskPo> findByStatusIn(List<SimulationTaskPo.TaskStatus> statuses);
