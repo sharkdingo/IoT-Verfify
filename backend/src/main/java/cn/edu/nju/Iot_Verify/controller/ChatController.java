@@ -32,7 +32,7 @@ public class ChatController {
 
     public ChatController(ChatService chatService,
                           @Qualifier("chatExecutor") Executor executor,
-                          @Value("${chat.sse-timeout-ms:600000}") long sseTimeoutMs) {
+                          @Value("${chat.sse-timeout-ms:3600000}") long sseTimeoutMs) {
         this.chatService = chatService;
         this.executor = executor;
         this.sseTimeoutMs = sseTimeoutMs;

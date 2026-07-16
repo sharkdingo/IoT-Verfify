@@ -15,7 +15,7 @@ import {
   FUZZING_EXPLORATION_MODES,
   isValidFuzzPaperDomainFingerprint
 } from '@/types/fuzzing'
-import type { AsyncTaskStatus } from '@/types/task'
+import type { AsyncTaskStatus, TaskProgressStage } from '@/types/task'
 
 export const FUZZ_RESPONSE_INCOMPLETE_CODE = 'FUZZ_RESPONSE_INCOMPLETE'
 export const FUZZ_ACTIVE_TASK_LIMIT_REACHED_CODE = 'FUZZ_ACTIVE_TASK_LIMIT_REACHED'
@@ -68,6 +68,17 @@ const TASK_STATUSES = new Set<AsyncTaskStatus>([
   'COMPLETED',
   'FAILED',
   'CANCELLED'
+])
+const TASK_PROGRESS_STAGES = new Set<TaskProgressStage>([
+  'QUEUED',
+  'STARTING',
+  'GENERATING_MODEL',
+  'EXECUTING_MODEL_CHECKER',
+  'PARSING_RESULTS',
+  'RUNNING_SIMULATION',
+  'PREPARING_EXPLORATION',
+  'EXPLORING_CANDIDATES',
+  'PERSISTING_RESULT'
 ])
 
 const OUTCOMES = new Set(['FOUND_VIOLATION', 'BUDGET_EXHAUSTED', 'INCONCLUSIVE'])
@@ -335,6 +346,9 @@ const validateTask = (value: unknown, context: string): FuzzingTask => {
   integer(task.progress, 'progress', context)
   if (task.progress > 100) {
     throw new FuzzResponseContractError(context, 'progress must be <= 100')
+  }
+  if (task.progressStage !== undefined && !TASK_PROGRESS_STAGES.has(task.progressStage)) {
+    throw new FuzzResponseContractError(context, 'progressStage is invalid')
   }
   if (task.processingTimeMs !== undefined) integer(task.processingTimeMs, 'processingTimeMs', context)
   if (task.runId !== undefined) integer(task.runId, 'runId', context, 1)

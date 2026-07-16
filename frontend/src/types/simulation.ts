@@ -2,7 +2,7 @@
 
 import type { ModelDevice, ModelEnvironmentVariable, ModelRule } from './model'
 import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
-import type { AsyncTaskStatus } from './task'
+import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { ModelGenerationIssue, TraceTriggeredRule } from './verify'
 import type { RunPersistence } from './runPersistence'
 
@@ -130,6 +130,7 @@ export interface SimulationTask {
   completedAt?: string
   processingTimeMs?: number
   progress?: number       // 新增：0-100 进度
+  progressStage?: TaskProgressStage
   isAttack: boolean
   attackBudget: number
   enablePrivacy: boolean
@@ -147,6 +148,7 @@ export type SimulationTaskSummary = Pick<
   | 'completedAt'
   | 'processingTimeMs'
   | 'progress'
+  | 'progressStage'
   | 'isAttack'
   | 'attackBudget'
   | 'enablePrivacy'

@@ -53,6 +53,7 @@ public class SimulationTaskMapper {
                 .checkLogs(checkLogs)
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())
+                .progressStage(po.getProgressStage())
                 .build();
     }
 
@@ -93,6 +94,7 @@ public class SimulationTaskMapper {
                 .simulationTraceId(po.getSimulationTraceId())
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())
+                .progressStage(po.getProgressStage())
                 .build();
     }
 

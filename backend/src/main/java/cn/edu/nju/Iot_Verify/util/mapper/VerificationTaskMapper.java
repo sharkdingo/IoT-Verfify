@@ -64,6 +64,7 @@ public class VerificationTaskMapper {
                 .nusmvOutput(po.getNusmvOutput())
                 .errorMessage(po.getErrorMessage())
                 .progress(po.getProgress())
+                .progressStage(po.getProgressStage())
                 .build();
     }
 
@@ -109,6 +110,7 @@ public class VerificationTaskMapper {
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
                                 po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
                 .progress(po.getProgress())
+                .progressStage(po.getProgressStage())
                 .outcome(outcome)
                 .modelComplete(taskModelComplete(po, outcome))
                 .violatedSpecCount(po.getViolatedSpecCount())

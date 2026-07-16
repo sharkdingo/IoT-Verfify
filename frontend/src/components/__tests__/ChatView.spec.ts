@@ -105,11 +105,70 @@ describe('ChatView', () => {
     const pending = wrapper.get('[data-testid="chat-assistant-pending"]')
     const pendingBubble = wrapper.get('article.assistant-pending-body')
     expect(pendingBubble.element.contains(pending.element)).toBe(true)
-    expect(pendingBubble.text()).toContain('正在回复')
+    expect(pendingBubble.text()).toContain('执行轨迹')
+    expect(pendingBubble.text()).toContain('已接收请求')
     expect(wrapper.find('.msg-content-wrapper > .thinking-state').exists()).toBe(false)
 
     finishStream()
     await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('keeps a visible execution trace through tool work and after the response completes', async () => {
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onProgress({
+        stage: 'CONTEXT_READY',
+        toolName: null,
+        round: null,
+        outcome: null,
+        successfulSteps: null,
+        failedSteps: null,
+        unconfirmedSteps: null
+      })
+      callbacks.onProgress({
+        stage: 'PLANNING',
+        round: 1,
+        successfulSteps: 0,
+        failedSteps: 0,
+        unconfirmedSteps: 0
+      })
+      callbacks.onProgress({ stage: 'TOOL_EXECUTION', round: 1, toolName: 'add_device' })
+      callbacks.onProgress({
+        stage: 'TOOL_RESULT',
+        round: 1,
+        toolName: 'add_device',
+        outcome: 'USABLE',
+        successfulSteps: 1,
+        failedSteps: 0,
+        unconfirmedSteps: 0
+      })
+      callbacks.onProgress({
+        stage: 'WRITING_RESPONSE',
+        successfulSteps: 1,
+        failedSteps: 0,
+        unconfirmedSteps: 0
+      })
+      callbacks.onMessage('设备已创建。')
+      callbacks.onFinish?.()
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('添加设备')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    const trace = wrapper.get('[data-testid="chat-execution-trace"]')
+    expect(trace.findAll('li')).toHaveLength(5)
+    expect(trace.text()).toContain('第 1 轮：正在执行 add device')
+    expect(trace.text()).toContain('add device 已返回可用结果')
+    expect(trace.text()).toContain('正在根据实际结果组织答复')
+    expect(wrapper.text()).toContain('设备已创建。')
+    expect(wrapper.get('details.chat-execution-trace').attributes('open')).toBeUndefined()
+
     wrapper.unmount()
   })
 

@@ -144,9 +144,14 @@ makes a kept draft structurally importable, but it does not prove that every pro
 response is semantically identical to this fixture. Regenerate a mismatching draft or
 use the canonical JSON route for deterministic acceptance results.
 
-### AI assistant fallback
+### AI assistant demonstration
 
-For a more deterministic tool demonstration, issue separate messages to:
+A single assistant message may request the complete scene. The backend continues tool
+planning while calls or results are changing, and the frontend shows the accumulating
+execution trace throughout the request. A fixed five-round product limit is not part of
+the flow.
+
+For a more deterministic checkpointed demonstration, optionally issue separate messages to:
 
 1. create the four exact device instances;
 2. set the two Environment Pool values and create the three exact rules using the device
@@ -154,8 +159,9 @@ For a more deterministic tool demonstration, issue separate messages to:
 3. create the five structured specifications; and
 4. call `board_overview` and summarize what was actually persisted.
 
-Splitting the request keeps each assistant tool loop within its planning limit and makes
-partial progress visible instead of implying one atomic AI transaction.
+Splitting the request is useful only when the demonstrator wants to inspect persisted
+state between stages. It is not required to bypass an assistant planning limit, and each
+tool mutation remains independently committed rather than forming one atomic transaction.
 
 ## Execute the acceptance flow
 

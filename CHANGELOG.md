@@ -15,6 +15,35 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-17
+
+#### Changed
+- Replaced the assistant's normal five-round planning cutoff with progress-aware
+  continuation, exact repeated-call/result stagnation detection, and a configurable
+  high emergency runaway guard. Long requests now retain full tool capability and still
+  receive a model-written final explanation if a guard stops duplicate execution.
+- Extended the default chat SSE lifetime to 60 minutes and added structured tool-result
+  and execution-guard progress events with cumulative success, failure, and unconfirmed
+  counts.
+- Defaulted Board verification and simulation to background execution while retaining
+  the synchronous options, so users can leave the submit panel, observe progress, and
+  cancel long work without reducing formal-analysis capability.
+
+#### Added
+- Added an accumulating, bilingual execution trace inside the active assistant message.
+  It shows context loading, planning rounds, tool starts and outcomes, retry decisions,
+  and response generation, then remains available as a collapsible record after the
+  response completes without presenting private model chain-of-thought.
+- Added server-observed phase reporting for standalone AI recommendations, automatic-fix
+  searches, and persisted verification/simulation/exploration tasks. The frontend now
+  displays these real phases instead of guessing from elapsed time or showing an
+  indefinite generic spinner.
+
+#### Fixed
+- Made terminal background tasks display their completed, failed, or cancelled status
+  instead of a stale last active phase, and prevented a closing automatic-fix request
+  from stopping progress updates for a newly opened request.
+
 ### 2026-07-16
 
 #### Added

@@ -20,6 +20,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.fix.TemplateSnapshotComparison;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
@@ -52,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 
 @Slf4j
 @Service
@@ -102,17 +104,29 @@ public class FixServiceImpl implements FixService {
     @Override
     public FixResultDto fix(Long userId, Long traceId, List<String> strategies,
                             Map<String, PreferredRange> preferredRanges) {
+        return fix(userId, traceId, strategies, preferredRanges, stage -> { });
+    }
+
+    @Override
+    public FixResultDto fix(Long userId, Long traceId, List<String> strategies,
+                            Map<String, PreferredRange> preferredRanges,
+                            Consumer<InteractiveOperationStage> progressListener) {
+        Consumer<InteractiveOperationStage> progress = Objects.requireNonNull(progressListener);
+        progress.accept(InteractiveOperationStage.PREPARING_CONTEXT);
         strategies = validateRequestedStrategies(strategies);
         validatePreferredRanges(preferredRanges);
         VerificationContext ctx = loadContext(userId, traceId);
         VerificationRequestDto req = ctx.request;
+        progress.accept(InteractiveOperationStage.PREPARING_MODEL);
         ModelBoundaryInput modelInput = modelBoundaryInput(req, ctx.templateManifests);
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
 
         if (!sourceModelComplete(ctx.trace)) {
+            progress.accept(InteractiveOperationStage.FINALIZING);
             return incompleteSourceModelResult(traceId, ctx, strategies, deviceSmvMap);
         }
 
+        progress.accept(InteractiveOperationStage.SEARCHING_AND_VERIFYING);
         FixResultDto result = ruleFixer.fix(
                 traceId,
                 ctx.trace.getViolatedSpecId(),
@@ -131,6 +145,7 @@ public class FixServiceImpl implements FixService {
                 preferredRanges
         );
 
+        progress.accept(InteractiveOperationStage.FINALIZING);
         appendDriftWarningIfNeeded(result, userId, ctx);
         applySourceModelMetadata(result, ctx.trace);
         if (result.getSuggestions() != null) {

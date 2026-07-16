@@ -28,6 +28,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -575,7 +576,7 @@ class FuzzServiceImplTest {
                         .map(FuzzTaskPo::getStatus));
         when(taskRepository.findByIdAndUserId(anyLong(), eq(7L))).thenAnswer(invocation ->
                 Optional.ofNullable(savedTasks.get(invocation.getArgument(0, Long.class))));
-        when(taskRepository.updateProgressIfActive(anyLong(), anyInt())).thenReturn(1);
+        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class))).thenReturn(1);
         when(taskRepository.startTaskIfStillPending(
                 eq(41L), eq(FuzzTaskPo.TaskStatus.RUNNING), any(), anyString(), any(),
                 anyString(), eq(FuzzTaskPo.TaskStatus.PENDING))).thenAnswer(invocation -> {
@@ -1336,7 +1337,7 @@ class FuzzServiceImplTest {
     @Test
     void workerInitializationFailureFailsByTaskIdAndReleasesItsLease() {
         Runnable worker = captureSubmittedWorker();
-        when(taskRepository.updateProgressIfActive(41L, 0))
+        when(taskRepository.updateProgressIfActive(41L, 0, TaskProgressStage.STARTING))
                 .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("jdbc details"));
         when(taskRepository.failTaskIfActive(
                 eq(41L), eq(FuzzTaskPo.TaskStatus.FAILED), any(), any(),
@@ -1357,7 +1358,7 @@ class FuzzServiceImplTest {
     @Test
     void failurePersistenceErrorStillReleasesLeaseForRecovery() {
         Runnable worker = captureSubmittedWorker();
-        when(taskRepository.updateProgressIfActive(41L, 0))
+        when(taskRepository.updateProgressIfActive(41L, 0, TaskProgressStage.STARTING))
                 .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("progress failed"));
         doThrow(new org.springframework.dao.DataAccessResourceFailureException("failure update failed"))
                 .when(taskRepository).failTaskIfActive(
@@ -1489,7 +1490,7 @@ class FuzzServiceImplTest {
         });
         ArgumentCaptor<Runnable> workerCaptor = ArgumentCaptor.forClass(Runnable.class);
 
-        when(taskRepository.updateProgressIfActive(anyLong(), anyInt())).thenReturn(1);
+        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class))).thenReturn(1);
         when(taskRepository.startTaskIfStillPending(
                 anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1);
         when(taskRepository.findById(41L)).thenAnswer(invocation -> {

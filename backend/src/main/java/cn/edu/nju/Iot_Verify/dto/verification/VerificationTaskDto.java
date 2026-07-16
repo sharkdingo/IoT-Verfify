@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.verification;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -98,4 +99,5 @@ public class VerificationTaskDto {
     private String errorMessage;
 
     private Integer progress;
+    private TaskProgressStage progressStage;
 }

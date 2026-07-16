@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
@@ -126,9 +127,9 @@ public interface VerificationService {
      *
      * @param taskId 任务ID
      * @param progress 进度 (0-100)
-     * @param message 进度消息
+     * @param stage stable, localizable execution phase
      */
-    void updateTaskProgress(Long taskId, int progress, String message);
+    void updateTaskProgress(Long taskId, int progress, TaskProgressStage stage);
 
     /**
      * 获取任务进度

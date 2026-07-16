@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
 import org.springframework.data.domain.Pageable;
@@ -180,7 +181,8 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
 
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE FuzzTaskPo t SET t.progress = :progress "
+    @Query("UPDATE FuzzTaskPo t SET t.progress = :progress, t.progressStage = :stage "
          + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
-    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
+    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress,
+                               @Param("stage") TaskProgressStage stage);
 }

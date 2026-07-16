@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -148,9 +149,10 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
      */
     @Transactional
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE VerificationTaskPo t SET t.progress = :progress "
+    @Query("UPDATE VerificationTaskPo t SET t.progress = :progress, t.progressStage = :stage "
          + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
-    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress);
+    int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress,
+                               @Param("stage") TaskProgressStage stage);
 
     /** Persist the assumptions under which this task will run without replacing task state. */
     @Transactional

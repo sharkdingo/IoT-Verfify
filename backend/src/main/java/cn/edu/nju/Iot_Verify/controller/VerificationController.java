@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationResultDto;
@@ -201,7 +202,9 @@ public class VerificationController {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
         var preferredRanges = (request != null) ? preferredRangesFromRequest(request) : null;
         return interactiveFixExecutionService.execute(userId, requestId,
-                () -> Result.success(fixService.fix(userId, id, strategies, preferredRanges)));
+                () -> Result.success(fixService.fix(
+                        userId, id, strategies, preferredRanges,
+                        stage -> interactiveFixExecutionService.markStage(userId, requestId, stage))));
     }
 
     @DeleteMapping("/fix-requests/{requestId}")
@@ -209,6 +212,13 @@ public class VerificationController {
             @CurrentUser Long userId,
             @PathVariable String requestId) {
         return Result.success(interactiveFixExecutionService.cancel(userId, requestId));
+    }
+
+    @GetMapping("/fix-requests/{requestId}")
+    public Result<InteractiveOperationStatusDto> getFixRequestStatus(
+            @CurrentUser Long userId,
+            @PathVariable String requestId) {
+        return Result.success(interactiveFixExecutionService.getStatus(userId, requestId));
     }
 
     /**

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { ModelSemantics } from '@/types/modelSemantics'
 import {
   RUN_RESPONSE_INCOMPLETE_CODE,
+  activeTaskProgressStage,
+  validateInteractiveOperationStatus,
   validateSimulationResult,
   validateSimulationTask,
   validateSimulationTraceSummary,
@@ -313,5 +315,27 @@ describe('verification and simulation response contracts', () => {
     }, 9, 'Task cancellation')).toThrow(expect.objectContaining({
       code: RUN_RESPONSE_INCOMPLETE_CODE
     }))
+  })
+
+  it('validates server-observed interactive operation stages', () => {
+    const status = {
+      requestId: 'request-123',
+      state: 'RUNNING',
+      stage: 'REQUESTING_MODEL',
+      elapsedMs: 1250
+    }
+
+    expect(validateInteractiveOperationStatus(status)).toEqual(status)
+    expect(() => validateInteractiveOperationStatus({
+      ...status,
+      stage: 'THINKING_FOR_A_WHILE'
+    })).toThrow(expect.objectContaining({ code: RUN_RESPONSE_INCOMPLETE_CODE }))
+  })
+
+  it('does not present a stale active phase after a task reaches a terminal state', () => {
+    expect(activeTaskProgressStage('PERSISTING_RESULT', 'RUNNING')).toBe('PERSISTING_RESULT')
+    expect(activeTaskProgressStage('PERSISTING_RESULT', 'COMPLETED')).toBeNull()
+    expect(activeTaskProgressStage('EXPLORING_CANDIDATES', 'FAILED')).toBeNull()
+    expect(activeTaskProgressStage('STARTING', 'CANCELLED')).toBeNull()
   })
 })

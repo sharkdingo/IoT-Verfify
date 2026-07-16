@@ -13,7 +13,7 @@ import type {
 } from '../types/rule'
 import type { DeviceTemplate } from '@/types/device'
 import type { ModelEnvironmentVariable } from '@/types/model'
-import type { TaskCancellationResult } from '@/types/task'
+import type { InteractiveOperationStatus, TaskCancellationResult } from '@/types/task'
 import type { PortableSceneFile } from '@/types/scene'
 import type {
     Trace,
@@ -51,6 +51,7 @@ import {
 } from '@/utils/recommendationMaterialization'
 import {
     validateTaskCancellationResult,
+    validateInteractiveOperationStatus,
     validateTaskProgress,
     validateVerificationTask,
     validateVerificationTaskSummaryList,
@@ -1671,6 +1672,12 @@ export default {
         ));
     },
 
+    getRecommendationStatus: async (requestId: string): Promise<InteractiveOperationStatus> => {
+        return validateInteractiveOperationStatus(unpack<unknown>(await api.get(
+            `/board/recommendations/${encodeURIComponent(requestId)}`
+        )));
+    },
+
     // ==== 故障定位与修复 ====
     /**
      * 获取 Trace 的故障规则定位
@@ -1706,6 +1713,12 @@ export default {
         return unpack<boolean>(await api.delete(
             `/verify/fix-requests/${encodeURIComponent(requestId)}`
         ));
+    },
+
+    getFixRequestStatus: async (requestId: string): Promise<InteractiveOperationStatus> => {
+        return validateInteractiveOperationStatus(unpack<unknown>(await api.get(
+            `/verify/fix-requests/${encodeURIComponent(requestId)}`
+        )));
     },
 
     /** Apply the exact signed suggestion the user reviewed after server-side drift checks. */

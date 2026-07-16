@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import org.junit.jupiter.api.AfterEach;
@@ -13,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -74,6 +76,31 @@ class InteractiveFixExecutionServiceTest {
             awaitRequestIdRelease();
         } finally {
             releaseSearch.countDown();
+        }
+    }
+
+    @Test
+    void statusReportsTheServerObservedStageWhileRunning() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch releaseSearch = new CountDownLatch(1);
+        CompletableFuture<Void> request = CompletableFuture.runAsync(() ->
+                service.execute(1L, "request-123", () -> {
+                    started.countDown();
+                    releaseSearch.await();
+                    return null;
+                }));
+
+        try {
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            service.markStage(1L, "request-123", InteractiveOperationStage.SEARCHING_AND_VERIFYING);
+
+            var status = service.getStatus(1L, "request-123");
+            assertEquals("RUNNING", status.getState());
+            assertEquals(InteractiveOperationStage.SEARCHING_AND_VERIFYING, status.getStage());
+            assertTrue(status.getElapsedMs() >= 0);
+        } finally {
+            releaseSearch.countDown();
+            request.get(2, TimeUnit.SECONDS);
         }
     }
 

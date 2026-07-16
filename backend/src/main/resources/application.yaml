@@ -32,7 +32,10 @@ llm:
   timeout-minutes: ${LLM_TIMEOUT_MINUTES:5}
 
 chat:
-  sse-timeout-ms: ${CHAT_SSE_TIMEOUT_MS:600000}
+  sse-timeout-ms: ${CHAT_SSE_TIMEOUT_MS:3600000}
+  execution:
+    max-tool-rounds: ${CHAT_MAX_TOOL_ROUNDS:64}
+    max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
 
 jwt:
   secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}

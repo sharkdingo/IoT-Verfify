@@ -17,6 +17,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.*;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto;
@@ -385,6 +386,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     .enablePrivacy(enablePrivacy)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
                     .createdAt(LocalDateTime.now())
+                    .progress(0)
+                    .progressStage(TaskProgressStage.QUEUED)
                     .build();
             SimulationTaskPo saved = simulationTaskRepository.save(Objects.requireNonNull(task));
             log.info("Created simulation task: {} for user: {}", saved.getId(), userId);
@@ -482,7 +485,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         String templateSnapshotsJson = JsonUtils.toJson(input.templateManifests());
 
         registerRunningTask(taskId, Thread.currentThread());
-        updateTaskProgress(taskId, 0, "Task started");
+        updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
 
         SimulationTaskPo task = null;
         try {
@@ -513,7 +516,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 return;
             }
 
-            updateTaskProgress(taskId, 20, "Executing simulation");
+            updateTaskProgress(taskId, 20, TaskProgressStage.RUNNING_SIMULATION);
             SimulationResultDto result = doSimulate(userId, input.devices(), input.rules(), input.steps(),
                     input.attack(), input.attackBudget(), input.enablePrivacy(), input.request(),
                     input.deviceSmvMap(), input.modelSnapshot(), SmvGenerator.TempModelContext.task(taskId));
@@ -527,7 +530,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 return;
             }
 
-            updateTaskProgress(taskId, 90, "Persisting simulation trace");
+            updateTaskProgress(taskId, 90, TaskProgressStage.PERSISTING_RESULT);
             boolean completed = completeTaskAndSaveTrace(task, userId, result, requestJson, templateSnapshotsJson);
             if (!completed && !isCompletionCancelled(taskId)) {
                 failTask(task,
@@ -1114,7 +1117,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     @Override
-    protected int atomicUpdateProgress(Long taskId, int progress) {
-        return simulationTaskRepository.updateProgressIfActive(taskId, progress);
+    protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
+        return simulationTaskRepository.updateProgressIfActive(taskId, progress, stage);
     }
 }

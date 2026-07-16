@@ -209,6 +209,7 @@ const inputValue = ref('');
 const isStreaming = ref(false);
 const isSettlingStream = ref(false);
 const streamProgress = ref<StreamProgress | null>(null);
+const streamProgressEvents = ref<StreamProgress[]>([]);
 const streamElapsedSeconds = ref(0);
 let streamElapsedTimer: ReturnType<typeof setInterval> | null = null;
 const reconciliationRequired = ref(false);
@@ -218,18 +219,79 @@ const isLoadingHistory = ref(false);
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || reconciliationRequired.value);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
-const streamProgressText = computed(() => {
-  const progress = streamProgress.value;
-  if (!progress) return '';
+const readableToolName = (progress: StreamProgress) =>
+    (progress.toolName || t('app.chat.progressUnknownTool')).replace(/_/g, ' ');
+const formatStreamProgress = (progress: StreamProgress) => {
   if (progress.stage === 'TOOL_EXECUTION') {
-    return t('app.chat.progressExecutingTool', { tool: progress.toolName || t('app.chat.progressUnknownTool') });
+    return t('app.chat.progressExecutingTool', {
+      round: progress.round || 1,
+      tool: readableToolName(progress)
+    });
+  }
+  if (progress.stage === 'TOOL_RESULT') {
+    const params = {
+      round: progress.round || 1,
+      tool: readableToolName(progress),
+      successful: progress.successfulSteps ?? 0,
+      failed: progress.failedSteps ?? 0,
+      unconfirmed: progress.unconfirmedSteps ?? 0
+    };
+    if (progress.outcome === 'FAILED') return t('app.chat.progressToolFailed', params);
+    if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressToolUnconfirmed', params);
+    if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressToolNeedsConfirmation', params);
+    return t('app.chat.progressToolSucceeded', params);
+  }
+  if (progress.stage === 'EXECUTION_GUARD') {
+    return progress.outcome === 'NO_PROGRESS'
+        ? t('app.chat.progressNoProgressGuard')
+        : t('app.chat.progressEmergencyGuard');
   }
   if (progress.stage === 'PLANNING') {
-    return t('app.chat.progressPlanning', { round: progress.round || 1 });
+    return t('app.chat.progressPlanning', {
+      round: progress.round || 1,
+      successful: progress.successfulSteps ?? 0,
+      failed: progress.failedSteps ?? 0,
+      unconfirmed: progress.unconfirmedSteps ?? 0
+    });
   }
   if (progress.stage === 'WRITING_RESPONSE') return t('app.chat.progressWritingResponse');
   return t('app.chat.progressContextReady');
+};
+const progressEventClass = (progress: StreamProgress) => ({
+  'is-success': progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE',
+  'is-warning': progress.stage === 'EXECUTION_GUARD'
+      || progress.outcome === 'RESULT_UNAVAILABLE'
+      || progress.outcome === 'CONFIRMATION_REQUIRED',
+  'is-error': progress.stage === 'TOOL_RESULT' && progress.outcome === 'FAILED',
+  'is-current': progress === streamProgressEvents.value[streamProgressEvents.value.length - 1]
 });
+const appendStreamProgress = (progress: StreamProgress) => {
+  streamProgress.value = progress;
+  const previous = streamProgressEvents.value[streamProgressEvents.value.length - 1];
+  if (previous
+      && previous.stage === progress.stage
+      && (previous.toolName ?? null) === (progress.toolName ?? null)
+      && (previous.round ?? null) === (progress.round ?? null)
+      && (previous.outcome ?? null) === (progress.outcome ?? null)
+      && (previous.successfulSteps ?? null) === (progress.successfulSteps ?? null)
+      && (previous.failedSteps ?? null) === (progress.failedSteps ?? null)
+      && (previous.unconfirmedSteps ?? null) === (progress.unconfirmedSteps ?? null)) {
+    return;
+  }
+  streamProgressEvents.value.push({ ...progress });
+  nextTick(() => {
+    const activeTrace = chatPanelRef.value?.querySelector<HTMLElement>(
+        '[data-testid="chat-assistant-pending"] .chat-execution-events');
+    if (activeTrace) activeTrace.scrollTop = activeTrace.scrollHeight;
+    scrollToBottom(false);
+  });
+};
+const isActiveAssistantMessage = (index: number) =>
+    isStreaming.value && index === messages.value.length - 1;
+const messageExecutionTrace = (message: ChatMessage, index: number) =>
+    isActiveAssistantMessage(index) ? streamProgressEvents.value : (message.executionTrace ?? []);
+const messageExecutionElapsed = (message: ChatMessage, index: number) =>
+    isActiveAssistantMessage(index) ? streamElapsedSeconds.value : (message.executionElapsedSeconds ?? 0);
 watch(isAssistantBusy, busy => chatStore.setStreaming(busy), { immediate: true });
 const scrollRef = ref<HTMLElement | null>(null);
 const chatPanelRef = ref<HTMLElement | null>(null);
@@ -912,7 +974,8 @@ const handleSend = async () => {
   let hasReceivedContent = false;
   let streamErrorHandled = false;
   let aiMsgIndex = -1;
-  streamProgress.value = { stage: 'CONTEXT_READY' };
+  streamProgressEvents.value = [];
+  appendStreamProgress({ stage: 'CONTEXT_READY' });
   streamElapsedSeconds.value = 0;
   const streamStartedAt = Date.now();
   if (streamElapsedTimer) clearInterval(streamElapsedTimer);
@@ -939,7 +1002,11 @@ const handleSend = async () => {
     activeStreamSessionId.value = targetSessionId;
 
     // 先插入一条空的 AI 消息占位
-    aiMsgIndex = messages.value.push({role: 'assistant', content: ''}) - 1;
+    aiMsgIndex = messages.value.push({
+      role: 'assistant',
+      content: '',
+      executionTrace: [...streamProgressEvents.value]
+    }) - 1;
     scrollToBottom(true);
 
     const renderStreamError = (error: unknown) => {
@@ -967,7 +1034,6 @@ const handleSend = async () => {
         {
           onMessage: (chunk) => {
             if (requestEpoch !== streamRequestEpoch) return;
-            streamProgress.value = null;
             const cleanChunk = chunk.replace('CallEnd|>', '');
             if (!cleanChunk) return;
 
@@ -984,7 +1050,9 @@ const handleSend = async () => {
           },
           onProgress: (progress: StreamProgress) => {
             if (requestEpoch !== streamRequestEpoch) return;
-            streamProgress.value = progress;
+            appendStreamProgress(progress);
+            const msg = messages.value[aiMsgIndex];
+            if (msg) msg.executionTrace = [...streamProgressEvents.value];
           },
           onError: (err: any) => {
             if (requestEpoch !== streamRequestEpoch) return;
@@ -1014,6 +1082,11 @@ const handleSend = async () => {
       await commandExecutionChain;
       isStreaming.value = false;
       streamProgress.value = null;
+      const completedMessage = messages.value[aiMsgIndex];
+      if (completedMessage) {
+        completedMessage.executionTrace = [...streamProgressEvents.value];
+        completedMessage.executionElapsedSeconds = streamElapsedSeconds.value;
+      }
       if (streamElapsedTimer) {
         clearInterval(streamElapsedTimer);
         streamElapsedTimer = null;
@@ -1244,19 +1317,6 @@ const scrollToBottom = (force = false) => {
               <span class="thinking-text">{{ t('app.chat.loadingConversation') }}</span>
               <div class="typing-indicator"><span></span><span></span><span></span></div>
             </div>
-            <div
-              v-else-if="isStreaming && streamProgress"
-              class="chat-progress-state"
-              role="status"
-              aria-live="polite"
-            >
-              <RobotOutlined class="thinking-avatar" />
-              <div>
-                <strong>{{ streamProgressText }}</strong>
-                <p>{{ t('app.chat.progressElapsed', { seconds: streamElapsedSeconds }) }}</p>
-              </div>
-              <div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
-            </div>
             <div v-else-if="isSettlingStream" class="thinking-state" role="status" aria-live="polite">
               <RobotOutlined class="thinking-avatar" />
               <span>{{ t('app.chat.waitingForServerToStop') }}</span>
@@ -1302,21 +1362,40 @@ const scrollToBottom = (force = false) => {
                     :class="[
                       'msg-body',
                       'vue-markdown-wrapper',
-                      { 'assistant-pending-body': isStreaming && !msg.content && index === messages.length - 1 }
+                      { 'assistant-pending-body': isStreaming && index === messages.length - 1 }
                     ]"
-                    :aria-busy="isStreaming && !msg.content && index === messages.length - 1 ? 'true' : undefined"
+                    :aria-busy="isStreaming && index === messages.length - 1 ? 'true' : undefined"
                   >
-                    <div
-                      v-if="isStreaming && !msg.content && index === messages.length - 1"
-                      class="thinking-state"
-                      data-testid="chat-assistant-pending"
-                      role="status"
-                      aria-live="polite"
+                    <details
+                      v-if="messageExecutionTrace(msg, index).length"
+                      class="chat-execution-trace"
+                      :open="isActiveAssistantMessage(index)"
+                      :data-testid="isActiveAssistantMessage(index) ? 'chat-assistant-pending' : undefined"
+                      :role="isActiveAssistantMessage(index) ? 'status' : undefined"
+                      :aria-live="isActiveAssistantMessage(index) ? 'polite' : undefined"
+                      aria-atomic="false"
                     >
-                      <span class="thinking-text">{{ t('app.chat.thinking') }}</span>
-                      <div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
-                    </div>
-                    <ChatMarkdown v-else :source="getProcessedContent(msg.content) || ''" />
+                      <summary class="chat-execution-header">
+                        <div>
+                          <strong>{{ t('app.chat.executionTraceTitle') }}</strong>
+                          <p>{{ t('app.chat.progressElapsed', { seconds: messageExecutionElapsed(msg, index) }) }}</p>
+                        </div>
+                        <div v-if="isActiveAssistantMessage(index)" class="typing-indicator" aria-hidden="true">
+                          <span></span><span></span><span></span>
+                        </div>
+                      </summary>
+                      <ol class="chat-execution-events" data-testid="chat-execution-trace">
+                        <li
+                          v-for="(progress, progressIndex) in messageExecutionTrace(msg, index)"
+                          :key="`${progress.stage}-${progress.round || 0}-${progress.toolName || ''}-${progressIndex}`"
+                          :class="progressEventClass(progress)"
+                        >
+                          <span class="chat-execution-dot" aria-hidden="true"></span>
+                          <span>{{ formatStreamProgress(progress) }}</span>
+                        </li>
+                      </ol>
+                    </details>
+                    <ChatMarkdown v-if="msg.content" :source="getProcessedContent(msg.content) || ''" />
                   </article>
 
                   <div v-if="msg.role === 'assistant' && msg.content && !isStreaming" class="msg-actions">
@@ -2048,27 +2127,85 @@ const scrollToBottom = (force = false) => {
   font-size: 0.8rem;
 }
 
-.chat-progress-state {
-  max-width: 48rem;
-  margin: 0.75rem auto;
-  padding: 0.65rem 0.8rem;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  border-left: 3px solid var(--chat-accent);
-  background: color-mix(in srgb, var(--chat-accent) 7%, var(--chat-ai-bg));
+.chat-execution-trace {
+  min-width: min(30rem, 72vw);
   color: var(--chat-text);
   font-size: 0.8rem;
 }
 
-.chat-progress-state p {
+.chat-execution-header {
+  cursor: pointer;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--chat-border);
+}
+
+.chat-execution-header::marker {
+  color: var(--chat-accent);
+}
+
+.chat-execution-header > div:first-child {
+  display: inline-block;
+  margin-left: 0.25rem;
+}
+
+.chat-execution-header .typing-indicator {
+  float: right;
+  margin-top: 0.45rem;
+}
+
+.chat-execution-header p {
   margin: 0.15rem 0 0;
   color: var(--chat-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.chat-progress-state .typing-indicator {
-  margin-left: auto;
+.chat-execution-events {
+  max-height: 14rem;
+  margin: 0.55rem 0 0;
+  padding: 0 0 0 0.15rem;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.chat-execution-trace + .chat-markdown-stub,
+.chat-execution-trace + :deep(.markdown-body) {
+  margin-top: 0.75rem;
+}
+
+.chat-execution-events li {
+  display: grid;
+  grid-template-columns: 0.65rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  color: var(--chat-muted);
+  line-height: 1.45;
+}
+
+.chat-execution-events li.is-current {
+  color: var(--chat-text);
+  font-weight: 600;
+}
+
+.chat-execution-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-top: 0.35rem;
+  border-radius: 50%;
+  background: var(--chat-muted);
+}
+
+.chat-execution-events li.is-success .chat-execution-dot {
+  background: var(--chat-success);
+}
+
+.chat-execution-events li.is-warning .chat-execution-dot {
+  background: #d97706;
+}
+
+.chat-execution-events li.is-error .chat-execution-dot {
+  background: #dc2626;
 }
 
 .reconciliation-state p {

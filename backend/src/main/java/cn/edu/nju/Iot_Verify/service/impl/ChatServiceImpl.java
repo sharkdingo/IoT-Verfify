@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
@@ -59,7 +60,6 @@ import java.util.concurrent.ConcurrentMap;
 @RequiredArgsConstructor
 public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
-    private static final int MAX_TOOL_ROUNDS = 5;
     private static final int HISTORY_CHAR_LIMIT = 4000;
 
     private final ChatSessionRepository sessionRepo;
@@ -73,6 +73,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private final ObjectMapper objectMapper;
     private final ChatMapper chatMapper;
     private final TransactionTemplate transactionTemplate;
+    private final ChatExecutionConfig chatExecutionConfig;
     private final ConcurrentMap<String, ActiveStreamRequest> activeStreamRequests = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
 
@@ -255,22 +256,18 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 finalAnswer.append(executionNotice);
             }
 
-            boolean finalResponseProduced = false;
-            if (loopResult.reachedMaxRounds()) {
-                String fallbackText = maxRoundsFallback(loopResult, preferChinese);
-                if (sendSseChunk(emitter, fallbackText)) {
-                    finalAnswer.append(fallbackText);
-                    finalResponseProduced = true;
-                }
-            } else {
-                int replyStart = finalAnswer.length();
-                if (!sendSseProgress(emitter, "WRITING_RESPONSE", null, null)) {
-                    isDisconnect.set(true);
-                    return;
-                }
-                streamAssistantReply(withVisibleReplyPrompt(messages, loopResult.hadToolCalls()), finalAnswer, emitter, isDisconnect);
-                finalResponseProduced = finalAnswer.length() > replyStart;
+            String guardNotice = executionGuardNotice(loopResult, preferChinese);
+            if (!guardNotice.isBlank() && sendSseChunk(emitter, guardNotice)) {
+                finalAnswer.append(guardNotice);
             }
+
+            int replyStart = finalAnswer.length();
+            if (!sendSseProgress(emitter, "WRITING_RESPONSE", null, null, null, loopResult)) {
+                isDisconnect.set(true);
+                return;
+            }
+            streamAssistantReply(withVisibleReplyPrompt(messages, loopResult), finalAnswer, emitter, isDisconnect);
+            boolean finalResponseProduced = finalAnswer.length() > replyStart;
 
             if (!finalResponseProduced && !isDisconnect.get()) {
                 String fallbackText = missingFinalResponseFallback(loopResult, preferChinese);
@@ -425,9 +422,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return LlmMessage.system(systemPromptContent);
     }
 
-    private List<LlmMessage> withVisibleReplyPrompt(List<LlmMessage> messages, boolean afterToolExecution) {
+    private List<LlmMessage> withVisibleReplyPrompt(List<LlmMessage> messages, ToolLoopResult loopResult) {
         List<LlmMessage> finalMessages = new ArrayList<>();
-        finalMessages.add(buildVisibleReplySystemPrompt(afterToolExecution));
+        finalMessages.add(buildVisibleReplySystemPrompt(loopResult.hadToolCalls()));
+        if (loopResult.stoppedForNoProgress()) {
+            finalMessages.add(LlmMessage.system("Further tool calls were stopped only because consecutive rounds "
+                    + "repeated the exact same calls and results. Summarize completed, failed, and unfinished work "
+                    + "accurately. Do not claim that the full request completed."));
+        } else if (loopResult.reachedEmergencyLimit()) {
+            finalMessages.add(LlmMessage.system("The emergency runaway guard stopped further tool calls. Summarize "
+                    + "completed, failed, and unfinished work accurately. Do not claim that the full request completed."));
+        }
         if (messages != null && messages.size() > 1) {
             finalMessages.addAll(messages.subList(1, messages.size()));
         }
@@ -447,30 +452,35 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         int resultUnavailableToolCalls = 0;
         int uncertainMutationCalls = 0;
         boolean confirmationPending = false;
+        String previousRoundFingerprint = null;
+        int stagnantRoundCount = 0;
 
-        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        for (int round = 0; round < chatExecutionConfig.getMaxToolRounds(); round++) {
             if (isDisconnect.get()) {
                 log.info("Client disconnected, stopping tool loop");
-                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
-            if (!sendSseProgress(emitter, "PLANNING", null, round + 1)) {
+            ToolLoopResult currentResult = new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED,
+                    successfulToolCalls, failedToolCalls, resultUnavailableToolCalls,
+                    uncertainMutationCalls, confirmationPending);
+            if (!sendSseProgress(emitter, "PLANNING", null, round + 1, null, currentResult)) {
                 isDisconnect.set(true);
-                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
             LlmChatResponse response = llmChatService.chatWithTools(messages, tools);
             if (isDisconnect.get()) {
                 log.info("Chat execution stopped after tool planning for session {}", sessionId);
-                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
             if (response == null) {
                 log.warn("LLM provider returned null tool-planning response");
-                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.PROVIDER_UNAVAILABLE, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
@@ -481,7 +491,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 if (!aiText.isBlank()) {
                     log.debug("Tool planning completed with final text; regenerating visible answer through streaming.");
                 }
-                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
@@ -490,11 +500,12 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             executeOwnedSessionWrite(userId, sessionId, () ->
                     saveAiToolCallRequest(sessionId, toolCalls));
             messages.add(LlmMessage.assistantToolCalls(toolCalls));
+            StringBuilder roundFingerprint = new StringBuilder();
 
             for (LlmToolCall toolCall : toolCalls) {
                 if (isDisconnect.get()) {
                     log.info("Client disconnected, stopping remaining tool calls");
-                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                    return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                             confirmationPending);
                 }
@@ -511,16 +522,20 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     toolResult = jsonError("Invalid tool call: missing function name.", "VALIDATION_ERROR", 400);
                     executionOutcome = ToolExecutionOutcome.FAILED;
                 } else {
-                    if (!sendSseProgress(emitter, "TOOL_EXECUTION", functionName, round + 1)) {
+                    currentResult = new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED,
+                            successfulToolCalls, failedToolCalls, resultUnavailableToolCalls,
+                            uncertainMutationCalls, confirmationPending);
+                    if (!sendSseProgress(emitter, "TOOL_EXECUTION", functionName, round + 1,
+                            null, currentResult)) {
                         isDisconnect.set(true);
-                        return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                                 failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                                 confirmationPending);
                     }
                     toolResult = aiToolManager.execute(functionName, argsJson);
                     if (isDisconnect.get()) {
                         log.info("Chat execution stopped after tool execution for session {}", sessionId);
-                        return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
                                 failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                                 confirmationPending);
                     }
@@ -550,21 +565,65 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 executeOwnedSessionWrite(userId, sessionId, () ->
                         saveToolExecutionResult(sessionId, toolCallId, finalToolResult));
                 messages.add(LlmMessage.tool(toolCallId, toolResult));
+                roundFingerprint.append(functionName).append('\u001f')
+                        .append(argsJson).append('\u001f')
+                        .append(executionOutcome.name()).append('\u001f')
+                        .append(toolResult).append('\u001e');
+
+                currentResult = new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED,
+                        successfulToolCalls, failedToolCalls, resultUnavailableToolCalls,
+                        uncertainMutationCalls, confirmationPending);
+                String progressOutcome = requiresConfirmation
+                        ? "CONFIRMATION_REQUIRED" : executionOutcome.name();
+                if (!sendSseProgress(emitter, "TOOL_RESULT", functionName, round + 1,
+                        progressOutcome, currentResult)) {
+                    isDisconnect.set(true);
+                    return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
+                            failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                            confirmationPending);
+                }
                 if (requiresConfirmation) {
-                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                    return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.CONFIRMATION_REQUIRED,
+                            successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, true);
                 }
                 if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
-                    return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                    return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.RESULT_UNAVAILABLE,
+                            successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, false);
                 }
             }
+
+            String fingerprint = roundFingerprint.toString();
+            if (fingerprint.equals(previousRoundFingerprint)) {
+                stagnantRoundCount++;
+            } else {
+                previousRoundFingerprint = fingerprint;
+                stagnantRoundCount = 0;
+            }
+            if (stagnantRoundCount >= chatExecutionConfig.getMaxStagnantRounds()) {
+                log.warn("Tool call loop stopped after {} repeated no-progress round(s)", stagnantRoundCount);
+                ToolLoopResult guardResult = new ToolLoopResult(hadToolCalls, ToolLoopStopReason.NO_PROGRESS,
+                        successfulToolCalls, failedToolCalls, resultUnavailableToolCalls,
+                        uncertainMutationCalls, confirmationPending);
+                if (!sendSseProgress(emitter, "EXECUTION_GUARD", null, round + 1,
+                        "NO_PROGRESS", guardResult)) {
+                    isDisconnect.set(true);
+                }
+                return guardResult;
+            }
         }
 
-        log.warn("Tool call loop reached max rounds: {}", MAX_TOOL_ROUNDS);
-        return new ToolLoopResult(hadToolCalls, true, successfulToolCalls,
+        log.warn("Tool call loop reached emergency max rounds: {}", chatExecutionConfig.getMaxToolRounds());
+        ToolLoopResult guardResult = new ToolLoopResult(hadToolCalls, ToolLoopStopReason.EMERGENCY_LIMIT,
+                successfulToolCalls,
                 failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                 confirmationPending);
+        if (!sendSseProgress(emitter, "EXECUTION_GUARD", null, chatExecutionConfig.getMaxToolRounds(),
+                "EMERGENCY_LIMIT", guardResult)) {
+            isDisconnect.set(true);
+        }
+        return guardResult;
     }
 
     private void streamAssistantReply(List<LlmMessage> messages,
@@ -641,9 +700,26 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private boolean sendSseProgress(SseEmitter emitter, String stage, String toolName, Integer round) {
+        return sendSseProgress(emitter, stage, toolName, round, null, null);
+    }
+
+    private boolean sendSseProgress(SseEmitter emitter,
+                                    String stage,
+                                    String toolName,
+                                    Integer round,
+                                    String outcome,
+                                    ToolLoopResult result) {
         try {
             emitter.send(SseEmitter.event()
-                    .data(StreamResponseDto.progress(stage, toolName, round), MediaType.APPLICATION_JSON));
+                    .data(StreamResponseDto.progress(
+                            stage,
+                            toolName,
+                            round,
+                            outcome,
+                            result == null ? null : result.successfulToolCalls(),
+                            result == null ? null : result.failedToolCalls(),
+                            result == null ? null : result.resultUnavailableToolCalls()
+                    ), MediaType.APPLICATION_JSON));
             return true;
         } catch (IOException | IllegalStateException e) {
             log.debug("Failed to send chat progress stage {}: {}", stage, e.toString());
@@ -784,20 +860,20 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         return notices.isEmpty() ? "" : String.join(" ", notices) + "\n\n";
     }
 
-    private String maxRoundsFallback(ToolLoopResult result, boolean preferChinese) {
-        if (preferChinese) {
-            return "助手已达到 " + MAX_TOOL_ROUNDS + " 轮规划上限：已获得 "
-                    + result.successfulToolCalls() + " 个可用工具结果、"
-                    + result.failedToolCalls() + " 个失败步骤和 "
-                    + result.resultUnavailableToolCalls() + " 个结果未确认步骤。后续步骤未再尝试。"
-                    + "请求可能只完成了一部分；继续前请检查刷新后的当前状态。";
+    private String executionGuardNotice(ToolLoopResult result, boolean preferChinese) {
+        if (result == null || (!result.stoppedForNoProgress() && !result.reachedEmergencyLimit())) {
+            return "";
         }
-        return "The assistant reached its " + MAX_TOOL_ROUNDS + "-round planning limit after "
-                + result.successfulToolCalls() + " usable tool result(s) and "
-                + result.failedToolCalls() + " failed tool step(s), with "
-                + result.resultUnavailableToolCalls() + " unconfirmed result(s). No further steps were attempted. "
-                + "Some requested work may therefore be incomplete; review the refreshed current state "
-                + "before continuing.";
+        if (result.stoppedForNoProgress()) {
+            return preferChinese
+                    ? "检测到连续多轮完全相同的工具调用和结果，已停止重复执行；正在整理已完成、失败和未完成的步骤。\n\n"
+                    : "Consecutive rounds repeated the exact same tool calls and results, so duplicate execution stopped. "
+                        + "The assistant is now summarizing completed, failed, and unfinished steps.\n\n";
+        }
+        return preferChinese
+                ? "任务触发了异常循环安全保护；此前步骤不会回滚，助手正在整理已完成、失败和未完成的内容。\n\n"
+                : "The task reached the emergency runaway guard. Earlier steps were not rolled back; the assistant "
+                    + "is now summarizing completed, failed, and unfinished work.\n\n";
     }
 
     private String missingFinalResponseFallback(ToolLoopResult result, boolean preferChinese) {
@@ -1095,15 +1171,33 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         RESULT_UNAVAILABLE
     }
 
+    private enum ToolLoopStopReason {
+        COMPLETED,
+        DISCONNECTED,
+        PROVIDER_UNAVAILABLE,
+        CONFIRMATION_REQUIRED,
+        RESULT_UNAVAILABLE,
+        NO_PROGRESS,
+        EMERGENCY_LIMIT
+    }
+
     private record ToolLoopResult(boolean hadToolCalls,
-                                  boolean reachedMaxRounds,
+                                  ToolLoopStopReason stopReason,
                                   int successfulToolCalls,
                                   int failedToolCalls,
                                   int resultUnavailableToolCalls,
                                   int uncertainMutationCalls,
                                   boolean confirmationPending) {
+        private boolean stoppedForNoProgress() {
+            return stopReason == ToolLoopStopReason.NO_PROGRESS;
+        }
+
+        private boolean reachedEmergencyLimit() {
+            return stopReason == ToolLoopStopReason.EMERGENCY_LIMIT;
+        }
+
         private static ToolLoopResult empty() {
-            return new ToolLoopResult(false, false, 0, 0, 0, 0, false);
+            return new ToolLoopResult(false, ToolLoopStopReason.COMPLETED, 0, 0, 0, 0, false);
         }
     }
 }

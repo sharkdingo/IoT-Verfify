@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.po;
 
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -111,6 +112,10 @@ public class VerificationTaskPo implements TaskView {
 
     /** 0-100 progress percentage, persisted for multi-instance visibility */
     private Integer progress;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "progress_stage", length = 40)
+    private TaskProgressStage progressStage;
 
     @Override
     public boolean isTerminalStatus() {

@@ -5,9 +5,11 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public interface FixService {
 
@@ -21,6 +23,10 @@ public interface FixService {
      * (may invoke NuSMV multiple times).
      */
     FixResultDto fix(Long userId, Long traceId, List<String> strategies, Map<String, PreferredRange> preferredRanges);
+
+    FixResultDto fix(Long userId, Long traceId, List<String> strategies,
+                     Map<String, PreferredRange> preferredRanges,
+                     Consumer<InteractiveOperationStage> progressListener);
 
     /**
      * Apply a repair strategy to the user's persisted board rules.

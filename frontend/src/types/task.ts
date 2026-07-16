@@ -1,5 +1,34 @@
 export type AsyncTaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
 
+export type TaskProgressStage =
+  | 'QUEUED'
+  | 'STARTING'
+  | 'GENERATING_MODEL'
+  | 'EXECUTING_MODEL_CHECKER'
+  | 'PARSING_RESULTS'
+  | 'RUNNING_SIMULATION'
+  | 'PREPARING_EXPLORATION'
+  | 'EXPLORING_CANDIDATES'
+  | 'PERSISTING_RESULT'
+
+export type InteractiveOperationStage =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'PREPARING_CONTEXT'
+  | 'REQUESTING_MODEL'
+  | 'VALIDATING_RESULT'
+  | 'PREPARING_MODEL'
+  | 'SEARCHING_AND_VERIFYING'
+  | 'FINALIZING'
+  | 'CANCELLING'
+
+export interface InteractiveOperationStatus {
+  requestId: string
+  state: 'WAITING' | 'RUNNING' | 'FINISHED'
+  stage: InteractiveOperationStage
+  elapsedMs: number
+}
+
 export type TaskCancellationOutcome =
   | 'ACCEPTED'
   | 'ALREADY_CANCELLED'

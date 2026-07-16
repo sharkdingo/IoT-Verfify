@@ -66,6 +66,7 @@ Verified against code on 2026-07-16.
 | POST | `/api/board/rules/check-similarity` | Explicit AI rule-similarity check available from `RuleBuilderDialog` | `docs/api/board.md` |
 | GET | `/api/board/specs/recommend` | AI specification recommendations | `docs/api/board.md` |
 | POST | `/api/board/scenario/recommend` | AI importable scene-draft recommendation | `docs/api/board.md` |
+| GET | `/api/board/recommendations/{requestId}` | Read the server-observed stage of an in-flight standalone recommendation | `docs/api/board.md` |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancel an in-flight standalone recommendation | `docs/api/board.md` |
 
 ## Verification — `VerificationController`
@@ -88,6 +89,7 @@ Verified against code on 2026-07-16.
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}/fault-rules` | Counterexample rule involvement with source-model completeness and limitations | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix` | Generate signed fix suggestions | `docs/api/verification.md` |
+| GET | `/api/verify/fix-requests/{requestId}` | Read the server-observed stage of an in-flight fix search | `docs/api/verification.md` |
 | DELETE | `/api/verify/fix-requests/{requestId}` | Cancel an in-flight fix search | `docs/api/verification.md` |
 | POST | `/api/verify/traces/{id}/fix/apply` | Apply the exact signed suggestion after snapshot checks | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}/traces` | Traces for a specific async verification task | `docs/api/verification.md` |

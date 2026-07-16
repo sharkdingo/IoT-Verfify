@@ -7,6 +7,8 @@ import type {
 } from '@/types/simulation'
 import type {
   AsyncTaskStatus,
+  InteractiveOperationStatus,
+  TaskProgressStage,
   TaskCancellationOutcome,
   TaskCancellationResult
 } from '@/types/task'
@@ -250,7 +252,39 @@ const TASK_STATUSES = new Set<AsyncTaskStatus>([
   'CANCELLED'
 ])
 
+const TASK_PROGRESS_STAGES = new Set<TaskProgressStage>([
+  'QUEUED',
+  'STARTING',
+  'GENERATING_MODEL',
+  'EXECUTING_MODEL_CHECKER',
+  'PARSING_RESULTS',
+  'RUNNING_SIMULATION',
+  'PREPARING_EXPLORATION',
+  'EXPLORING_CANDIDATES',
+  'PERSISTING_RESULT'
+])
+
+const INTERACTIVE_OPERATION_STAGES = new Set([
+  'QUEUED',
+  'RUNNING',
+  'PREPARING_CONTEXT',
+  'REQUESTING_MODEL',
+  'VALIDATING_RESULT',
+  'PREPARING_MODEL',
+  'SEARCHING_AND_VERIFYING',
+  'FINALIZING',
+  'CANCELLING'
+])
+
 const TERMINAL_TASK_STATUSES = new Set<AsyncTaskStatus>(['COMPLETED', 'FAILED', 'CANCELLED'])
+
+export const activeTaskProgressStage = (
+  stage?: TaskProgressStage | null,
+  status?: AsyncTaskStatus | string
+): TaskProgressStage | null => {
+  if (!stage || (status && TERMINAL_TASK_STATUSES.has(status as AsyncTaskStatus))) return null
+  return stage
+}
 
 const validateTaskBase = (value: unknown, context: string): Record<string, any> => {
   const task = requireRecord(value, context)
@@ -268,6 +302,10 @@ const validateTaskBase = (value: unknown, context: string): Record<string, any> 
   }
   if (task.progress !== undefined && task.progress !== null) {
     requireIntegerInRange(task, 'progress', context, 0, 100)
+  }
+  if (task.progressStage !== undefined && task.progressStage !== null
+    && !TASK_PROGRESS_STAGES.has(task.progressStage)) {
+    throw new RunResponseContractError(context, 'progressStage is invalid')
   }
   if (status === 'RUNNING' || status === 'COMPLETED') {
     requireString(task, 'startedAt', context, false)
@@ -354,6 +392,20 @@ export const validateTaskProgress = (value: unknown, context: string): number =>
     throw new RunResponseContractError(context, 'progress must be an integer between 0 and 100')
   }
   return value as number
+}
+
+export const validateInteractiveOperationStatus = (value: unknown): InteractiveOperationStatus => {
+  const context = 'Interactive operation status'
+  const status = requireRecord(value, context)
+  requireString(status, 'requestId', context, false)
+  if (!['WAITING', 'RUNNING', 'FINISHED'].includes(status.state)) {
+    throw new RunResponseContractError(context, 'state is invalid')
+  }
+  if (!INTERACTIVE_OPERATION_STAGES.has(status.stage)) {
+    throw new RunResponseContractError(context, 'stage is invalid')
+  }
+  requireInteger(status, 'elapsedMs', context)
+  return status as unknown as InteractiveOperationStatus
 }
 
 export const validateTaskCancellationResult = (

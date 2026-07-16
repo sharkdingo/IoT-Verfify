@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -694,6 +695,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .enablePrivacy(enablePrivacy)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
                     .createdAt(LocalDateTime.now())
+                    .progress(0)
+                    .progressStage(TaskProgressStage.QUEUED)
                     .build();
             VerificationTaskPo saved = taskRepository.save(Objects.requireNonNull(task));
             log.info("Created verification task: {} for user: {}", saved.getId(), userId);
@@ -750,7 +753,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         log.info("Starting async verification task: {} for user: {}", taskId, userId);
 
         registerRunningTask(taskId, Thread.currentThread());
-        updateTaskProgress(taskId, 0, "Task started");
+        updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
 
         File smvFile = null;
         VerificationTaskPo task = null;
@@ -783,7 +786,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 return;
             }
 
-            updateTaskProgress(taskId, 20, "Generating NuSMV model");
+            updateTaskProgress(taskId, 20, TaskProgressStage.GENERATING_MODEL);
             SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
                     userId, input.devices(), input.request().getEnvironmentVariables(), input.rules(), input.specs(),
                     input.attack(), input.attackBudget(), input.enablePrivacy(), SmvGenerator.GeneratePurpose.VERIFICATION,
@@ -806,7 +809,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             saveRequestJson(smvFile, requestJson);
 
 
-            updateTaskProgress(taskId, 50, "Executing NuSMV");
+            updateTaskProgress(taskId, 50, TaskProgressStage.EXECUTING_MODEL_CHECKER);
             checkLogs.add("Executing NuSMV verification...");
             NusmvResult result = nusmvExecutor.execute(smvFile);
 
@@ -822,7 +825,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
             checkLogs.add("NuSMV execution completed.");
 
-            updateTaskProgress(taskId, 80, "Parsing results");
+            updateTaskProgress(taskId, 80, TaskProgressStage.PARSING_RESULTS);
             finalResult = buildVerificationResult(
                     result, input.devices(), input.rules(), input.specs(), userId, taskId, checkLogs, deviceSmvMap,
                     input.templateManifests(), requestJson,
@@ -1085,8 +1088,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     @Override
-    public void updateTaskProgress(Long taskId, int progress, String message) {
-        super.updateTaskProgress(taskId, progress, message);
+    public void updateTaskProgress(Long taskId, int progress, TaskProgressStage stage) {
+        super.updateTaskProgress(taskId, progress, stage);
     }
 
     @Override
@@ -1697,7 +1700,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     @Override
-    protected int atomicUpdateProgress(Long taskId, int progress) {
-        return taskRepository.updateProgressIfActive(taskId, progress);
+    protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
+        return taskRepository.updateProgressIfActive(taskId, progress, stage);
     }
 }

@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -46,6 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -73,6 +76,7 @@ class ChatServiceImplToolLoopControlTest {
     private ChatMapper chatMapper;
     private LlmMessageCodec messageCodec;
     private TransactionTemplate transactionTemplate;
+    private ChatExecutionConfig chatExecutionConfig;
 
     private ChatServiceImpl service;
     private Method executeToolLoopMethod;
@@ -88,6 +92,7 @@ class ChatServiceImplToolLoopControlTest {
         };
 
         messageCodec = new LlmMessageCodec(new ObjectMapper());
+        chatExecutionConfig = new ChatExecutionConfig();
         lenient().when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
         ChatSessionPo defaultSession = new ChatSessionPo();
@@ -106,7 +111,8 @@ class ChatServiceImplToolLoopControlTest {
                 destructiveActionGuard,
                 new ObjectMapper(),
                 chatMapper,
-                transactionTemplate
+                transactionTemplate,
+                chatExecutionConfig
         );
         executeToolLoopMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "executeToolLoop",
@@ -634,7 +640,50 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void processStreamChat_whenToolLoopReachesLimit_reportsPartialExecutionWithoutClaimingCompletion() throws Exception {
+    void processStreamChat_whenMoreThanFiveRoundsMakeProgress_continuesAndStreamsFinalReply() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(
+                        toolCallResult("list_rules", "{\"page\":1}"),
+                        toolCallResult("list_rules", "{\"page\":2}"),
+                        toolCallResult("list_rules", "{\"page\":3}"),
+                        toolCallResult("list_rules", "{\"page\":4}"),
+                        toolCallResult("list_rules", "{\"page\":5}"),
+                        toolCallResult("list_rules", "{\"page\":6}"),
+                        textResult("planning complete")
+                );
+        when(aiToolManager.execute(eq("list_rules"), anyString())).thenReturn("{\"rules\":[]}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("All requested rule pages were checked.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "please list rules across all pages", emitter);
+
+        verify(aiToolManager, org.mockito.Mockito.times(6)).execute(eq("list_rules"), anyString());
+        verify(llmChatService).streamReply(anyList(), any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getContent() != null
+                        && msg.getContent().contains("All requested rule pages were checked.")
+                        && !msg.getContent().contains("planning limit")));
+        verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenConsecutiveRoundsRepeatExactly_stopsDuplicatesAndStillExplains() throws Exception {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
         session.setUserId(1L);
@@ -646,20 +695,26 @@ class ChatServiceImplToolLoopControlTest {
         when(llmChatService.chatWithTools(anyList(), anyList()))
                 .thenReturn(toolCallResult("list_rules", "{}"));
         when(aiToolManager.execute("list_rules", "{}")).thenReturn("{\"rules\":[]}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("No rules were found; repeated reads were stopped.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
 
         SseEmitter emitter = mock(SseEmitter.class);
 
         service.processStreamChat(1L, "s1", "please list rules", emitter);
 
-        verify(llmChatService, never()).streamReply(anyList(), any(), any());
-        verify(aiToolManager, org.mockito.Mockito.times(5)).execute("list_rules", "{}");
+        verify(aiToolManager, org.mockito.Mockito.times(3)).execute("list_rules", "{}");
+        verify(llmChatService).streamReply(anyList(), any(), any());
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equalsIgnoreCase(msg.getRole())
                         && msg.getContent() != null
-                        && msg.getContent().contains("reached its 5-round planning limit")
-                        && msg.getContent().contains("Some requested work may therefore be incomplete")
-                        && !msg.getContent().contains("operation completed")));
+                        && msg.getContent().contains("repeated the exact same tool calls and results")
+                        && msg.getContent().contains("No rules were found; repeated reads were stopped.")
+                        && !msg.getContent().contains("5-round planning limit")));
         verify(emitter).complete();
     }
 

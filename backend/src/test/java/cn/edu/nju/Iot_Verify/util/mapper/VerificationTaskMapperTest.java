@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
@@ -27,6 +28,8 @@ class VerificationTaskMapperTest {
                 .userId(1L)
                 .status(VerificationTaskPo.TaskStatus.COMPLETED)
                 .createdAt(LocalDateTime.now())
+                .progress(80)
+                .progressStage(TaskProgressStage.PARSING_RESULTS)
                 .isAttack(true)
                 .attackBudget(2)
                 .modeledDeviceAttackPointCount(3)
@@ -47,6 +50,7 @@ class VerificationTaskMapperTest {
         VerificationTaskDto dto = mapper.toDto(po);
 
         assertEquals(1, dto.getSpecResults().size());
+        assertEquals(TaskProgressStage.PARSING_RESULTS, dto.getProgressStage());
         assertEquals("s1", dto.getSpecResults().get(0).getSpecId());
         assertEquals(VerificationOutcome.SATISFIED, dto.getSpecResults().get(0).getOutcome());
         assertEquals("CTLSPEC AG(light.on)", dto.getSpecResults().get(0).getExpression());
@@ -65,6 +69,7 @@ class VerificationTaskMapperTest {
         assertEquals(true, dto.getModelSnapshot().isTemplatesFrozen());
         assertEquals(false, dto.getModelComplete());
         VerificationTaskSummaryDto summary = mapper.toSummaryDto(po);
+        assertEquals(TaskProgressStage.PARSING_RESULTS, summary.getProgressStage());
         assertEquals("Hall automation", summary.getGenerationIssues().get(0).getItemLabel());
         assertEquals(ModelGenerationIssueReasonCode.RULE_UNRESOLVABLE_TRIGGER_CONDITION,
                 summary.getGenerationIssues().get(0).getReasonCode());

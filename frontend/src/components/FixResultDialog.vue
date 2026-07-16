@@ -19,6 +19,7 @@ import type {
   ParameterAdjustment,
   PreferredRangeSelection
 } from '@/types/fix'
+import type { InteractiveOperationStage } from '@/types/task'
 
 const props = defineProps<{
   visible: boolean
@@ -38,9 +39,11 @@ const faultLoading = ref(false)
 const faultLoadFailed = ref(false)
 const strategyLoading = ref<FixStrategyName | null>(null)
 const fixSearchElapsedSeconds = ref(0)
+const fixProgressStage = ref<InteractiveOperationStage>('QUEUED')
 const activeFixRequestId = ref<string | null>(null)
 const activeFixAbortController = ref<AbortController | null>(null)
 let fixSearchTimer: ReturnType<typeof setInterval> | null = null
+let fixProgressRefreshInFlight = false
 const strategyErrors = ref<Partial<Record<FixStrategyName, string>>>({})
 const strategyWarnings = ref<Partial<Record<FixStrategyName, string[]>>>({})
 const fixResult = ref<FixResult | null>(null)
@@ -61,6 +64,21 @@ type PreferredRangeRow = {
 }
 
 const strategyOrder: FixStrategyName[] = ['parameter', 'condition', 'remove']
+
+const fixProgressStageLabel = computed(() => t(`app.fixProgressStage_${fixProgressStage.value}`))
+
+const refreshFixProgress = async (requestId: string) => {
+  if (fixProgressRefreshInFlight) return
+  fixProgressRefreshInFlight = true
+  try {
+    const status = await boardApi.getFixRequestStatus(requestId)
+    if (activeFixRequestId.value === requestId) fixProgressStage.value = status.stage
+  } catch {
+    // Registration and completion can race with this read; the fix response remains authoritative.
+  } finally {
+    fixProgressRefreshInFlight = false
+  }
+}
 
 const strategyIcons: Record<FixStrategyName, string> = {
   parameter: 'tune',
@@ -381,15 +399,19 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
   invalidateStrategyResult(strategy)
   strategyLoading.value = strategy
   fixSearchElapsedSeconds.value = 0
+  fixProgressStage.value = 'QUEUED'
   const requestId = crypto.randomUUID()
   const controller = new AbortController()
   const startedAt = Date.now()
   activeFixRequestId.value = requestId
   activeFixAbortController.value = controller
   if (fixSearchTimer) clearInterval(fixSearchTimer)
-  fixSearchTimer = setInterval(() => {
+  void refreshFixProgress(requestId)
+  const requestProgressTimer = setInterval(() => {
     fixSearchElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+    void refreshFixProgress(requestId)
   }, 1000)
+  fixSearchTimer = requestProgressTimer
   delete strategyErrors.value[strategy]
   try {
     if (strategy === 'parameter') {
@@ -424,8 +446,8 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     }
     if (activeFixRequestId.value === requestId) activeFixRequestId.value = null
     if (activeFixAbortController.value === controller) activeFixAbortController.value = null
-    if (fixSearchTimer) {
-      clearInterval(fixSearchTimer)
+    if (fixSearchTimer === requestProgressTimer) {
+      clearInterval(requestProgressTimer)
       fixSearchTimer = null
     }
   }
@@ -640,6 +662,7 @@ const closeDialog = () => {
     return
   }
   if (activeFixRequestId.value) {
+    fixProgressStage.value = 'CANCELLING'
     void boardApi.cancelFixRequest(activeFixRequestId.value)
     activeFixRequestId.value = null
   }
@@ -837,6 +860,7 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   {{ t('app.tryingFixStrategy', { strategy: strategyLabels[selectedStrategy] }) }}
                 </div>
                 <p class="mt-1 text-xs text-blue-700">{{ t('app.fixAttemptDoesNotApply') }}</p>
+                <p class="mt-1 text-xs font-semibold text-blue-800">{{ fixProgressStageLabel }}</p>
                 <p class="mt-1 text-xs text-blue-700">
                   {{ t('app.fixSearchProgress', { seconds: fixSearchElapsedSeconds }) }}
                 </p>

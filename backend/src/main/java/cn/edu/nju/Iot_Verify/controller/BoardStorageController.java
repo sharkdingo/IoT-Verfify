@@ -30,6 +30,8 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetRequestDto;
 import cn.edu.nju.Iot_Verify.dto.device.DefaultTemplateResetResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.DeviceRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.DeviceRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.PortableSceneDto;
@@ -322,13 +324,19 @@ public class BoardStorageController {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
                     "category", category,
                     "language", language,
                     "userRequirement", userRequirement));
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.REQUESTING_MODEL);
             String result = recommendRulesTool.execute(args);
 
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.VALIDATING_RESULT);
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
             throwIfToolError(resultMap);
@@ -357,9 +365,15 @@ public class BoardStorageController {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String argsJson = objectMapper.writeValueAsString(requestBody);
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.REQUESTING_MODEL);
             String result = recommendRelatedDevicesTool.executeBoardRecommendations(argsJson);
 
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.VALIDATING_RESULT);
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
             throwIfToolError(resultMap);
@@ -422,13 +436,19 @@ public class BoardStorageController {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
                     "category", category,
                     "language", language,
                     "userRequirement", userRequirement));
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.REQUESTING_MODEL);
             String result = recommendSpecificationsTool.execute(args);
 
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.VALIDATING_RESULT);
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
             throwIfToolError(resultMap);
@@ -481,9 +501,15 @@ public class BoardStorageController {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.PREPARING_CONTEXT);
             String argsJson = objectMapper.writeValueAsString(requestBody);
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.REQUESTING_MODEL);
             String result = recommendScenarioTool.execute(argsJson);
 
+            interactiveAiExecutionService.markStage(
+                    userId, requestId, InteractiveOperationStage.VALIDATING_RESULT);
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = objectMapper.readValue(result, Map.class);
             throwIfToolError(resultMap);
@@ -502,6 +528,13 @@ public class BoardStorageController {
             @CurrentUser Long userId,
             @PathVariable String requestId) {
         return Result.success(interactiveAiExecutionService.cancel(userId, requestId));
+    }
+
+    @GetMapping("/recommendations/{requestId}")
+    public Result<InteractiveOperationStatusDto> getRecommendationStatus(
+            @CurrentUser Long userId,
+            @PathVariable String requestId) {
+        return Result.success(interactiveAiExecutionService.getStatus(userId, requestId));
     }
 
     /**

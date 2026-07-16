@@ -15,18 +15,22 @@ const i18n = createI18n({
         recommendationProgressElapsed: '{seconds}s elapsed',
         recommendationProgressContext: '{templates}/{devices}/{rules}/{specs}',
         recommendationProgressTool: 'Calling: {tool}',
+        recommendationProgressQueued: 'Waiting for server capacity',
         recommendationProgressSubmitting: 'Submitting the request',
         recommendationProgressAnalyzing: 'Waiting for the model service; private reasoning is not observable.',
+        recommendationProgressValidating: 'Validating the returned candidates',
+        recommendationProgressCancelling: 'Stopping the server request',
         recommendationProgressStillWorking: 'Still processing; you can stop at any time.'
       }
     }
   }
 })
 
-const mountStatus = (elapsedSeconds: number) => mount(RecommendationProgressStatus, {
+const mountStatus = (stage: 'QUEUED' | 'REQUESTING_MODEL' | 'VALIDATING_RESULT', elapsedSeconds: number) => mount(RecommendationProgressStatus, {
   props: {
     kind: 'rule',
     elapsedSeconds,
+    stage,
     templateCount: 45,
     deviceCount: 2,
     ruleCount: 1,
@@ -37,10 +41,11 @@ const mountStatus = (elapsedSeconds: number) => mount(RecommendationProgressStat
 
 describe('RecommendationProgressStatus', () => {
   it('does not infer unobservable model phases from elapsed time', () => {
-    expect(mountStatus(12).text()).toContain('Waiting for the model service')
+    expect(mountStatus('QUEUED', 31).text()).toContain('Waiting for server capacity')
+    expect(mountStatus('REQUESTING_MODEL', 1).text()).toContain('Waiting for the model service')
   })
 
-  it('offers an accurate long-wait recovery cue', () => {
-    expect(mountStatus(31).text()).toContain('you can stop at any time')
+  it('shows server-observed response validation', () => {
+    expect(mountStatus('VALIDATING_RESULT', 31).text()).toContain('Validating the returned candidates')
   })
 })

@@ -1,18 +1,23 @@
 package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -61,6 +66,20 @@ public class InteractiveFixExecutionService {
         return execution != null && execution.cancel();
     }
 
+    public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
+        String id = validateRequestId(requestId);
+        ActiveExecution<?> execution = active.get(new RequestKey(userId, id));
+        if (execution == null) {
+            throw new ResourceNotFoundException("automatic-fix request", id);
+        }
+        return execution.status();
+    }
+
+    public void markStage(Long userId, String requestId, InteractiveOperationStage stage) {
+        ActiveExecution<?> execution = active.get(new RequestKey(userId, validateRequestId(requestId)));
+        if (execution != null) execution.stage.set(Objects.requireNonNull(stage));
+    }
+
     private String validateRequestId(String requestId) {
         String value = requestId == null ? "" : requestId.trim();
         if (!value.matches("[A-Za-z0-9_-]{8,80}")) {
@@ -83,6 +102,9 @@ public class InteractiveFixExecutionService {
         private final AtomicReference<ExecutionState> state =
                 new AtomicReference<>(ExecutionState.WAITING);
         private final AtomicBoolean cleaned = new AtomicBoolean(false);
+        private final AtomicReference<InteractiveOperationStage> stage =
+                new AtomicReference<>(InteractiveOperationStage.QUEUED);
+        private final long createdAtNanos = System.nanoTime();
         private final FutureTask<T> task;
 
         private ActiveExecution(RequestKey key, Callable<T> operation) {
@@ -91,6 +113,7 @@ public class InteractiveFixExecutionService {
                 if (!state.compareAndSet(ExecutionState.WAITING, ExecutionState.RUNNING)) {
                     throw new CancellationException("Automatic-fix search was cancelled before it started.");
                 }
+                stage.compareAndSet(InteractiveOperationStage.QUEUED, InteractiveOperationStage.RUNNING);
                 try {
                     return operation.call();
                 } finally {
@@ -101,11 +124,21 @@ public class InteractiveFixExecutionService {
         }
 
         private boolean cancel() {
+            stage.set(InteractiveOperationStage.CANCELLING);
             boolean cancelled = task.cancel(true);
             if (cancelled && state.compareAndSet(ExecutionState.WAITING, ExecutionState.FINISHED)) {
                 cleanup();
             }
             return cancelled;
+        }
+
+        private InteractiveOperationStatusDto status() {
+            return InteractiveOperationStatusDto.builder()
+                    .requestId(key.requestId())
+                    .state(state.get().name())
+                    .stage(stage.get())
+                    .elapsedMs(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - createdAtNanos))
+                    .build();
         }
 
         private void cleanup() {

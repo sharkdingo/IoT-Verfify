@@ -207,12 +207,16 @@ independently changed to `CANCELLED` during that race is retained as the cancell
 and is not reported as failed cleanup.
 
 Response data: the accepted `FuzzTaskDto`. Acceptance is not completion. Its fields are
-`id`, `status`, `progress`, lifecycle timestamps, `processingTimeMs`, optional
+`id`, `status`, `progress`, `progressStage`, lifecycle timestamps, `processingTimeMs`, optional
 `errorMessage`, optional `runId`/`outcome`, frozen `modelSnapshot`, the five request
 configuration fields (`explorationMode`, `maxIterations`, `pathLength`,
 `populationSize`, and optional `seed`), and `targetSpecIds`. `runId` equals the task ID
 after successful completion. Task detail and task-list summaries both return the
 persisted `explorationMode`; it is not inferred from the current UI selection.
+The exploration phases are `QUEUED`, `STARTING`, `PREPARING_EXPLORATION`,
+`EXPLORING_CANDIDATES`, and `PERSISTING_RESULT`. The backend persists the percentage
+and phase in one atomic active-task update so the UI can describe real work without
+guessing from elapsed time.
 
 Task statuses are `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, and `CANCELLED`.
 `FAILED` is an execution status, not a search outcome. The task APIs are:

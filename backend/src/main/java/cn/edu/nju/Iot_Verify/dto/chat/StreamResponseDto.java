@@ -21,8 +21,26 @@ public class StreamResponseDto {
     }
 
     public static StreamResponseDto progress(String stage, String toolName, Integer round) {
+        return progress(stage, toolName, round, null, null, null, null);
+    }
+
+    public static StreamResponseDto progress(String stage,
+                                             String toolName,
+                                             Integer round,
+                                             String outcome,
+                                             Integer successfulSteps,
+                                             Integer failedSteps,
+                                             Integer unconfirmedSteps) {
         StreamResponseDto response = new StreamResponseDto();
-        response.setProgress(new ProgressDto(stage, toolName, round));
+        response.setProgress(new ProgressDto(
+                stage,
+                toolName,
+                round,
+                outcome,
+                successfulSteps,
+                failedSteps,
+                unconfirmedSteps
+        ));
         return response;
     }
 
@@ -32,11 +50,25 @@ public class StreamResponseDto {
         private String stage;
         private String toolName;
         private Integer round;
+        private String outcome;
+        private Integer successfulSteps;
+        private Integer failedSteps;
+        private Integer unconfirmedSteps;
 
-        public ProgressDto(String stage, String toolName, Integer round) {
+        public ProgressDto(String stage,
+                           String toolName,
+                           Integer round,
+                           String outcome,
+                           Integer successfulSteps,
+                           Integer failedSteps,
+                           Integer unconfirmedSteps) {
             this.stage = stage;
             this.toolName = toolName;
             this.round = round;
+            this.outcome = outcome;
+            this.successfulSteps = successfulSteps;
+            this.failedSteps = failedSteps;
+            this.unconfirmedSteps = unconfirmedSteps;
         }
     }
 

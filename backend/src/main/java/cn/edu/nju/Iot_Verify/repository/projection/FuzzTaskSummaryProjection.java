@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.repository.projection;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 
 import java.time.LocalDateTime;
 
@@ -30,6 +31,8 @@ public interface FuzzTaskSummaryProjection {
     String getErrorMessage();
 
     Integer getProgress();
+
+    TaskProgressStage getProgressStage();
 
     String getTargetSpecIdsJson();
 

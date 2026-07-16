@@ -49,7 +49,7 @@ import type {
 import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
 import type { RunBoardComparison } from '@/types/modelSemantics'
 import type { ModelEnvironmentVariable } from '@/types/model'
-import type { TaskCancellationResult } from '@/types/task'
+import type { InteractiveOperationStage, TaskCancellationResult, TaskProgressStage } from '@/types/task'
 import type { FixApplyResult } from '@/types/fix'
 import type { ChatLogoutPreparation } from '@/types/chat'
 import type {
@@ -136,6 +136,7 @@ import {
 } from '@/utils/recommendationMaterialization'
 import {
   RUN_RESPONSE_INCOMPLETE_CODE,
+  activeTaskProgressStage,
   validateCompletedVerificationTask
 } from '@/utils/runResponse'
 import {
@@ -913,6 +914,14 @@ const formatAsyncTaskStatus = (status?: AsyncTaskStatus | string): string => {
     default:
       return status || t('app.taskInitializing')
   }
+}
+
+const formatTaskProgressStage = (
+  stage?: TaskProgressStage | null,
+  status?: AsyncTaskStatus | string
+): string => {
+  const activeStage = activeTaskProgressStage(stage, status)
+  return activeStage ? t(`app.taskProgressStage_${activeStage}`) : formatAsyncTaskStatus(status)
 }
 
 const buildVerificationResultFromTask = (task: VerificationTask, traces: Trace[] = []): VerificationResult => {
@@ -5247,17 +5256,42 @@ const getRunningRecommendationKind = (): RecommendationPanelKind | null => {
 const isAnyRecommendationRunning = (): boolean => getRunningRecommendationKind() !== null
 
 const recommendationProgressElapsed = ref(0)
+const recommendationProgressStage = ref<InteractiveOperationStage>('QUEUED')
+const recommendationProgressRequestId = ref<string | null>(null)
 let recommendationProgressTimer: ReturnType<typeof setInterval> | null = null
+let recommendationProgressRefreshInFlight = false
+const refreshRecommendationProgress = async (kind: RecommendationPanelKind) => {
+  if (recommendationProgressRefreshInFlight) return
+  const requestId = recommendationProgressRequestId.value
+  if (!requestId) return
+  recommendationProgressRefreshInFlight = true
+  try {
+    const status = await boardApi.getRecommendationStatus(requestId)
+    if (getRunningRecommendationKind() === kind && recommendationProgressRequestId.value === requestId) {
+      recommendationProgressStage.value = status.stage
+    }
+  } catch {
+    // Registration and completion can race with this read; the main request remains authoritative.
+  } finally {
+    recommendationProgressRefreshInFlight = false
+  }
+}
 watch(() => getRunningRecommendationKind(), kind => {
   if (recommendationProgressTimer) {
     clearInterval(recommendationProgressTimer)
     recommendationProgressTimer = null
   }
   recommendationProgressElapsed.value = 0
-  if (!kind) return
+  recommendationProgressStage.value = 'QUEUED'
+  if (!kind) {
+    recommendationProgressRequestId.value = null
+    return
+  }
   const startedAt = Date.now()
+  void refreshRecommendationProgress(kind)
   recommendationProgressTimer = setInterval(() => {
     recommendationProgressElapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+    void refreshRecommendationProgress(kind)
   }, 1000)
 })
 
@@ -5449,6 +5483,7 @@ const fetchRuleRecommendations = async () => {
   const requestId = crypto.randomUUID()
   ruleRecommendationAbortController.value = controller
   ruleRecommendationRequestId.value = requestId
+  recommendationProgressRequestId.value = requestId
   try {
     const response = await rulesApi.recommendRules(
       validateRecommendationCount(ruleRecommendationFilters.maxRecommendations),
@@ -5606,6 +5641,7 @@ const fetchDeviceRecommendations = async () => {
   const requestId = crypto.randomUUID()
   deviceRecommendationAbortController.value = controller
   deviceRecommendationRequestId.value = requestId
+  recommendationProgressRequestId.value = requestId
   
   try {
     const response = await boardApi.recommendRelatedDevices(
@@ -5697,6 +5733,7 @@ const fetchSpecRecommendations = async () => {
   const requestId = crypto.randomUUID()
   specRecommendationAbortController.value = controller
   specRecommendationRequestId.value = requestId
+  recommendationProgressRequestId.value = requestId
 
   try {
     const response = await boardApi.recommendSpecifications(
@@ -5780,6 +5817,7 @@ const fetchScenarioRecommendation = async () => {
   const requestId = crypto.randomUUID()
   scenarioRecommendationAbortController.value = controller
   scenarioRecommendationRequestId.value = requestId
+  recommendationProgressRequestId.value = requestId
 
   try {
     const response = await boardApi.recommendScenario({
@@ -6222,7 +6260,7 @@ const simulationForm = reactive({
   isAttack: false,
   attackBudget: 1,
   enablePrivacy: false,
-  isAsync: false,
+  isAsync: true,
   saveToHistory: true
 })
 
@@ -6254,7 +6292,7 @@ const verificationForm = reactive({
   isAttack: false,
   attackBudget: 1,
   enablePrivacy: false,
-  isAsync: false
+  isAsync: true
 })
 
 // The bounded counterexample explorer is intentionally background-only. The first-level controls describe the
@@ -7057,7 +7095,7 @@ const miniTaskItems = computed(() => {
       kind: 'verification',
       id: task.id,
       label: t('app.verification'),
-      status: formatAsyncTaskStatus(task.status),
+      status: formatTaskProgressStage(task.progressStage, task.status),
       progress: normalizeTaskProgress(task.progress)
     })
   }
@@ -7080,7 +7118,7 @@ const miniTaskItems = computed(() => {
       kind: 'fuzzing',
       id: task.id,
       label: t('app.fuzzSearch'),
-      status: formatAsyncTaskStatus(task.status),
+      status: formatTaskProgressStage(task.progressStage, task.status),
       progress: normalizeTaskProgress(task.progress)
     })
   }
@@ -7103,7 +7141,7 @@ const miniTaskItems = computed(() => {
       kind: 'simulation',
       id: task.id,
       label: t('app.simulation'),
-      status: formatAsyncTaskStatus(task.status),
+      status: formatTaskProgressStage(task.progressStage, task.status),
       progress: normalizeTaskProgress(task.progress)
     })
   }
@@ -7694,7 +7732,7 @@ const watchVerificationTask = async (taskId: number) => {
   asyncVerificationTask.value = {
     taskId,
     progress: normalizeTaskProgress(taskSummary?.progress),
-    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+    status: formatTaskProgressStage(taskSummary?.progressStage, taskSummary?.status) || t('app.taskInitializing')
   }
   closeHistoryPanel()
   try {
@@ -7739,7 +7777,7 @@ const watchSimulationTask = async (taskId: number) => {
   asyncSimulationTask.value = {
     taskId,
     progress: normalizeTaskProgress(taskSummary?.progress),
-    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+    status: formatTaskProgressStage(taskSummary?.progressStage, taskSummary?.status) || t('app.taskInitializing')
   }
   closeHistoryPanel()
   try {
@@ -7878,7 +7916,7 @@ const watchFuzzingTask = async (taskId: number) => {
   asyncFuzzingTask.value = {
     taskId,
     progress: normalizeTaskProgress(taskSummary?.progress),
-    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+    status: formatTaskProgressStage(taskSummary?.progressStage, taskSummary?.status) || t('app.taskInitializing')
   }
   trackFuzzTask(taskId)
   closeHistoryPanel()
@@ -9424,7 +9462,8 @@ const handleVerify = async (): Promise<boolean> => {
       submission.taskId = taskId
       asyncVerificationTask.value.taskId = taskId
       asyncVerificationTask.value.progress = submittedTask.progress ?? 0
-      asyncVerificationTask.value.status = formatAsyncTaskStatus(submittedTask.status)
+      asyncVerificationTask.value.status = formatTaskProgressStage(
+        submittedTask.progressStage, submittedTask.status)
       upsertVerificationTaskSummary(submittedTask)
 
       await pollAsyncVerification(taskId, { submission })
@@ -9572,7 +9611,7 @@ const runFuzzing = async (): Promise<boolean> => {
     asyncFuzzingTask.value = {
       taskId: submittedTask.id,
       progress: normalizeTaskProgress(submittedTask.progress),
-      status: formatAsyncTaskStatus(submittedTask.status)
+      status: formatTaskProgressStage(submittedTask.progressStage, submittedTask.status)
     }
     upsertFuzzingTaskSummary(submittedTask)
     fuzzingWatchedTask.value = submittedTask
@@ -9747,7 +9786,8 @@ const handleSimulate = async (simConfig: {
       submission.taskId = taskId
       asyncSimulationTask.value.taskId = taskId
       asyncSimulationTask.value.progress = submittedTask.progress ?? 0
-      asyncSimulationTask.value.status = formatAsyncTaskStatus(submittedTask.status)
+      asyncSimulationTask.value.status = formatTaskProgressStage(
+        submittedTask.progressStage, submittedTask.status)
       upsertSimulationTaskSummary(submittedTask)
 
       // 轮询任务进度
@@ -9920,12 +9960,10 @@ const pollAsyncVerification = async (
     throwIfPollingAborted()
     let task: VerificationTask
     try {
-      const progress = await boardApi.getTaskProgress(taskId)
-      throwIfPollingAborted()
-      asyncVerificationTask.value.progress = normalizeTaskProgress(progress)
       task = await boardApi.getTask(taskId)
       throwIfPollingAborted()
-      asyncVerificationTask.value.status = formatAsyncTaskStatus(task.status)
+      asyncVerificationTask.value.progress = normalizeTaskProgress(task.progress)
+      asyncVerificationTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertVerificationTaskSummary(task)
     } catch (e: any) {
       if (isPollingAbortedError(e)) {
@@ -9983,13 +10021,10 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
     let task: SimulationTask
     try {
       // 获取任务进度 + 状态（瞬时网络错误容忍：进入 catch 后继续轮询）
-      const progress = await simulationApi.getTaskProgress(taskId)
-      throwIfPollingAborted()
-      asyncSimulationTask.value.progress = normalizeTaskProgress(progress)
-
       task = await simulationApi.getTask(taskId)
       throwIfPollingAborted()
-      asyncSimulationTask.value.status = formatAsyncTaskStatus(task.status)
+      asyncSimulationTask.value.progress = normalizeTaskProgress(task.progress)
+      asyncSimulationTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertSimulationTaskSummary(task)
     } catch (error: any) {
       if (isPollingAbortedError(error)) {
@@ -10057,12 +10092,10 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
     throwIfPollingAborted()
     let task: FuzzingTask
     try {
-      const progress = await fuzzingApi.getTaskProgress(taskId)
-      throwIfPollingAborted()
-      asyncFuzzingTask.value.progress = normalizeTaskProgress(progress)
       task = await fuzzingApi.getTask(taskId)
       throwIfPollingAborted()
-      asyncFuzzingTask.value.status = formatAsyncTaskStatus(task.status)
+      asyncFuzzingTask.value.progress = normalizeTaskProgress(task.progress)
+      asyncFuzzingTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertFuzzingTaskSummary(task)
     } catch (error: any) {
       if (isPollingAbortedError(error)) throw error
@@ -11805,6 +11838,7 @@ const closeResultDialog = () => {
           v-if="isRecommendingScenario"
           kind="scenario"
           :elapsed-seconds="recommendationProgressElapsed"
+          :stage="recommendationProgressStage"
           :template-count="deviceTemplates.length"
           :device-count="nodes.length"
           :rule-count="rules.length"
@@ -12146,6 +12180,7 @@ const closeResultDialog = () => {
           v-if="isRecommendingRules"
           kind="rule"
           :elapsed-seconds="recommendationProgressElapsed"
+          :stage="recommendationProgressStage"
           :template-count="deviceTemplates.length"
           :device-count="nodes.length"
           :rule-count="rules.length"
@@ -12431,6 +12466,7 @@ const closeResultDialog = () => {
           v-if="isRecommendingDevices"
           kind="device"
           :elapsed-seconds="recommendationProgressElapsed"
+          :stage="recommendationProgressStage"
           :template-count="deviceTemplates.length"
           :device-count="nodes.length"
           :rule-count="rules.length"
@@ -12736,6 +12772,7 @@ const closeResultDialog = () => {
           v-if="isRecommendingSpecs"
           kind="spec"
           :elapsed-seconds="recommendationProgressElapsed"
+          :stage="recommendationProgressStage"
           :template-count="deviceTemplates.length"
           :device-count="nodes.length"
           :rule-count="rules.length"

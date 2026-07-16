@@ -33,6 +33,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
@@ -372,6 +373,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     .status(FuzzTaskPo.TaskStatus.PENDING)
                     .createdAt(LocalDateTime.now())
                     .progress(0)
+                    .progressStage(TaskProgressStage.QUEUED)
                     .targetSpecIdsJson(JsonUtils.toJson(request.targetSpecIds()))
                     .maxIterations(request.maxIterations())
                     .pathLength(request.pathLength())
@@ -433,7 +435,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         FuzzTaskPo task = null;
         try {
             registerRunningTask(taskId, Thread.currentThread());
-            updateTaskProgress(taskId, 0, "Task queued");
+            updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
             if (isTaskCancelled(taskId)) return;
 
             LocalDateTime startedAt = LocalDateTime.now();
@@ -466,7 +468,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     request.targetSpecIds(), request.maxIterations(), request.pathLength(),
                     request.populationSize(), request.seed(), request.explorationMode()));
 
-            updateTaskProgress(taskId, 1, "Preparing counterexample search");
+            updateTaskProgress(taskId, 1, TaskProgressStage.PREPARING_EXPLORATION);
             BooleanSupplier cancelled = cancellationSignal(taskId);
             FuzzEngineResult result = fuzzEngine.run(
                     engineInput,
@@ -491,7 +493,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             FuzzOutcome outcome = toOutcome(result.outcome());
             List<FuzzFindingPo> findings = toFindingEntities(userId, taskId, result);
 
-            updateTaskProgress(taskId, 95, "Persisting candidate findings");
+            updateTaskProgress(taskId, 95, TaskProgressStage.PERSISTING_RESULT);
             boolean completed = completeTaskAndFindings(
                     task, userId, result, outcome, eligibility, limitations, findings);
             if (!completed && !isCancelledOrTerminal(taskId)) {
@@ -541,8 +543,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
         if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) return;
         try {
             int bounded = Math.min(90, Math.max(1, percent));
-            updateTaskProgress(taskId, bounded,
-                    message == null ? "Counterexample search in progress" : message);
+            updateTaskProgress(taskId, bounded, TaskProgressStage.EXPLORING_CANDIDATES);
         } catch (RuntimeException e) {
             log.warn("Could not persist progress for fuzz task {}", taskId, e);
         }
@@ -1563,8 +1564,8 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     @Override
-    protected int atomicUpdateProgress(Long taskId, int progress) {
-        return taskRepository.updateProgressIfActive(taskId, progress);
+    protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
+        return taskRepository.updateProgressIfActive(taskId, progress, stage);
     }
 
     @Override

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.simulation;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -33,6 +34,7 @@ public class SimulationTaskSummaryDto {
     private ModelSemanticsDto modelSemantics;
     private ModelRunSnapshotDto modelSnapshot;
     private Integer progress;
+    private TaskProgressStage progressStage;
     private Integer requestedSteps;
     private Integer steps;
     private Boolean modelComplete;

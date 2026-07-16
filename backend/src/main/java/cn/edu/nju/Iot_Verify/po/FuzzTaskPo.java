@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.po;
 
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -66,6 +67,10 @@ public class FuzzTaskPo implements TaskView {
     private Long processingTimeMs;
 
     private Integer progress;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "progress_stage", length = 40)
+    private TaskProgressStage progressStage;
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;

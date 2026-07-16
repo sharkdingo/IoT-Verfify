@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.fuzz;
 
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
@@ -20,6 +22,7 @@ public class FuzzTaskDto {
     private Long id;
     private String status;
     private Integer progress;
+    private TaskProgressStage progressStage;
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;

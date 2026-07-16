@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.repository;
 
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzExplorationMode;
 import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.po.FuzzFindingPo;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -100,6 +101,11 @@ class FuzzRepositoryTest {
                 task.getId(), FuzzTaskPo.TaskStatus.RUNNING, LocalDateTime.now(),
                 "worker-a", leaseExpiresAt, "[]",
                 FuzzTaskPo.TaskStatus.PENDING));
+        assertEquals(1, taskRepository.updateProgressIfActive(
+                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES));
+        FuzzTaskPo taskWithProgress = taskRepository.findById(task.getId()).orElseThrow();
+        assertEquals(50, taskWithProgress.getProgress());
+        assertEquals(TaskProgressStage.EXPLORING_CANDIDATES, taskWithProgress.getProgressStage());
         assertEquals(1, taskRepository.completeTaskIfRunning(
                 task.getId(), FuzzTaskPo.TaskStatus.COMPLETED, LocalDateTime.now(), 10L,
                 FuzzOutcome.BUDGET_EXHAUSTED, 7L, 100, 500L, 10L,
@@ -108,7 +114,8 @@ class FuzzRepositoryTest {
         assertEquals(0, taskRepository.cancelTaskIfStillActive(
                 task.getId(), FuzzTaskPo.TaskStatus.CANCELLED, LocalDateTime.now(),
                 List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
-        assertEquals(0, taskRepository.updateProgressIfActive(task.getId(), 50));
+        assertEquals(0, taskRepository.updateProgressIfActive(
+                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES));
         assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT,
                 taskRepository.findById(task.getId()).orElseThrow().getExplorationMode());
 

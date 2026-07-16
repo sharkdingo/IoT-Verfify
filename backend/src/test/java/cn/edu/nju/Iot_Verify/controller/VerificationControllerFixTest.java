@@ -48,21 +48,21 @@ class VerificationControllerFixTest {
                         anyLong(), anyString(), org.mockito.ArgumentMatchers.<Callable<Object>>any()))
                 .thenAnswer(invocation -> invocation.<Callable<Object>>getArgument(2).call());
         validator = Validation.buildDefaultValidatorFactory().getValidator();
-        lenient().when(fixService.fix(anyLong(), anyLong(), any(), any()))
+        lenient().when(fixService.fix(anyLong(), anyLong(), any(), any(), any()))
                 .thenReturn(FixResultDto.builder().fixable(false).build());
     }
 
     @SuppressWarnings("unchecked")
     private List<String> captureStrategies() {
         ArgumentCaptor<List<String>> captor = ArgumentCaptor.forClass(List.class);
-        verify(fixService).fix(anyLong(), anyLong(), captor.capture(), any());
+        verify(fixService).fix(anyLong(), anyLong(), captor.capture(), any(), any());
         return captor.getValue();
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, PreferredRange> capturePreferredRanges() {
         ArgumentCaptor<Map<String, PreferredRange>> captor = ArgumentCaptor.forClass(Map.class);
-        verify(fixService).fix(anyLong(), anyLong(), any(), captor.capture());
+        verify(fixService).fix(anyLong(), anyLong(), any(), captor.capture(), any());
         return captor.getValue();
     }
 

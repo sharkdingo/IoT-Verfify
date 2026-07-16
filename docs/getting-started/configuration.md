@@ -9,9 +9,10 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-16. Source:
+Verified against code on 2026-07-17. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
+`configure/ChatExecutionConfig`,
 `configure/ProductionSafetyCheck`,
 `frontend/src/api/`, `frontend/.env.example`.
 
@@ -92,7 +93,9 @@ process that starts it.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `CHAT_SSE_TIMEOUT_MS` | `600000` | SSE emitter timeout for `/api/chat/completions`; keep it higher than `LLM_TIMEOUT_MINUTES` so provider errors can be sent as SSE frames. |
+| `CHAT_SSE_TIMEOUT_MS` | `3600000` | Total SSE emitter lifetime for `/api/chat/completions` (60 minutes by default); keep it higher than `LLM_TIMEOUT_MINUTES` so long multi-step tasks and provider errors remain visible. |
+| `CHAT_MAX_TOOL_ROUNDS` | `64` | Emergency runaway guard for one assistant request, not a normal task budget. Product flows should finish or stop on confirmation/result safety before this value. Minimum `8`. |
+| `CHAT_MAX_STAGNANT_ROUNDS` | `2` | Stop after this many consecutive rounds repeat the exact same tool calls and results. A changed call or changed result resets the counter. Minimum `1`. |
 
 ## NuSMV
 

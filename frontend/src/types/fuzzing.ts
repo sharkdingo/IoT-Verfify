@@ -1,6 +1,6 @@
 import type { ModelRunSnapshot } from './modelSemantics'
 import type { Specification } from './spec'
-import type { AsyncTaskStatus } from './task'
+import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { TraceState } from './verify'
 
 export const FUZZING_EXPLORATION_MODES = ['BOARD_SNAPSHOT', 'PAPER_COMPATIBLE'] as const
@@ -156,6 +156,7 @@ export interface FuzzingTask {
   explorationMode: FuzzingExplorationMode
   status: AsyncTaskStatus
   progress: number
+  progressStage?: TaskProgressStage
   createdAt: string
   startedAt?: string
   completedAt?: string

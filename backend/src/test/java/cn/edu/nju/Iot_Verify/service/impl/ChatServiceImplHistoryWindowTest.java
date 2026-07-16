@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -77,7 +78,8 @@ class ChatServiceImplHistoryWindowTest {
                 destructiveActionGuard,
                 new ObjectMapper(),
                 chatMapper,
-                transactionTemplate
+                transactionTemplate,
+                new ChatExecutionConfig()
         );
     }
 

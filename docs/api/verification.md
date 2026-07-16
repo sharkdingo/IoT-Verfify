@@ -133,7 +133,7 @@ counterexample.
 
 Same request body, including the non-empty `specs` constraint. **Response `data`** is
 the newly created `VerificationTaskDto`, not a bare id. Its `id` is the server-generated
-polling identity; `status`, `progress`, `modelSemantics`, and `modelSnapshot` are the
+polling identity; `status`, `progress`, `progressStage`, `modelSemantics`, and `modelSnapshot` are the
 authoritative values already persisted for the accepted task. A successful submission
 means only that the task was accepted. It does not mean verification completed, and
 active tasks do not contain a property `outcome`.
@@ -256,6 +256,7 @@ may offer deletion, but must disable open, replay, and repair actions for that i
 | `nusmvOutput` | `String` | Raw NuSMV output once completed |
 | `errorMessage` | `String` | Technical failure diagnostic present on `FAILED`; clients show a localized no-result state first and place this text in an advanced/technical disclosure |
 | `progress` | `Integer` | 0–100 |
+| `progressStage` | `TaskProgressStage` | Server-observed active phase: `QUEUED`, `STARTING`, `GENERATING_MODEL`, `EXECUTING_MODEL_CHECKER`, `PARSING_RESULTS`, or `PERSISTING_RESULT` for verification |
 
 `@JsonInclude(NON_NULL)` — null fields are omitted. Completed async verification
 tasks carry the same conclusion and per-spec fields as synchronous verification:
@@ -268,6 +269,8 @@ non-blank `errorMessage`; and `COMPLETED` has the complete conclusion fields abo
 The frontend validates these invariants before it renders an inbox row or reconstructs
 a result. A malformed HTTP 200 is an uninterpretable task response, not a poll timeout
 or evidence that the run completed.
+`progress` and `progressStage` are persisted by the same atomic active-task update, so
+clients do not combine a percentage from one phase with a label from another phase.
 
 ### `SpecResultDto`
 
@@ -682,7 +685,7 @@ is `TIMED_OUT`, `INTERRUPTED`, `NO_TRACE_STATES`, or `EXECUTION_FAILED`.
 ### `POST /api/simulate/async`
 
 **Response `data`**: the newly created `SimulationTaskDto`. Its server-generated `id`
-is used for polling, while `status`, `progress`, `requestedSteps`, `modelSemantics`, and
+is used for polling, while `status`, `progress`, `progressStage`, `requestedSteps`, `modelSemantics`, and
 `modelSnapshot` are the authoritative accepted-task context. HTTP success means the task
 was accepted, not that a trajectory already exists.
 
@@ -739,7 +742,9 @@ persisted-run endpoint.
 `{ id, status, createdAt, startedAt, completedAt, processingTimeMs, isAttack,
 attackBudget, enablePrivacy, modelSemantics, modelSnapshot, requestedSteps, steps, modelComplete,
 disabledRuleCount, generationIssues, simulationTraceId, checkLogs: String[],
-errorMessage, progress }`.
+errorMessage, progress, progressStage }`. Simulation uses `QUEUED`, `STARTING`,
+`RUNNING_SIMULATION`, and `PERSISTING_RESULT`. The percentage and phase are updated
+atomically while the task remains active.
 
 Completed async simulations store the full states, execution logs, request JSON, and
 raw NuSMV output in the referenced `SimulationTraceDto`; the task DTO stays a polling
@@ -835,6 +840,13 @@ May invoke NuSMV multiple times (bounded by `FIX_TIMEOUT_MS`, see
 [configuration.md](../getting-started/configuration.md)). A URL-safe `requestId` query parameter
 is required so the client can cancel this exact search through
 `DELETE /api/verify/fix-requests/{requestId}`.
+
+While the search is active, `GET /api/verify/fix-requests/{requestId}` returns
+`InteractiveOperationStatusDto` as `{ requestId, state, stage, elapsedMs }`; an unknown
+or already-finished request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
+`PREPARING_CONTEXT`, `PREPARING_MODEL`, `SEARCHING_AND_VERIFYING`, `FINALIZING`, and
+`CANCELLING` as applicable. These are server-observed operational phases, not inferred
+timers or hidden model reasoning.
 
 **Request body**: `FixRequestDto` — optional; omit or send `null` for defaults.
 

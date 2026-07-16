@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-16. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-17. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -50,22 +50,25 @@ or late stream therefore cannot recreate data after the account has been removed
 
 Sends a user message and streams the assistant's visible reply. **Not** wrapped in
 `Result<T>` — the response is `text/event-stream` produced by a Spring `SseEmitter`
-(10-minute default timeout, configured by `CHAT_SSE_TIMEOUT_MS`).
+(60-minute default timeout, configured by `CHAT_SSE_TIMEOUT_MS`).
 
 Conversational messages without a board/tool intent stream directly. Messages that
 mention board operations such as devices, rules, specifications, verification,
-simulation, templates, traces, or recommendations first run one or more non-visible
-tool-planning rounds. Tool calls and tool results are persisted as internal chat
-messages, but they are not emitted as user visible text. After planning completes, the
+simulation, templates, traces, or recommendations first run one or more tool-planning
+rounds. Tool calls and full tool results are persisted as internal chat messages but are
+not exposed as raw user-visible text. Structured progress frames expose the verifiable
+execution state and outcome of each step while it runs. After planning completes, the
 final assistant reply is generated through the streaming LLM path so tool-backed answers
 also arrive as incremental text chunks.
 
 Tool execution is not one transaction across an entire user request. Each mutating tool
-commits or rejects independently. Reaching the five-round planning limit therefore stops
-additional steps but does not roll back earlier ones. The stream reports usable, failed,
-and result-unavailable tool-step counts and explicitly labels the request as potentially
-incomplete; failure or missing-final-reply fallbacks never say that the whole operation
-completed.
+commits or rejects independently. There is no five-round product budget: planning
+continues while calls or results are changing. Two guards prevent runaway execution:
+consecutive rounds that repeat the exact same calls and results stop after
+`CHAT_MAX_STAGNANT_ROUNDS`, and `CHAT_MAX_TOOL_ROUNDS` is a high emergency ceiling rather
+than a normal task limit. Either guard preserves earlier commits, emits a visible guard
+event, and still runs the streaming final-answer model with an instruction to identify
+completed, failed, and unfinished work accurately.
 
 `requiresUserConfirmation=true` is a generic no-write boundary, not only a deletion
 preview. The planning loop stops immediately for destructive previews and for proposed
@@ -115,7 +118,18 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
 | `command` | `CommandDto` | Optional front-end command: `{ type, payload }` where `type` is e.g. `REFRESH_DATA` / `SHOW_TOAST` / `NAVIGATE` and `payload` is a `Map<String, Object>` (e.g. `{"target":"device_list"}`) |
-| `progress` | `ProgressDto` | Optional non-persisted status `{ stage, toolName?, round? }`. `stage` is `CONTEXT_READY`, `PLANNING`, `TOOL_EXECUTION`, or `WRITING_RESPONSE` |
+| `progress` | `ProgressDto` | Optional non-persisted status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps? }` |
+
+Progress stages and outcomes:
+
+| Stage | Meaning | Outcome when present |
+| :--- | :--- | :--- |
+| `CONTEXT_READY` | Request accepted; conversation and Board context are available | — |
+| `PLANNING` | The model is choosing the next tool step for `round` | — |
+| `TOOL_EXECUTION` | `toolName` has started | — |
+| `TOOL_RESULT` | The tool returned and cumulative counters were updated | `USABLE`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
+| `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | `NO_PROGRESS` or `EMERGENCY_LIMIT` |
+| `WRITING_RESPONSE` | Tool work ended and the visible final answer is streaming | — |
 
 Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 
@@ -127,8 +141,9 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   throws, pending refresh commands are sent before the SSE error when the connection is
   still usable.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
-  show the current verifiable phase and elapsed time without presenting private chain-of-thought.
-  They are not appended to the assistant message or saved in chat history.
+  show an accumulating execution trace and elapsed time without presenting private model
+  chain-of-thought. The frontend retains the trace with the current in-memory assistant message
+  so it remains expandable after completion; frames are not saved in server chat history.
 - After deterministic intent routing, planning receives only the relevant device/rule/spec/template/
   verification/simulation tool subset plus `board_overview`; explicit confirmation keeps the full
   tool set so a prior destructive preview can still be completed safely.
@@ -198,7 +213,7 @@ text.
 
 Backend-supplied safety notices and fallback explanations follow the language of the
 current user message for Chinese and English conversations. This applies to no-write
-confirmation previews, failed or result-unavailable tool steps, planning-limit and
+confirmation previews, failed or result-unavailable tool steps, execution-guard and
 missing-reply fallbacks, and mapped stream errors. These deterministic notices remain
 visible and are persisted with the assistant reply; raw English control text is not
 prepended to an otherwise Chinese answer.

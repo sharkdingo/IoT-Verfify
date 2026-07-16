@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.TaskView;
 import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
@@ -41,7 +42,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
     // ── 并发容器（private，通过语义操作方法暴露）──────────────────────
 
     private final ConcurrentHashMap<Long, Thread> runningTasks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Integer> taskProgress = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, TaskProgressState> taskProgress = new ConcurrentHashMap<>();
     private final Set<Long> cancelledTasks = ConcurrentHashMap.newKeySet();
 
     protected AbstractAsyncTaskService(ObjectMapper objectMapper,
@@ -161,14 +162,16 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
      * 更新任务进度。
      * 逻辑来源：VerificationServiceImpl:L532-539, SimulationServiceImpl:L528-535
      */
-    protected void updateTaskProgress(Long taskId, int progress, String message) {
+    protected void updateTaskProgress(Long taskId, int progress, TaskProgressStage stage) {
         Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
+        TaskProgressStage requiredStage = Objects.requireNonNull(stage, "stage must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
-        Integer previous = taskProgress.put(requiredTaskId, clamped);
-        if (!Objects.equals(previous, clamped)) {
-            atomicUpdateProgress(requiredTaskId, clamped);
+        TaskProgressState next = new TaskProgressState(clamped, requiredStage);
+        TaskProgressState previous = taskProgress.put(requiredTaskId, next);
+        if (!Objects.equals(previous, next)) {
+            atomicUpdateProgress(requiredTaskId, clamped, requiredStage);
         }
-        log.debug("{} {} progress: {}% - {}", taskResourceType, requiredTaskId, progress, message);
+        log.debug("{} {} progress: {}% - {}", taskResourceType, requiredTaskId, progress, requiredStage);
     }
 
     /**
@@ -185,9 +188,9 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
                 .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
 
         // 优先使用内存值（当前实例上的活跃任务）
-        Integer progress = taskProgress.get(taskId);
+        TaskProgressState progress = taskProgress.get(taskId);
         if (progress != null) {
-            return progress;
+            return progress.progress();
         }
         // 退回 DB 列（任务在其他实例上或重启后）
         if (task.getProgress() != null) {
@@ -295,5 +298,8 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
     /**
      * 原子更新任务进度（仅当任务仍在活跃状态时）。
      */
-    protected abstract int atomicUpdateProgress(Long taskId, int progress);
+    protected abstract int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage);
+
+    private record TaskProgressState(int progress, TaskProgressStage stage) {
+    }
 }

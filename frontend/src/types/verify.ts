@@ -3,7 +3,7 @@
 import type { ModelDevice, ModelEnvironmentVariable, ModelRule, ModelSpecification } from './model'
 import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { Specification } from './spec'
-import type { AsyncTaskStatus } from './task'
+import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { RunPersistence } from './runPersistence'
 
 export interface VerificationRequest {
@@ -151,6 +151,7 @@ export interface VerificationTask {
   completedAt?: string;
   processingTimeMs?: number;
   progress?: number;       // 新增：0-100 进度
+  progressStage?: TaskProgressStage;
   isAttack: boolean;
   attackBudget: number;
   enablePrivacy: boolean;
@@ -177,6 +178,7 @@ export type VerificationTaskSummary = Pick<
   | 'completedAt'
   | 'processingTimeMs'
   | 'progress'
+  | 'progressStage'
   | 'isAttack'
   | 'attackBudget'
   | 'enablePrivacy'

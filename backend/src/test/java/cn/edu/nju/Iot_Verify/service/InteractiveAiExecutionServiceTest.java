@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -61,6 +63,31 @@ class InteractiveAiExecutionServiceTest {
         assertTrue(service.cancel(1L, "request-123"));
         request.get(2, TimeUnit.SECONDS);
         assertTrue(interrupted.await(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void statusReportsTheServerObservedStageWhileRunning() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch releaseProvider = new CountDownLatch(1);
+        CompletableFuture<Void> request = CompletableFuture.runAsync(() ->
+                service.execute(1L, "request-123", () -> {
+                    started.countDown();
+                    releaseProvider.await();
+                    return null;
+                }));
+
+        try {
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            service.markStage(1L, "request-123", InteractiveOperationStage.REQUESTING_MODEL);
+
+            var status = service.getStatus(1L, "request-123");
+            assertEquals("RUNNING", status.getState());
+            assertEquals(InteractiveOperationStage.REQUESTING_MODEL, status.getStage());
+            assertTrue(status.getElapsedMs() >= 0);
+        } finally {
+            releaseProvider.countDown();
+            request.get(2, TimeUnit.SECONDS);
+        }
     }
 
     @Test

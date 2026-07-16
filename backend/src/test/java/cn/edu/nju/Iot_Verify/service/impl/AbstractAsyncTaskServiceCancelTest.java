@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.TaskView;
 import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
@@ -93,7 +94,7 @@ class AbstractAsyncTaskServiceCancelTest {
         }
 
         private void reportProgress(int progress) {
-            updateTaskProgress(task.id, progress, "test");
+            updateTaskProgress(task.id, progress, TaskProgressStage.STARTING);
         }
 
         @Override
@@ -114,7 +115,7 @@ class AbstractAsyncTaskServiceCancelTest {
         }
 
         @Override
-        protected int atomicUpdateProgress(Long taskId, int progress) {
+        protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
             progressWriteCount++;
             task.progress = progress;
             return 1;

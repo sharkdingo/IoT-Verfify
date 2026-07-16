@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-16. Source: `frontend/src/api/`,
+Verified against code on 2026-07-17. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/router/index.ts`.
 
 ---
@@ -514,8 +514,7 @@ const taskId = submittedTask.id;
 let task = submittedTask;
 
 while (true) {
-  const progress = await boardApi.getTaskProgress(taskId);
-  task = await boardApi.getTask(taskId);               // VerificationTask
+  task = await boardApi.getTask(taskId);               // includes progress + progressStage
   if (task.status === 'COMPLETED' || task.status === 'FAILED' || task.status === 'CANCELLED') {
     break;
   }
@@ -586,11 +585,17 @@ When a task is already being watched through the 1s per-task polling loop, pass
 `excludeTaskIds` to the summary-list refresh so the inbox does not fetch and merge the
 same task redundantly; keep the locally watched task in the list until the watch loop
 ends.
+Render the localized `progressStage` returned with each task instead of deriving a phase
+from its percentage or elapsed time. Verification, simulation, and exploration stages
+are persisted with the percentage by the backend, so one task-detail poll is both more
+consistent and cheaper than separate progress and detail requests.
 
 User-facing verification modes should distinguish behavior, not implementation jargon:
 synchronous `verify` waits on the current page and returns the result directly;
 asynchronous `verifyAsync` creates a pollable task with progress/cancel controls and
-task-backed results.
+task-backed results. The Board defaults verification and simulation to background mode
+because it preserves navigation, exposes real phases, and supports cancellation; the
+synchronous option remains available when a user deliberately wants to wait in place.
 Before verification, simulation, or exploration captures immutable input, the Board waits
 for pending fix reconciliation and its mutation queue to drain, then rechecks the current
 devices/rules/specifications. Verification/simulation build a client model request;
@@ -737,6 +742,14 @@ through the proxy) and reads the response body with `response.body.getReader()` 
 This is the one place the axios
 instance and its interceptors are bypassed — the `Authorization` header must be set
 manually here. Protocol detail: [../api/chat-sse.md](../api/chat-sse.md).
+
+`onProgress` appends verifiable execution events instead of replacing one generic
+loading label. `ChatView` renders context loading, every planning round, tool start,
+tool outcome, duplicate-loop protection, and final-answer generation inside the active
+assistant message. The trace remains attached to that message as a collapsible in-memory
+record after completion. It is operational telemetry, not private model chain-of-thought;
+server history reloads contain the persisted user-visible answer but not these transient
+progress frames.
 
 The chat stop control aborts only the SSE response. It cannot undo a backend tool call
 that already started. `ChatView` therefore polls `getSessionActivity` until the server

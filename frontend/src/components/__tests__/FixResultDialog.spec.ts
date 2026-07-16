@@ -23,7 +23,9 @@ vi.mock('element-plus', () => ({
 
 const boardApi = vi.hoisted(() => ({
   getFaultRules: vi.fn(),
+  getFixRequestStatus: vi.fn(),
   fixTrace: vi.fn(),
+  cancelFixRequest: vi.fn(),
   applyFix: vi.fn()
 }))
 
@@ -131,6 +133,13 @@ describe('FixResultDialog strategy workflow', () => {
       summary: 'No user-defined automation rule was localized.',
       warnings: []
     })
+    boardApi.getFixRequestStatus.mockResolvedValue({
+      requestId: 'request-123',
+      state: 'RUNNING',
+      stage: 'SEARCHING_AND_VERIFYING',
+      elapsedMs: 1000
+    })
+    boardApi.cancelFixRequest.mockResolvedValue(true)
     elementPlus.confirm.mockResolvedValue('confirm')
   })
 
@@ -175,6 +184,22 @@ describe('FixResultDialog strategy workflow', () => {
 
     expect(wrapper.find('[data-testid="fix-strategy-loading"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="fix-apply-current"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('shows the server-observed automatic-fix phase while the strategy is running', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    const wrapper = mountDialog()
+    await flush()
+
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    await flush()
+
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(expect.any(String))
+    expect(wrapper.text()).toContain('fixProgressStage_SEARCHING_AND_VERIFYING')
+
+    pending.resolve(parameterResult())
+    await flush()
   })
 
   it('invalidates an old verified suggestion before retrying that strategy', async () => {

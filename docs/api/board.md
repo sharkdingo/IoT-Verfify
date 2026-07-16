@@ -719,6 +719,7 @@ status by `throwIfToolError`.
 | GET | `/api/board/specs/recommend` | Required `requestId` plus `maxRecommendations` (default 5; integer `1..10`), `category`, `language`, and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
 | POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
 | POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching in-flight request | Returns `InteractiveOperationStatusDto`; unknown or already-finished requests return 404 |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means a tracked task accepted interruption |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |
 | POST | `/api/board/rules/check-similarity` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Explicit AI semantic similarity check available from `RuleBuilderDialog` and the Board rule-recommendation apply flow. It may call the configured LLM and returns a typed `RuleSimilarityResultDto`: required `isSimilar`, `isDuplicate`, authoritative `requiresReview`, `similarity` (`0..1`), stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Internal candidate references and LLM prose are not ordinary UI concepts. |
@@ -849,11 +850,15 @@ conflict freedom.
 > identifiers remain an internal modeling detail.
 
 Standalone recommendations run in a bounded dedicated executor. Only one is admitted per user;
-pool saturation returns `503`. The UI shows the submitted Board-context counts, selected tool,
-elapsed time, and current transport/model phase while it waits. These are observable processing
-stages, not hidden model reasoning. Stop and panel-close actions call the cancellation endpoint
-before aborting the browser request. Recommendation prompts use a compact capability projection;
-the complete template manifests remain server-side for authoritative validation.
+pool saturation returns `503`. While a request is active, its status DTO is
+`{ requestId, state, stage, elapsedMs }`. `state` is `WAITING` or `RUNNING`; `stage` is one of
+`QUEUED`, `RUNNING`, `PREPARING_CONTEXT`, `REQUESTING_MODEL`, `VALIDATING_RESULT`, or
+`CANCELLING` for this workflow. The UI polls this endpoint and shows the submitted Board-context
+counts, selected tool, elapsed time, and the actual server-observed stage. It does not infer a
+phase from elapsed time, and these operational stages are not hidden model reasoning. Stop and
+panel-close actions call the cancellation endpoint before aborting the browser request.
+Recommendation prompts use a compact capability projection; the complete template manifests
+remain server-side for authoritative validation.
 
 If the AI provider's whole response is malformed JSON or lacks the required
 recommendation/scene arrays, recommendation endpoints return HTTP `502` through

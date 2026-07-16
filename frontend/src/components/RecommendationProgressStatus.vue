@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { InteractiveOperationStage } from '@/types/task'
 
 const props = defineProps<{
   kind: 'rule' | 'device' | 'spec' | 'scenario'
   elapsedSeconds: number
+  stage: InteractiveOperationStage
   templateCount: number
   deviceCount: number
   ruleCount: number
@@ -15,9 +17,14 @@ const { t } = useI18n()
 
 const toolLabel = computed(() => t(`app.recommendationProgressTool_${props.kind}`))
 const phaseLabel = computed(() => {
-  if (props.elapsedSeconds < 3) return t('app.recommendationProgressSubmitting')
-  if (props.elapsedSeconds < 30) return t('app.recommendationProgressAnalyzing')
-  return t('app.recommendationProgressStillWorking')
+  switch (props.stage) {
+    case 'QUEUED': return t('app.recommendationProgressQueued')
+    case 'PREPARING_CONTEXT': return t('app.recommendationProgressSubmitting')
+    case 'REQUESTING_MODEL': return t('app.recommendationProgressAnalyzing')
+    case 'VALIDATING_RESULT': return t('app.recommendationProgressValidating')
+    case 'CANCELLING': return t('app.recommendationProgressCancelling')
+    default: return t('app.recommendationProgressStillWorking')
+  }
 })
 </script>
 

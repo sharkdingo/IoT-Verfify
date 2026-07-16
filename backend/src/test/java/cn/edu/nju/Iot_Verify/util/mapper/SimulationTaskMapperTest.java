@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.util.mapper;
 
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
+import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTaskSummaryDto;
 import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
@@ -25,6 +26,8 @@ class SimulationTaskMapperTest {
                 .userId(1L)
                 .status(SimulationTaskPo.TaskStatus.COMPLETED)
                 .createdAt(LocalDateTime.now())
+                .progress(80)
+                .progressStage(TaskProgressStage.RUNNING_SIMULATION)
                 .isAttack(true)
                 .attackBudget(3)
                 .modeledDeviceAttackPointCount(4)
@@ -43,6 +46,7 @@ class SimulationTaskMapperTest {
         SimulationTaskSummaryDto summary = mapper.toSummaryDto(po);
 
         assertEquals(1, task.getDisabledRuleCount());
+        assertEquals(TaskProgressStage.RUNNING_SIMULATION, task.getProgressStage());
         assertEquals(true, task.getIsAttack());
         assertEquals(3, task.getAttackBudget());
         assertEquals(true, task.getEnablePrivacy());
@@ -58,6 +62,7 @@ class SimulationTaskMapperTest {
                 task.getGenerationIssues().get(0).getReasonCode());
         assertEquals(task.getGenerationIssues(), summary.getGenerationIssues());
         assertEquals(1, summary.getDisabledRuleCount());
+        assertEquals(TaskProgressStage.RUNNING_SIMULATION, summary.getProgressStage());
         assertEquals(true, summary.getIsAttack());
         assertEquals(3, summary.getAttackBudget());
         assertEquals(true, summary.getEnablePrivacy());
