@@ -4,14 +4,14 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-13. Source: board DTOs/services,
-`BoardDataConverter`, `modelRequest.ts`, scene import/export, and NuSMV generation.
+Verified against code on 2026-07-15. Source: board/fuzz DTOs and services,
+`BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
 
 - Board storage keeps authoring data: raw `DeviceNode.id`, display labels,
   positions, rules, specs, templates, the board environment pool, and layout.
-- Verification, simulation, traces, and fix use the model boundary: each device
+- Verification, simulation, bounded exploration, traces/findings, and fix use the model boundary: each device
   reference is the NuSMV-safe `varName` produced from `DeviceNode.id`.
 - Display labels never resolve identity. `label`, `deviceLabel`, and
   `deviceName` labels are readable snapshots only.
@@ -252,7 +252,7 @@ Frontend type: `Specification`. Backend DTO: `SpecificationDto`.
 
 | Field | Authority | Purpose | Downstream |
 | --- | --- | --- | --- |
-| `id` | Frontend/AI UUID | Stable spec identity | Save/delete, trace `violatedSpecId`, fix |
+| `id` | Frontend/AI UUID, scoped to the authenticated user | Stable spec identity within one account | Save/delete, trace `violatedSpecId`, fix |
 | `templateId` | Spec template config | P1-P7 property shape | NuSMV CTL/LTL generation |
 | `templateLabel` | Backend/UI derived from `templateId` | Localized/display label cache | Response/inspector only; ignored as write authority |
 | `aConditions` | User/AI | A-side condition list | Spec formula generation |
@@ -285,6 +285,8 @@ AI-tool, and NuSMV-generation boundaries.
 Specification list order and condition list order are preserved by portable scene JSON.
 Most generated formulas treat conditions as conjunctions, but the authored order remains
 part of the canvas snapshot for previews, review, and stable user-facing round trips.
+Persistence uses the composite primary key `(id, user_id)`, so importing the same portable
+scene into different accounts cannot overwrite or transfer another user's specifications.
 Board storage writes specification array positions to the internal
 `specification.list_order` column and orders every read by it (then by id only as a
 deterministic tie-breaker). This persistence detail is not exported.
@@ -403,7 +405,8 @@ Backend DTOs: `TraceDto`, `TraceStateDto`, `TraceDeviceDto`,
 ## Task
 
 Backend DTOs: `VerificationTaskDto`, `VerificationTaskSummaryDto`,
-`SimulationTaskDto`, `SimulationTaskSummaryDto`.
+`SimulationTaskDto`, `SimulationTaskSummaryDto`, `FuzzTaskDto`, and
+`FuzzTaskSummaryDto`.
 
 | Field | Authority | Purpose | Downstream |
 | --- | --- | --- | --- |
@@ -413,7 +416,7 @@ Backend DTOs: `VerificationTaskDto`, `VerificationTaskSummaryDto`,
 | `processingTimeMs` | Backend lifecycle | Duration | History |
 | `progress` | Backend lifecycle | 0-100 progress | Polling UI |
 | `errorMessage` | Backend lifecycle | Failure/cancel reason | UI feedback |
-| `outcome` | Verification result | `SATISFIED`, `VIOLATED`, or `INCONCLUSIVE` | Verification history |
+| `outcome` | Verification or fuzz result | Verification: `SATISFIED`, `VIOLATED`, `INCONCLUSIVE`; fuzz: `FOUND_VIOLATION`, `BUDGET_EXHAUSTED`, `INCONCLUSIVE` | Result/history presentation |
 | `modelComplete` | Generator/result reconciliation | Whether every requested rule/spec was modeled and parsed reliably | Verification history diagnostics |
 | `violatedSpecCount` | Verification result | Explicitly violated spec count | Verification history |
 | `disabledRuleCount` / `skippedSpecCount` | Generator/result | Model generation adjustments | UI diagnostics |
@@ -422,11 +425,14 @@ Backend DTOs: `VerificationTaskDto`, `VerificationTaskSummaryDto`,
 | `checkLogs` | Service/generator/executor | Diagnostic log lines | Result/history |
 | `nusmvOutput` | Executor | Truncated raw output | Debug/result details |
 | `requestedSteps` / `steps` | Simulation service | Requested/actual simulation steps | Simulation history |
+| `simulationTraceId` | Simulation trace persistence | Link task to saved simulation trace | History lookup |
+| `maxIterations` / `pathLength` / `populationSize` | Counterexample-exploration request | Bounded search configuration | Fuzz worker/result history |
+| `seed` | User or absent | Requested deterministic seed | Fuzz worker; absent values receive a generated effective seed |
+| `runId` | Completed fuzz task | Same ID as the completed task | Fuzz result lookup |
 
 `status=COMPLETED` is only a lifecycle fact. UI color and wording must not reuse it as a
 verification verdict: `outcome` is shown independently, and `modelComplete` independently
 states whether the requested model was fully represented.
-| `simulationTraceId` | Simulation trace persistence | Link task to saved simulation trace | History lookup |
 
 Cancellation is authoritative at the task row and mirrored by an in-memory marker on the
 running backend instance. Task terminal states are immutable. The legal async transitions
@@ -439,10 +445,39 @@ are:
 - `RUNNING -> COMPLETED` only after the result is ready to commit.
 
 A cancelled async task must not complete as success after cancellation has won the status
-transition. Verification/simulation completion also checks the in-memory cancellation
-marker inside the same transaction that writes traces, so a cancellation request that
+transition. Verification/simulation/fuzz completion also checks the in-memory cancellation
+marker inside the same transaction that writes traces or findings, so a cancellation request that
 arrives before completion persistence rolls back the history result instead of leaving a
-trace for a cancelled task.
+trace/finding for a cancelled task.
+
+## Counterexample exploration run and finding
+
+Backend DTOs: `FuzzRunDto`, `FuzzRunSummaryDto`, `FuzzEligibilityDto`,
+`FuzzFindingDto`, and `FuzzFindingSummaryDto`. The complete internal model input remains
+server-owned persisted JSON and is never exposed through the API.
+
+| Field | Authority | Purpose | Downstream |
+| --- | --- | --- | --- |
+| `FuzzRun.id` | Completed `fuzz_task` row | Run identity; identical to task ID | History/detail/delete |
+| `outcome` | Fuzz engine + service mapping | `FOUND_VIOLATION`, `BUDGET_EXHAUSTED`, or `INCONCLUSIVE`; never a proof of satisfaction | Neutral/red/amber result presentation |
+| `effectiveSeed` | Fuzz engine | Exact reproducibility seed | Retry/research reporting |
+| `iterations` / `generatedPaths` / `elapsedMs` | Fuzz engine | Bounded execution statistics; completed data must have `iterations <= maxIterations` and either `0/0` or `iterations <= generatedPaths <= iterations * populationSize` | Result explanation only; not coverage |
+| `modelSnapshot` | Board capture boundary | Frozen run-scope counts/time | Historical scope explanation |
+| `eligibility` | Fuzz model/spec classifier | Eligible IDs plus itemized unsupported/invalid specs | Fail-closed user explanation |
+| `limitations` | Fuzz engine | Stable codes for the run's semantic boundary | Localized result detail |
+| `dataAvailable` / `unavailableReasonCode` | Fuzz mapper | Fail-closed history-row decode status | Disable open/replay while preserving delete |
+| `FuzzFinding.id` | DB | Candidate evidence identity | Lazy detail/replay |
+| `fuzzTaskId` | Owning completed run | Finding ownership and grouping | Run history |
+| `violatedSpecId` / `violatedSpec` | Captured structured specification | Historical target identity and readable context | Replay/formal-verification handoff |
+| `firstViolationStep` | Finite monitor | First zero-based violating state | Timeline focus |
+| `states` | Deterministic finite simulation | Candidate state prefix | Read-only playback; never fix input |
+| `inputEvents` | Genome, paper initializer, or paper seed | Non-decreasing-step evidence with same-step precedence `RANDOM_INITIAL_STATE -> SEED_EVENT -> MODEL_CHOICE`; random initialization is restricted to step `0` | Reproduction/diagnostics without conflating initialization and overrides |
+| `seed` | Owning run | Finding reproducibility | UI/detail |
+
+Fuzz findings are deliberately separate from NuSMV `trace` rows. They do not carry a
+formal `checkedExpression`, cannot be submitted to fault localization or fix endpoints,
+and must not be rebuilt from the mutable current Board. The frontend loads full states
+only when replay is requested and offers formal verification as the next action.
 
 ## Fix
 

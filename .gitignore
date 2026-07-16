@@ -76,6 +76,7 @@ coverage/
 # Vitest / Playwright
 playwright-report/
 test-results/
+test-results-*/
 
 # ======================= Backend (Java / Maven) =============
 target/

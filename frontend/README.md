@@ -24,8 +24,8 @@ but it exercises real auth/board APIs, so keep the backend running at
 
 ```
 src/
-  api/       http.ts (axios) + auth / board / chat / rules / simulation modules
-  types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, fix, …)
+  api/       http.ts (axios) + auth / board / chat / rules / simulation / fuzzing modules
+  types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, fuzzing, fix, …)
   stores/    reactive state (auth, chat)
   router/    routes + auth guard
   views/     Landing / Board / NotFound

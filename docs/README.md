@@ -46,6 +46,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/architecture/device-identity.md](architecture/device-identity.md) | ✅ ready | Canonical device identity, display-label boundaries, NuSMV `varName` normalization | — |
 | [docs/architecture/data-authority-model.md](architecture/data-authority-model.md) | ✅ ready | Field-level data ownership for devices, environment pool, rules, specs, traces, tasks, and fix | — |
 | [docs/architecture/verification-flow.md](architecture/verification-flow.md) | ✅ ready | SmvGenerator → NusmvExecutor → SmvTraceParser pipeline | — |
+| [docs/architecture/fuzzing-flow.md](architecture/fuzzing-flow.md) | ✅ ready | HAFuzz-inspired bounded exploration role, pipeline, supported finite semantics, and proof boundary | — |
 | [docs/architecture/nusmv-model.md](architecture/nusmv-model.md) | ✅ ready | SMV modeling logic, identifier sanitization, user-input → model mapping | — |
 | [docs/architecture/spec-templates.md](architecture/spec-templates.md) | ✅ ready | 7 spec templates ↔ CTL/LTL, `templateId` mapping, P1–P5 | — |
 | [docs/architecture/auto-fix.md](architecture/auto-fix.md) | ✅ ready | Fault localization + parameter/condition/permanent-removal strategies + forward verification | — |
@@ -59,6 +60,7 @@ see Source) · ⚠️ pending (blocked on a decision).
 | [docs/api/auth.md](api/auth.md) | ✅ ready | Auth DTO-level contract | — |
 | [docs/api/board.md](api/board.md) | ✅ ready | Board/rules/specs/templates/recommend contracts | — |
 | [docs/api/verification.md](api/verification.md) | ✅ ready | Verify/simulate/task/trace/fix DTO-level contract | — |
+| [docs/api/fuzzing.md](api/fuzzing.md) | ✅ ready | Counterexample-exploration task/run/finding DTO-level contract | — |
 | [docs/api/chat-sse.md](api/chat-sse.md) | ✅ ready | SSE streaming protocol for chat | — |
 | [docs/api/ai-tools.md](api/ai-tools.md) | ✅ ready | The 33 AI tools: names, categories, argument semantics | — |
 
@@ -106,7 +108,7 @@ are intentionally preserved.
    link). It does **not** contain DTO fields or request/response examples.
 2. **Endpoint detail**: field-level DTO contracts, examples, validation and error
    semantics live in exactly one domain doc (`auth.md` / `board.md` /
-   `verification.md` / `chat-sse.md`). A field has one home.
+   `verification.md` / `fuzzing.md` / `chat-sse.md`). A field has one home.
 3. **Configuration**: `docs/getting-started/configuration.md` is the only place that
    lists environment variables and their default values. Every other document links
    to it instead of copying values.

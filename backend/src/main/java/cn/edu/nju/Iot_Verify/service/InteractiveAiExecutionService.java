@@ -1,0 +1,138 @@
+package cn.edu.nju.Iot_Verify.service;
+
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.stereotype.Service;
+
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Bounded, user-cancellable execution for synchronous AI recommendation endpoints. */
+@Slf4j
+@Service
+public class InteractiveAiExecutionService {
+
+    private final ThreadPoolTaskExecutor executor;
+    private final Map<RequestKey, ActiveExecution<?>> active = new ConcurrentHashMap<>();
+    private final Map<Long, String> activeByUser = new ConcurrentHashMap<>();
+
+    public InteractiveAiExecutionService(
+            @Qualifier("interactiveAiExecutor") ThreadPoolTaskExecutor executor) {
+        this.executor = executor;
+    }
+
+    public <T> T execute(Long userId, String requestId, Callable<T> operation) {
+        String id = validateRequestId(requestId);
+        RequestKey key = new RequestKey(userId, id);
+        String existing = activeByUser.putIfAbsent(userId, id);
+        if (existing != null) {
+            throw new ServiceUnavailableException(
+                    "Another AI recommendation is already running for this user. Stop it before starting a new one.");
+        }
+
+        ActiveExecution<T> execution = new ActiveExecution<>(key, operation);
+        if (active.putIfAbsent(key, execution) != null) {
+            activeByUser.remove(userId, id);
+            throw new ServiceUnavailableException(
+                    "An AI recommendation with this requestId is already running.");
+        }
+        try {
+            executor.execute(execution.task);
+            return execution.task.get();
+        } catch (RejectedExecutionException e) {
+            execution.cancel();
+            throw new ServiceUnavailableException(
+                    "AI recommendation capacity is currently full. Try again shortly.", e);
+        } catch (CancellationException e) {
+            throw new ServiceUnavailableException("AI recommendation was cancelled.", e);
+        } catch (InterruptedException e) {
+            execution.cancel();
+            Thread.currentThread().interrupt();
+            throw new ServiceUnavailableException("AI recommendation was interrupted.", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtime) throw runtime;
+            throw new ServiceUnavailableException("AI recommendation failed.", cause);
+        } finally {
+            if (executor.getThreadPoolExecutor() != null) executor.getThreadPoolExecutor().purge();
+        }
+    }
+
+    public boolean cancel(Long userId, String requestId) {
+        String id = validateRequestId(requestId);
+        ActiveExecution<?> execution = active.get(new RequestKey(userId, id));
+        boolean cancelled = execution != null && execution.cancel();
+        log.info("AI recommendation cancellation: userId={}, requestId={}, cancelled={}",
+                userId, id, cancelled);
+        return cancelled;
+    }
+
+    private String validateRequestId(String requestId) {
+        String value = requestId == null ? "" : requestId.trim();
+        if (!value.matches("[A-Za-z0-9_-]{8,80}")) {
+            throw new BadRequestException("requestId must contain 8-80 URL-safe characters.");
+        }
+        return value;
+    }
+
+    private record RequestKey(Long userId, String requestId) {
+    }
+
+    private enum ExecutionState {
+        WAITING,
+        RUNNING,
+        FINISHED
+    }
+
+    /**
+     * FutureTask reports cancellation before an interrupt-ignoring provider call has returned.
+     * Keep the request registered until the callable actually exits so per-user admission remains
+     * truthful and repeated stop/retry actions cannot stack hidden model work.
+     */
+    private final class ActiveExecution<T> {
+        private final RequestKey key;
+        private final AtomicReference<ExecutionState> state =
+                new AtomicReference<>(ExecutionState.WAITING);
+        private final AtomicBoolean cleaned = new AtomicBoolean(false);
+        private final FutureTask<T> task;
+
+        private ActiveExecution(RequestKey key, Callable<T> operation) {
+            this.key = key;
+            this.task = new FutureTask<>(() -> {
+                if (!state.compareAndSet(ExecutionState.WAITING, ExecutionState.RUNNING)) {
+                    throw new CancellationException("AI recommendation was cancelled before it started.");
+                }
+                try {
+                    return operation.call();
+                } finally {
+                    state.set(ExecutionState.FINISHED);
+                    cleanup();
+                }
+            });
+        }
+
+        private boolean cancel() {
+            boolean cancelled = task.cancel(true);
+            if (cancelled && state.compareAndSet(ExecutionState.WAITING, ExecutionState.FINISHED)) {
+                cleanup();
+            }
+            return cancelled;
+        }
+
+        private void cleanup() {
+            if (!cleaned.compareAndSet(false, true)) return;
+            active.remove(key, this);
+            activeByUser.remove(key.userId(), key.requestId());
+        }
+    }
+}

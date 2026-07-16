@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.provider.LlmProvider;
+import cn.edu.nju.Iot_Verify.configure.LlmConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ import java.util.List;
 public class PromptCompletionService {
 
     private final LlmProvider llmProvider;
+    private final LlmConfig llmConfig;
 
     /**
      * Run a single system+user completion and return the assistant text.
@@ -34,15 +36,37 @@ public class PromptCompletionService {
      * @return the assistant's text content, or empty string if the model returned nothing
      */
     public String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        return complete(systemPrompt, userPrompt, temperature, maxTokens, null, "general");
+    }
+
+    public String completeRecommendation(
+            String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        String recommendationModel = llmConfig.getRecommendationModel();
+        String model = recommendationModel == null || recommendationModel.isBlank()
+                ? null : recommendationModel.trim();
+        return complete(systemPrompt, userPrompt, temperature, maxTokens, model, "recommendation");
+    }
+
+    private String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens,
+                            String model, String purpose) {
+        long startedAt = System.nanoTime();
         LlmChatRequest request = LlmChatRequest.builder()
                 .messages(List.of(
                         LlmMessage.system(systemPrompt),
                         LlmMessage.user(userPrompt)))
                 .temperature(temperature)
                 .maxTokens(maxTokens)
+                .model(model)
                 .build();
 
         LlmChatResponse response = llmProvider.chat(request);
-        return response.text();
+        String text = response.text();
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+        log.info("LLM {} completion finished: promptChars={}, outputChars={}, elapsedMs={}",
+                purpose,
+                (systemPrompt == null ? 0 : systemPrompt.length()) + (userPrompt == null ? 0 : userPrompt.length()),
+                text == null ? 0 : text.length(),
+                elapsedMs);
+        return text;
     }
 }

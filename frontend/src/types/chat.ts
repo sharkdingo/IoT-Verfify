@@ -27,3 +27,11 @@ export interface StreamCommand {
     type: string;
     payload?: Record<string, any>;
 }
+
+export interface StreamProgress {
+    stage: 'CONTEXT_READY' | 'PLANNING' | 'TOOL_EXECUTION' | 'WRITING_RESPONSE'
+    toolName?: string | null
+    round?: number | null
+}
+
+export type ChatLogoutPreparation = 'ready' | 'outcome-unknown' | 'reconciliation-failed'

@@ -1,7 +1,10 @@
 // src/api/chat.ts - Chat API
 import api from '@/api/http'
-import { ChatMessage, ChatSession, ChatSessionActivity, StreamCommand } from "@/types/chat"
+import type { ChatMessage, ChatSession, ChatSessionActivity, StreamCommand, StreamProgress } from "@/types/chat"
 import { useAuth } from '@/stores/auth'
+import { router } from '@/router'
+
+export const CHAT_ACTIVITY_TIMEOUT_MS = 2500
 
 export type ChatStreamErrorKind =
     | 'HTTP_ERROR'
@@ -55,8 +58,14 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
   await api.delete(`/chat/sessions/${sessionId}`);
 }
 
-export const getSessionActivity = async (sessionId: string): Promise<ChatSessionActivity> => {
-  const response = await api.get<any>(`/chat/sessions/${sessionId}/activity`);
+export const getSessionActivity = async (
+    sessionId: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<ChatSessionActivity> => {
+  const response = await api.get<any>(`/chat/sessions/${sessionId}/activity`, {
+    timeout: options.timeoutMs ?? CHAT_ACTIVITY_TIMEOUT_MS,
+    signal: options.signal
+  });
   const activity = unpack<ChatSessionActivity>(response);
   if (!activity || activity.sessionId !== sessionId || typeof activity.active !== 'boolean') {
     throw new Error('Chat session activity response is incomplete');
@@ -70,6 +79,7 @@ export const sendStreamChat = async (
     callbacks: {
         onMessage: (text: string) => void
         onCommand?: (cmd: StreamCommand) => void;
+        onProgress?: (progress: StreamProgress) => void;
         onError?: (err: any) => void
         onFinish?: () => void
     },
@@ -96,8 +106,16 @@ export const sendStreamChat = async (
         });
 
         if (!response.ok) {
-            if (response.status === 401 || response.status === 403) {
+            if (response.status === 401) {
                 logout();
+                const currentRoute = router.currentRoute.value;
+                if (currentRoute.path !== '/') {
+                    const query: Record<string, string> = { mode: 'login' };
+                    if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
+                        query.redirect = currentRoute.fullPath;
+                    }
+                    await router.push({ path: '/', query });
+                }
             }
             const detail = await readErrorDetail(response);
             throw new ChatStreamError(`HTTP ${response.status}: ${detail}`, {
@@ -142,6 +160,9 @@ export const sendStreamChat = async (
                 }
                 if (json.command && callbacks.onCommand) {
                     callbacks.onCommand(json.command);
+                }
+                if (json.progress && callbacks.onProgress) {
+                    callbacks.onProgress(json.progress as StreamProgress);
                 }
                 if (content) {
                     callbacks.onMessage(content);

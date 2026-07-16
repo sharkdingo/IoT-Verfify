@@ -1,43 +1,26 @@
-import { expect, type APIRequestContext, type Page, type Route, test } from '@playwright/test'
+import { type APIRequestContext, type Page, type Route } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-
-const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
-
-type AuthUser = {
-  userId: number
-  phone: string
-  username: string
-  token: string
-}
+import {
+  apiBaseURL,
+  createAuthenticatedUser,
+  expect,
+  test,
+  type AuthUser
+} from './support/auth'
 
 const authHeaders = (auth: AuthUser) => ({
   Authorization: `Bearer ${auth.token}`
 })
+
+const fixRequestUrl = (traceId: number) =>
+  `${apiBaseURL}/api/verify/traces/${traceId}/fix?requestId=${crypto.randomUUID()}`
 
 const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> => {
   expect(response.ok(), await response.text()).toBeTruthy()
   const body = await response.json()
   expect(body.code, JSON.stringify(body)).toBe(200)
   return body.data as T
-}
-
-const createAuthenticatedUser = async (request: APIRequestContext): Promise<AuthUser> => {
-  const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
-  const phone = `139${suffix}`
-  const password = 'Pass1234'
-  const username = `flow${Date.now().toString(36).slice(-10)}`
-
-  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
-    data: { phone, username, password }
-  })
-  expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy()
-
-  const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { identifier: username, password }
-  })
-  const data = await unwrap<AuthUser>(loginResponse)
-  return data
 }
 
 const openWorkspace = async (page: Page, auth: AuthUser) => {
@@ -312,7 +295,7 @@ test.describe('board full-stack NuSMV user flow', () => {
         let selectedTrace: any = null
         let selectedFix: any = null
         for (const trace of traces.filter(item => item.isAttack === false)) {
-          const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${trace.id}/fix`, {
+          const fixResponse = await request.post(fixRequestUrl(trace.id), {
             headers: authHeaders(auth),
             data: { strategies: ['remove'] }
           })
@@ -334,7 +317,11 @@ test.describe('board full-stack NuSMV user flow', () => {
           `${apiBaseURL}/api/verify/traces/${selectedTrace.id}/fix/apply`,
           {
             headers: authHeaders(auth),
-            data: { strategy: 'remove' }
+            data: {
+              strategy: selectedFix.strategy,
+              suggestion: selectedFix,
+              suggestionToken: selectedFix.suggestionToken
+            }
           }
         )
         const applied = await unwrap<any>(applyResponse)
@@ -519,6 +506,11 @@ test.describe('board full-stack NuSMV user flow', () => {
     const auth = await createAuthenticatedUser(request)
     await saveEmptyBoard(request, auth)
     await openWorkspace(page, auth)
+
+    await expect(page.getByTestId('canvas-empty-state')).toBeVisible()
+    await expect(page.getByTestId('empty-state-add-device')).toBeVisible()
+    await expect(page.getByTestId('empty-state-generate-scenario')).toBeVisible()
+    await expect(page.getByTestId('empty-state-import-scene')).toBeVisible()
 
     await page.getByTestId('open-scenario-recommendations').click()
     await expect(page.getByTestId('scenario-recommendation-panel').locator('textarea'))
@@ -775,6 +767,12 @@ test.describe('board full-stack NuSMV user flow', () => {
     await expect(page.locator('.el-message').filter({ hasText: /futureConflictPolicy|不认识的字段/i })).toBeVisible()
     await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
 
+    const malformedJsonPath = testInfo.outputPath('scene-malformed.json')
+    fs.writeFileSync(malformedJsonPath, '{not-json', 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(malformedJsonPath)
+    await expect(page.locator('.el-message').filter({ hasText: /Invalid JSON file|JSON 文件无效/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
     const wrongScalarTypeScene = JSON.parse(firstJson)
     wrongScalarTypeScene.devices[0].label = 123
     const wrongScalarTypePath = testInfo.outputPath('scene-wrong-scalar-type.json')
@@ -799,6 +797,49 @@ test.describe('board full-stack NuSMV user flow', () => {
     fs.writeFileSync(emptyEnvironmentValuePath, JSON.stringify(emptyEnvironmentValueScene, null, 2), 'utf8')
     await page.getByTestId('scene-import-file').setInputFiles(emptyEnvironmentValuePath)
     await expect(page.locator('.el-message').filter({ hasText: /explicit non-blank value|显式填写非空 value/i })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const duplicateVariableScene = JSON.parse(firstJson)
+    duplicateVariableScene.devices[0].variables = [
+      { name: 'duplicate_input', value: 'one' },
+      { name: 'duplicate_input', value: 'two' }
+    ]
+    const duplicateVariablePath = testInfo.outputPath('scene-duplicate-device-variable.json')
+    fs.writeFileSync(duplicateVariablePath, JSON.stringify(duplicateVariableScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(duplicateVariablePath)
+    await expect(page.locator('.el-message').filter({
+      hasText: /duplicate_input.*devices\[0\]\.variables|devices\[0\]\.variables.*duplicate_input/i
+    })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const duplicatePrivacyScene = JSON.parse(firstJson)
+    duplicatePrivacyScene.devices[0].privacies = [
+      { name: 'duplicate_privacy', privacy: 'private' },
+      { name: 'duplicate_privacy', privacy: 'public' }
+    ]
+    const duplicatePrivacyPath = testInfo.outputPath('scene-duplicate-device-privacy.json')
+    fs.writeFileSync(duplicatePrivacyPath, JSON.stringify(duplicatePrivacyScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(duplicatePrivacyPath)
+    await expect(page.locator('.el-message').filter({
+      hasText: /duplicate_privacy.*devices\[0\]\.privacies|devices\[0\]\.privacies.*duplicate_privacy/i
+    })).toBeVisible()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
+
+    const duplicateEnvironmentScene = JSON.parse(firstJson)
+    const duplicateEnvironment = {
+      ...duplicateEnvironmentScene.environmentVariables[0],
+      name: 'duplicate_environment'
+    }
+    duplicateEnvironmentScene.environmentVariables = [
+      duplicateEnvironment,
+      { ...duplicateEnvironment }
+    ]
+    const duplicateEnvironmentPath = testInfo.outputPath('scene-duplicate-environment.json')
+    fs.writeFileSync(duplicateEnvironmentPath, JSON.stringify(duplicateEnvironmentScene, null, 2), 'utf8')
+    await page.getByTestId('scene-import-file').setInputFiles(duplicateEnvironmentPath)
+    await expect(page.locator('.el-message').filter({
+      hasText: /duplicate environment variable: duplicate_environment|重复的环境变量.*duplicate_environment/i
+    })).toBeVisible()
     await waitForApi<any[]>(request, auth, '/api/board/nodes', value => value.length === 0)
 
     const invalidScene = JSON.parse(firstJson)
@@ -936,7 +977,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(attacked.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(4)
     await page.getByTestId('close-verification-result').click()
 
-    const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${baselineTrace.id}/fix`, {
+    const fixResponse = await request.post(fixRequestUrl(baselineTrace.id), {
       headers: authHeaders(auth),
       data: { strategies: ['remove'] }
     })
@@ -951,7 +992,11 @@ test.describe('board full-stack NuSMV user flow', () => {
       `${apiBaseURL}/api/verify/traces/${baselineTrace.id}/fix/apply`,
       {
         headers: authHeaders(auth),
-        data: { strategy: 'remove' }
+        data: {
+          strategy: removal.strategy,
+          suggestion: removal,
+          suggestionToken: removal.suggestionToken
+        }
       }
     )
     const applied = await unwrap<any>(applyResponse)
@@ -1021,7 +1066,7 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(cameraNeverTrace).toBeTruthy()
 
     const fixResponse = await request.post(
-      `${apiBaseURL}/api/verify/traces/${cameraNeverTrace.id}/fix`,
+      fixRequestUrl(cameraNeverTrace.id),
       {
         headers: authHeaders(auth),
         data: { strategies: ['remove'] }
@@ -1038,13 +1083,18 @@ test.describe('board full-stack NuSMV user flow', () => {
       `${apiBaseURL}/api/verify/traces/${cameraNeverTrace.id}/fix/apply`,
       {
         headers: authHeaders(auth),
-        data: { strategy: 'remove' }
+        data: {
+          strategy: removal.strategy,
+          suggestion: removal,
+          suggestionToken: removal.suggestionToken
+        }
       }
     )
     const applied = await unwrap<any>(applyResponse)
     expect(applied).toMatchObject({
       applied: true,
-      verificationRechecked: true,
+      verificationRechecked: false,
+      verificationEvidenceReused: true,
       previousRuleCount: 3,
       currentRuleCount: 2
     })
@@ -1138,7 +1188,7 @@ test.describe('board full-stack NuSMV user flow', () => {
       value => value.some(trace => Array.isArray(trace.states) && trace.states.length > 0))
     expect(JSON.stringify(traces[0].violatedSpec)).toContain('taking photo')
 
-    const fixResponse = await request.post(`${apiBaseURL}/api/verify/traces/${traces[0].id}/fix`, {
+    const fixResponse = await request.post(fixRequestUrl(traces[0].id), {
       headers: authHeaders(auth),
       data: { strategies: ['remove', 'condition'] }
     })

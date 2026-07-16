@@ -25,11 +25,11 @@ public interface FixService {
     /**
      * Apply a repair strategy to the user's persisted board rules.
      *
-     * <p>The caller supplies only the strategy and optional ranges. The service re-derives a
-     * NuSMV-verified suggestion from the trace snapshot, checks board/template drift, and persists
-     * only that server-computed change.</p>
+     * <p>The caller supplies the exact displayed suggestion and its server-issued signature. The
+     * service checks the signature and board/template drift before persisting that same change.</p>
      */
     FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
+                               FixSuggestionDto suggestion, String suggestionToken,
                                Map<String, PreferredRange> preferredRanges);
 
     /**

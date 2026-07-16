@@ -67,7 +67,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("not-json");
 
         JsonNode json = objectMapper.readTree(tool.execute("{}"));
@@ -82,7 +82,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("{\"recommendations\":[]}");
 
         JsonNode json = objectMapper.readTree(tool.execute("{}"));
@@ -97,7 +97,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 contains("输出语言: 简体中文"),
                 anyDouble(),
@@ -142,7 +142,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -177,7 +177,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [{
@@ -213,7 +213,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -247,7 +247,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -283,7 +283,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(cameraDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -318,7 +318,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -353,7 +353,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -388,7 +388,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -450,7 +450,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(serviceWithoutApiEndState()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [{
@@ -485,7 +485,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[{
                           "rationale":"Temperature stays safe",
@@ -510,7 +510,7 @@ class RecommendSpecificationsToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[{
                           "templateId":"1",

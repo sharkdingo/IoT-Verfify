@@ -469,7 +469,13 @@ describe('board mutation response contracts', () => {
       }]
     }))
 
-    const result = await boardApi.applyFix(7, 'remove')
+    const result = await boardApi.applyFix(7, {
+      suggestionToken: 'signed-remove-suggestion',
+      strategy: 'remove',
+      description: 'Remove the conflicting rule',
+      verified: true,
+      removedRuleDescriptions: ['Old rule']
+    })
 
     expect(result.rules).toEqual([expect.objectContaining({
       id: '9',
@@ -502,7 +508,13 @@ describe('board mutation response contracts', () => {
       rules: []
     }))
 
-    await expect(boardApi.applyFix(7, 'condition')).rejects.toMatchObject({
+    await expect(boardApi.applyFix(7, {
+      suggestionToken: 'signed-condition-suggestion',
+      strategy: 'condition',
+      description: 'Adjust a condition',
+      verified: true,
+      conditionAdjustments: []
+    })).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })
   })

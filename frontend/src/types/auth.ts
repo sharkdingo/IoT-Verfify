@@ -27,12 +27,7 @@ export interface LoginResponse {
   token: string;
 }
 
-// 注册响应（不包含token）
-export interface RegisterResponse {
-  userId: number;
-  phone: string;
-  username: string;
-}
+export type RegisterResponse = LoginResponse;
 
 // 当前用户信息
 export interface UserInfo {

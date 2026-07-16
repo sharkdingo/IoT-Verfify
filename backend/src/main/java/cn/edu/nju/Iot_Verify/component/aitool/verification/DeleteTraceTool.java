@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.ModelTraceToolPresenter;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -24,10 +25,14 @@ import java.util.Set;
 public class DeleteTraceTool extends AbstractAiTool {
 
     private final VerificationService verificationService;
+    private final AiDestructiveActionGuard destructiveActionGuard;
 
-    public DeleteTraceTool(VerificationService verificationService, ObjectMapper objectMapper) {
+    public DeleteTraceTool(VerificationService verificationService,
+                           ObjectMapper objectMapper,
+                           AiDestructiveActionGuard destructiveActionGuard) {
         super(objectMapper);
         this.verificationService = verificationService;
+        this.destructiveActionGuard = destructiveActionGuard;
     }
 
     @Override
@@ -42,6 +47,10 @@ public class DeleteTraceTool extends AbstractAiTool {
         properties.put("confirmed", Map.of(
                 "type", "boolean",
                 "description", "Use false to preview the trace. Use true only in a later turn after explicit user confirmation."
+        ));
+        properties.put("impactToken", Map.of(
+                "type", "string",
+                "description", "Required with confirmed=true. Copy the opaque impactToken from the latest preview."
         ));
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object",
@@ -62,20 +71,28 @@ public class DeleteTraceTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
 
-            requireOnlyFields(args, "arguments", Set.of("traceId", "confirmed"));
+            requireOnlyFields(args, "arguments", Set.of("traceId", "confirmed", "impactToken"));
             long traceId = positiveLongArg(args, "traceId");
 
             TraceDto trace = verificationService.getTrace(userId, traceId);
+            Map<String, Object> previewSummary = previewSummary(traceId, trace);
             boolean confirmed = booleanArg(args, "confirmed", false);
             if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
-                Map<String, Object> preview = new LinkedHashMap<>();
-                preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this saved verification trace.");
-                preview.put("operation", "preview");
-                preview.put("requiresUserConfirmation", true);
-                preview.put("traceId", traceId);
-                preview.put("violatedSpecification", ModelTraceToolPresenter.violatedSpecification(trace));
-                preview.put("stateCount", safeList(trace.getStates()).size());
+                String impactToken = destructiveActionGuard.issue(
+                        userId, getName(), Long.toString(traceId), previewSummary, null);
+                Map<String, Object> preview = previewResponse(previewSummary, impactToken);
                 return readOnlySuccessJson(preview, "Verification trace deletion preview prepared; no changes were made.");
+            }
+
+            String impactToken = requiredTextField(args, "impactToken", "arguments");
+            AiDestructiveActionGuard.ConsumeResult confirmation = destructiveActionGuard.consume(
+                    userId, getName(), Long.toString(traceId), impactToken, previewSummary);
+            if (!confirmation.approved()) {
+                String freshToken = destructiveActionGuard.issue(
+                        userId, getName(), Long.toString(traceId), previewSummary, null);
+                return errorJson(confirmation.message(), confirmation.errorCode(), 409, Map.of(
+                        "requiresUserConfirmation", true,
+                        "currentPreview", previewResponse(previewSummary, freshToken)));
             }
 
             verificationService.deleteTrace(userId, traceId);
@@ -98,5 +115,23 @@ public class DeleteTraceTool extends AbstractAiTool {
             log.error("delete_trace failed", e);
             return errorJson("Failed to delete trace.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> previewSummary(long traceId, TraceDto trace) {
+        Map<String, Object> preview = new LinkedHashMap<>();
+        preview.put("traceId", traceId);
+        preview.put("violatedSpecification", ModelTraceToolPresenter.violatedSpecification(trace));
+        preview.put("stateCount", safeList(trace.getStates()).size());
+        return preview;
+    }
+
+    private Map<String, Object> previewResponse(Map<String, Object> summary, String impactToken) {
+        Map<String, Object> preview = new LinkedHashMap<>();
+        preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this saved verification trace.");
+        preview.put("operation", "preview");
+        preview.put("requiresUserConfirmation", true);
+        preview.putAll(summary);
+        preview.put("impactToken", impactToken);
+        return preview;
     }
 }

@@ -6,7 +6,7 @@ rules run before SMV generation.
 Request field contract for specs → [../api/verification.md](../api/verification.md).
 Modeling pipeline → [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-12. Source:
+Verified against code on 2026-07-14. Source:
 `component/nusmv/generator/module/SmvSpecificationBuilder.java`,
 `component/nusmv/generator/SmvModelValidator.java`,
 `frontend/src/assets/config/specTemplates.ts`.
@@ -59,6 +59,16 @@ what actually runs). For reference, the negated forms in
 | `5` | `EF((IF) & EG(!(THEN)))` |
 | `6` | `LTLSPEC F((IF) & G F(!(THEN)))` |
 | `7` | `EF(body)` |
+
+### Bounded exploration eligibility
+
+The HAFuzz-inspired counterexample explorer does not replace these CTL/LTL formulas.
+Its finite-path monitor supports only the safety templates whose violations have a
+finite witness: `1` (a state where A is false), `3` (a state where A is true), and `4`
+(an IF state followed by a non-THEN state). Templates `2`, `5`, and `6` need liveness
+reasoning beyond a bounded prefix; template `7` needs trust-label propagation. The
+exploration API reports those templates as ineligible instead of treating them as
+satisfied. See [fuzzing-flow.md](fuzzing-flow.md).
 
 ---
 

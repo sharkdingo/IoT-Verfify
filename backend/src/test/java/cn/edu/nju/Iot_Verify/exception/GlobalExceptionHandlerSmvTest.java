@@ -13,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.mock.http.MockHttpInputMessage;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
@@ -60,6 +61,20 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleMissingServletRequestParameter_shouldReturn400() {
+        MissingServletRequestParameterException ex =
+                new MissingServletRequestParameterException("requestId", "String");
+
+        ResponseEntity<Result<Void>> response = handler.handleMissingServletRequestParameter(ex);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        Result<Void> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(400, body.getCode());
+        assertEquals("Missing required parameter 'requestId'", body.getMessage());
+    }
+
+    @Test
     void handleValidationException_shouldExposeEveryFieldReason() {
         ValidationException ex = new ValidationException(Map.of(
                 "nodes[0].id", "Conflicts with a generated model marker",
@@ -98,6 +113,36 @@ class GlobalExceptionHandlerSmvTest {
         assertEquals(409, body.getCode());
         assertEquals("BOARD_REPLACEMENT_STALE", body.getData().get("reasonCode"));
         assertEquals(preview, body.getData().get("currentPreview"));
+    }
+
+    @Test
+    void handleFuzzTaskQuotaExceeded_shouldReturnStable429Details() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleFuzzTaskQuotaExceededException(
+                        new FuzzTaskQuotaExceededException(2L, 2));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(429, body.getCode());
+        assertEquals("FUZZ_ACTIVE_TASK_LIMIT_REACHED", body.getData().get("reasonCode"));
+        assertEquals(2L, body.getData().get("activeTaskCount"));
+        assertEquals(2, body.getData().get("maxActiveTasksPerUser"));
+    }
+
+    @Test
+    void handleFuzzTaskStorageQuotaExceeded_shouldReturnStable429Details() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleFuzzTaskStorageQuotaExceededException(
+                        new FuzzTaskStorageQuotaExceededException(100L, 100));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(429, body.getCode());
+        assertEquals("FUZZ_STORED_TASK_LIMIT_REACHED", body.getData().get("reasonCode"));
+        assertEquals(100L, body.getData().get("storedTaskCount"));
+        assertEquals(100, body.getData().get("maxStoredTasksPerUser"));
     }
 
     @Test

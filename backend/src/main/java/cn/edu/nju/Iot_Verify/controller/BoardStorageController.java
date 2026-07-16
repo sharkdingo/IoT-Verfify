@@ -11,6 +11,7 @@ import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
+import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
@@ -57,6 +58,7 @@ import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.exception.ValidationException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.InteractiveAiExecutionService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -105,6 +107,12 @@ public class BoardStorageController {
     private final ObjectMapper objectMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final BoardBatchRequestParser boardBatchRequestParser;
+    private final InteractiveAiExecutionService interactiveAiExecutionService;
+
+    @GetMapping("/snapshot")
+    public Result<BoardSemanticSnapshotDto> getSnapshot(@CurrentUser Long userId) {
+        return Result.success(boardService.getSemanticSnapshot(userId));
+    }
 
     @GetMapping("/nodes")
     public Result<List<DeviceNodeDto>> getNodes(@CurrentUser Long userId) {
@@ -309,8 +317,10 @@ public class BoardStorageController {
             @Size(max = 100) @RequestParam(defaultValue = "all") String category,
             @Size(max = 20) @RequestParam(defaultValue = "en") String language,
             @Size(max = RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH)
-            @RequestParam(defaultValue = "") String userRequirement) {
+            @RequestParam(defaultValue = "") String userRequirement,
+            @RequestParam String requestId) {
 
+        return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
@@ -330,6 +340,7 @@ public class BoardStorageController {
         } catch (Exception e) {
             throw new InternalServerException("Failed to process rule recommendations", e);
         }
+        });
     }
 
     /**
@@ -341,8 +352,10 @@ public class BoardStorageController {
     @PostMapping("/devices/recommend")
     public Result<RecommendationResponseDto<DeviceRecommendationDto>> recommendDevices(
             @CurrentUser Long userId,
+            @RequestParam String requestId,
             @NotNull @Valid @RequestBody DeviceRecommendationRequestDto requestBody) {
 
+        return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
             String argsJson = objectMapper.writeValueAsString(requestBody);
             String result = recommendRelatedDevicesTool.executeBoardRecommendations(argsJson);
@@ -358,6 +371,7 @@ public class BoardStorageController {
         } catch (Exception e) {
             throw new InternalServerException("Failed to process device recommendations", e);
         }
+        });
     }
 
     /**
@@ -403,8 +417,10 @@ public class BoardStorageController {
             @Size(max = 100) @RequestParam(defaultValue = "all") String category,
             @Size(max = 20) @RequestParam(defaultValue = "en") String language,
             @Size(max = RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH)
-            @RequestParam(defaultValue = "") String userRequirement) {
+            @RequestParam(defaultValue = "") String userRequirement,
+            @RequestParam String requestId) {
 
+        return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
             String args = objectMapper.writeValueAsString(Map.of(
                     "maxRecommendations", maxRecommendations,
@@ -425,6 +441,7 @@ public class BoardStorageController {
         } catch (Exception e) {
             throw new InternalServerException("Failed to process specification recommendations", e);
         }
+        });
     }
 
     /**
@@ -459,8 +476,10 @@ public class BoardStorageController {
     @PostMapping("/scenario/recommend")
     public Result<ScenarioRecommendationResponseDto> recommendScenario(
             @CurrentUser Long userId,
+            @RequestParam String requestId,
             @NotNull @Valid @RequestBody ScenarioRecommendationRequestDto requestBody) {
 
+        return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
             String argsJson = objectMapper.writeValueAsString(requestBody);
             String result = recommendScenarioTool.execute(argsJson);
@@ -475,6 +494,14 @@ public class BoardStorageController {
         } catch (Exception e) {
             throw new InternalServerException("Failed to process scenario recommendations", e);
         }
+        });
+    }
+
+    @DeleteMapping("/recommendations/{requestId}")
+    public Result<Boolean> cancelRecommendation(
+            @CurrentUser Long userId,
+            @PathVariable String requestId) {
+        return Result.success(interactiveAiExecutionService.cancel(userId, requestId));
     }
 
     /**

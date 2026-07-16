@@ -228,7 +228,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
             }
 
             String prompt = buildPrompt(userId, templates, maxDevices, maxRules, maxSpecs, language, userRequirement);
-            String aiResponse = promptCompletionService.complete(SYSTEM_PROMPT, prompt, TEMPERATURE, MAX_TOKENS);
+            String aiResponse = promptCompletionService.completeRecommendation(
+                    SYSTEM_PROMPT, prompt, TEMPERATURE, MAX_TOKENS);
 
             Map<String, Object> result;
             try {
@@ -274,7 +275,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("name", templateName(template));
             row.put("description", template.getManifest() == null ? "" : template.getManifest().getDescription());
-            row.put("manifest", template.getManifest());
+            row.put("capabilities", compactManifest(template.getManifest()));
             templateContext.add(row);
         }
 
@@ -298,6 +299,64 @@ public class RecommendScenarioTool extends AbstractAiTool {
         prompt.append("- 不要把 a_、trust_、privacy_、variable_ 当前缀约定；它们如果出现在变量名里就是普通业务名字。\n");
         prompt.append("\n请只返回 JSON。");
         return prompt.toString();
+    }
+
+    private Map<String, Object> compactManifest(DeviceTemplateDto.DeviceManifest manifest) {
+        if (manifest == null) return Map.of();
+        Map<String, Object> capabilities = new LinkedHashMap<>();
+        capabilities.put("modes", safeList(manifest.getModes()));
+        capabilities.put("initState", manifest.getInitState());
+        capabilities.put("workingStates", safeList(manifest.getWorkingStates()).stream()
+                .map(state -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", state.getName());
+                    item.put("trust", state.getTrust());
+                    item.put("privacy", state.getPrivacy());
+                    return item;
+                })
+                .toList());
+        capabilities.put("variables", safeList(manifest.getInternalVariables()).stream()
+                .map(variable -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", variable.getName());
+                    item.put("deviceLocal", variable.getIsInside());
+                    item.put("trust", variable.getTrust());
+                    item.put("privacy", variable.getPrivacy());
+                    item.put("values", variable.getValues());
+                    item.put("lowerBound", variable.getLowerBound());
+                    item.put("upperBound", variable.getUpperBound());
+                    return item;
+                }).toList());
+        capabilities.put("environmentDomains", safeList(manifest.getEnvironmentDomains()).stream()
+                .map(domain -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", domain.getName());
+                    item.put("trust", domain.getTrust());
+                    item.put("privacy", domain.getPrivacy());
+                    item.put("values", domain.getValues());
+                    item.put("lowerBound", domain.getLowerBound());
+                    item.put("upperBound", domain.getUpperBound());
+                    return item;
+                }).toList());
+        capabilities.put("apis", safeList(manifest.getApis()).stream()
+                .map(api -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", api.getName());
+                    item.put("signal", api.getSignal());
+                    item.put("acceptsContent", api.getAcceptsContent());
+                    item.put("startState", api.getStartState());
+                    item.put("endState", api.getEndState());
+                    return item;
+                }).toList());
+        capabilities.put("contents", safeList(manifest.getContents()).stream()
+                .map(content -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", content.getName());
+                    item.put("privacy", content.getPrivacy());
+                    return item;
+                })
+                .toList());
+        return capabilities;
     }
 
     @SuppressWarnings("unchecked")

@@ -20,18 +20,30 @@ const i18n = createI18n({
         trust: 'trust',
         privacy: 'privacy',
         unknown: 'Unknown',
+        fuzzFirstViolation: 'First violation',
         traceVisualization: {
           simulationStepChanges: 'Device Changes in This Step',
           counterexampleStepChanges: 'Counterexample Changes in This Step',
-          playbackChangesSummary: '{devices} device(s), {environment} environment value(s), {rules} rule(s)',
+          fuzzingStepChanges: 'Candidate Changes in This Step',
+          fuzzInputsInThisStep: 'Exploration inputs in this state',
+          fuzzDeviceStateInput: 'Device-state input',
+          fuzzDeviceInput: 'Device-variable input',
+          fuzzEnvironmentInput: 'Environment-value input',
+          fuzzEnvironmentRateInput: 'Environment-rate input',
+          fuzzRandomInitialSource: 'Random initial state',
+          fuzzSeedEventSource: 'Seed-generated input',
+          fuzzModelChoiceSource: 'Model choice',
+          noFuzzInputInThisStep: 'No exploration input was injected',
+          fuzzObservedModelChanges: 'Observable model or natural changes',
+          playbackInitialStateSummary: 'Initial path state; there is no previous state to compare.',
+          playbackChangesSummaryWithRules: '{devices} device(s) and {environment} environment value(s) changed; {rules} user automation(s) ran in this step.',
+          playbackChangesSummaryWithoutRules: '{devices} device(s) and {environment} environment value(s) changed; no user automation ran in this step.',
           playbackInitialStateNoPrevious: 'Initial state has no previous state',
           playbackNoObservableChanges: 'No observable values changed',
           environmentChanges: 'Environment changes',
-          automationInThisStep: 'Automation in this step',
+          automationInThisStep: 'Automations run in this step',
           playbackAnimatedEdges: '{count} matching edge(s) animate',
           playbackTriggeredRuleWithoutCurrentEdge: 'No current matching edge',
-          playbackInitialEdgesStatic: 'Initial edges remain still',
-          playbackEdgesStaticNoRule: 'No rule produced this state; edges remain still',
           playbackCompromisedEdgesStatic: '{count} compromised edge(s) remain still',
           dismissChanges: 'Hide changes',
           moveChangesPanel: 'Drag to move the change panel',
@@ -133,6 +145,147 @@ describe('PlaybackChangePopover', () => {
     })
 
     expect(wrapper.get('[data-testid="playback-change-empty"]').text()).toContain('No observable values changed')
-    expect(wrapper.get('[data-testid="playback-change-automation"]').text()).toContain('edges remain still')
+    expect(wrapper.text()).toContain('no user automation ran in this step')
+    expect(wrapper.find('[data-testid="playback-change-automation"]').exists()).toBe(false)
+  })
+
+  it('does not show an empty automation card for device and environment evolution', () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'counterexample',
+        stateNumber: 7,
+        totalStates: 26,
+        position: { x: 0, y: 0 },
+        changes: [{
+          deviceId: 'clock-1',
+          deviceLabel: 'Living room clock',
+          details: [{ kind: 'variable', name: 'time', previousValue: '4', currentValue: '5' }]
+        }],
+        environmentChanges: [
+          { name: 'time', previousValue: '4', currentValue: '5' },
+          { name: 'illuminance', previousValue: '5', currentValue: '4' }
+        ],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.text()).toContain('1 device(s) and 2 environment value(s) changed')
+    expect(wrapper.text()).toContain('no user automation ran in this step')
+    expect(wrapper.find('[data-testid="playback-change-automation"]').exists()).toBe(false)
+  })
+
+  it('separates fuzz inputs from rule and model changes and marks the first violation', () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 2,
+        totalStates: 4,
+        firstViolationStateNumber: 2,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 1,
+          kind: 'DEVICE_VARIABLE',
+          targetId: 'sensor-1',
+          targetLabel: 'Hall sensor',
+          property: 'motion',
+          value: 'active',
+          source: 'MODEL_CHOICE'
+        }],
+        changes: [{
+          deviceId: 'alarm-1',
+          deviceLabel: 'Alarm',
+          details: [{ kind: 'state', previousValue: 'off', currentValue: 'on' }]
+        }],
+        environmentChanges: [],
+        triggeredRules: [{ ruleId: 'rule-1', ruleLabel: 'Motion activates alarm' }],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 1,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    expect(wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()).toContain('Hall sensor.motion')
+    expect(wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()).toContain('active')
+    expect(wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()).toContain('Model choice')
+    expect(wrapper.get('[data-testid="playback-change-automation"]').text()).toContain('Motion activates alarm')
+    expect(wrapper.text()).toContain('Observable model or natural changes')
+    expect(wrapper.get('[data-testid="fuzzing-first-violation-badge"]').text()).toContain('First violation')
+  })
+
+  it('distinguishes random initialization from a seed-generated input at the same state', () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 1,
+        totalStates: 2,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 0,
+          kind: 'DEVICE_STATE',
+          targetId: 'door-1',
+          targetLabel: 'Front door',
+          property: 'workingState',
+          value: 'closed',
+          source: 'RANDOM_INITIAL_STATE'
+        }, {
+          step: 0,
+          kind: 'DEVICE_STATE',
+          targetId: 'door-1',
+          targetLabel: 'Front door',
+          property: 'workingState',
+          value: 'open',
+          source: 'SEED_EVENT'
+        }],
+        changes: [],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const evidence = wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()
+    expect(evidence).toContain('Random initial state')
+    expect(evidence).toContain('Seed-generated input')
+    expect(evidence).toContain('Device-state input')
+    expect(evidence).toContain('Front door.workingState')
+  })
+
+  it('presents an encoded environment rate as a user-facing numeric rate', () => {
+    const wrapper = mount(PlaybackChangePopover, {
+      props: {
+        kind: 'fuzzing',
+        stateNumber: 2,
+        totalStates: 3,
+        position: { x: 0, y: 0 },
+        inputEvents: [{
+          step: 1,
+          kind: 'ENVIRONMENT_RATE',
+          targetId: 'environment',
+          property: 'temperature',
+          value: 'rate:-1',
+          source: 'SEED_EVENT'
+        }],
+        changes: [],
+        environmentChanges: [],
+        triggeredRules: [],
+        compromisedAutomationLinks: [],
+        animatedEdgeCount: 0,
+        compromisedEdgeCount: 0
+      },
+      global: { plugins: [i18n] }
+    })
+
+    const evidence = wrapper.get('[data-testid="playback-change-fuzz-inputs"]').text()
+    expect(evidence).toContain('Environment-rate input')
+    expect(evidence).toContain('-1')
+    expect(evidence).not.toContain('rate:-1')
   })
 })

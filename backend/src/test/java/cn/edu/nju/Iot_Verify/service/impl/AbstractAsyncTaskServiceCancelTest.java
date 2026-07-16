@@ -4,8 +4,11 @@ import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.TaskView;
+import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -68,13 +71,16 @@ class AbstractAsyncTaskServiceCancelTest {
         }
     }
 
-    private static class TestAsyncTaskService extends AbstractAsyncTaskService<TestTask> {
+    static class TestAsyncTaskService extends AbstractAsyncTaskService<TestTask> {
         private final TestTask task = new TestTask(7L, 1L);
         private int cancelUpdateResult = 1;
         private boolean setCancelledDuringAtomicCancel;
         private boolean markerVisibleDuringAtomicCancel;
+        private int progressWriteCount;
+        private LocalExecutionStopResult additionalStop = LocalExecutionStopResult.NONE;
+        private int additionalStopRequests;
 
-        private TestAsyncTaskService() {
+        TestAsyncTaskService() {
             super(new ObjectMapper(), "TestTask");
         }
 
@@ -84,6 +90,10 @@ class AbstractAsyncTaskServiceCancelTest {
 
         private boolean hasCancelMarker(Long taskId) {
             return isTaskCancelled(taskId);
+        }
+
+        private void reportProgress(int progress) {
+            updateTaskProgress(task.id, progress, "test");
         }
 
         @Override
@@ -105,13 +115,20 @@ class AbstractAsyncTaskServiceCancelTest {
 
         @Override
         protected int atomicUpdateProgress(Long taskId, int progress) {
+            progressWriteCount++;
             task.progress = progress;
             return 1;
+        }
+
+        @Override
+        protected LocalExecutionStopResult stopAdditionalLocalExecution(Long taskId) {
+            additionalStopRequests++;
+            return additionalStop;
         }
     }
 
     @Test
-    void cancelTask_marksInMemoryBeforeAtomicDbCancel() {
+    void cancelTask_marksInMemoryAndConservativelyReportsUnknownRemoteExecution() {
         TestAsyncTaskService service = new TestAsyncTaskService();
 
         TaskCancellationResultDto result = service.cancel(1L, 7L);
@@ -119,8 +136,47 @@ class AbstractAsyncTaskServiceCancelTest {
         assertTrue(result.isCancellationAccepted());
         assertEquals(TaskCancellationOutcome.ACCEPTED, result.getCancellationOutcome());
         assertEquals("CANCELLED", result.getTaskStatus());
+        assertTrue(result.isExecutionMayStillBeStopping());
         assertTrue(service.markerVisibleDuringAtomicCancel);
         assertFalse(service.hasCancelMarker(7L), "marker should be cleared when no local worker owns the task");
+    }
+
+    @Test
+    void cancelTask_stopsQueuedDomainExecutionWithoutReportingARunningWorker() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+        service.additionalStop =
+                AbstractAsyncTaskService.LocalExecutionStopResult.STOPPED_BEFORE_START;
+
+        TaskCancellationResultDto result = service.cancel(1L, 7L);
+
+        assertTrue(result.isCancellationAccepted());
+        assertFalse(result.isExecutionMayStillBeStopping());
+        assertEquals(1, service.additionalStopRequests);
+        assertFalse(service.hasCancelMarker(7L));
+    }
+
+    @Test
+    void requestLocalExecutionStop_delegatesToDomainQueuedExecutionHook() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+        service.additionalStop =
+                AbstractAsyncTaskService.LocalExecutionStopResult.STOPPED_BEFORE_START;
+
+        assertTrue(service.requestLocalExecutionStop(7L));
+        assertEquals(1, service.additionalStopRequests);
+    }
+
+    @Test
+    void requestLocalExecutionStop_worksThroughTheCglibProxyUsedByTransactionalServices() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+        service.additionalStop =
+                AbstractAsyncTaskService.LocalExecutionStopResult.STOPPED_BEFORE_START;
+        ProxyFactory proxyFactory = new ProxyFactory(service);
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+        AsyncTaskExecutionControl proxy = (AsyncTaskExecutionControl) proxyFactory.getProxy();
+
+        assertTrue(proxy.requestLocalExecutionStop(7L));
+        assertEquals(1, service.additionalStopRequests);
     }
 
     @Test
@@ -156,5 +212,17 @@ class AbstractAsyncTaskServiceCancelTest {
         TestAsyncTaskService service = new TestAsyncTaskService();
 
         assertThrows(ResourceNotFoundException.class, () -> service.cancel(2L, 7L));
+    }
+
+    @Test
+    void updateTaskProgress_persistsOnlyWhenTheVisiblePercentageChanges() {
+        TestAsyncTaskService service = new TestAsyncTaskService();
+
+        service.reportProgress(12);
+        service.reportProgress(12);
+        service.reportProgress(13);
+
+        assertEquals(2, service.progressWriteCount);
+        assertEquals(13, service.task.progress);
     }
 }

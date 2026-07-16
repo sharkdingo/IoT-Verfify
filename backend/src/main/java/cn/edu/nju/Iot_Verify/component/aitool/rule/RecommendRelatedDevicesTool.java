@@ -312,7 +312,8 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                 + "\n\n请直接返回JSON格式的推荐结果，不要包含其他文字。";
 
         log.info("Calling LLM for board device recommendations, maxRecommendations={}", maxRecommendations);
-        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
+        String content = promptCompletionService.completeRecommendation(
+                SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
         if (content == null || content.isBlank()) {
             return "";

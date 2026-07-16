@@ -9,7 +9,11 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])'
 ].join(',')
 
-export const useModalAccessibility = (isOpen: Ref<boolean>, close: () => void) => {
+export const useModalAccessibility = (
+  isOpen: Ref<boolean>,
+  close: () => void,
+  fallbackFocus?: () => HTMLElement | null
+) => {
   const dialogRef = ref<HTMLElement | null>(null)
   let previousActiveElement: HTMLElement | null = null
 
@@ -32,9 +36,11 @@ export const useModalAccessibility = (isOpen: Ref<boolean>, close: () => void) =
   }
 
   const restoreFocus = () => {
-    if (previousActiveElement && document.contains(previousActiveElement)) {
-      previousActiveElement.focus()
-    }
+    const previousCanReceiveFocus = previousActiveElement
+      && previousActiveElement !== document.body
+      && document.contains(previousActiveElement)
+    const target = previousCanReceiveFocus ? previousActiveElement : fallbackFocus?.()
+    target?.focus()
     previousActiveElement = null
   }
 
@@ -80,7 +86,7 @@ export const useModalAccessibility = (isOpen: Ref<boolean>, close: () => void) =
     } else {
       restoreFocus()
     }
-  }, { flush: 'post' })
+  }, { flush: 'post', immediate: true })
 
   onBeforeUnmount(restoreFocus)
 

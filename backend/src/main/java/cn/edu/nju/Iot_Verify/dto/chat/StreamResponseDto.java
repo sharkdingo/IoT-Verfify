@@ -9,6 +9,7 @@ import java.util.Map;
 public class StreamResponseDto {
     private String content;      // 正常的聊天文本
     private CommandDto command;  // <--- 改为对象，支持携带参数
+    private ProgressDto progress;
 
     public StreamResponseDto(String content) {
         this.content = content;
@@ -17,6 +18,26 @@ public class StreamResponseDto {
     public StreamResponseDto(String content, CommandDto command) {
         this.content = content;
         this.command = command;
+    }
+
+    public static StreamResponseDto progress(String stage, String toolName, Integer round) {
+        StreamResponseDto response = new StreamResponseDto();
+        response.setProgress(new ProgressDto(stage, toolName, round));
+        return response;
+    }
+
+    @Data
+    @NoArgsConstructor
+    public static class ProgressDto {
+        private String stage;
+        private String toolName;
+        private Integer round;
+
+        public ProgressDto(String stage, String toolName, Integer round) {
+            this.stage = stage;
+            this.toolName = toolName;
+            this.round = round;
+        }
     }
 
     // 内部静态类或独立文件定义 CommandDto

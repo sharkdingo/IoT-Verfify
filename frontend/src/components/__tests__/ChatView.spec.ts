@@ -8,6 +8,7 @@ import { useChatStore } from '@/stores/chat'
 const chatApi = vi.hoisted(() => ({
   createSession: vi.fn(),
   deleteSession: vi.fn(),
+  getSessionActivity: vi.fn(),
   getSessionHistory: vi.fn(),
   getSessionList: vi.fn(),
   sendStreamChat: vi.fn()
@@ -33,8 +34,8 @@ const session = {
   updatedAt: '2026-07-13T12:00:00Z'
 }
 
-const mountChat = () => mount(ChatView, {
-  props: { boardMode: true },
+const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
+  props: { boardMode: true, ...props },
   global: {
     plugins: [i18n],
     stubs: {
@@ -50,6 +51,7 @@ describe('ChatView', () => {
     chatStore.setStreaming(false)
     i18n.global.locale.value = 'zh-CN'
     chatApi.getSessionList.mockResolvedValue([])
+    chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory.mockResolvedValue([])
     chatApi.deleteSession.mockResolvedValue(undefined)
   })
@@ -108,6 +110,110 @@ describe('ChatView', () => {
 
     finishStream()
     await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('awaits command confirmation and falls back to a full reconciliation', async () => {
+    let resolveReconciliation!: (value: boolean) => void
+    const executeCommand = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(() => new Promise<boolean>(resolve => {
+        resolveReconciliation = resolve
+      }))
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onCommand({ type: 'REFRESH_DATA', payload: { target: 'device_list' } })
+      callbacks.onMessage('完成')
+      callbacks.onFinish?.()
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('添加设备')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(executeCommand).toHaveBeenNthCalledWith(1, {
+      type: 'REFRESH_DATA',
+      payload: { target: 'device_list' }
+    })
+    expect(executeCommand).toHaveBeenNthCalledWith(2, {
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(chatStore.state.streaming).toBe(true)
+
+    resolveReconciliation(true)
+    await flushPromises()
+
+    expect(chatStore.state.streaming).toBe(false)
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps interactions locked until a failed reconciliation is retried successfully', async () => {
+    const executeCommand = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onCommand({ type: 'REFRESH_DATA', payload: { target: 'rule_list' } })
+      callbacks.onMessage('已处理')
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('修改规则')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="chat-reconciliation-required"]').text())
+      .toContain('需要重新同步当前状态')
+    expect(wrapper.get('[data-testid="chat-send"]').attributes('disabled')).toBeDefined()
+    expect(chatStore.state.streaming).toBe(true)
+
+    await wrapper.get('[data-testid="chat-reconciliation-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(false)
+    expect(chatStore.state.streaming).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('settles the active backend request before allowing logout', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      const controller = args[3] as AbortController
+      return new Promise<void>(resolve => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('运行工具')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    const result = await (wrapper.vm as any).prepareForLogout()
+    await flushPromises()
+
+    expect(result).toBe('ready')
+    expect(chatApi.getSessionActivity).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
     wrapper.unmount()
   })
 })

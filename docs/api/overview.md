@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-14. Source: `dto/Result.java`,
+Verified against code on 2026-07-15. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
 
@@ -62,7 +62,9 @@ Authorization: Bearer <token>
 
 The public endpoints (no token required) are `POST /api/auth/register` and
 `POST /api/auth/login`. `POST /api/auth/logout` and `DELETE /api/auth/account` live
-under `/api/auth` but still require a valid bearer token via `@CurrentUser`.
+under `/api/auth` but still require a valid bearer token at both the security-filter and
+`@CurrentUser` ownership boundaries. The application excludes Spring Boot's generated
+default user because authentication is JWT-only.
 
 ---
 
@@ -79,14 +81,15 @@ equals the HTTP status. Domain exceptions and their statuses:
 | 404 | `ResourceNotFoundException` | Resource does not exist |
 | 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
 | 422 | `ValidationException` | Semantic validation failure |
+| 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException` | Per-user active or stored counterexample-search task limit reached; response data includes a stable reason code, current count, and limit |
 | 500 | `InternalServerException`, `SmvGenerationException`, `PersistedDataIntegrityException` (and uncaught) | Server-side failure or unusable persisted semantic data |
 | 502 | `BadGatewayException` | The configured AI provider replied, but its output could not be parsed as the requested structured result |
 | 503 | `ServiceUnavailableException` | Thread pool saturated / task rejected |
 | 504 | `SimulationExecutionException` | Synchronous simulation timed out before producing a usable model trace |
 
-Additional mappings: bean-validation failures (`@Valid`, `@NotNull`, etc.) and
-malformed JSON map to `400`; `IllegalArgumentException` is masked to a generic `400`
-and `IllegalStateException` to `500`, so internal detail is not leaked.
+Additional mappings: missing required query parameters, bean-validation failures (`@Valid`,
+`@NotNull`, etc.), and malformed JSON map to `400`; `IllegalArgumentException` is masked
+to a generic `400` and `IllegalStateException` to `500`, so internal detail is not leaked.
 
 JSON scalar coercion is disabled for REST request DTOs. Integer fields require JSON
 integer numbers (not quoted strings, booleans, or floats), floating-point fields require

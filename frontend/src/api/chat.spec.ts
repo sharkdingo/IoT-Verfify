@@ -1,11 +1,23 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const authMocks = vi.hoisted(() => ({
+  logout: vi.fn(),
+  getToken: vi.fn(() => null as string | null)
+}))
+
+const routerMocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  currentRoute: { value: { path: '/board', fullPath: '/board' } }
+}))
 
 vi.mock('@/stores/auth', () => ({
   useAuth: () => ({
-    getToken: () => null,
-    logout: vi.fn()
+    getToken: authMocks.getToken,
+    logout: authMocks.logout
   })
 }))
+
+vi.mock('@/router', () => ({ router: routerMocks }))
 
 vi.mock('@/api/http', () => ({
   default: {
@@ -14,9 +26,16 @@ vi.mock('@/api/http', () => ({
 }))
 
 import http from '@/api/http'
-import { getSessionHistory, sendStreamChat } from './chat'
+import { getSessionActivity, getSessionHistory, sendStreamChat } from './chat'
 
 describe('chat stream lifecycle semantics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    authMocks.getToken.mockReturnValue(null)
+    routerMocks.currentRoute.value = { path: '/board', fullPath: '/board' }
+    routerMocks.push.mockResolvedValue(undefined)
+  })
+
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -48,6 +67,59 @@ describe('chat stream lifecycle semantics', () => {
       '/chat/sessions/session-1/messages',
       { signal: controller.signal }
     )
+  })
+
+  it('uses a short independent timeout and abort signal for activity checks', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: { data: { sessionId: 'session-1', active: false } }
+    })
+    const controller = new AbortController()
+
+    await getSessionActivity('session-1', { timeoutMs: 1500, signal: controller.signal })
+
+    expect(http.get).toHaveBeenCalledWith(
+      '/chat/sessions/session-1/activity',
+      { timeout: 1500, signal: controller.signal }
+    )
+  })
+
+  it('redirects an expired SSE session through the same login route as axios', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: vi.fn().mockResolvedValue('{"message":"Authentication required"}')
+    }))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() }
+    )).rejects.toMatchObject({ status: 401 })
+
+    expect(authMocks.logout).toHaveBeenCalledOnce()
+    expect(routerMocks.push).toHaveBeenCalledWith({
+      path: '/',
+      query: { mode: 'login', redirect: '/board' }
+    })
+  })
+
+  it('reports SSE authorization failures without logging the user out', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: vi.fn().mockResolvedValue('{"message":"Access denied"}')
+    }))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() }
+    )).rejects.toMatchObject({ status: 403 })
+
+    expect(authMocks.logout).not.toHaveBeenCalled()
+    expect(routerMocks.push).not.toHaveBeenCalled()
   })
 
   it('classifies a missing response body without exposing its English parser message as UI text', async () => {

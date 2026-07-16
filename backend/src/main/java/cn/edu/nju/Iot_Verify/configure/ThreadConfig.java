@@ -14,7 +14,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeoutException;
 
 @Configuration
 public class ThreadConfig {
@@ -30,6 +34,13 @@ public class ThreadConfig {
         ThreadPoolConfig.Pool pool = threadPoolConfig.getChat();
         return buildExecutor(pool.getCorePoolSize(), pool.getMaxPoolSize(),
                 pool.getQueueCapacity(), "ai-chat-exec-", pool.getAwaitTerminationSeconds());
+    }
+
+    @Bean("interactiveAiExecutor")
+    public ThreadPoolTaskExecutor interactiveAiExecutor() {
+        ThreadPoolConfig.Pool pool = threadPoolConfig.getInteractiveAi();
+        return buildExecutor(pool.getCorePoolSize(), pool.getMaxPoolSize(),
+                pool.getQueueCapacity(), "interactive-ai-", pool.getAwaitTerminationSeconds());
     }
 
     @Bean("verificationTaskExecutor")
@@ -60,6 +71,13 @@ public class ThreadConfig {
                 pool.getQueueCapacity(), "simulation-task-", pool.getAwaitTerminationSeconds());
     }
 
+    @Bean("fuzzTaskExecutor")
+    public ThreadPoolTaskExecutor fuzzTaskExecutor() {
+        ThreadPoolConfig.Pool pool = threadPoolConfig.getFuzzTask();
+        return buildExecutor(pool.getCorePoolSize(), pool.getMaxPoolSize(),
+                pool.getQueueCapacity(), "fuzz-task-", pool.getAwaitTerminationSeconds());
+    }
+
     private ThreadPoolTaskExecutor buildExecutor(int corePoolSize,
                                                  int maxPoolSize,
                                                  int queueCapacity,
@@ -85,7 +103,7 @@ public class ThreadConfig {
             Authentication authCopy = deepCopyAuthentication(auth);
             Long userId = UserContextHolder.getUserId();
             Map<String, String> mdcCtx = MDC.getCopyOfContextMap();
-            return () -> {
+            Runnable contextualRunnable = () -> {
                 SecurityContext newCtx = SecurityContextHolder.createEmptyContext();
                 if (authCopy != null) {
                     newCtx.setAuthentication(authCopy);
@@ -105,7 +123,46 @@ public class ThreadConfig {
                     MDC.clear();
                 }
             };
+            return runnable instanceof Future<?> future
+                    ? new FutureAwareContextRunnable(contextualRunnable, future)
+                    : contextualRunnable;
         };
+    }
+
+    /** Keeps a decorated Future visible to ThreadPoolExecutor.purge(). */
+    private record FutureAwareContextRunnable(Runnable contextualRunnable, Future<?> future)
+            implements Runnable, Future<Object> {
+
+        @Override
+        public void run() {
+            contextualRunnable.run();
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            return future.cancel(mayInterruptIfRunning);
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return future.isCancelled();
+        }
+
+        @Override
+        public boolean isDone() {
+            return future.isDone();
+        }
+
+        @Override
+        public Object get() throws InterruptedException, ExecutionException {
+            return future.get();
+        }
+
+        @Override
+        public Object get(long timeout, TimeUnit unit)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            return future.get(timeout, unit);
+        }
     }
 
     private Authentication deepCopyAuthentication(Authentication auth) {

@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.node;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.EnvironmentVariableChangeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -45,11 +46,14 @@ class NodeToolsErrorTest {
     private BoardStorageService boardStorageService;
 
     private ObjectMapper objectMapper;
+    private AiDestructiveActionGuard destructiveActionGuard;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
+        destructiveActionGuard = new AiDestructiveActionGuard(objectMapper);
         UserContextHolder.setUserId(1L);
+        UserContextHolder.setChatSessionId("node-test-session");
     }
 
     @AfterEach
@@ -91,7 +95,7 @@ class NodeToolsErrorTest {
 
     @Test
     void deleteNodeTool_whenDeviceMissing_shouldReturnStructuredError() throws Exception {
-        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper, destructiveActionGuard);
         when(boardStorageService.previewNodeDeletion(1L, "ghost"))
                 .thenThrow(new ResourceNotFoundException("Device", "ghost"));
 
@@ -105,7 +109,7 @@ class NodeToolsErrorTest {
 
     @Test
     void deleteNodeTool_rejectsCoercedOrUnknownIdentityFieldsBeforePreview() throws Exception {
-        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper, destructiveActionGuard);
 
         JsonNode numericId = objectMapper.readTree(tool.execute("{\"id\":42,\"confirmed\":false}"));
         JsonNode unknownField = objectMapper.readTree(tool.execute(
@@ -146,15 +150,15 @@ class NodeToolsErrorTest {
                 .deletedDevice(node)
                 .build();
         when(boardStorageService.previewNodeDeletion(1L, "ac_1")).thenReturn(preview);
-        DeleteNodeTool previewTool = new DeleteNodeTool(boardStorageService, objectMapper);
+        DeleteNodeTool previewTool = new DeleteNodeTool(boardStorageService, objectMapper, destructiveActionGuard);
         String impactToken = objectMapper.readTree(
                 previewTool.execute("{\"id\":\"ac_1\",\"confirmed\":false}"))
                 .path("impactToken").asText();
 
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
-        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, failingMapper);
-        when(boardStorageService.deleteNodeCascade(1L, "ac_1", impactToken))
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, failingMapper, destructiveActionGuard);
+        when(boardStorageService.deleteNodeCascade(1L, "ac_1", "preview-token"))
                 .thenReturn(DeviceDeletionResultDto.builder()
                         .deletedDevice(node)
                         .build());
@@ -171,7 +175,7 @@ class NodeToolsErrorTest {
 
     @Test
     void deleteNodeTool_deletesOnlyTargetNodeAndRelatedRulesSpecsAtomically() throws Exception {
-        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper);
+        DeleteNodeTool tool = new DeleteNodeTool(boardStorageService, objectMapper, destructiveActionGuard);
         DeviceNodeDto target = node("light_1", "KitchenLight", "Light");
         DeviceNodeDto variable = node("light_1_power", "power", "variable_power");
         DeviceNodeDto other = node("door_1", "Door", "Door");

@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-14. Source:
+Verified against code on 2026-07-16. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -212,8 +212,10 @@ the run-history endpoint so their counterexamples are removed atomically.
 | `dataAvailable` | `Boolean` | `true` when persisted semantic fields decoded successfully; `false` keeps a damaged row visible without treating it as usable |
 | `unavailableReasonCode` | `String` | Present for an unavailable row; currently `PERSISTED_SEMANTIC_DATA_INVALID` |
 
-`VerificationRunDto` contains every summary field plus `specResults`, `checkLogs`, and
-`nusmvOutput`.
+`VerificationRunDto` contains the run metadata and semantic result fields plus
+`specResults`, `checkLogs`, and `nusmvOutput`. It reports `counterexampleCount` but does
+not embed counterexample summaries or full trace states; load those from
+`GET /api/verify/runs/{id}/traces`.
 
 `violatedSpecCount` and `counterexampleCount` are intentionally separate. NuSMV can
 report a property as false without returning a trace that the parser can reconstruct;
@@ -363,7 +365,7 @@ request was evaluated, not that cancellation won the race.
 | `cancellationAccepted` | `Boolean` | `true` only when an active task was atomically changed to `CANCELLED` |
 | `cancellationOutcome` | `ACCEPTED \| ALREADY_CANCELLED \| ALREADY_COMPLETED \| ALREADY_FAILED \| NO_LONGER_CANCELLABLE` | User-facing result of the attempt |
 | `taskStatus` | `PENDING \| RUNNING \| COMPLETED \| FAILED \| CANCELLED` | Authoritative status after the attempt |
-| `executionMayStillBeStopping` | `Boolean` | The persisted status is already `CANCELLED`, but an interrupted running checker may still be unwinding |
+| `executionMayStillBeStopping` | `Boolean` | The persisted status is already `CANCELLED`, but queued or running work may still exist locally or on another backend instance; `false` is returned only when this instance definitively removed the queued execution before it started |
 
 Clients must branch on `cancellationOutcome`; they must not turn every HTTP 200 into
 "cancelled successfully". The frontend also verifies that the returned `taskId`,
@@ -817,7 +819,9 @@ was later removed.
 ### `POST /api/verify/traces/{id}/fix` — fix suggestions
 
 May invoke NuSMV multiple times (bounded by `FIX_TIMEOUT_MS`, see
-[configuration.md](../getting-started/configuration.md)).
+[configuration.md](../getting-started/configuration.md)). A URL-safe `requestId` query parameter
+is required so the client can cancel this exact search through
+`DELETE /api/verify/fix-requests/{requestId}`.
 
 **Request body**: `FixRequestDto` — optional; omit or send `null` for defaults.
 
@@ -840,7 +844,7 @@ omitted), never when the caller explicitly supplies an empty or malformed select
 | `traceId` | `Long` | |
 | `violatedSpecId` | `String` | |
 | `faultRules` | `FaultRuleDto[]` | Same schema as fault localization |
-| `suggestions` | `FixSuggestionDto[]` | Advisory proposals that passed recomputation against every submitted specification in the complete formal model used for the fix attempt; not a real-world repair guarantee |
+| `suggestions` | `FixSuggestionDto[]` | Advisory proposals that passed every submitted specification in the complete formal model used for the fix attempt. Each verified suggestion includes a short-lived `suggestionToken` binding the exact visible proposal to this user, trace, strategy, and preferred ranges |
 | `strategyAttempts` | `FixStrategyAttemptDto[]` | One entry per requested strategy, including skipped/failed attempts and a user-readable reason |
 | `fixable` | `boolean` | Whether at least one complete-model, forward-verified suggestion was found; not whether repair was merely attempted |
 | `sourceModelComplete` | `Boolean` | Whether the counterexample source verification used a complete model |
@@ -858,7 +862,7 @@ omitted), never when the caller explicitly supplies an empty or malformed select
 from "the strategy started but did not finish" (`TIMED_OUT`) and "the strategy was
 not run" (`SKIPPED_*`).
 
-`FixSuggestionDto`: `{ strategy, description, parameterAdjustments[],
+`FixSuggestionDto`: `{ suggestionToken, strategy, description, parameterAdjustments[],
 conditionAdjustments[], removedRuleDescriptions: String[], verified }`.
 All collection fields in `FixResultDto` and `FixSuggestionDto` are always serialized as
 JSON arrays. A collection that does not apply to the selected strategy is `[]`, never
@@ -869,37 +873,39 @@ lowerBound, upperBound, description }`.
 relation, value }`.
 `targetId` is the opaque API-facing selector for preferred ranges within the same
 trace/fix context. Clients should copy it from a returned `ParameterAdjustment`, not generate it.
-If a copied target is no longer available during recompute, the response reports it in
+If a copied target is not available during generation, the response reports it in
 `unusedPreferredRangeSelections`. Rule/condition positions remain server-side
-trace-snapshot locators for recompute, drift checks, and patching; they are not part of
+trace-snapshot locators for verification, drift checks, and patching; they are not part of
 the REST or AI response contract.
 
 ### `POST /api/verify/traces/{id}/fix/apply` — apply a fix suggestion
 
-Applies a selected repair strategy to the user's persisted board rules. The server
-recomputes the concrete proposal from the trace context and saves only the freshly
-verified result.
+Applies the exact signed repair suggestion the user is viewing. The server verifies its
+short-lived signature and saves that same proposal only when the complete current model snapshot
+still matches the verification context.
 
 **Request body**: `FixApplyRequestDto`
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
 | `strategy` | `String` | `parameter` / `condition` / `remove` |
-| `preferredRangeSelections` | `PreferredRangeSelection[]` | Optional. The same selections `/fix` used to produce the suggestion; the server replays them in its recompute so the same search space (and result) is reproduced. Omit if `/fix` was called without selections |
+| `suggestion` | `FixSuggestionDto` | Required exact suggestion returned by `/fix` |
+| `suggestionToken` | `String` | Required opaque token copied from that suggestion |
+| `preferredRangeSelections` | `PreferredRangeSelection[]` | Optional exact selections used for the preceding `/fix`; they are covered by the signature. Omit when generation used no selections |
 
 **Safety** — the server does **not** trust the client:
 
-- **Server re-verification.** The client submits no concrete fix payload. On apply the server
-  recomputes the selected strategy against the trace's own context (a fresh NuSMV-verified run,
-  replaying `preferredRangeSelections`). If it cannot reproduce a verified suggestion, it
-  **rejects with `400`**; it never applies a client-authored operation list.
+- **Exact-suggestion signature.** The client submits the displayed proposal, but cannot alter it:
+  the HMAC-protected token binds the user, trace, strategy, complete visible suggestion,
+  preferred ranges, expiry, and hidden remove-rule positions. Tampering, expiry, or mixing a token
+  with another trace/range rejects with `400`. Apply therefore cannot silently substitute a
+  different newly searched proposal.
 - **Complete-source-model guard.** A trace produced while any rule/specification was
   omitted cannot be used for automatic fix generation or apply. Suggestion generation
   returns explicit skipped strategy attempts; apply rejects with `400` and requires the
   user to resolve generation warnings and verify again. A saved trace with missing
   `modelComplete` metadata also fails closed: zero omission counts alone are not evidence
-  that the source model was complete. Apply checks this before template reads or NuSMV
-  recomputation.
+  that the source model was complete. Apply checks this before template reads or persistence.
 - **Board-drift guard (rules).** The server's internal rule/condition positions are relative to the
   trace's verification-time rule snapshot. The server aligns that snapshot with the current board
   rules by index + **order-preserving** fingerprint (device varName, attribute, relation, value, plus
@@ -909,9 +915,8 @@ verified result.
   (read → check → apply → write are one atomic critical section), so a concurrent save cannot slip in
   between the check and the write.
 - **Frozen-template replay and drift guard.** Verification traces persist the exact
-  referenced manifests internally. `/fix` and apply recomputation both build their NuSMV
-  model from that frozen set, so a queued edit or later template change cannot silently
-  alter what is being re-proved. Before apply, the server compares the current manifests'
+  referenced manifests internally. `/fix` builds its NuSMV model from that frozen set. Before
+  apply, the server compares the current manifests'
   persisted JSON projection with the saved set and requires the same referenced-template
   keys. This avoids false drift from deserialization-only compatibility fields such as an
   omitted versus empty legacy API `Assignments` list, while a real modeled-field or
@@ -921,10 +926,8 @@ verified result.
   unavailable comparison as proven drift or silently omits the degradation.
 - **Spec/device/environment-drift guard.** apply also rejects with `400` when the current board's
   specifications, environment pool, or device instance state (variables, privacies, initial state,
-  trust) changed after the trace was recorded. The server recompute replays the trace's *stored*
-  context, so on its own it would re-prove the same fix and never notice edits that touch neither
-  rules nor templates.
-  apply therefore compares a canonical **semantic fingerprint** of the trace snapshot against the current
+  trust) changed after the trace was recorded. Apply compares a canonical **semantic fingerprint**
+  of the trace snapshot against the current
   board. It is *not* a raw-JSON equality check: both sides run through the same normalization (device
   names canonicalized, effective device-local variable/trust/privacy values and the board
   environment pool derived from the same manifests NuSMV uses, values de-quoted), so an
@@ -942,8 +945,9 @@ verified result.
   Verification flags (`isAttack`/`attackBudget`/`enablePrivacy`) are per-request and not persisted for
   re-proving, so re-run verification after changing them.
 
-The server then applies its own recomputed suggestion (not the client's) to a deep copy of the
-persisted rules, so what is saved is exactly what NuSMV just verified.
+The server then applies the token-verified suggestion to a deep copy of the persisted rules. The
+unchanged complete snapshot means the earlier NuSMV evidence still describes the model being
+changed; apply does not repeat the expensive strategy search.
 
 **Response**: `FixApplyResultDto`
 
@@ -951,7 +955,8 @@ persisted rules, so what is saved is exactly what NuSMV just verified.
 | :--- | :--- | :--- |
 | `applied` | `boolean` | `true` on success |
 | `strategy` | `String` | The applied strategy |
-| `verificationRechecked` | `boolean` | `true` only when the server recomputed the concrete suggestion and every submitted specification passed in the complete generated formal model used for this write; this is not a real-world safety guarantee |
+| `verificationRechecked` | `boolean` | `false` for the public signed-suggestion flow because apply does not repeat the search; retained for internal compatibility paths that do recompute |
+| `verificationEvidenceReused` | `boolean` | `true` for the public signed-suggestion flow: existing verification evidence was reused only after all rule/template/spec/device/environment drift checks passed atomically |
 | `appliedSuggestion` | `FixSuggestionDto` | Server-trusted suggestion actually applied; user-facing descriptions are included while internal rule/condition positions remain hidden |
 | `previousRuleCount` / `currentRuleCount` | `int` | Rule-set size before/after the atomic write; particularly important for the destructive `remove` strategy |
 | `message` | `String` | English API summary for logs and non-localized callers; the frontend uses the structured fields above to render a localized, scope-qualified result instead of treating this text as an unconditional guarantee |
@@ -967,13 +972,14 @@ wildcard start-state segments are not treated as contradictions. During apply, N
 device references are mapped back to the current raw board node ids; an unmappable reference fails
 the transaction without writing a rule.
 
-`/fix` and `/fix/apply` are synchronous, server-bounded operations. Every NuSMV call
+`/fix` is a synchronous, server-bounded operation. Every NuSMV call
 inside the fix pipeline is capped by the smaller of `NUSMV_TIMEOUT_MS` and the remaining
-`FIX_TIMEOUT_MS` budget, including the wait for NuSMV execution capacity. Closing a
-client's read-only suggestion view does not cancel a request already executing on the
-server. The Board therefore does not describe close as cancel; during the mutating
-`fix/apply` request it keeps the dialog open until a definitive response and refreshes
-rules when transport failure leaves the write outcome uncertain.
+`FIX_TIMEOUT_MS` budget, including the wait for NuSMV execution capacity. The Board shows the
+selected strategy, validation phase, and elapsed time. Closing the suggestion view calls the
+request-specific cancellation endpoint before aborting transport; the backend interrupts the
+tracked search and purges cancelled queued work. `/fix/apply` performs no strategy search and
+keeps the dialog open until a definitive write response; transport uncertainty still triggers
+authoritative rule reconciliation.
 
 ### `GET /api/verify/tasks/{id}/traces` — traces for an accepted background run
 

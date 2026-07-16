@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmRole;
 import cn.edu.nju.Iot_Verify.component.ai.provider.LlmProvider;
+import cn.edu.nju.Iot_Verify.configure.LlmConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -19,12 +20,14 @@ class PromptCompletionServiceTest {
 
     @Mock
     private LlmProvider llmProvider;
+    @Mock
+    private LlmConfig llmConfig;
     @Captor
     private ArgumentCaptor<LlmChatRequest> requestCaptor;
 
     @Test
     void complete_buildsSystemUserRequestWithParams_andReturnsText() {
-        PromptCompletionService service = new PromptCompletionService(llmProvider);
+        PromptCompletionService service = new PromptCompletionService(llmProvider, llmConfig);
         when(llmProvider.chat(requestCaptor.capture()))
                 .thenReturn(LlmChatResponse.ofText("{\"recommendations\":[]}"));
 
@@ -46,7 +49,7 @@ class PromptCompletionServiceTest {
 
     @Test
     void complete_returnsEmptyString_whenModelReturnsNothing() {
-        PromptCompletionService service = new PromptCompletionService(llmProvider);
+        PromptCompletionService service = new PromptCompletionService(llmProvider, llmConfig);
         when(llmProvider.chat(org.mockito.ArgumentMatchers.any(LlmChatRequest.class)))
                 .thenReturn(LlmChatResponse.empty());
 

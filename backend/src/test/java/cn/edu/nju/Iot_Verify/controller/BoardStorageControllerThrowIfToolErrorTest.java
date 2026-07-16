@@ -22,6 +22,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDt
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.InteractiveAiExecutionService;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,10 +33,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class BoardStorageControllerThrowIfToolErrorTest {
@@ -49,6 +53,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
     @Mock private RecommendScenarioTool recommendScenarioTool;
     @Mock private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     @Mock private BoardBatchRequestParser boardBatchRequestParser;
+    @Mock private InteractiveAiExecutionService interactiveAiExecutionService;
 
     private BoardStorageController controller;
     private RuleDto dummyRule;
@@ -63,7 +68,10 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 boardService, recommendRulesTool, recommendRelatedDevicesTool,
                 checkDuplicateRuleTool, checkRuleSimilarityTool,
                 recommendSpecificationsTool, recommendScenarioTool, objectMapper,
-                deviceTemplateSchemaValidator, boardBatchRequestParser);
+                deviceTemplateSchemaValidator, boardBatchRequestParser, interactiveAiExecutionService);
+        lenient().when(interactiveAiExecutionService.execute(
+                        anyLong(), anyString(), org.mockito.ArgumentMatchers.<Callable<Object>>any()))
+                .thenAnswer(invocation -> invocation.<Callable<Object>>getArgument(2).call());
         dummyRule = new RuleDto();
         dummyRule.setConditions(List.of());
         dummyRule.setCommand(new RuleDto.Command("dev", "on", null, null));
@@ -188,7 +196,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "deviceLabel":"Alarm","deviceName":"Alarm","action":"turn_on"}}]}
                 """);
 
-        var response = controller.recommendRules(1L, 5, "all", "en", "").getData();
+        var response = controller.recommendRules(1L, 5, "all", "en", "", "request-123").getData();
 
         assertEquals(1, response.getAdjustedCount());
         assertEquals("apiEventSyntaxNormalized", response.getAdjustedItems().get(0).getReasonCode());
@@ -206,7 +214,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
     }
 
     @Test
@@ -222,7 +230,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
     }
 
     @Test
@@ -237,7 +245,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendRules(1L, 5, "all", "en", ""));
+                () -> controller.recommendRules(1L, 5, "all", "en", "", "request-123"));
     }
 
     @Test
@@ -258,7 +266,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertDoesNotThrow(() -> controller.recommendDevices(
-                1L, new DeviceRecommendationRequestDto()));
+                1L, "request-123", new DeviceRecommendationRequestDto()));
     }
 
     @Test
@@ -276,7 +284,8 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "relation":"=","value":"on"}]}]}
                 """);
 
-        assertDoesNotThrow(() -> controller.recommendSpecs(1L, 5, "all", "en", ""));
+        assertDoesNotThrow(() -> controller.recommendSpecs(
+                1L, 5, "all", "en", "", "request-123"));
     }
 
     @Test
@@ -290,7 +299,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         assertThrows(BadGatewayException.class,
-                () -> controller.recommendSpecs(1L, 5, "all", "en", ""));
+                () -> controller.recommendSpecs(1L, 5, "all", "en", "", "request-123"));
     }
 
     @Test
@@ -315,7 +324,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 """);
 
         ScenarioRecommendationResponseDto response = controller.recommendScenario(
-                1L, new ScenarioRecommendationRequestDto()).getData();
+                1L, "request-123", new ScenarioRecommendationRequestDto()).getData();
         JsonNode scene = objectMapper.valueToTree(response.getScene());
 
         assertEquals(List.of("manifest", "name"),

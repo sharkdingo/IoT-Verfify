@@ -20,6 +20,9 @@ public class ThreadPoolConfig {
     private Pool chat = new Pool(10, 50, 200, 30);
     @Valid
     @NotNull
+    private Pool interactiveAi = new Pool(2, 4, 8, 30);
+    @Valid
+    @NotNull
     private Pool verificationTask = new Pool(4, 8, 40, 60);
     @Valid
     @NotNull
@@ -30,6 +33,9 @@ public class ThreadPoolConfig {
     @Valid
     @NotNull
     private Pool simulationTask = new Pool(4, 8, 40, 60);
+    @Valid
+    @NotNull
+    private Pool fuzzTask = new Pool(2, 4, 20, 60);
 
     @Data
     public static class Pool {

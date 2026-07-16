@@ -8,12 +8,15 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
+import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -58,9 +62,13 @@ class ChatServiceImplToolLoopControlTest {
     @Mock
     private ChatMessageRepository messageRepo;
     @Mock
+    private UserRepository userRepository;
+    @Mock
     private LlmChatService llmChatService;
     @Mock
     private AiToolManager aiToolManager;
+    @Mock
+    private AiDestructiveActionGuard destructiveActionGuard;
     @Mock
     private ChatMapper chatMapper;
     private LlmMessageCodec messageCodec;
@@ -80,19 +88,29 @@ class ChatServiceImplToolLoopControlTest {
         };
 
         messageCodec = new LlmMessageCodec(new ObjectMapper());
+        lenient().when(userRepository.findByIdForUpdate(1L))
+                .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
+        ChatSessionPo defaultSession = new ChatSessionPo();
+        defaultSession.setId("s1");
+        defaultSession.setUserId(1L);
+        lenient().when(sessionRepo.findByIdAndUserId("s1", 1L))
+                .thenReturn(Optional.of(defaultSession));
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
+                userRepository,
                 llmChatService,
                 messageCodec,
                 new ChatIntentRouter(),
                 aiToolManager,
+                destructiveActionGuard,
                 new ObjectMapper(),
                 chatMapper,
                 transactionTemplate
         );
         executeToolLoopMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "executeToolLoop",
+                Long.class,
                 String.class,
                 List.class,
                 List.class,
@@ -391,6 +409,78 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
+    void requestLocalUserExecutionStop_whenRequestIsQueued_preventsChatWorkFromStarting() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.beginStreamRequest(1L, "s1");
+        service.requestLocalUserExecutionStop(1L);
+        service.processStreamChat(1L, "s1", "hello", emitter);
+
+        verify(emitter).complete();
+        verify(messageRepo, never()).saveAndFlush(any());
+        verifyNoInteractions(llmChatService, aiToolManager);
+        verify(destructiveActionGuard).clearUser(1L);
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void processStreamChat_whenAccountDisappearsBeforeAssistantWrite_doesNotPersistLateMessage() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        UserPo user = UserPo.builder().id(1L).build();
+        when(userRepository.findByIdForUpdate(1L))
+                .thenReturn(Optional.of(user), Optional.empty());
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("late answer");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.processStreamChat(1L, "s1", "hello", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "user".equals(msg.getRole())));
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "assistant".equals(msg.getRole())));
+        verify(emitter).complete();
+    }
+
+    @Test
+    void processStreamChat_whenAccountStopArrivesDuringToolPlanning_doesNotExecutePlannedTool() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenAnswer(invocation -> {
+            service.requestLocalUserExecutionStop(1L);
+            return toolCallResult("list_rules", "{}");
+        });
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verify(aiToolManager, never()).execute(any(), any());
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && ("assistant".equals(msg.getRole()) || "tool".equals(msg.getRole()))));
+        verify(emitter).complete();
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
     void processStreamChat_whenStreamingProviderFails_shouldSendSseErrorFrame() throws Exception {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
@@ -406,7 +496,7 @@ class ChatServiceImplToolLoopControlTest {
 
         service.processStreamChat(1L, "s1", "hello", emitter);
 
-        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter, org.mockito.Mockito.atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null && "assistant".equalsIgnoreCase(msg.getRole())));
@@ -456,7 +546,7 @@ class ChatServiceImplToolLoopControlTest {
         service.processStreamChat(1L, "s1", "please list rules", emitter);
 
         verify(llmChatService).streamReply(anyList(), any(), any());
-        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter, org.mockito.Mockito.atLeast(2)).send(any(SseEmitter.SseEventBuilder.class));
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equalsIgnoreCase(msg.getRole())
@@ -532,6 +622,7 @@ class ChatServiceImplToolLoopControlTest {
 
         service.processStreamChat(1L, "s1", "hello", emitter);
 
+        verify(destructiveActionGuard).clearSession(1L, "s1");
         verify(aiToolManager, never()).getAllToolDefinitions();
         verify(llmChatService, never()).chatWithTools(anyList(), anyList());
         verify(llmChatService).streamReply(anyList(), any(), any());
@@ -581,6 +672,7 @@ class ChatServiceImplToolLoopControlTest {
                                   SseEmitter emitter) throws Exception {
         return executeToolLoopMethod.invoke(
                 service,
+                1L,
                 "s1",
                 new ArrayList<LlmMessage>(),
                 new ArrayList<LlmToolSpec>(),

@@ -35,6 +35,9 @@ public class LlmConfig {
     @NotBlank
     private String model;
 
+    /** Optional model dedicated to recommendation generation; blank reuses {@link #model}. */
+    private String recommendationModel;
+
     /** OpenAI-compatible base URL. Points at the official API or a relay/gateway. */
     @NotBlank
     private String baseUrl = "https://api.openai.com/v1";

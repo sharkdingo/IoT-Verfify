@@ -20,6 +20,7 @@ import cn.edu.nju.Iot_Verify.dto.verification.VerificationRunSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.FixService;
+import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.Valid;
@@ -42,6 +43,7 @@ public class VerificationController {
 
     private final VerificationService verificationService;
     private final FixService fixService;
+    private final InteractiveFixExecutionService interactiveFixExecutionService;
     private final ModelRequestParser modelRequestParser;
 
     /**
@@ -194,10 +196,19 @@ public class VerificationController {
     public Result<FixResultDto> fix(
             @CurrentUser Long userId,
             @PathVariable Long id,
+            @RequestParam String requestId,
             @Valid @RequestBody(required = false) FixRequestDto request) {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
         var preferredRanges = (request != null) ? preferredRangesFromRequest(request) : null;
-        return Result.success(fixService.fix(userId, id, strategies, preferredRanges));
+        return interactiveFixExecutionService.execute(userId, requestId,
+                () -> Result.success(fixService.fix(userId, id, strategies, preferredRanges)));
+    }
+
+    @DeleteMapping("/fix-requests/{requestId}")
+    public Result<Boolean> cancelFixRequest(
+            @CurrentUser Long userId,
+            @PathVariable String requestId) {
+        return Result.success(interactiveFixExecutionService.cancel(userId, requestId));
     }
 
     /**
@@ -209,7 +220,7 @@ public class VerificationController {
             @PathVariable Long id,
             @Valid @RequestBody FixApplyRequestDto request) {
         FixApplyResultDto result = fixService.applyFix(
-                userId, id, request.getStrategy(),
+                userId, id, request.getStrategy(), request.getSuggestion(), request.getSuggestionToken(),
                 preferredRangesFromRequest(request));
         return Result.success(result);
     }

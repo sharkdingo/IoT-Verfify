@@ -64,7 +64,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_withUnparseableAiResponse_returnsUpstreamError() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Camera")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("not-json");
 
         JsonNode json = objectMapper.readTree(tool.executeBoardRecommendations("{}"));
@@ -78,7 +78,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_whenAiReturnsNoCandidates_reportsNoFiltering() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Camera")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("{\"recommendations\":[]}");
 
         JsonNode json = objectMapper.readTree(tool.executeBoardRecommendations("{}"));
@@ -93,7 +93,7 @@ class RecommendRelatedDevicesToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(
                 template("Camera"), template("Alarm"), template("Plug")));
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 contains("最多返回 2 条推荐"),
                 anyDouble(),
@@ -146,7 +146,7 @@ class RecommendRelatedDevicesToolTest {
                         List.of())
         ));
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Camera")));
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 contains("输出语言: 简体中文"),
                 anyDouble(),
@@ -178,7 +178,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_canonicalizesTemplateNameFromAvailableTemplate() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Window Shade")));
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 anyString(),
                 anyDouble(),
@@ -204,7 +204,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_returnsFilteredItemsForUnknownTemplates() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Camera")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -229,7 +229,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_filtersCandidatesWithDroppedInitialRuntime() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(runtimeTemplate("Sensor")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -269,7 +269,7 @@ class RecommendRelatedDevicesToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(
                 template("Camera"), template("Alarm")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -290,7 +290,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_materializesOmittedRuntimeAndReportsAppliedDefaults() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(runtimeTemplate("Sensor")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [{
@@ -328,7 +328,7 @@ class RecommendRelatedDevicesToolTest {
     void executeBoardRecommendations_rejectsExplicitBlankRuntimeInsteadOfDefaultingIt() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(runtimeTemplate("Sensor")));
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [{

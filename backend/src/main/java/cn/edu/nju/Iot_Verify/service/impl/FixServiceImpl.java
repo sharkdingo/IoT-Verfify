@@ -31,6 +31,7 @@ import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.service.FixService;
+import cn.edu.nju.Iot_Verify.service.FixSuggestionTokenService;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.BoardSemanticFingerprint;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
@@ -67,6 +68,7 @@ public class FixServiceImpl implements FixService {
     private final FixConfig fixConfig;
     private final BoardStorageService boardStorageService;
     private final BoardDataConverter boardDataConverter;
+    private final FixSuggestionTokenService fixSuggestionTokenService;
 
     @Override
     @Transactional(readOnly = true)
@@ -131,22 +133,28 @@ public class FixServiceImpl implements FixService {
 
         appendDriftWarningIfNeeded(result, userId, ctx);
         applySourceModelMetadata(result, ctx.trace);
+        if (result.getSuggestions() != null) {
+            result.getSuggestions().stream()
+                    .filter(Objects::nonNull)
+                    .filter(FixSuggestionDto::isVerified)
+                    .forEach(suggestion -> suggestion.setSuggestionToken(
+                            fixSuggestionTokenService.issue(
+                                    userId, traceId, suggestion, preferredRanges)));
+        }
 
         return result;
     }
 
-    @Override
     @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
                                       Map<String, PreferredRange> preferredRanges) {
-        return applyFixInternal(userId, traceId, strategy, null, preferredRanges);
+        return applyFixInternal(userId, traceId, strategy, null, preferredRanges, false);
     }
 
     /**
      * Kept for service-level tamper-detection tests. REST callers do not send a concrete suggestion:
      * the public API applies the server-recomputed proposal for the selected strategy.
      */
-    @Override
     @Deprecated
     @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy, FixSuggestionDto suggestion,
@@ -161,12 +169,33 @@ public class FixServiceImpl implements FixService {
             throw new BadRequestException("strategy '" + strategy
                     + "' does not match suggestion.strategy '" + suggestion.getStrategy() + "'");
         }
-        return applyFixInternal(userId, traceId, strategy, suggestion, preferredRanges);
+        return applyFixInternal(userId, traceId, strategy, suggestion, preferredRanges, false);
+    }
+
+    @Override
+    @Transactional
+    public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
+                                      FixSuggestionDto suggestion, String suggestionToken,
+                                      Map<String, PreferredRange> preferredRanges) {
+        String validatedStrategy = validateApplyStrategy(strategy);
+        validatePreferredRanges(preferredRanges);
+        if (suggestion == null || suggestion.getStrategy() == null
+                || !validatedStrategy.equals(suggestion.getStrategy())) {
+            throw new BadRequestException("The submitted suggestion does not match the selected strategy.");
+        }
+        FixSuggestionDto trusted = fixSuggestionTokenService.verify(
+                userId, traceId, validatedStrategy, suggestion, suggestionToken, preferredRanges);
+        if (!trusted.isVerified()) {
+            throw new BadRequestException("Only a verified fix suggestion can be applied.");
+        }
+        return applyFixInternal(
+                userId, traceId, validatedStrategy, trusted, preferredRanges, true);
     }
 
     private FixApplyResultDto applyFixInternal(Long userId, Long traceId, String strategy,
                                                FixSuggestionDto clientSuggestion,
-                                               Map<String, PreferredRange> preferredRanges) {
+                                               Map<String, PreferredRange> preferredRanges,
+                                               boolean useSignedSuggestion) {
         String validatedStrategy = validateApplyStrategy(strategy);
         validatePreferredRanges(preferredRanges);
         // Load the trace's verification-time snapshot (normalized rules) for index/fingerprint alignment.
@@ -180,21 +209,23 @@ public class FixServiceImpl implements FixService {
         ModelBoundaryInput modelInput = modelBoundaryInput(ctx.request, ctx.templateManifests);
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
 
-        // Re-derive the fix server-side for the requested strategy against the trace's own context.
-        // The REST API never accepts an operation list; the optional clientSuggestion is used only by
-        // the internal service overload that tests tamper detection for programmatic callers.
-        FixSuggestionDto trusted = recomputeVerifiedSuggestion(
-                userId, ctx, validatedStrategy, modelInput, preferredRanges);
-        if (trusted == null) {
-            throw new BadRequestException("Could not reproduce a verified '" + validatedStrategy
-                    + "' fix for this trace (the board or templates may have changed). "
-                    + "Please re-run the fix and try again.");
+        FixSuggestionDto trusted = clientSuggestion;
+        if (!useSignedSuggestion) {
+            // Compatibility path for internal callers. REST apply uses the signed exact suggestion.
+            trusted = recomputeVerifiedSuggestion(
+                    userId, ctx, validatedStrategy, modelInput, preferredRanges);
+            if (trusted == null) {
+                throw new BadRequestException("Could not reproduce a verified '" + validatedStrategy
+                        + "' fix for this trace (the board or templates may have changed). "
+                        + "Please re-run the fix and try again.");
+            }
+            if (clientSuggestion != null
+                    && !suggestionsEquivalent(validatedStrategy, clientSuggestion, trusted, deviceSmvMap)) {
+                throw new BadRequestException("The submitted fix no longer matches the current verified '"
+                        + validatedStrategy + "' suggestion. Please re-run the fix and apply the updated suggestion.");
+            }
         }
-        if (clientSuggestion != null
-                && !suggestionsEquivalent(validatedStrategy, clientSuggestion, trusted, deviceSmvMap)) {
-            throw new BadRequestException("The submitted fix no longer matches the current verified '"
-                    + validatedStrategy + "' suggestion. Please re-run the fix and apply the updated suggestion.");
-        }
+        FixSuggestionDto suggestionToApply = trusted;
 
         // Read current rules → drift check → apply → save, all inside ONE per-user lock + transaction.
         // This closes the race where a concurrent save could interleave between an unlocked read and the
@@ -214,15 +245,15 @@ public class FixServiceImpl implements FixService {
             // with the current board rules by ordered fingerprint. Internal fix coordinates must never
             // be allowed to target a different rule or condition after the board changes.
             assertBoardAlignedWithSnapshot(boardRules, snapshotRules, deviceSmvMap);
-            // Apply the server-recomputed suggestion, so the persisted change is exactly what NuSMV
-            // just verified.
+            // Apply the exact signed suggestion shown to the user. Snapshot checks above ensure its
+            // existing NuSMV evidence still describes the model being changed.
             Map<String, String> persistenceDeviceRefs = buildPersistenceDeviceRefAliases(
                     currentSnapshot.nodes(), deviceSmvMap, currentBoard.currentDeviceSmvMap());
             Map<String, String> displayDeviceNames = "remove".equals(validatedStrategy)
                     ? Map.of()
                     : buildDisplayDeviceNames(currentSnapshot.nodes());
             return FixStrategyApplier.apply(
-                    validatedStrategy, trusted, boardRules, deviceSmvMap,
+                    validatedStrategy, suggestionToApply, boardRules, deviceSmvMap,
                     persistenceDeviceRefs, displayDeviceNames);
         });
         log.info("Applied '{}' fix for trace {} (user {}): {} rule(s) -> {} rule(s)",
@@ -231,11 +262,12 @@ public class FixServiceImpl implements FixService {
         return FixApplyResultDto.builder()
                 .applied(true)
                 .strategy(validatedStrategy)
-                .verificationRechecked(true)
-                .appliedSuggestion(trusted)
+                .verificationRechecked(!useSignedSuggestion)
+                .verificationEvidenceReused(useSignedSuggestion)
+                .appliedSuggestion(suggestionToApply)
                 .previousRuleCount(before[0])
                 .currentRuleCount(saved.size())
-                .message(buildApplyMessage(validatedStrategy, trusted, before[0], saved.size()))
+                .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size()))
                 .rules(saved)
                 .build();
     }

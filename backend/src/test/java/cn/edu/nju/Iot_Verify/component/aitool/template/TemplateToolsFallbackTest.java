@@ -1,9 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool.template;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionResultDto;
-import cn.edu.nju.Iot_Verify.exception.TemplateDeletionConflictException;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -35,11 +35,14 @@ class TemplateToolsFallbackTest {
     private DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
 
     private ObjectMapper objectMapper;
+    private AiDestructiveActionGuard destructiveActionGuard;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
+        destructiveActionGuard = new AiDestructiveActionGuard(objectMapper);
         UserContextHolder.setUserId(1L);
+        UserContextHolder.setChatSessionId("template-test-session");
     }
 
     @AfterEach
@@ -97,11 +100,21 @@ class TemplateToolsFallbackTest {
         DeviceTemplateDeletionResultDto deletion = DeviceTemplateDeletionResultDto.builder()
                 .operation("deleted").impactToken("token-42").canDelete(true)
                 .template(deleted).deletedTemplate(deleted).currentTemplates(java.util.List.of()).build();
+        DeviceTemplateDeletionResultDto preview = DeviceTemplateDeletionResultDto.builder()
+                .operation("preview").impactToken("token-42").canDelete(true)
+                .template(deleted).currentTemplates(java.util.List.of(deleted)).build();
+        when(boardStorageService.previewDeviceTemplateDeletion(1L, 42L)).thenReturn(preview);
         when(boardStorageService.deleteDeviceTemplate(1L, 42L, "token-42")).thenReturn(deletion);
+
+        DeleteTemplateTool previewTool = new DeleteTemplateTool(
+                boardStorageService, objectMapper, destructiveActionGuard);
+        JsonNode previewJson = objectMapper.readTree(
+                previewTool.execute("{\"templateId\":42,\"confirmed\":false}"));
         UserContextHolder.setDestructiveActionConfirmed(true);
 
-        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, failingMapper);
-        String result = tool.execute("{\"templateId\":42,\"confirmed\":true,\"impactToken\":\"token-42\"}");
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, failingMapper, destructiveActionGuard);
+        String result = tool.execute("{\"templateId\":42,\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("preview").path("impactToken").asText() + "\"}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("RESULT_UNAVAILABLE", json.path("resultStatus").asText());
@@ -120,7 +133,7 @@ class TemplateToolsFallbackTest {
                         .operation("preview").impactToken("token-42").canDelete(true)
                         .template(target).currentTemplates(java.util.List.of(target)).build());
 
-        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper);
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper, destructiveActionGuard);
         String result = tool.execute("{\"templateId\":42,\"confirmed\":true}");
         JsonNode json = objectMapper.readTree(result);
 
@@ -135,23 +148,29 @@ class TemplateToolsFallbackTest {
         DeviceTemplateDto target = new DeviceTemplateDto();
         target.setId(42L);
         target.setName("Lamp");
-        DeviceTemplateDeletionResultDto currentPreview = DeviceTemplateDeletionResultDto.builder()
-                .operation("preview").impactToken("new-token").canDelete(false)
+        DeviceTemplateDeletionResultDto originalPreview = DeviceTemplateDeletionResultDto.builder()
+                .operation("preview").impactToken("old-token").canDelete(true)
                 .template(target).currentTemplates(java.util.List.of(target)).build();
-        when(boardStorageService.deleteDeviceTemplate(1L, 42L, "stale-token"))
-                .thenThrow(new TemplateDeletionConflictException(
-                        "TEMPLATE_DELETION_PREVIEW_STALE",
-                        "The deletion preview is no longer current.", currentPreview));
+        DeviceTemplateDeletionResultDto currentPreview = DeviceTemplateDeletionResultDto.builder()
+                .operation("preview").impactToken("new-token").canDelete(true)
+                .template(target).currentTemplates(java.util.List.of()).build();
+        when(boardStorageService.previewDeviceTemplateDeletion(1L, 42L))
+                .thenReturn(originalPreview, currentPreview);
+
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper, destructiveActionGuard);
+        JsonNode original = objectMapper.readTree(
+                tool.execute("{\"templateId\":42,\"confirmed\":false}"));
         UserContextHolder.setDestructiveActionConfirmed(true);
 
-        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper);
         JsonNode json = objectMapper.readTree(tool.execute(
-                "{\"templateId\":42,\"confirmed\":true,\"impactToken\":\"stale-token\"}"));
+                "{\"templateId\":42,\"confirmed\":true,\"impactToken\":\""
+                        + original.path("preview").path("impactToken").asText() + "\"}"));
 
         assertEquals(409, json.path("status").asInt());
-        assertEquals("TEMPLATE_DELETION_PREVIEW_STALE", json.path("errorCode").asText());
+        assertEquals("CONFIRMATION_STALE", json.path("errorCode").asText());
         assertEquals("preview", json.path("currentPreview").path("operation").asText());
-        assertEquals("new-token", json.path("currentPreview").path("impactToken").asText());
+        assertTrue(json.path("currentPreview").path("impactToken").asText().length() > 20);
+        verify(boardStorageService, never()).deleteDeviceTemplate(anyLong(), anyLong(), any());
     }
 
     @Test
@@ -172,7 +191,7 @@ class TemplateToolsFallbackTest {
         AddTemplateTool addTool = new AddTemplateTool(
                 boardStorageService, objectMapper, deviceTemplateSchemaValidator);
         addTool.initTolerantMapper();
-        DeleteTemplateTool deleteTool = new DeleteTemplateTool(boardStorageService, objectMapper);
+        DeleteTemplateTool deleteTool = new DeleteTemplateTool(boardStorageService, objectMapper, destructiveActionGuard);
 
         JsonNode numericName = objectMapper.readTree(
                 addTool.execute("{\"name\":7,\"manifest\":{}}"));
@@ -188,7 +207,7 @@ class TemplateToolsFallbackTest {
 
     @Test
     void deleteTemplate_outOfRangeLong_shouldReturn400() throws Exception {
-        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper);
+        DeleteTemplateTool tool = new DeleteTemplateTool(boardStorageService, objectMapper, destructiveActionGuard);
         String result = tool.execute("{\"templateId\":99999999999999999999}");
         JsonNode json = objectMapper.readTree(result);
 

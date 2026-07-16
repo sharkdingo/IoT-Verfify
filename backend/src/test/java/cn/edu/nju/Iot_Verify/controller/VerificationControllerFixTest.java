@@ -5,10 +5,12 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
+import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.service.FixService;
+import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -31,6 +34,7 @@ class VerificationControllerFixTest {
 
     @Mock private VerificationService verificationService;
     @Mock private FixService fixService;
+    @Mock private InteractiveFixExecutionService interactiveFixExecutionService;
     @Mock private ModelRequestParser modelRequestParser;
 
     private VerificationController controller;
@@ -38,7 +42,11 @@ class VerificationControllerFixTest {
 
     @BeforeEach
     void setUp() {
-        controller = new VerificationController(verificationService, fixService, modelRequestParser);
+        controller = new VerificationController(
+                verificationService, fixService, interactiveFixExecutionService, modelRequestParser);
+        lenient().when(interactiveFixExecutionService.execute(
+                        anyLong(), anyString(), org.mockito.ArgumentMatchers.<Callable<Object>>any()))
+                .thenAnswer(invocation -> invocation.<Callable<Object>>getArgument(2).call());
         validator = Validation.buildDefaultValidatorFactory().getValidator();
         lenient().when(fixService.fix(anyLong(), anyLong(), any(), any()))
                 .thenReturn(FixResultDto.builder().fixable(false).build());
@@ -60,14 +68,14 @@ class VerificationControllerFixTest {
 
     @Test
     void fix_nullBody_passesNullStrategies() {
-        controller.fix(1L, 1L, null);
+        controller.fix(1L, 1L, "request-123", null);
         assertNull(captureStrategies());
     }
 
     @Test
     void fix_emptyRequest_passesNullStrategies() {
         FixRequestDto request = new FixRequestDto();
-        controller.fix(1L, 1L, request);
+        controller.fix(1L, 1L, "request-123", request);
         assertNull(captureStrategies());
     }
 
@@ -100,7 +108,7 @@ class VerificationControllerFixTest {
     void fix_explicitStrategies_passesThrough() {
         FixRequestDto request = new FixRequestDto();
         request.setStrategies(List.of("remove"));
-        controller.fix(1L, 1L, request);
+        controller.fix(1L, 1L, "request-123", request);
         assertEquals(List.of("remove"), captureStrategies());
     }
 
@@ -114,7 +122,7 @@ class VerificationControllerFixTest {
                 .upper(20)
                 .build()));
 
-        controller.fix(1L, 1L, request);
+        controller.fix(1L, 1L, "request-123", request);
 
         Map<String, PreferredRange> ranges = capturePreferredRanges();
         assertNotNull(ranges);
@@ -123,23 +131,35 @@ class VerificationControllerFixTest {
     }
 
     @Test
-    void applyFix_forwardsOnlyStrategyAndPreferredRanges() {
+    void applyFix_forwardsExactSignedSuggestionAndPreferredRanges() {
         String targetId = PreferredRangeSelection.targetIdFor(1L, 0, 0);
         FixApplyRequestDto request = new FixApplyRequestDto();
         request.setStrategy("parameter");
+        FixSuggestionDto suggestion = FixSuggestionDto.builder()
+                .strategy("parameter")
+                .description("Adjust threshold")
+                .verified(true)
+                .suggestionToken("signed-suggestion")
+                .build();
+        request.setSuggestion(suggestion);
+        request.setSuggestionToken("signed-suggestion");
         request.setPreferredRangeSelections(List.of(PreferredRangeSelection.builder()
                 .targetId(targetId)
                 .lower(10)
                 .upper(20)
                 .build()));
-        when(fixService.applyFix(eq(1L), eq(2L), eq("parameter"), any()))
+        when(fixService.applyFix(
+                eq(1L), eq(2L), eq("parameter"), same(suggestion),
+                eq("signed-suggestion"), any()))
                 .thenReturn(FixApplyResultDto.builder().applied(true).build());
 
         controller.applyFix(1L, 2L, request);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, PreferredRange>> ranges = ArgumentCaptor.forClass(Map.class);
-        verify(fixService).applyFix(eq(1L), eq(2L), eq("parameter"), ranges.capture());
+        verify(fixService).applyFix(
+                eq(1L), eq(2L), eq("parameter"), same(suggestion),
+                eq("signed-suggestion"), ranges.capture());
         assertEquals(10, ranges.getValue().get(targetId).getLower());
         assertEquals(20, ranges.getValue().get(targetId).getUpper());
     }

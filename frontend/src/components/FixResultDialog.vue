@@ -37,6 +37,10 @@ const { t, locale } = useI18n()
 const faultLoading = ref(false)
 const faultLoadFailed = ref(false)
 const strategyLoading = ref<FixStrategyName | null>(null)
+const fixSearchElapsedSeconds = ref(0)
+const activeFixRequestId = ref<string | null>(null)
+const activeFixAbortController = ref<AbortController | null>(null)
+let fixSearchTimer: ReturnType<typeof setInterval> | null = null
 const strategyErrors = ref<Partial<Record<FixStrategyName, string>>>({})
 const strategyWarnings = ref<Partial<Record<FixStrategyName, string[]>>>({})
 const fixResult = ref<FixResult | null>(null)
@@ -376,15 +380,26 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
   delete strategyWarnings.value[strategy]
   invalidateStrategyResult(strategy)
   strategyLoading.value = strategy
+  fixSearchElapsedSeconds.value = 0
+  const requestId = crypto.randomUUID()
+  const controller = new AbortController()
+  const startedAt = Date.now()
+  activeFixRequestId.value = requestId
+  activeFixAbortController.value = controller
+  if (fixSearchTimer) clearInterval(fixSearchTimer)
+  fixSearchTimer = setInterval(() => {
+    fixSearchElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
   delete strategyErrors.value[strategy]
   try {
     if (strategy === 'parameter') {
       lastPreferredRangeSelections.value = preferredRangeSelections
     }
-    const result = await boardApi.fixTrace(traceId, {
-      strategies: [strategy],
-      preferredRangeSelections
-    })
+    const result = await boardApi.fixTrace(
+      traceId,
+      { strategies: [strategy], preferredRangeSelections },
+      { requestId, signal: controller.signal }
+    )
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
     strategyWarnings.value[strategy] = result.warnings || []
     if (strategy === 'parameter') {
@@ -398,6 +413,7 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     if (result.faultRules?.length) faultRules.value = result.faultRules
   } catch (error: any) {
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to fetch fix suggestions:', error)
     strategyErrors.value[strategy] = fixResponseErrorMessage(error, t('app.failedToLoadFixSuggestions'))
     ElMessage.error(strategyErrors.value[strategy])
@@ -405,6 +421,12 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     if (requestVersion === dialogRequestVersion && traceId === props.traceId
       && strategyLoading.value === strategy) {
       strategyLoading.value = null
+    }
+    if (activeFixRequestId.value === requestId) activeFixRequestId.value = null
+    if (activeFixAbortController.value === controller) activeFixAbortController.value = null
+    if (fixSearchTimer) {
+      clearInterval(fixSearchTimer)
+      fixSearchTimer = null
     }
   }
 }
@@ -446,8 +468,7 @@ const switchStrategy = (strategy: FixStrategyName) => {
 
 const trySelectedStrategy = () => fetchFixSuggestions(selectedStrategy.value)
 
-// Apply only the chosen strategy. The server recomputes the proposal and checks every submitted
-// specification in the complete formal model before saving; this is not a real-world safety guarantee.
+// Apply the exact signed suggestion after the server checks the complete formal-model snapshot.
 const applyFix = async (suggestion: FixSuggestion) => {
   if (!props.traceId) return
   if (!suggestion.verified) {
@@ -473,10 +494,10 @@ const applyFix = async (suggestion: FixSuggestion) => {
   try {
     const result = await boardApi.applyFix(
       props.traceId,
-      suggestion.strategy,
+      suggestion,
       suggestion.strategy === 'parameter' ? lastPreferredRangeSelections.value : undefined
     )
-    if (!result.applied || !result.verificationRechecked) {
+    if (!result.applied || (!result.verificationRechecked && !result.verificationEvidenceReused)) {
       ElMessage.warning(localizedTextOrFallback(result.message, t('app.failedToApplyFix'), locale.value))
       return
     }
@@ -617,6 +638,17 @@ const closeDialog = () => {
   if (applyingFix.value) {
     ElMessage.warning(t('app.fixApplyStillRunning'))
     return
+  }
+  if (activeFixRequestId.value) {
+    void boardApi.cancelFixRequest(activeFixRequestId.value)
+    activeFixRequestId.value = null
+  }
+  activeFixAbortController.value?.abort()
+  activeFixAbortController.value = null
+  strategyLoading.value = null
+  if (fixSearchTimer) {
+    clearInterval(fixSearchTimer)
+    fixSearchTimer = null
   }
   dialogRequestVersion += 1
   emit('update:visible', false)
@@ -805,6 +837,9 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   {{ t('app.tryingFixStrategy', { strategy: strategyLabels[selectedStrategy] }) }}
                 </div>
                 <p class="mt-1 text-xs text-blue-700">{{ t('app.fixAttemptDoesNotApply') }}</p>
+                <p class="mt-1 text-xs text-blue-700">
+                  {{ t('app.fixSearchProgress', { seconds: fixSearchElapsedSeconds }) }}
+                </p>
               </div>
               <div
                 v-else-if="anotherStrategyLoading"

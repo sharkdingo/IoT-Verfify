@@ -3,7 +3,7 @@
 System topology, the front/back boundary, and the backend package layout. Deep dives
 link out to the focused architecture documents.
 
-Verified against code on 2026-07-09. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
+Verified against code on 2026-07-14. Source: `backend/src/main/java/cn/edu/nju/Iot_Verify/`,
 `frontend/src/`.
 
 ---
@@ -14,6 +14,8 @@ Verified against code on 2026-07-09. Source: `backend/src/main/java/cn/edu/nju/I
   rule/spec/AI references, NuSMV varName normalization, and the no-fallback policy.
 - [Data authority model](data-authority-model.md): field-level ownership and downstream
   consumption for devices, rules, specs, edges, model requests, traces, tasks, and fix.
+- [Counterexample exploration](fuzzing-flow.md): bounded search, reproducibility,
+  supported finite semantics, and its boundary from formal verification.
 
 ---
 
@@ -56,6 +58,7 @@ component/
     executor/        NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/          SmvTraceParser — counterexample parsing
     fixer/           FaultLocalizer + parameter/condition/permanent-removal fix strategies
+  fuzz/              deterministic bounded path search + finite specification monitor
   aitool/            the 33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/                LLM abstraction: domain model + LlmProvider (OpenAiLlmProvider adapter)
                      + LlmChatService / PromptCompletionService / LlmMessageCodec facades
@@ -73,7 +76,7 @@ resources/
 ```
 
 Key service implementations: `AuthServiceImpl`, `BoardStorageServiceImpl`,
-`VerificationServiceImpl`, `SimulationServiceImpl`, `FixServiceImpl`, `ChatServiceImpl`,
+`VerificationServiceImpl`, `SimulationServiceImpl`, `FuzzServiceImpl`, `FixServiceImpl`, `ChatServiceImpl`,
 `NodeServiceImpl`, `DeviceTemplateServiceImpl`, plus `RedisTokenBlacklistService` and
 the `AbstractAsyncTaskService` base for async verify/simulate tasks.
 
@@ -83,8 +86,8 @@ the `AbstractAsyncTaskService` base for async verify/simulate tasks.
 
 ```
 frontend/src/
-  api/       http.ts (axios) + auth/board/chat/rules/simulation modules
-  types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, …)
+  api/       http.ts (axios) + auth/board/chat/rules/simulation/fuzzing modules
+  types/     TypeScript contracts (auth, device, node, edge, rule, spec, verify, fuzzing, …)
   stores/    reactive state (auth, chat)
   router/    routes + auth guard
   views/     Landing / Board / NotFound
@@ -104,9 +107,10 @@ surface.
 ## Cross-cutting concerns
 
 - **Auth & errors**: [../api/overview.md](../api/overview.md).
-- **Async tasks**: verify/simulate support sync and async modes with progress and
-  cancellation; task-status writes are atomic (see `CHANGELOG.md`, 2026-03-03).
-- **Concurrency**: five configurable thread pools; NuSMV runs are bounded by a
+- **Async tasks**: verification/simulation support sync and async modes; bounded
+  exploration is background-only. All expose progress/cancellation and use atomic
+  terminal status writes.
+- **Concurrency**: six configurable thread pools; NuSMV runs are bounded by a
   semaphore (`NUSMV_MAX_CONCURRENT`). See
   [../getting-started/configuration.md](../getting-started/configuration.md).
 
@@ -114,6 +118,7 @@ surface.
 
 - Verification request → result pipeline:
   [verification-flow.md](verification-flow.md)
+- Bounded candidate-path search: [fuzzing-flow.md](fuzzing-flow.md)
 - SMV model generation internals: [nusmv-model.md](nusmv-model.md)
 - Spec formulas & P1–P5: [spec-templates.md](spec-templates.md)
 - Auto-fix: [auto-fix.md](auto-fix.md)

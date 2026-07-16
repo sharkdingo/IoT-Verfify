@@ -285,6 +285,14 @@
     color: var(--board-text);
 }
 
+.iot-board .board-floating-panel.fuzzing-panel {
+    overflow: hidden;
+}
+
+.iot-board .board-floating-panel.history-panel {
+    overflow: hidden;
+}
+
 .iot-board .board-floating-actions {
     position: fixed;
     right: var(--board-action-dock-right, var(--board-floating-action-right));

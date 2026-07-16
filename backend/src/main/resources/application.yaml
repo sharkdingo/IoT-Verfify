@@ -9,12 +9,12 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: update
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.MySQL8Dialect
         format_sql: true
 
 server:
@@ -27,6 +27,7 @@ llm:
   provider: ${LLM_PROVIDER:openai}
   api-key: ${IOT_VERIFY_OPENAI_API_KEY:your_api_key_here}
   model: ${IOT_VERIFY_OPENAI_MODEL:gpt-5.5}
+  recommendation-model: ${IOT_VERIFY_OPENAI_RECOMMENDATION_MODEL:}
   base-url: ${IOT_VERIFY_OPENAI_BASE_URL:https://api.openai.com/v1}
   timeout-minutes: ${LLM_TIMEOUT_MINUTES:5}
 
@@ -69,7 +70,17 @@ fix:
 device-template:
   schema-path: ${DEVICE_TEMPLATE_SCHEMA_PATH:device-template-schema.json}
 
+fuzz:
+  admission:
+    max-active-tasks-per-user: ${FUZZ_MAX_ACTIVE_TASKS_PER_USER:2}
+    max-stored-tasks-per-user: ${FUZZ_MAX_STORED_TASKS_PER_USER:100}
+
 thread-pool:
+  interactive-ai:
+    core-pool-size: ${THREAD_POOL_INTERACTIVE_AI_CORE:2}
+    max-pool-size: ${THREAD_POOL_INTERACTIVE_AI_MAX:4}
+    queue-capacity: ${THREAD_POOL_INTERACTIVE_AI_QUEUE:8}
+    await-termination-seconds: ${THREAD_POOL_INTERACTIVE_AI_AWAIT:30}
   chat:
     core-pool-size: ${THREAD_POOL_CHAT_CORE:10}
     max-pool-size: ${THREAD_POOL_CHAT_MAX:50}
@@ -95,3 +106,8 @@ thread-pool:
     max-pool-size: ${THREAD_POOL_SIMULATION_TASK_MAX:8}
     queue-capacity: ${THREAD_POOL_SIMULATION_TASK_QUEUE:40}
     await-termination-seconds: ${THREAD_POOL_SIMULATION_TASK_AWAIT:60}
+  fuzz-task:
+    core-pool-size: ${THREAD_POOL_FUZZ_TASK_CORE:2}
+    max-pool-size: ${THREAD_POOL_FUZZ_TASK_MAX:4}
+    queue-capacity: ${THREAD_POOL_FUZZ_TASK_QUEUE:20}
+    await-termination-seconds: ${THREAD_POOL_FUZZ_TASK_AWAIT:60}

@@ -777,6 +777,12 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
     @Override
     public CollectionMutationResultDto<SpecificationDto> removeSpec(Long userId, String specId) {
+        return removeSpecIfUnchanged(userId, specId, null);
+    }
+
+    @Override
+    public CollectionMutationResultDto<SpecificationDto> removeSpecIfUnchanged(
+            Long userId, String specId, SpecificationDto expected) {
         synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
@@ -786,6 +792,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .filter(candidate -> specId.equals(candidate.getId()))
                         .findFirst()
                         .orElseThrow(() -> new ResourceNotFoundException("Specification", specId));
+                if (expected != null && !Objects.equals(expected, removed)) {
+                    throw new ConflictException(
+                            "The specification changed after confirmation. Review the current specification before deleting it.");
+                }
                 existing.removeIf(candidate -> specId.equals(candidate.getId()));
                 List<SpecificationDto> saved = saveSpecsInternal(userId, existing, currentNodes);
                 return CollectionMutationResultDto.of("deleted", removed, saved);
@@ -3392,6 +3402,12 @@ public class BoardStorageServiceImpl implements BoardStorageService {
 
     @Override
     public CollectionMutationResultDto<RuleDto> removeRule(Long userId, long ruleId) {
+        return removeRuleIfUnchanged(userId, ruleId, null);
+    }
+
+    @Override
+    public CollectionMutationResultDto<RuleDto> removeRuleIfUnchanged(
+            Long userId, long ruleId, RuleDto expected) {
         synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
@@ -3400,9 +3416,14 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         .filter(rule -> rule.getId() != null && rule.getId() == ruleId)
                         .findFirst()
                         .orElseThrow(() -> new ResourceNotFoundException("Rule", ruleId));
+                RuleDto current = ruleMapper.toDto(removed);
+                if (expected != null && !Objects.equals(expected, current)) {
+                    throw new ConflictException(
+                            "The rule changed after confirmation. Review the current rule before deleting it.");
+                }
                 ruleRepo.deleteById(ruleId);
-                List<RuleDto> current = getRulesInternal(userId);
-                return CollectionMutationResultDto.of("deleted", ruleMapper.toDto(removed), current);
+                List<RuleDto> remaining = getRulesInternal(userId);
+                return CollectionMutationResultDto.of("deleted", current, remaining);
             });
         }
     }

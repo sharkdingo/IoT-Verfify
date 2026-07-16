@@ -8,6 +8,7 @@ import lombok.*;
 @Table(name = "specification", indexes = {
         @Index(name = "idx_specification_user_order", columnList = "user_id, list_order")
 })
+@IdClass(SpecificationId.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -20,7 +21,9 @@ public class SpecificationPo {
     @EqualsAndHashCode.Include
     private String id;
 
+    @Id
     @Column(name = "user_id", nullable = false)
+    @EqualsAndHashCode.Include
     private Long userId;
 
     /** Internal persistence of the user-visible specification list order. */

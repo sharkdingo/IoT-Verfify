@@ -14,7 +14,7 @@ home:
 1. **Endpoints** — index only in [docs/api/rest-endpoints.md](docs/api/rest-endpoints.md)
    (method, path, controller, link; no field detail).
 2. **Endpoint detail** — field-level DTO contracts in one domain doc
-   (`docs/api/auth.md`, `board.md`, `verification.md`, `chat-sse.md`).
+   (`docs/api/auth.md`, `board.md`, `verification.md`, `fuzzing.md`, `chat-sse.md`).
 3. **Configuration** — env vars/defaults only in
    [docs/getting-started/configuration.md](docs/getting-started/configuration.md).
 4. **Global API conventions** — `Result<T>`, auth, error codes only in
@@ -47,6 +47,9 @@ Include this line in the PR description and tick it:
 
 ### Recommended CI gates
 
+- Keep the real-backend Playwright journey green. The full-stack smoke gate runs
+  `frontend/e2e/fuzzing-flow.spec.ts` against MySQL, Redis, and NuSMV; run the complete
+  `npm run test:e2e` suite locally for broader interaction and authority-model changes.
 - Regenerate the endpoint index from controller annotations and fail if it differs from
   `docs/api/rest-endpoints.md` (see the "Regeneration" note in that file).
 - Run a Markdown dead-link check across `docs/` and the root docs.

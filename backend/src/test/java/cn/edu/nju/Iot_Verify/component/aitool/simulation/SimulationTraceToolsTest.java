@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.simulation;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -37,10 +38,13 @@ class SimulationTraceToolsTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
+        AiDestructiveActionGuard destructiveActionGuard = new AiDestructiveActionGuard(objectMapper);
         listTool = new ListSimulationTracesTool(simulationService, objectMapper);
         getTool = new GetSimulationTraceTool(simulationService, objectMapper);
-        deleteTool = new DeleteSimulationTraceTool(simulationService, objectMapper);
+        deleteTool = new DeleteSimulationTraceTool(
+                simulationService, objectMapper, destructiveActionGuard);
         UserContextHolder.clear();
+        UserContextHolder.setChatSessionId("simulation-trace-test-session");
     }
 
     @AfterEach
@@ -241,11 +245,13 @@ class SimulationTraceToolsTest {
         when(simulationService.getSimulation(1L, 13L)).thenReturn(trace);
 
         String preview = deleteTool.execute("{\"simulationId\":13,\"confirmed\":false}");
-        assertTrue(objectMapper.readTree(preview).path("requiresUserConfirmation").asBoolean());
+        JsonNode previewJson = objectMapper.readTree(preview);
+        assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
         verify(simulationService, never()).deleteSimulation(1L, 13L);
 
         UserContextHolder.setDestructiveActionConfirmed(true);
-        String result = deleteTool.execute("{\"simulationId\":13,\"confirmed\":true}");
+        String result = deleteTool.execute("{\"simulationId\":13,\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("impactToken").asText() + "\"}");
         JsonNode json = objectMapper.readTree(result);
 
         assertTrue(json.path("deleted").asBoolean());

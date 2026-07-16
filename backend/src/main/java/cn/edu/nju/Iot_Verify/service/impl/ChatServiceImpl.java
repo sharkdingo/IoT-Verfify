@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolResponseHelper;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
@@ -16,11 +17,14 @@ import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatService;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -40,32 +44,36 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ChatServiceImpl implements ChatService {
+public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private static final int MAX_TOOL_ROUNDS = 5;
     private static final int HISTORY_CHAR_LIMIT = 4000;
 
     private final ChatSessionRepository sessionRepo;
     private final ChatMessageRepository messageRepo;
+    private final UserRepository userRepository;
     private final LlmChatService llmChatService;
     private final LlmMessageCodec messageCodec;
     private final ChatIntentRouter chatIntentRouter;
     private final AiToolManager aiToolManager;
+    private final AiDestructiveActionGuard destructiveActionGuard;
     private final ObjectMapper objectMapper;
     private final ChatMapper chatMapper;
     private final TransactionTemplate transactionTemplate;
-    private final ConcurrentMap<String, Long> activeStreamRequests = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ActiveStreamRequest> activeStreamRequests = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
 
     @Override
@@ -77,6 +85,7 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public ChatSessionResponseDto createSession(Long userId) {
+        requireActiveUserForWrite(userId);
         ChatSessionPo session = new ChatSessionPo();
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
@@ -100,6 +109,7 @@ public class ChatServiceImpl implements ChatService {
     @Transactional
     public void deleteSession(Long userId, String sessionId) {
         synchronized (sessionLock(sessionId)) {
+            requireActiveUserForWrite(userId);
             sessionRepo.findByIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
             if (activeStreamRequests.containsKey(sessionId)) {
@@ -107,6 +117,7 @@ public class ChatServiceImpl implements ChatService {
             }
             messageRepo.deleteBySessionId(sessionId);
             sessionRepo.deleteById(Objects.requireNonNull(sessionId, "sessionId must not be null"));
+            destructiveActionGuard.clearSession(userId, sessionId);
         }
     }
 
@@ -115,8 +126,9 @@ public class ChatServiceImpl implements ChatService {
         synchronized (sessionLock(sessionId)) {
             sessionRepo.findByIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-            Long existingUser = activeStreamRequests.putIfAbsent(sessionId, userId);
-            if (existingUser != null) {
+            ActiveStreamRequest request = new ActiveStreamRequest(userId);
+            ActiveStreamRequest existing = activeStreamRequests.putIfAbsent(sessionId, request);
+            if (existing != null) {
                 throw new ChatSessionBusyException(sessionId);
             }
         }
@@ -125,8 +137,27 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public void endStreamRequest(Long userId, String sessionId) {
         if (sessionId != null) {
-            activeStreamRequests.remove(sessionId, userId);
+            activeStreamRequests.computeIfPresent(sessionId,
+                    (ignored, request) -> Objects.equals(request.userId(), userId) ? null : request);
         }
+    }
+
+    @Override
+    public void requestLocalUserExecutionStop(Long userId) {
+        if (userId == null) return;
+        destructiveActionGuard.clearUser(userId);
+        activeStreamRequests.forEach((sessionId, request) -> {
+            if (!Objects.equals(request.userId(), userId)) return;
+            request.stopRequested().set(true);
+            SseEmitter emitter = request.emitter().get();
+            if (emitter != null) {
+                try {
+                    emitter.complete();
+                } catch (IllegalStateException e) {
+                    log.debug("Chat emitter was already complete while stopping session {}", sessionId);
+                }
+            }
+        });
     }
 
     @Override
@@ -149,11 +180,21 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public void processStreamChat(Long userId, String sessionId, String content, SseEmitter emitter) {
+        boolean explicitConfirmation = chatIntentRouter.isExplicitConfirmation(content);
         UserContextHolder.setUserId(userId);
-        UserContextHolder.setDestructiveActionConfirmed(chatIntentRouter.isExplicitConfirmation(content));
+        UserContextHolder.setChatSessionId(sessionId);
+        UserContextHolder.setDestructiveActionConfirmed(explicitConfirmation);
+        if (!explicitConfirmation) {
+            destructiveActionGuard.clearSession(userId, sessionId);
+        }
         boolean preferChinese = prefersChinese(content);
         StringBuilder finalAnswer = new StringBuilder();
-        AtomicBoolean isDisconnect = new AtomicBoolean(false);
+        ActiveStreamRequest activeRequest = activeStreamRequests.get(sessionId);
+        AtomicBoolean isDisconnect = activeRequest != null && Objects.equals(activeRequest.userId(), userId)
+                ? activeRequest.stopRequested() : new AtomicBoolean(false);
+        if (activeRequest != null && Objects.equals(activeRequest.userId(), userId)) {
+            activeRequest.emitter().compareAndSet(null, emitter);
+        }
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         ToolLoopResult loopResult = ToolLoopResult.empty();
         emitter.onCompletion(() -> isDisconnect.set(true));
@@ -161,13 +202,25 @@ public class ChatServiceImpl implements ChatService {
         emitter.onError(ex -> isDisconnect.set(true));
 
         try {
+            if (isDisconnect.get()) {
+                try {
+                    emitter.complete();
+                } catch (IllegalStateException e) {
+                    log.debug("Chat emitter was already complete before session {} started", sessionId);
+                }
+                return;
+            }
             sessionRepo.findByIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
 
-            transactionTemplate.executeWithoutResult(status -> {
+            executeOwnedSessionWrite(userId, sessionId, () -> {
                 saveSimpleMsg(sessionId, "user", content);
                 touchSessionTitle(sessionId, userId, content);
             });
+            if (!sendSseProgress(emitter, "CONTEXT_READY", null, null)) {
+                isDisconnect.set(true);
+                return;
+            }
 
             ChatIntentRouter.Decision routeDecision = chatIntentRouter.route(content);
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
@@ -177,8 +230,10 @@ public class ChatServiceImpl implements ChatService {
 
             if (routeDecision.requiresToolLoop()) {
                 log.debug("Routing chat message to tool loop: reason={}", routeDecision.reason());
-                List<LlmToolSpec> tools = aiToolManager.getAllToolDefinitions();
-                loopResult = executeToolLoop(sessionId, messages, tools, commandSet, emitter, isDisconnect);
+                List<LlmToolSpec> tools = selectRelevantTools(
+                        aiToolManager.getAllToolDefinitions(), content, routeDecision.reason());
+                log.debug("Selected {} tool definition(s) for chat planning", tools.size());
+                loopResult = executeToolLoop(userId, sessionId, messages, tools, commandSet, emitter, isDisconnect);
             } else {
                 log.debug("Skipping tool planning for conversational chat message: reason={}", routeDecision.reason());
             }
@@ -209,6 +264,10 @@ public class ChatServiceImpl implements ChatService {
                 }
             } else {
                 int replyStart = finalAnswer.length();
+                if (!sendSseProgress(emitter, "WRITING_RESPONSE", null, null)) {
+                    isDisconnect.set(true);
+                    return;
+                }
                 streamAssistantReply(withVisibleReplyPrompt(messages, loopResult.hadToolCalls()), finalAnswer, emitter, isDisconnect);
                 finalResponseProduced = finalAnswer.length() > replyStart;
             }
@@ -221,7 +280,7 @@ public class ChatServiceImpl implements ChatService {
             }
 
             if (!finalAnswer.isEmpty()) {
-                transactionTemplate.executeWithoutResult(status ->
+                executeOwnedSessionWrite(userId, sessionId, () ->
                         saveSimpleMsg(sessionId, "assistant", finalAnswer.toString()));
             }
             completeEmitter(emitter, isDisconnect);
@@ -375,7 +434,8 @@ public class ChatServiceImpl implements ChatService {
         return finalMessages;
     }
 
-    private ToolLoopResult executeToolLoop(String sessionId,
+    private ToolLoopResult executeToolLoop(Long userId,
+                                           String sessionId,
                                            List<LlmMessage> messages,
                                            List<LlmToolSpec> tools,
                                            Set<StreamResponseDto.CommandDto> commandSet,
@@ -395,7 +455,19 @@ public class ChatServiceImpl implements ChatService {
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
             }
+            if (!sendSseProgress(emitter, "PLANNING", null, round + 1)) {
+                isDisconnect.set(true);
+                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                        confirmationPending);
+            }
             LlmChatResponse response = llmChatService.chatWithTools(messages, tools);
+            if (isDisconnect.get()) {
+                log.info("Chat execution stopped after tool planning for session {}", sessionId);
+                return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                        failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                        confirmationPending);
+            }
             if (response == null) {
                 log.warn("LLM provider returned null tool-planning response");
                 return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
@@ -415,7 +487,7 @@ public class ChatServiceImpl implements ChatService {
             }
 
             hadToolCalls = true;
-            transactionTemplate.executeWithoutResult(status ->
+            executeOwnedSessionWrite(userId, sessionId, () ->
                     saveAiToolCallRequest(sessionId, toolCalls));
             messages.add(LlmMessage.assistantToolCalls(toolCalls));
 
@@ -439,7 +511,19 @@ public class ChatServiceImpl implements ChatService {
                     toolResult = jsonError("Invalid tool call: missing function name.", "VALIDATION_ERROR", 400);
                     executionOutcome = ToolExecutionOutcome.FAILED;
                 } else {
+                    if (!sendSseProgress(emitter, "TOOL_EXECUTION", functionName, round + 1)) {
+                        isDisconnect.set(true);
+                        return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                                failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                                confirmationPending);
+                    }
                     toolResult = aiToolManager.execute(functionName, argsJson);
+                    if (isDisconnect.get()) {
+                        log.info("Chat execution stopped after tool execution for session {}", sessionId);
+                        return new ToolLoopResult(hadToolCalls, false, successfulToolCalls,
+                                failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
+                                confirmationPending);
+                    }
                     executionOutcome = classifyToolExecution(toolResult);
                     if (executionOutcome == ToolExecutionOutcome.USABLE
                             || (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE
@@ -463,7 +547,7 @@ public class ChatServiceImpl implements ChatService {
                 }
 
                 final String finalToolResult = toolResult;
-                transactionTemplate.executeWithoutResult(status ->
+                executeOwnedSessionWrite(userId, sessionId, () ->
                         saveToolExecutionResult(sessionId, toolCallId, finalToolResult));
                 messages.add(LlmMessage.tool(toolCallId, toolResult));
                 if (requiresConfirmation) {
@@ -554,6 +638,71 @@ public class ChatServiceImpl implements ChatService {
             }
         }
         return true;
+    }
+
+    private boolean sendSseProgress(SseEmitter emitter, String stage, String toolName, Integer round) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .data(StreamResponseDto.progress(stage, toolName, round), MediaType.APPLICATION_JSON));
+            return true;
+        } catch (IOException | IllegalStateException e) {
+            log.debug("Failed to send chat progress stage {}: {}", stage, e.toString());
+            return false;
+        }
+    }
+
+    private List<LlmToolSpec> selectRelevantTools(
+            List<LlmToolSpec> allTools, String content, String routeReason) {
+        if (allTools == null || allTools.isEmpty()
+                || "explicit_confirmation".equals(routeReason)) {
+            return allTools == null ? List.of() : allTools;
+        }
+        String normalized = content == null ? "" : content.toLowerCase(Locale.ROOT);
+        Set<String> selected = new LinkedHashSet<>();
+        selected.add("board_overview");
+
+        for (LlmToolSpec tool : allTools) {
+            if (tool != null && tool.name() != null && normalized.contains(tool.name().toLowerCase(Locale.ROOT))) {
+                selected.add(tool.name());
+            }
+        }
+        if (containsAny(normalized, "device", "node", "sensor", "设备", "节点", "传感器")) {
+            selected.addAll(Set.of("add_device", "delete_device", "search_devices",
+                    "recommend_related_devices", "list_templates"));
+        }
+        if (containsAny(normalized, "rule", "automation", "trigger", "规则", "自动化", "联动", "触发")) {
+            selected.addAll(Set.of("list_rules", "manage_rule", "check_duplicate_rule",
+                    "check_rule_similarity", "recommend_rules"));
+        }
+        if (containsAny(normalized, "spec", "property", "safety", "ctl", "ltl", "规约", "安全性", "约束")) {
+            selected.addAll(Set.of("list_specs", "manage_spec", "recommend_specifications"));
+        }
+        if (containsAny(normalized, "template", "manifest", "capabil", "模板", "清单", "能力")) {
+            selected.addAll(Set.of("list_templates", "add_template", "delete_template"));
+        }
+        if (containsAny(normalized, "verify", "verification", "nusmv", "counterexample", "trace",
+                "fix", "验证", "反例", "轨迹", "修复")) {
+            selected.addAll(Set.of("verify_model", "verify_model_async", "verify_task_status",
+                    "cancel_verify_task", "list_traces", "get_trace", "delete_trace", "fix_violation"));
+        }
+        if (containsAny(normalized, "simulate", "simulation", "scenario", "仿真", "模拟", "场景")) {
+            selected.addAll(Set.of("simulate_model", "simulate_model_async", "simulate_task_status",
+                    "cancel_simulate_task", "list_simulation_traces", "get_simulation_trace",
+                    "delete_simulation_trace", "recommend_scenario"));
+        }
+
+        List<LlmToolSpec> filtered = allTools.stream()
+                .filter(Objects::nonNull)
+                .filter(tool -> selected.contains(tool.name()))
+                .toList();
+        return filtered.isEmpty() ? allTools : filtered;
+    }
+
+    private boolean containsAny(String value, String... needles) {
+        for (String needle : needles) {
+            if (value.contains(needle)) return true;
+        }
+        return false;
     }
 
     private void collectRefreshCommand(String functionName, Set<StreamResponseDto.CommandDto> commandSet) {
@@ -698,6 +847,35 @@ public class ChatServiceImpl implements ChatService {
         po.setRole("tool");
         po.setContent(messageCodec.serializeToolResult(toolCallId, result));
         messageRepo.saveAndFlush(po);
+    }
+
+    private void executeOwnedSessionWrite(Long userId, String sessionId, Runnable write) {
+        transactionTemplate.executeWithoutResult(status -> {
+            requireOwnedSessionForWrite(userId, sessionId);
+            write.run();
+        });
+    }
+
+    private void requireOwnedSessionForWrite(Long userId, String sessionId) {
+        requireActiveUserForWrite(userId);
+        sessionRepo.findByIdAndUserId(Objects.requireNonNull(sessionId, "sessionId must not be null"), userId)
+                .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+    }
+
+    private void requireActiveUserForWrite(Long userId) {
+        if (userId == null || userRepository.findByIdForUpdate(userId).isEmpty()) {
+            throw UnauthorizedException.invalidToken();
+        }
+    }
+
+    private record ActiveStreamRequest(
+            Long userId,
+            AtomicBoolean stopRequested,
+            AtomicReference<SseEmitter> emitter) {
+
+        private ActiveStreamRequest(Long userId) {
+            this(userId, new AtomicBoolean(false), new AtomicReference<>());
+        }
     }
 
     private List<ChatMessagePo> getSmartHistory(String sessionId, int limitCharCount) {

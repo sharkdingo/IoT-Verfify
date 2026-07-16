@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
@@ -11,6 +12,7 @@ import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -38,10 +40,14 @@ public class ManageSpecTool extends AbstractAiTool {
     private static final Set<String> TEMPLATE_IDS = Set.of("1", "2", "3", "4", "5", "6", "7");
 
     private final BoardStorageService boardStorageService;
+    private final AiDestructiveActionGuard destructiveActionGuard;
 
-    public ManageSpecTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+    public ManageSpecTool(BoardStorageService boardStorageService,
+                          ObjectMapper objectMapper,
+                          AiDestructiveActionGuard destructiveActionGuard) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
+        this.destructiveActionGuard = destructiveActionGuard;
     }
 
     @Override
@@ -101,6 +107,10 @@ public class ManageSpecTool extends AbstractAiTool {
                 "type", "boolean",
                 "description", "For delete: use false to preview the exact specification without changing it; use true only in a later turn after the user explicitly confirms that preview. Ignored for add."
         ));
+        props.put("impactToken", Map.of(
+                "type", "string",
+                "description", "For delete with confirmed=true, copy the opaque impactToken from the latest preview."
+        ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, List.of("action"));
 
@@ -117,7 +127,7 @@ public class ManageSpecTool extends AbstractAiTool {
             }
             requireOnlyFields(args, "arguments", Set.of(
                     "action", "templateId", "aConditions", "ifConditions", "thenConditions",
-                    "specId", "confirmed"));
+                    "specId", "confirmed", "impactToken"));
             String action = requiredTextField(args, "action", "arguments").toLowerCase(Locale.ROOT);
 
             return switch (action) {
@@ -187,7 +197,7 @@ public class ManageSpecTool extends AbstractAiTool {
     }
 
     private String executeDelete(Long userId, JsonNode args) throws Exception {
-        requireOnlyFields(args, "arguments", Set.of("action", "specId", "confirmed"));
+        requireOnlyFields(args, "arguments", Set.of("action", "specId", "confirmed", "impactToken"));
         String specId = requiredTextField(args, "specId", "arguments");
 
         SpecificationDto target = safeList(boardStorageService.getSpecs(userId)).stream()
@@ -198,19 +208,60 @@ public class ManageSpecTool extends AbstractAiTool {
             return errorJson("Specification not found: " + specId, "NOT_FOUND", 404);
         }
 
+        Object presentedSpecification = SpecificationToolPresenter.present(
+                target, currentPresentationContext(userId));
+        Map<String, Object> bindingSnapshot = Map.of(
+                "specification", presentedSpecification);
         boolean confirmed = booleanArg(args, "confirmed", false);
         if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+            String impactToken = destructiveActionGuard.issue(
+                    userId, getName(), specId, bindingSnapshot, null);
             Map<String, Object> preview = new LinkedHashMap<>();
             preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this specification.");
             preview.put("operation", "preview");
             preview.put("requiresUserConfirmation", true);
-            preview.put("specification", SpecificationToolPresenter.present(
-                    target,
-                    currentPresentationContext(userId)));
+            preview.put("specification", presentedSpecification);
+            preview.put("impactToken", impactToken);
             return readOnlySuccessJson(preview, "Specification deletion preview unavailable.");
         }
 
-        CollectionMutationResultDto<SpecificationDto> mutation = boardStorageService.removeSpec(userId, specId);
+        String impactToken = requiredTextField(args, "impactToken", "arguments");
+        AiDestructiveActionGuard.ConsumeResult confirmation = destructiveActionGuard.consume(
+                userId, getName(), specId, impactToken, bindingSnapshot);
+        if (!confirmation.approved()) {
+            String freshToken = destructiveActionGuard.issue(
+                    userId, getName(), specId, bindingSnapshot, null);
+            return errorJson(confirmation.message(), confirmation.errorCode(), 409, Map.of(
+                    "requiresUserConfirmation", true,
+                    "currentPreview", Map.of(
+                            "operation", "preview",
+                            "specification", presentedSpecification,
+                            "impactToken", freshToken)));
+        }
+
+        CollectionMutationResultDto<SpecificationDto> mutation;
+        try {
+            mutation = boardStorageService.removeSpecIfUnchanged(userId, specId, target);
+        } catch (ConflictException conflict) {
+            SpecificationDto current = safeList(boardStorageService.getSpecs(userId)).stream()
+                    .filter(spec -> spec != null && specId.equals(spec.getId()))
+                    .findFirst()
+                    .orElse(null);
+            if (current == null) {
+                return errorJson("Specification not found: " + specId, "NOT_FOUND", 404);
+            }
+            Object currentPresentation = SpecificationToolPresenter.present(
+                    current, currentPresentationContext(userId));
+            Map<String, Object> currentBinding = Map.of("specification", currentPresentation);
+            String freshToken = destructiveActionGuard.issue(
+                    userId, getName(), specId, currentBinding, null);
+            return errorJson(conflict.getMessage(), "CONFIRMATION_STALE", 409, Map.of(
+                    "requiresUserConfirmation", true,
+                    "currentPreview", Map.of(
+                            "operation", "preview",
+                            "specification", currentPresentation,
+                            "impactToken", freshToken)));
+        }
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("message", "Specification deleted successfully.");

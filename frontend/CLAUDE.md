@@ -8,8 +8,8 @@ Detailed reference lives in [../docs/](../docs/README.md); when code and docs di
 ## What this is
 
 Vue 3 + TypeScript single-page app (Vite) for the IoT-Verify platform: a visual device
-canvas, rule/spec builders, verification + counterexample visualization, an AI chat
-panel, and bilingual (zh-CN / en) UI. Talks to the Spring Boot backend over HTTP
+canvas, rule/spec builders, bounded candidate-path exploration, verification + formal
+counterexample visualization, an AI chat panel, and bilingual (zh-CN / en) UI. Talks to the Spring Boot backend over HTTP
 (`Result<T>` JSON) plus one SSE stream for chat.
 
 Stack: Vue 3 (Composition API), TypeScript, Vite, Tailwind CSS, Ant Design Vue,
@@ -36,7 +36,8 @@ src/
               chat.ts       named exports: sessions (axios) + SSE streaming (fetch)
               rules.ts      rules + rule recommendation (cancellable)
               simulation.ts default-export object: simulation calls
-  types/      TypeScript contracts (auth, device, node, edge, rule, spec, verify, fix, …)
+              fuzzing.ts    default-export object: exploration tasks/runs/findings
+  types/      TypeScript contracts (auth, device, node, edge, rule, spec, verify, fuzzing, fix, …)
   stores/     reactive state (auth, chat)
   router/     routes + auth guard
   views/      Landing / Board / NotFound
@@ -55,7 +56,7 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   (`userId`, not `user_id`). When a backend DTO changes, update the matching
   `src/types/*.ts` **and** the owning `docs/api/*.md` in the same change.
 - **Two response-unwrapping conventions — do not mix them up:**
-  - `board.ts` / `simulation.ts` / `rules.ts` return **already-unwrapped** `T` (a local
+  - `board.ts` / `simulation.ts` / `fuzzing.ts` / `rules.ts` return **already-unwrapped** `T` (a local
     `unpack` returns `response.data.data`).
   - `authApi` returns the **full** `Result<T>` (`response.data`) — read `res.data.token`,
     not `res.token`, and check `res.code`.
@@ -65,6 +66,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   Acceptance does not mean the run completed.
 - Verification/fix live on `boardApi` (there is **no** `api/verify.ts`); trace types
   live in `types/verify.ts` (there is **no** `types/trace.ts`).
+- Counterexample exploration lives in `api/fuzzing.ts` and `types/fuzzing.ts`. A fuzz
+  finding is replay-only candidate evidence: never expose the formal Fix action for it,
+  and never render `BUDGET_EXHAUSTED` as safe or satisfied.
 - Bilingual: user-facing strings go through Vue I18n (`assets` i18n, zh-CN + en) — do
   not hardcode display text. Backend/LLM free-text `message`, `reason`, `warning`, and
   `errorMessage` fields are technical diagnostics unless their contract explicitly says
@@ -96,6 +100,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   or saved simulation; verification counterexamples are nested summary evidence, not
   peer runs. Load full run/trace states only when opened, and keep malformed rows as
   unavailable placeholders rather than failing the whole list.
+- **Exploration is background-only.** Closing its panel must not cancel the accepted
+  task; keep it visible in the global task indicator/inbox and move completed work into
+  History Results with nested finding summaries.
 - **A stopped chat transport is not a cancelled tool operation.** Wait for the session
   activity endpoint to become idle before switching/deleting the session or allowing a
   new assistant mutation, then reconcile board and run-history state.
@@ -104,4 +111,6 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
 
 - Backend API contracts: [../docs/api/rest-endpoints.md](../docs/api/rest-endpoints.md)
   and the domain docs under [../docs/api/](../docs/api/overview.md)
+- Exploration contract and role: [../docs/api/fuzzing.md](../docs/api/fuzzing.md) and
+  [../docs/architecture/fuzzing-flow.md](../docs/architecture/fuzzing-flow.md)
 - Config / env vars: [../docs/getting-started/configuration.md](../docs/getting-started/configuration.md)

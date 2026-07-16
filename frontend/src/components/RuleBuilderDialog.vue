@@ -325,6 +325,27 @@ const canAddSource = computed(() => {
   return true
 })
 
+const ruleDraftIncompleteReasonKey = computed(() => {
+  if (ruleData.sources.length === 0) {
+    return canAddSource.value
+      ? 'app.addConfiguredRuleSourceBeforeSubmit'
+      : 'app.configureRuleSourceBeforeSubmit'
+  }
+  if (!ruleData.toId || !ruleData.toApi) {
+    return 'app.selectRuleTargetBeforeSubmit'
+  }
+  if (Boolean(ruleData.contentDevice) !== Boolean(ruleData.content)) {
+    return 'app.completeContentPayloadFields'
+  }
+  return ''
+})
+
+const ruleDraftIncompleteReason = computed(() =>
+  ruleDraftIncompleteReasonKey.value ? t(ruleDraftIncompleteReasonKey.value) : ''
+)
+
+const isRuleDraftComplete = computed(() => !ruleDraftIncompleteReasonKey.value)
+
 const hasSourceValue = (value: unknown) =>
   value !== null && value !== undefined && value !== ''
 
@@ -432,14 +453,9 @@ const removeSource = (index: number) => {
   ruleData.sources.splice(index, 1)
 }
 
-const validateRuleDraft = (forDuplicateCheck = false) => {
-  if (!ruleData.toId || !ruleData.toApi || ruleData.sources.length === 0) {
-    ElMessage.warning(t(forDuplicateCheck ? 'app.completeRequiredFieldsBeforeDuplicateCheck' : 'app.completeRequiredFields'))
-    return false
-  }
-
-  if ((ruleData.contentDevice && !ruleData.content) || (!ruleData.contentDevice && ruleData.content)) {
-    ElMessage.warning(t('app.completeContentPayloadFields'))
+const validateRuleDraft = () => {
+  if (!isRuleDraftComplete.value) {
+    ElMessage.warning(ruleDraftIncompleteReason.value)
     return false
   }
 
@@ -478,6 +494,9 @@ const emitRuleSave = async () => {
 
 const checkingDuplicate = ref(false)
 const checkingSimilarity = ref(false)
+const ruleActionBusy = computed(() =>
+  checkingDuplicate.value || checkingSimilarity.value || savingRule.value
+)
 
 const runDuplicateCheck = async (
   showClearFeedback: boolean
@@ -642,7 +661,7 @@ const runSimilarityCheck = async (
 }
 
 const handleSave = async () => {
-  if (checkingDuplicate.value || checkingSimilarity.value || !validateRuleDraft(false)) return
+  if (ruleActionBusy.value || !validateRuleDraft()) return
 
   const duplicateResult = await runDuplicateCheck(false)
   if (duplicateResult === 'cancel') return
@@ -651,7 +670,7 @@ const handleSave = async () => {
 }
 
 const handleCheckSimilarity = async () => {
-  if (checkingDuplicate.value || checkingSimilarity.value || !validateRuleDraft(true)) return
+  if (ruleActionBusy.value || !validateRuleDraft()) return
 
   const similarityResult = await runSimilarityCheck(true)
   if (similarityResult === 'save-anyway') {
@@ -1310,26 +1329,39 @@ const sourceShowsRelationValue = (type?: RuleSourceItemType) =>
         >
           {{ t('app.cancel') }}
         </button>
-        <div class="flex flex-wrap items-center justify-end gap-3">
-          <button
-            type="button"
-            @click="handleCheckSimilarity"
-            data-testid="rule-check-duplicate"
-            :disabled="checkingDuplicate || checkingSimilarity || savingRule"
-            class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        <div class="ml-auto flex min-w-0 flex-col items-end gap-2">
+          <p
+            v-if="ruleDraftIncompleteReason"
+            id="rule-draft-readiness"
+            data-testid="rule-draft-readiness"
+            role="status"
+            class="max-w-xl text-right text-xs leading-5 text-slate-500 dark:text-slate-400"
           >
-            <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
-            <span>{{ checkingSimilarity ? t('app.checkingAiSimilarity') : t('app.aiSimilarityCheck') }}</span>
-          </button>
-          <button
-            type="button"
-            @click="handleSave"
-            data-testid="rule-save"
-            :disabled="checkingDuplicate || checkingSimilarity || savingRule"
-            class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
-          >
-            {{ savingRule ? t('app.saving') : t('app.createRule') }}
-          </button>
+            {{ ruleDraftIncompleteReason }}
+          </p>
+          <div class="flex flex-wrap items-center justify-end gap-3">
+            <button
+              type="button"
+              @click="handleCheckSimilarity"
+              data-testid="rule-check-duplicate"
+              :disabled="!isRuleDraftComplete || ruleActionBusy"
+              :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
+              class="px-6 py-2.5 text-sm font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span v-if="checkingSimilarity" class="inline-block w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></span>
+              <span>{{ checkingSimilarity ? t('app.checkingAiSimilarity') : t('app.aiSimilarityCheck') }}</span>
+            </button>
+            <button
+              type="button"
+              @click="handleSave"
+              data-testid="rule-save"
+              :disabled="!isRuleDraftComplete || ruleActionBusy"
+              :aria-describedby="ruleDraftIncompleteReason ? 'rule-draft-readiness' : undefined"
+              class="px-8 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 active:scale-95 shadow-lg shadow-blue-500/20 rounded-xl transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+            >
+              {{ savingRule ? t('app.saving') : t('app.createRule') }}
+            </button>
+          </div>
         </div>
       </div>
     </div>

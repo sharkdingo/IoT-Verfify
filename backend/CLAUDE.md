@@ -7,9 +7,10 @@ fix the doc in the same change (see [../CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## What this is
 
-Spring Boot backend for a smart-home IoT formal-verification platform: users define
-devices, rules, and specifications; the backend generates an SMV model, runs NuSMV,
-parses counterexamples, and suggests automatic fixes. There is also an AI assistant
+Spring Boot backend for a smart-home IoT verification platform: users define devices,
+rules, and specifications; the backend performs bounded candidate-path exploration,
+generates an SMV model, runs NuSMV, parses formal counterexamples, and suggests
+automatic fixes. There is also an AI assistant
 (any OpenAI-compatible LLM endpoint, SSE streaming) with tool/function-calling.
 
 Stack: Java 17, Spring Boot 3.5.7, Spring Data JPA + MySQL, Redis (JWT blacklist,
@@ -41,6 +42,7 @@ component/
     executor/      NusmvExecutor — subprocess exec, semaphore concurrency, timeout
     parser/        SmvTraceParser — counterexample parsing
     fixer/         FaultLocalizer + parameter/condition/disable fix strategies
+  fuzz/            deterministic bounded path search + finite safety monitor
   aitool/          33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
@@ -85,6 +87,9 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   library to fill a missing domain: unused templates must not alter the current board.
 - **Async task state** uses atomic conditional UPDATEs (`WHERE status <> CANCELLED`) to
   avoid TOCTOU races — don't replace with read-then-write.
+- **Fuzz findings are not formal traces.** The bounded explorer supports only its
+  documented finite safety subset, and budget exhaustion is never satisfaction. Keep
+  `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.
 - **NuSMV generation must fail closed and be observable.** Invalid/empty rule
   conditions must not become `TRUE`; route them through the request-scoped
   `SmvGenerationContext` so `checkLogs`, `disabledRuleCount`, and `skippedSpecCount`
@@ -109,25 +114,30 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - Endpoint index: [../docs/api/rest-endpoints.md](../docs/api/rest-endpoints.md)
 - API contracts: [auth](../docs/api/auth.md) · [board](../docs/api/board.md) ·
   [verification/simulation/fix](../docs/api/verification.md) ·
+  [counterexample exploration](../docs/api/fuzzing.md) ·
   [chat SSE](../docs/api/chat-sse.md) · [AI tools](../docs/api/ai-tools.md)
 - Data authority & identity: [data authority](../docs/architecture/data-authority-model.md) ·
   [device identity](../docs/architecture/device-identity.md)
 - Verification pipeline & trace format: [../docs/architecture/verification-flow.md](../docs/architecture/verification-flow.md)
+- Bounded exploration: [../docs/architecture/fuzzing-flow.md](../docs/architecture/fuzzing-flow.md)
 - Spec templates & P1–P5 validation: [../docs/architecture/spec-templates.md](../docs/architecture/spec-templates.md)
 - Auto-fix (Salus §4–§5): [../docs/architecture/auto-fix.md](../docs/architecture/auto-fix.md)
 - Change history: [../CHANGELOG.md](../CHANGELOG.md)
 
 ## Data model
 
-13 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
+15 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
 `board_environment_variable`, `rules`, `specification`, `board_layout`,
-`device_templates`, `verification_task`, `simulation_task`, `trace`,
-`simulation_trace`, `chat_session`, `chat_message`. Notable: `device_node` has a
+`device_templates`, `verification_task`, `simulation_task`, `fuzz_task`, `trace`,
+`simulation_trace`, `fuzz_finding`, `chat_session`, `chat_message`. Notable: `device_node` has a
 composite PK `(id, user_id)` for user isolation; `board_environment_variable` has a
 composite PK `(name, user_id)` for per-user shared environment state;
-`device_templates` has a unique constraint on `(user_id, name)`; `specification`
-carries `formula` (TEXT) and `devices_json` (JSON) for authored-formula/device-binding
-persistence; `verification_task` carries `disabled_rule_count` / `skipped_spec_count`
+`device_templates` has a unique constraint on `(user_id, name)`; `specification` has a
+composite PK `(id, user_id)` and carries `formula` (TEXT) and `devices_json` (JSON) for
+authored-formula/device-binding persistence; `verification_task` carries
+`disabled_rule_count` / `skipped_spec_count`
 mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
 rows also back verification run history for both synchronous and asynchronous checks;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
+Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
+`fuzz_finding` rows are heuristic candidate evidence, not formal traces.

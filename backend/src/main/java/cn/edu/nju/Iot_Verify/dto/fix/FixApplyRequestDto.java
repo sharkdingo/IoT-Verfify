@@ -14,8 +14,8 @@ import java.util.List;
 /**
  * 应用某条修复建议的请求。
  *
- * <p>The client selects a strategy and optional preference ranges. The server recomputes and
- * re-verifies the fix from the trace context before persisting it.</p>
+ * <p>The client submits the exact displayed suggestion and its server-issued signature. The server
+ * verifies the signature and current board snapshot before persisting that same suggestion.</p>
  */
 @Data
 @Builder
@@ -29,9 +29,16 @@ public class FixApplyRequestDto {
             message = "strategy must be one of parameter, condition, remove")
     private String strategy;
 
+    @Valid
+    @NotNull(message = "suggestion must not be null")
+    private FixSuggestionDto suggestion;
+
+    @NotBlank(message = "suggestionToken must not be blank")
+    private String suggestionToken;
+
     /**
      * 生成该建议时 /fix 使用的参数范围选择（若有）。每项选择使用 ParameterAdjustment.targetId，
-     * apply 服务端重算时必须复现同一搜索空间，否则带 range 生成的合法 parameter 建议会重算出不同结果而被拒。
+     * The signed suggestion binds these ranges so a different parameter search cannot be applied.
      */
     private List<@Valid @NotNull(message = "preferredRangeSelections item must not be null")
             PreferredRangeSelection> preferredRangeSelections;

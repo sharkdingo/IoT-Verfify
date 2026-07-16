@@ -8,8 +8,8 @@ import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
  * import an SDK type.
  *
  * <p>{@code parameters} reuses {@link FunctionParameterSchema} (a plain JSON-Schema POJO:
- * type/properties/required); the {@code LlmProvider} adapter serializes it into whatever
- * shape the underlying SDK expects.
+ * type/properties/required/additionalProperties); the {@code LlmProvider} adapter
+ * serializes the complete structured schema into whatever shape the underlying SDK expects.
  *
  * @param name        function name (snake_case, the dispatch key)
  * @param description human-readable description sent to the model

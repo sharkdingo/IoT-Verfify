@@ -10,7 +10,7 @@ repaired rules back to the board (see [Applying a suggestion](#applying-a-sugges
 API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-13. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-16. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
 RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
 `parameterize/ParameterExtractor`; `service/impl/FixServiceImpl` (apply flow). Config keys
@@ -88,8 +88,8 @@ Adds a boolean lambda guard to a rule and uses NuSMV to decide which conditions 
 adjusted. Internally, existing conditions can be `keep` or `remove`, and candidates can
 be `add` or ignored; the returned suggestion filters out `keep` entries and emits only
 actionable `ConditionAdjustment` entries: `{ action, attribute, targetType, description,
-deviceName, relation, value }`. Internal positions are retained only by the server while
-it applies the recomputed suggestion.
+deviceName, relation, value }`. Internal positions are retained inside the signed
+suggestion token and restored only after the server verifies that token during apply.
 
 The candidate filter rejects a positive condition that is already satisfied by the same rule
 command's declared API `EndState` on the command target. That would be a postcondition
@@ -160,27 +160,26 @@ diagnostics for the AI/tool or advanced-details layer. Full field tables are in
 applies one (`POST /api/verify/traces/{id}/fix/apply`, handled by
 `FixServiceImpl.applyFix`). Because a suggestion is computed against the trace's
 verification-time snapshot, apply cannot trust that the board still matches — so it
-**never trusts the client** and re-derives everything server-side before persisting.
+**never trusts unsigned client data** and checks the exact signed proposal plus the current
+model snapshot before persisting.
 
-**The server recomputes; the client never submits an operation list.** The client sends
-only the selected strategy plus the same `preferredRangeSelections` that `/fix` used.
-Apply re-runs that strategy against the trace's own request and exact saved template
-manifests. If the server cannot
-reproduce a verified suggestion, it rejects with `400`; otherwise it applies its own
-recomputed suggestion to a deep copy of the persisted rules, so what is saved is exactly
-what NuSMV just verified.
+**The server signs the exact suggestion.** Every verified `/fix` proposal receives a short-lived
+HMAC token bound to the authenticated user, trace, strategy, complete user-visible proposal,
+preferred ranges, expiry, and hidden remove-rule positions. Apply submits that displayed proposal
+and token. Any edit, replay in another context, or expired token rejects with `400`; otherwise the
+same proposal is applied. This removes the second expensive strategy search and prevents apply
+from silently choosing a different valid suggestion than the one the user reviewed.
 
-**Drift guards** (all reject with `400` unless noted) run because the recompute replays
-the trace's *stored* context and would otherwise re-prove the same fix against a stale
-model or write it onto a changed board:
+**Drift guards** (all reject with `400` unless noted) ensure the earlier verification evidence
+still describes the model being changed:
 
 - **Source-model completeness** — apply rejects traces whose verification disabled any
   rule or skipped any specification. The user must resolve generation warnings and
   verify again before asking the system to certify a repair.
 
 - **Frozen-template replay and drift** — the trace stores the exact parsed manifests used
-  by verification. `/fix` and apply recomputation rebuild from that saved set, never from
-  whichever versions are current. Apply first compares current manifests with the saved
+  by verification. `/fix` rebuilds from that saved set, never from whichever versions are
+  current. Apply first compares current manifests with the saved
   set: a confirmed difference blocks with `400`; an unavailable repository comparison
   is reported as unknown and blocks with retryable `503`. `/fix` remains usable against
   the frozen model but adds an explicit warning for either confirmed drift or an
@@ -190,7 +189,7 @@ model or write it onto a changed board:
   fingerprint and rejects if rules were added/removed/edited/reordered, so a stale index
   never edits the wrong rule.
 - **Spec/device/environment drift** — a spec-, device-, or environment-pool-only edit
-  touches neither rules nor templates, so the recompute alone would miss it. Apply compares a canonical
+  touches neither rules nor templates. Apply compares a canonical
   **semantic fingerprint** (`BoardSemanticFingerprint`) of the trace snapshot against the
   current board — not raw-JSON equality: both sides run through the same normalization
   (device names canonicalized via `DeviceNameNormalizer`, effective variable/trust/privacy
@@ -232,8 +231,9 @@ the raw `DeviceNode.id` from the current board snapshot before persistence. If a
 be mapped, the transaction fails closed and no rule is written; the internal model identifier is
 not returned as a user-facing validation error.
 
-The response (`FixApplyResultDto`) returns the server-recomputed `appliedSuggestion`,
-`verificationRechecked=true`, before/after rule counts, and the full persisted rule list.
+The response (`FixApplyResultDto`) returns the signed `appliedSuggestion`,
+`verificationRechecked=false`, `verificationEvidenceReused=true`, before/after rule counts,
+and the full persisted rule list.
 The localized UI derives its success explanation from these structured fields instead
 of displaying the backend's English `message`; it states both the all-submitted-spec
 scope and the unmodelled-real-world limitation.

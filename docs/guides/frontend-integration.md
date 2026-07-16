@@ -19,10 +19,11 @@ frontend/src/
 │   ├── board.ts         # default-export object: board CRUD + verification + fix
 │   ├── chat.ts          # named exports: sessions + SSE streaming
 │   ├── rules.ts         # rule recommendation only (persistence lives in board.ts)
-│   └── simulation.ts    # default-export object: simulation calls
+│   ├── simulation.ts    # default-export object: simulation calls
+│   └── fuzzing.ts       # default-export object: bounded exploration tasks/runs/findings
 └── types/
     ├── auth.ts   canvas.ts   chat.ts   device.ts   edge.ts   fix.ts
-    ├── node.ts   rule.ts   simulation.ts   spec.ts   verify.ts
+    ├── fuzzing.ts   node.ts   rule.ts   simulation.ts   spec.ts   verify.ts
 ```
 
 > There is **no** `api/verify.ts` and **no** `types/trace.ts`. Verification calls live
@@ -73,7 +74,7 @@ frontend does **not** unwrap it uniformly:
 
 | Module | Returns | Caller must read |
 | :--- | :--- | :--- |
-| `board.ts`, `simulation.ts`, `rules.ts` (rule recommendation only) | already-unwrapped `T` (via a local `unpack` that returns `response.data.data`) | the value directly; targeted rule mutations map backend `RuleDto` values back to `RuleForm` and return the authoritative current collection |
+| `board.ts`, `simulation.ts`, `fuzzing.ts`, `rules.ts` (rule recommendation only) | already-unwrapped `T` (via a local `unpack` that returns `response.data.data`) | the value directly; targeted rule mutations map backend `RuleDto` values back to `RuleForm` and return the authoritative current collection |
 | `auth.ts` | the full `Result<T>` (returns `response.data`) | `.data` for payload endpoints, `.code` for status; void responses may omit `data` |
 
 So `authApi.login(...)` resolves to `Result<LoginResponse>` — after confirming
@@ -101,7 +102,7 @@ username, and password separately.
 `deleteAccount` sends `{ password, confirmation }`; the backend requires the password
 to match and `confirmation` to equal the current username or phone number. On success,
 clear local auth state and send the user back to the landing page.
-`logout` only revokes the current token; background verification/simulation tasks are
+`logout` only revokes the current token; background verification/simulation/exploration tasks are
 not cancelled. `deleteAccount` is the destructive path: it cancels active tasks,
 serializes in-flight writes with account deletion, and removes user-owned data.
 
@@ -301,6 +302,9 @@ Its methods return already-unwrapped values. Non-exhaustive:
   stop or finish first because aborting SSE cannot revoke a tool call already started.
 - Verification: `verify(req)`, `verifyAsync(req): Promise<VerificationTask>`, `getTasks`,
   `getTask`, `getTaskProgress`, `cancelTask`, and trace list/detail/delete.
+- Counterexample exploration: `fuzzingApi.startAsync(req)`, task polling/cancellation,
+  run list/detail/delete, and lazy finding detail. The accepted task is authoritative;
+  the client never sends a Board/model payload or fabricates a task ID.
 - Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?)`.
 
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<VerificationTask>` — it takes
@@ -460,7 +464,7 @@ Board layout and visual shell rules:
   NuSMV aliases are not displayed or matched as a frontend contract. Runtime NuSMV
   globals such as the actual `compromisedPointCount` are exposed separately through
   `TraceStateDto.globalVariables` so they cannot collide with user environment names.
-- The simulation/verification/history/recommendation actions live in a right-side tool
+- The simulation/counterexample-exploration/verification/history/recommendation actions live in a right-side tool
   rail placed just outside the inspector, never overlapping the inspector itself.
 - Model-trace playback is one exclusive review surface. While either the simulation
   timeline or counterexample timeline is open, the Action Dock cannot open run history,
@@ -526,10 +530,12 @@ For a background-task UI, do not trap the user inside the submit panel. Allow th
 to close and keep a global mini task indicator visible while active tasks exist. Run
 history has two user layers, not three peer artifact tabs:
 
-1. **Task Status** uses `GET /api/verify/tasks` and `GET /api/simulate/tasks`. These
-   lists contain active work plus failed/cancelled tasks that produced no result.
-2. **History Results** combines `GET /api/verify/runs` with saved simulation runs from
-   `GET /api/simulate/traces`. One completed run is one top-level history item.
+1. **Task Status** uses `GET /api/verify/tasks`, `GET /api/simulate/tasks`, and
+   `GET /api/fuzz/tasks`. These lists contain active work plus failed/cancelled tasks
+   that produced no result.
+2. **History Results** combines `GET /api/verify/runs`, `GET /api/fuzz/runs`, and saved
+   simulation runs from `GET /api/simulate/traces`. One completed run is one top-level
+   history item.
 
 Completed work is excluded from the task-status lists. Verification counterexamples are
 nested evidence under their owning verification result and keep replay/fix actions;
@@ -539,12 +545,27 @@ parseable/replayable trace. Failed and cancelled task rows can be dismissed thro
 task `DELETE` endpoints; deleting a verification result deletes all of its linked
 counterexamples.
 
-History list calls are summary-only. `GET /api/verify/runs` already nests lightweight
-counterexample summaries, so the Board must not also fetch the global full-trace list.
-Load full verification run detail, full trace states, or full simulation states only
-when the user opens that result/replay. Keep `dataAvailable=false` rows visible with a
+Exploration findings are likewise nested under their run, but they are candidate
+finite paths rather than NuSMV counterexamples. `FOUND_VIOLATION` is shown as candidate
+evidence, `BUDGET_EXHAUSTED` stays neutral and explicitly says it is not a proof, and
+`INCONCLUSIVE` names the eligibility/limitation boundary. Finding actions are replay and
+formal verification only; never expose Fix for a fuzz finding.
+The submit form mirrors the workload and target-selection guard owned by
+[the exploration API contract](../api/fuzzing.md#submit-and-task-lifecycle).
+Result UI localizes eligibility `reasonCode` and `limitations[]` codes; English backend
+diagnostics are reserved for logs or advanced details.
+
+History list calls are summary-only. `GET /api/verify/runs` and `GET /api/fuzz/runs`
+already nest lightweight evidence summaries, so the Board must not also fetch global
+full-trace/finding lists. Load full verification/fuzz run detail, full trace/finding
+states, or full simulation states only when the user opens that result/replay. Keep
+`dataAvailable=false` rows visible with a
 damaged-history explanation and deletion action, but disable open/replay/fix; one bad
 row must not turn the entire history panel into "load failed".
+Exploration history requests one bounded page at a time and exposes a localized Load
+More action in the exploration filter. Appends are de-duplicated by run ID; deleting a
+run resets offset pagination to the first page so shifted rows are not skipped. Exact
+page bounds remain owned by [the exploration API](../api/fuzzing.md#run-results).
 
 Treat task `status` as execution lifecycle only. A task's direct polling endpoint may
 return `COMPLETED` so the submitter can obtain the result, but the history UI then moves
@@ -560,10 +581,12 @@ User-facing verification modes should distinguish behavior, not implementation j
 synchronous `verify` waits on the current page and returns the result directly;
 asynchronous `verifyAsync` creates a pollable task with progress/cancel controls and
 task-backed results.
-Before either verification or simulation builds its immutable request, the Board waits
+Before verification, simulation, or exploration captures immutable input, the Board waits
 for pending fix reconciliation and its mutation queue to drain, then rechecks the current
-devices/rules/specifications. A run includes edits whose save was already started; later
-edits cannot rewrite the captured run snapshot.
+devices/rules/specifications. Verification/simulation build a client model request;
+exploration sends only its budget/target selection and the backend captures the Board.
+A run includes edits whose save was already started; later edits cannot rewrite the
+captured run snapshot.
 
 Enable the attack option only when the current scene contains an automation rule or a
 device-template reading with `FalsifiableWhenCompromised=true`. Otherwise explain that
@@ -709,9 +732,23 @@ The chat stop control aborts only the SSE response. It cannot undo a backend too
 that already started. `ChatView` therefore polls `getSessionActivity` until the server
 reports idle, keeps assistant mutations locked, then reloads conversation/board/history.
 Session switching, new-conversation creation, and deletion wait for the same settling
-step. Three consecutive activity-query failures produce an outcome-unknown warning and
-an authoritative state refresh rather than a ten-minute UI lock. Do not label this
+step. Activity checks have their own 2.5-second request timeout, so three consecutive
+query failures produce an outcome-unknown warning and an authoritative state refresh
+within seconds rather than inheriting the general 100-second axios timeout. Do not label this
 control as cancelling the requested operation.
+If the server continues to report an active tool for the 10-second settlement window,
+the UI switches to the same visible retry/locked state instead of spinning for the full
+SSE timeout or releasing a known-running mutation.
+
+Stream commands cross the component boundary through a promise-returning
+`executeCommand` callback. `ChatView` does not release its global interaction lock until
+the Board confirms the refresh. A failed targeted refresh falls back to `board_state`;
+if that also fails, a localized retry panel keeps assistant requests, scene replacement,
+and trace playback locked until reconciliation succeeds. Sign-out invokes the same
+settlement through the exposed `prepareForLogout()` method, requiring explicit user
+confirmation when the backend tool outcome remains unknown. SSE `401` responses clear
+authentication and navigate to login; `403` responses remain authorization errors and do
+not discard a valid login session.
 Board collection refreshes triggered by chat are serialized through the same mutation
 queue. Read-only trace playback and a pending scene replacement disable new assistant
 requests; starting either while an assistant stream is active is blocked until the stream

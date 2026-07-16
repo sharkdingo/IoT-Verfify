@@ -1,17 +1,21 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
+import cn.edu.nju.Iot_Verify.dto.auth.DeleteAccountRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
+import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.repository.BoardLayoutRepository;
 import cn.edu.nju.Iot_Verify.repository.BoardEnvironmentVariableRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
+import cn.edu.nju.Iot_Verify.repository.FuzzFindingRepository;
+import cn.edu.nju.Iot_Verify.repository.FuzzTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
@@ -20,6 +24,10 @@ import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
+import cn.edu.nju.Iot_Verify.service.ChatService;
+import cn.edu.nju.Iot_Verify.service.FuzzService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
@@ -32,8 +40,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.InOrder;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Optional;
 
@@ -51,6 +61,8 @@ class AuthServiceImplLogoutTest {
     @Mock private DeviceTemplateService deviceTemplateService;
     @Mock private VerificationService verificationService;
     @Mock private SimulationService simulationService;
+    @Mock private FuzzService fuzzService;
+    @Mock private ChatService chatService;
     @Mock private UserRepository userRepository;
     @Mock private BoardEnvironmentVariableRepository boardEnvironmentVariableRepository;
     @Mock private BoardLayoutRepository boardLayoutRepository;
@@ -58,6 +70,8 @@ class AuthServiceImplLogoutTest {
     @Mock private ChatSessionRepository chatSessionRepository;
     @Mock private DeviceNodeRepository deviceNodeRepository;
     @Mock private DeviceTemplateRepository deviceTemplateRepository;
+    @Mock private FuzzFindingRepository fuzzFindingRepository;
+    @Mock private FuzzTaskRepository fuzzTaskRepository;
     @Mock private RuleRepository ruleRepository;
     @Mock private SimulationTaskRepository simulationTaskRepository;
     @Mock private SimulationTraceRepository simulationTraceRepository;
@@ -69,13 +83,22 @@ class AuthServiceImplLogoutTest {
 
     @BeforeEach
     void setUp() {
+        verificationService = mock(
+                VerificationService.class, withSettings().extraInterfaces(AsyncTaskExecutionControl.class));
+        simulationService = mock(
+                SimulationService.class, withSettings().extraInterfaces(AsyncTaskExecutionControl.class));
+        fuzzService = mock(
+                FuzzService.class, withSettings().extraInterfaces(AsyncTaskExecutionControl.class));
+        chatService = mock(
+                ChatService.class, withSettings().extraInterfaces(ChatExecutionControl.class));
         authService = new AuthServiceImpl(
                 userService, jwtUtil, passwordEncoder,
                 tokenBlacklistService, userMapper, deviceTemplateService,
-                verificationService, simulationService, userRepository,
+                verificationService, simulationService, fuzzService, chatService, userRepository,
                 boardEnvironmentVariableRepository,
                 boardLayoutRepository, chatMessageRepository, chatSessionRepository,
-                deviceNodeRepository, deviceTemplateRepository, ruleRepository,
+                deviceNodeRepository, deviceTemplateRepository, fuzzFindingRepository,
+                fuzzTaskRepository, ruleRepository,
                 simulationTaskRepository, simulationTraceRepository, specificationRepository,
                 traceRepository, verificationTaskRepository
         );
@@ -210,5 +233,96 @@ class AuthServiceImplLogoutTest {
 
         assertThrows(RuntimeException.class, () -> authService.logout(1L, "Bearer some-token"));
         verifyNoInteractions(tokenBlacklistService);
+    }
+
+    @Test
+    void deleteAccount_cancelsAndDeletesFuzzDataWithUserOwnedData() {
+        UserPo user = UserPo.builder()
+                .id(7L)
+                .phone("13900000000")
+                .username("alice")
+                .password("encoded")
+                .build();
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Pass1234", "encoded")).thenReturn(true);
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.PENDING))
+                .thenReturn(java.util.List.of(21L));
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.RUNNING))
+                .thenReturn(java.util.List.of(22L));
+
+        DeleteAccountRequestDto request = new DeleteAccountRequestDto();
+        request.setPassword("Pass1234");
+        request.setConfirmation("alice");
+
+        authService.deleteAccount(7L, null, request);
+
+        InOrder fuzzCleanupOrder = inOrder(fuzzFindingRepository, fuzzTaskRepository);
+        fuzzCleanupOrder.verify(fuzzFindingRepository).deleteByUserId(7L);
+        fuzzCleanupOrder.verify(fuzzTaskRepository).deleteByUserId(7L);
+        AsyncTaskExecutionControl fuzzControl = (AsyncTaskExecutionControl) fuzzService;
+        verify(fuzzControl).requestLocalExecutionStop(21L);
+        verify(fuzzControl).requestLocalExecutionStop(22L);
+        verify((ChatExecutionControl) chatService).requestLocalUserExecutionStop(7L);
+        verify(fuzzService, never()).cancelTask(anyLong(), anyLong());
+        verify(userRepository).delete(user);
+    }
+
+    @Test
+    void deleteAccount_defersIrreversibleSideEffectsUntilCommit() {
+        UserPo user = UserPo.builder()
+                .id(7L).phone("13900000000").username("alice").password("encoded").build();
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Pass1234", "encoded")).thenReturn(true);
+        when(jwtUtil.getExpirationSeconds("token")).thenReturn(60L);
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.PENDING))
+                .thenReturn(java.util.List.of());
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.RUNNING))
+                .thenReturn(java.util.List.of(22L));
+        DeleteAccountRequestDto request = new DeleteAccountRequestDto();
+        request.setPassword("Pass1234");
+        request.setConfirmation("alice");
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            authService.deleteAccount(7L, "Bearer token", request);
+
+            verifyNoInteractions(tokenBlacklistService);
+            verify((AsyncTaskExecutionControl) fuzzService, never()).requestLocalExecutionStop(anyLong());
+            verify((ChatExecutionControl) chatService, never()).requestLocalUserExecutionStop(anyLong());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+
+            verify(tokenBlacklistService).blacklist("token", 60L);
+            verify((AsyncTaskExecutionControl) fuzzService).requestLocalExecutionStop(22L);
+            verify((ChatExecutionControl) chatService).requestLocalUserExecutionStop(7L);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void deleteAccount_databaseFailureDoesNotBlacklistOrStopTasks() {
+        UserPo user = UserPo.builder()
+                .id(7L).phone("13900000000").username("alice").password("encoded").build();
+        when(userRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Pass1234", "encoded")).thenReturn(true);
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.PENDING))
+                .thenReturn(java.util.List.of());
+        when(fuzzTaskRepository.findIdsByUserIdAndStatus(7L, FuzzTaskPo.TaskStatus.RUNNING))
+                .thenReturn(java.util.List.of(22L));
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("database unavailable"))
+                .when(fuzzFindingRepository).deleteByUserId(7L);
+        DeleteAccountRequestDto request = new DeleteAccountRequestDto();
+        request.setPassword("Pass1234");
+        request.setConfirmation("alice");
+
+        assertThrows(org.springframework.dao.DataAccessResourceFailureException.class,
+                () -> authService.deleteAccount(7L, "Bearer token", request));
+
+        verifyNoInteractions(tokenBlacklistService);
+        verify((AsyncTaskExecutionControl) fuzzService, never()).requestLocalExecutionStop(anyLong());
+        verify((ChatExecutionControl) chatService, never()).requestLocalUserExecutionStop(anyLong());
+        verify(userRepository, never()).delete(any());
     }
 }

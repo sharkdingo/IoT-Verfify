@@ -56,6 +56,7 @@ class FixServiceImplTest {
     @Mock private RuleFixer ruleFixer;
     @Mock private BoardStorageService boardStorageService;
     @Mock private BoardDataConverter boardDataConverter;
+    @Mock private cn.edu.nju.Iot_Verify.service.FixSuggestionTokenService fixSuggestionTokenService;
 
     private FixServiceImpl fixService;
     private List<DeviceVerificationDto> currentDevices;
@@ -69,7 +70,7 @@ class FixServiceImplTest {
         FixConfig fixConfig = new FixConfig();
         fixConfig.setMaxAttempts(20);
         fixService = new FixServiceImpl(traceRepository, traceMapper, smvGenerator, ruleFixer, fixConfig,
-                boardStorageService, boardDataConverter);
+                boardStorageService, boardDataConverter, fixSuggestionTokenService);
         DeviceManifest manifest = DeviceManifest.builder().name("t1").build();
         currentDevices = List.of();
         currentSpecs = List.of();

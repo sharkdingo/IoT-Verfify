@@ -1,6 +1,7 @@
 // src/stores/auth.ts - 认证状态管理（使用Vue reactive）
 import { reactive, readonly } from 'vue';
 import type { UserInfo } from '../types/auth';
+import { isLocallyUsableJwt } from '@/utils/jwt';
 
 interface AuthState {
   token: string | null;
@@ -16,7 +17,7 @@ const getInitialState = (): AuthState => {
   const token = localStorage.getItem(TOKEN_KEY);
   const userStr = localStorage.getItem(USER_KEY);
   
-  if (token && userStr) {
+  if (isLocallyUsableJwt(token) && userStr) {
     try {
       const user = JSON.parse(userStr);
       return {
@@ -25,12 +26,19 @@ const getInitialState = (): AuthState => {
         isLoggedIn: true
       };
     } catch {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
       return {
         token: null,
         user: null,
         isLoggedIn: false
       };
     }
+  }
+
+  if (token || userStr) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
   }
   
   return {

@@ -4,7 +4,6 @@ import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
 import cn.edu.nju.Iot_Verify.dto.auth.DeleteAccountRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
-import cn.edu.nju.Iot_Verify.dto.auth.RegisterResponseDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.InternalServerException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
@@ -15,6 +14,8 @@ import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceNodeRepository;
 import cn.edu.nju.Iot_Verify.repository.DeviceTemplateRepository;
+import cn.edu.nju.Iot_Verify.repository.FuzzFindingRepository;
+import cn.edu.nju.Iot_Verify.repository.FuzzTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.RuleRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
@@ -23,7 +24,11 @@ import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.AuthService;
+import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
+import cn.edu.nju.Iot_Verify.service.ChatService;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
+import cn.edu.nju.Iot_Verify.service.FuzzService;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
 import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
@@ -36,6 +41,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
@@ -52,6 +59,8 @@ public class AuthServiceImpl implements AuthService {
     private final DeviceTemplateService deviceTemplateService;
     private final VerificationService verificationService;
     private final SimulationService simulationService;
+    private final FuzzService fuzzService;
+    private final ChatService chatService;
     private final UserRepository userRepository;
     private final BoardEnvironmentVariableRepository boardEnvironmentVariableRepository;
     private final BoardLayoutRepository boardLayoutRepository;
@@ -59,6 +68,8 @@ public class AuthServiceImpl implements AuthService {
     private final ChatSessionRepository chatSessionRepository;
     private final DeviceNodeRepository deviceNodeRepository;
     private final DeviceTemplateRepository deviceTemplateRepository;
+    private final FuzzFindingRepository fuzzFindingRepository;
+    private final FuzzTaskRepository fuzzTaskRepository;
     private final RuleRepository ruleRepository;
     private final SimulationTaskRepository simulationTaskRepository;
     private final SimulationTraceRepository simulationTraceRepository;
@@ -68,7 +79,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public RegisterResponseDto register(RegisterRequestDto request) {
+    public AuthResponseDto register(RegisterRequestDto request) {
         UserPo user = userService.register(
                 request.getPhone(),
                 request.getUsername(),
@@ -83,7 +94,8 @@ public class AuthServiceImpl implements AuthService {
         }
         log.info("Loaded {} default templates for new user {}", count, user.getId());
 
-        return userMapper.toRegisterResponseDto(user);
+        String token = jwtUtil.generateToken(user.getId(), user.getPhone());
+        return userMapper.toAuthResponseDto(user, token);
     }
 
     @Override
@@ -136,10 +148,10 @@ public class AuthServiceImpl implements AuthService {
             throw new BadRequestException("Account confirmation must match the username or phone number.");
         }
 
-        blacklistCurrentToken(authHeader);
-        cancelActiveTasks(userId);
+        ActiveTaskIds activeTaskIds = activeTaskIds(userId);
         deleteUserOwnedData(userId);
         userRepository.delete(user);
+        afterCommit(() -> finishAccountDeletion(userId, authHeader, activeTaskIds));
         log.info("Deleted account and user-owned data for user {}", userId);
     }
 
@@ -171,6 +183,8 @@ public class AuthServiceImpl implements AuthService {
         verificationTaskRepository.deleteByUserId(userId);
         simulationTraceRepository.deleteByUserId(userId);
         simulationTaskRepository.deleteByUserId(userId);
+        fuzzFindingRepository.deleteByUserId(userId);
+        fuzzTaskRepository.deleteByUserId(userId);
 
         deviceNodeRepository.deleteByUserId(userId);
         boardEnvironmentVariableRepository.deleteByUserId(userId);
@@ -180,14 +194,76 @@ public class AuthServiceImpl implements AuthService {
         deviceTemplateRepository.deleteByUserId(userId);
     }
 
-    private void cancelActiveTasks(Long userId) {
-        verificationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.PENDING)
-                .forEach(task -> verificationService.cancelTask(userId, task.getId()));
-        verificationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.RUNNING)
-                .forEach(task -> verificationService.cancelTask(userId, task.getId()));
-        simulationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.PENDING)
-                .forEach(task -> simulationService.cancelTask(userId, task.getId()));
-        simulationTaskRepository.findByUserIdAndStatus(userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.RUNNING)
-                .forEach(task -> simulationService.cancelTask(userId, task.getId()));
+    private ActiveTaskIds activeTaskIds(Long userId) {
+        List<Long> verificationIds = new java.util.ArrayList<>();
+        verificationTaskRepository.findByUserIdAndStatus(
+                        userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.PENDING)
+                .forEach(task -> verificationIds.add(task.getId()));
+        verificationTaskRepository.findByUserIdAndStatus(
+                        userId, cn.edu.nju.Iot_Verify.po.VerificationTaskPo.TaskStatus.RUNNING)
+                .forEach(task -> verificationIds.add(task.getId()));
+
+        List<Long> simulationIds = new java.util.ArrayList<>();
+        simulationTaskRepository.findByUserIdAndStatus(
+                        userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.PENDING)
+                .forEach(task -> simulationIds.add(task.getId()));
+        simulationTaskRepository.findByUserIdAndStatus(
+                        userId, cn.edu.nju.Iot_Verify.po.SimulationTaskPo.TaskStatus.RUNNING)
+                .forEach(task -> simulationIds.add(task.getId()));
+
+        List<Long> fuzzIds = new java.util.ArrayList<>();
+        fuzzIds.addAll(fuzzTaskRepository.findIdsByUserIdAndStatus(
+                userId, cn.edu.nju.Iot_Verify.po.FuzzTaskPo.TaskStatus.PENDING));
+        fuzzIds.addAll(fuzzTaskRepository.findIdsByUserIdAndStatus(
+                userId, cn.edu.nju.Iot_Verify.po.FuzzTaskPo.TaskStatus.RUNNING));
+        return new ActiveTaskIds(List.copyOf(verificationIds), List.copyOf(simulationIds), List.copyOf(fuzzIds));
+    }
+
+    private void finishAccountDeletion(Long userId, String authHeader, ActiveTaskIds activeTaskIds) {
+        try {
+            blacklistCurrentToken(authHeader);
+        } catch (RuntimeException e) {
+            log.warn("Account was deleted but its token could not be blacklisted", e);
+        }
+        stopLocalExecutions(verificationService, activeTaskIds.verificationIds(), "verification");
+        stopLocalExecutions(simulationService, activeTaskIds.simulationIds(), "simulation");
+        stopLocalExecutions(fuzzService, activeTaskIds.fuzzIds(), "fuzz");
+        if (chatService instanceof ChatExecutionControl control) {
+            try {
+                control.requestLocalUserExecutionStop(userId);
+            } catch (RuntimeException e) {
+                log.warn("Account deletion could not stop local chat work for user {}", userId, e);
+            }
+        }
+    }
+
+    private void stopLocalExecutions(Object service, List<Long> taskIds, String taskType) {
+        if (!(service instanceof AsyncTaskExecutionControl control)) return;
+        for (Long taskId : taskIds) {
+            try {
+                control.requestLocalExecutionStop(taskId);
+            } catch (RuntimeException e) {
+                log.warn("Account deletion could not stop local {} task {}", taskType, taskId, e);
+            }
+        }
+    }
+
+    private void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
+    private record ActiveTaskIds(
+            List<Long> verificationIds,
+            List<Long> simulationIds,
+            List<Long> fuzzIds) {
     }
 }

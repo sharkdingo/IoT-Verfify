@@ -1,13 +1,11 @@
-import { expect, type APIRequestContext, type Page, test } from '@playwright/test'
-
-const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
-
-type AuthUser = {
-  userId: number
-  phone: string
-  username: string
-  token: string
-}
+import { type APIRequestContext, type Page } from '@playwright/test'
+import {
+  apiBaseURL,
+  createAuthenticatedUser,
+  expect,
+  test,
+  type AuthUser
+} from './support/auth'
 
 const authHeaders = (auth: AuthUser) => ({
   Authorization: `Bearer ${auth.token}`
@@ -18,23 +16,6 @@ const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>
   const body = await response.json()
   expect(body.code, JSON.stringify(body)).toBe(200)
   return body.data as T
-}
-
-const createAuthenticatedUser = async (request: APIRequestContext): Promise<AuthUser> => {
-  const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
-  const phone = `137${suffix}`
-  const password = 'Pass1234'
-  const username = `canvas${Date.now().toString(36).slice(-9)}`
-
-  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
-    data: { phone, username, password }
-  })
-  expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy()
-
-  const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { identifier: username, password }
-  })
-  return unwrap<AuthUser>(loginResponse)
 }
 
 const openWorkspace = async (page: Page, auth: AuthUser) => {
@@ -56,6 +37,16 @@ const openWorkspace = async (page: Page, auth: AuthUser) => {
   await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
 }
 
+const addNodes = async (
+  request: APIRequestContext,
+  auth: AuthUser,
+  devices: Record<string, unknown>[],
+  environmentVariablePatches: Record<string, unknown>[] = []
+) => unwrap(await request.post(`${apiBaseURL}/api/board/nodes`, {
+  headers: authHeaders(auth),
+  data: { devices, environmentVariablePatches }
+}))
+
 test('canvas node focus keeps environment variables scenario-level', async ({ page, request }) => {
   const auth = await createAuthenticatedUser(request)
 
@@ -69,17 +60,9 @@ test('canvas node focus keeps environment variables scenario-level', async ({ pa
     height: 180
   }
 
-  const saveResponse = await request.post(`${apiBaseURL}/api/board/batch`, {
-    headers: authHeaders(auth),
-    data: { nodes: [seedNode] }
-  })
-  expect(saveResponse.ok(), await saveResponse.text()).toBeTruthy()
-
-  const environmentResponse = await request.post(`${apiBaseURL}/api/board/environment`, {
-    headers: authHeaders(auth),
-    data: [{ name: 'temperature', value: '31', trust: 'trusted', privacy: 'public' }]
-  })
-  expect(environmentResponse.ok(), await environmentResponse.text()).toBeTruthy()
+  await addNodes(request, auth, [seedNode], [
+    { name: 'temperature', value: '31', trust: 'trusted', privacy: 'public' }
+  ])
 
   const layoutResponse = await request.post(`${apiBaseURL}/api/board/layout`, {
     headers: authHeaders(auth),
@@ -101,7 +84,14 @@ test('canvas node focus keeps environment variables scenario-level', async ({ pa
   await expect(node).toHaveClass(/device-node--compact/)
   await node.click({ button: 'right' })
   await expect(page.getByTestId('device-dialog')).toHaveCount(0)
+  const contextMenu = page.locator('.board-context-menu')
+  await expect(contextMenu).toBeVisible()
+  await contextMenu.getByRole('button', { name: 'View Details' }).click()
   await expect(page.locator('.board-context-menu')).toHaveCount(0)
+  const contextDialog = page.getByTestId('device-dialog')
+  await expect(contextDialog).toBeVisible()
+  await contextDialog.getByLabel('Close', { exact: true }).click()
+  await expect(contextDialog).toHaveCount(0)
 
   const environmentPool = page.getByTestId('environment-pool')
   await expect(environmentPool).toBeVisible()
@@ -124,9 +114,7 @@ test('canvas node focus keeps environment variables scenario-level', async ({ pa
 test('device info renders multi-mode API state tuples as readable mode changes', async ({ page, request }) => {
   const auth = await createAuthenticatedUser(request)
 
-  const saveResponse = await request.post(`${apiBaseURL}/api/board/batch`, {
-    headers: authHeaders(auth),
-    data: { nodes: [{
+  await addNodes(request, auth, [{
       id: 'thermostat_tuple_api',
       templateName: 'Thermostat',
       label: 'Living Thermostat',
@@ -134,9 +122,7 @@ test('device info renders multi-mode API state tuples as readable mode changes',
       state: 'auto;auto',
       width: 220,
       height: 180
-    }] }
-  })
-  expect(saveResponse.ok(), await saveResponse.text()).toBeTruthy()
+    }])
 
   await openWorkspace(page, auth)
 
@@ -156,9 +142,7 @@ test('device info renders multi-mode API state tuples as readable mode changes',
 test('environment pool keeps one shared value for multiple readers before simulation', async ({ page, request }) => {
   const auth = await createAuthenticatedUser(request)
 
-  const saveResponse = await request.post(`${apiBaseURL}/api/board/batch`, {
-    headers: authHeaders(auth),
-    data: { nodes: [
+  await addNodes(request, auth, [
       {
         id: 'temp_sensor_a',
         templateName: 'Temperature Sensor',
@@ -177,15 +161,9 @@ test('environment pool keeps one shared value for multiple readers before simula
         width: 180,
         height: 150
       }
-    ] }
-  })
-  expect(saveResponse.ok(), await saveResponse.text()).toBeTruthy()
-
-  const environmentResponse = await request.post(`${apiBaseURL}/api/board/environment`, {
-    headers: authHeaders(auth),
-    data: [{ name: 'temperature', value: '28', trust: 'trusted', privacy: 'public' }]
-  })
-  expect(environmentResponse.ok(), await environmentResponse.text()).toBeTruthy()
+    ], [
+      { name: 'temperature', value: '28', trust: 'trusted', privacy: 'public' }
+    ])
 
   await openWorkspace(page, auth)
 

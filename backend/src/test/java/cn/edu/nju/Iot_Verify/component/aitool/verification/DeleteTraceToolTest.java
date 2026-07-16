@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.verification;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
@@ -32,8 +33,10 @@ class DeleteTraceToolTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        tool = new DeleteTraceTool(verificationService, objectMapper);
+        tool = new DeleteTraceTool(
+                verificationService, objectMapper, new AiDestructiveActionGuard(objectMapper));
         UserContextHolder.clear();
+        UserContextHolder.setChatSessionId("trace-test-session");
     }
 
     @AfterEach
@@ -89,11 +92,13 @@ class DeleteTraceToolTest {
         when(verificationService.getTrace(1L, 8L)).thenReturn(trace);
 
         String preview = tool.execute("{\"traceId\":8,\"confirmed\":false}");
-        assertTrue(objectMapper.readTree(preview).path("requiresUserConfirmation").asBoolean());
+        JsonNode previewJson = objectMapper.readTree(preview);
+        assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
         verify(verificationService, never()).deleteTrace(1L, 8L);
 
         UserContextHolder.setDestructiveActionConfirmed(true);
-        String result = tool.execute("{\"traceId\":8,\"confirmed\":true}");
+        String result = tool.execute("{\"traceId\":8,\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("impactToken").asText() + "\"}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals(true, json.path("deleted").asBoolean());

@@ -2,13 +2,12 @@
 /* =================================================================================
  * 1. Imports & Setup
  * ================================================================================= */
-import {ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, h} from 'vue'
+import {ref, reactive, computed, defineAsyncComponent, nextTick, onMounted, onBeforeUnmount, watch, h, type Ref} from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
 import { authApi } from '@/api/auth'
-import LogoutConfirmDialog from '@/components/LogoutConfirmDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
 
@@ -33,10 +32,26 @@ import type {
   VerificationTaskSummary
 } from '@/types/verify'
 import type { SimulationRequest, SimulationState, SimulationTask, SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
+import type {
+  AvailableFuzzingRunSummary,
+  FuzzingExplorationMode,
+  FuzzingFinding,
+  FuzzingFindingSummary,
+  FuzzingInputEvent,
+  FuzzPaperDomainPreview,
+  FuzzWorkloadPreview,
+  FuzzingRequest,
+  FuzzingRun,
+  FuzzingRunSummary,
+  FuzzingTask,
+  FuzzingTaskSummary
+} from '@/types/fuzzing'
+import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
 import type { RunBoardComparison } from '@/types/modelSemantics'
 import type { ModelEnvironmentVariable } from '@/types/model'
 import type { TaskCancellationResult } from '@/types/task'
 import type { FixApplyResult } from '@/types/fix'
+import type { ChatLogoutPreparation } from '@/types/chat'
 import type {
   PortableSceneCondition,
   PortableSceneDevice,
@@ -85,7 +100,35 @@ import { isModelSemanticsConsistent } from '@/utils/modelSemantics'
 import { analyzeBoardAttackSurface, getAttackSelectionIssue } from '@/utils/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
+import {
+  FUZZ_RESPONSE_INCOMPLETE_CODE,
+  assertFuzzingFindingBelongsToRun,
+  getFuzzActiveTaskLimit,
+  getFuzzStoredTaskLimit
+} from '@/utils/fuzzingResponse'
+import {
+  FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES,
+  classifyTrackedFuzzRunError,
+  clearStoredFuzzNotifications,
+  fuzzNotificationStorageKeyForUser,
+  fuzzRunRetryDelayMs,
+  isTransientTaskHttpStatus
+} from '@/utils/fuzzingRecovery'
+import {
+  createPagedRequestCoordinator,
+  type PagedRequestToken
+} from '@/utils/pagedRequestCoordinator'
 import { generationIssueReasonKey } from '@/utils/generationIssue'
+import {
+  FUZZ_ITERATIONS_MAX,
+  FUZZ_ITERATIONS_MIN,
+  FUZZ_PATH_LENGTH_MAX,
+  FUZZ_PATH_LENGTH_MIN,
+  FUZZ_POPULATION_MAX,
+  FUZZ_POPULATION_MIN,
+  getFuzzingConfigurationIssue,
+  isKnownFuzzingSpecificationSupported
+} from '@/utils/fuzzingConfig'
 import {
   RecommendationCandidateError,
   materializeRuleRecommendation,
@@ -129,30 +172,42 @@ import boardApi, {
   type SpecificationRecommendation
 } from '@/api/board'
 import simulationApi from '@/api/simulation'
+import fuzzingApi from '@/api/fuzzing'
 import rulesApi, { type RuleRecommendation } from '@/api/rules'
 
 // Components
-import DeviceDialog from '../components/DeviceDialog.vue'
 import CanvasBoard from '../components/CanvasBoard.vue'
 import ControlCenter from '../components/ControlCenter.vue'
 import SystemInspector from '../components/SystemInspector.vue'
-import RuleBuilderDialog from '../components/RuleBuilderDialog.vue'
-import SimulationTimeline from '../components/SimulationTimeline.vue'
-import PlaybackChangePopover from '../components/PlaybackChangePopover.vue'
-import FixResultDialog from '../components/FixResultDialog.vue'
-import TraceHistoryPanel from '../components/TraceHistoryPanel.vue'
 import LanguageToggle from '@/components/common/LanguageToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import InfoTooltip from '@/components/common/InfoTooltip.vue'
-import AccountDeleteDialog from '@/components/AccountDeleteDialog.vue'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { useTheme } from '@/composables/useTheme'
+
+const LogoutConfirmDialog = defineAsyncComponent(() => import('@/components/LogoutConfirmDialog.vue'))
+const AccountDeleteDialog = defineAsyncComponent(() => import('@/components/AccountDeleteDialog.vue'))
+const DeviceDialog = defineAsyncComponent(() => import('../components/DeviceDialog.vue'))
+const RuleBuilderDialog = defineAsyncComponent(() => import('../components/RuleBuilderDialog.vue'))
+const SimulationTimeline = defineAsyncComponent(() => import('../components/SimulationTimeline.vue'))
+const FixResultDialog = defineAsyncComponent(() => import('../components/FixResultDialog.vue'))
+const RecommendationProgressStatus = defineAsyncComponent(
+  () => import('../components/RecommendationProgressStatus.vue')
+)
+const PlaybackChangePopover = defineAsyncComponent(() => import('../components/PlaybackChangePopover.vue'))
+const FuzzingPanel = defineAsyncComponent(() => import('../components/FuzzingPanel.vue'))
+const FuzzingResultDialog = defineAsyncComponent(() => import('../components/FuzzingResultDialog.vue'))
+const TraceHistoryPanel = defineAsyncComponent(() => import('../components/TraceHistoryPanel.vue'))
+
+const props = defineProps<{
+  prepareChatForLogout?: () => Promise<ChatLogoutPreparation>
+}>()
 
 const { t, locale } = useI18n()
 const router = useRouter()
 const chatStore = useChatStore()
 const { toggleChat } = chatStore
-const { logout, getUser } = useAuth()
+const { logout, getUser, getToken } = useAuth()
 const { theme } = useTheme()
 
 const showLogoutDialog = ref(false)
@@ -161,6 +216,20 @@ const isLoggingOut = ref(false)
 const isDeletingAccount = ref(false)
 const currentUser = computed(() => getUser())
 
+type FuzzUnreadNotification = {
+  taskId: number
+  kind: 'COMPLETED' | 'FAILED' | 'UNAVAILABLE'
+  runId?: number
+  outcome?: string
+  createdAt: string
+}
+
+const unreadFuzzNotifications = ref<FuzzUnreadNotification[]>([])
+const trackedFuzzTaskIds = ref<number[]>([])
+const unreadFuzzNotificationCount = computed(() => unreadFuzzNotifications.value.length)
+const unreadFailedFuzzCount = computed(() =>
+  unreadFuzzNotifications.value.filter(item => item.kind === 'FAILED').length)
+
 const handleLogout = () => {
   showLogoutDialog.value = true
 }
@@ -168,15 +237,57 @@ const handleLogout = () => {
 const handleLogoutConfirm = async () => {
   if (isLoggingOut.value) return
   isLoggingOut.value = true
-  // 调用后端 logout 把 JWT 加入黑名单；失败也要清本地登录态。
+  let shouldLogout = false
   try {
-    await authApi.logout()
-  } catch {
-    // API 失败不影响本地登出
+    let chatPreparation: ChatLogoutPreparation = 'ready'
+    try {
+      chatPreparation = await props.prepareChatForLogout?.() ?? 'ready'
+    } catch (error) {
+      console.error('Failed to prepare the active assistant request for logout', error)
+      chatPreparation = 'reconciliation-failed'
+    }
+    if (chatPreparation === 'reconciliation-failed') {
+      ElMessage.error(t('app.chat.logoutReconcileFailed'))
+      return
+    }
+    if (chatPreparation === 'outcome-unknown') {
+      try {
+        await ElMessageBox.confirm(
+          t('app.chat.logoutOutcomeUnknownMessage'),
+          t('app.chat.logoutOutcomeUnknownTitle'),
+          {
+            confirmButtonText: t('app.chat.logoutOutcomeUnknownConfirm'),
+            cancelButtonText: t('app.cancel'),
+            type: 'warning'
+          }
+        )
+      } catch {
+        return
+      }
+    }
+
+    try {
+      layoutSaveFeedbackSuppressed = true
+      await flushPendingBoardLayout({
+        silent: true,
+        timeoutMs: LAYOUT_LOGOUT_FLUSH_TIMEOUT_MS
+      })
+    } catch {
+      // A layout flush failure must not trap the user in the current login session.
+    }
+    try {
+      // API failure does not prevent local logout after the user confirmed it.
+      await authApi.logout()
+    } catch {
+      // Local logout remains authoritative for this browser session.
+    }
+    shouldLogout = true
   } finally {
-    logout()
-    showLogoutDialog.value = false
-    router.push({ path: '/', query: { mode: 'login' } })
+    if (shouldLogout) {
+      logout()
+      showLogoutDialog.value = false
+      router.push({ path: '/', query: { mode: 'login' } })
+    }
     isLoggingOut.value = false
   }
 }
@@ -194,8 +305,14 @@ const handleOpenDeleteAccount = () => {
 const handleDeleteAccountConfirm = async (payload: { password: string; confirmation: string }) => {
   if (isDeletingAccount.value) return
   isDeletingAccount.value = true
+  const deletedAccountNotificationStorageKey = fuzzNotificationStorageKeyForUser(
+    currentUser.value?.userId
+  )
   try {
     await authApi.deleteAccount(payload)
+    clearStoredFuzzNotifications(deletedAccountNotificationStorageKey)
+    unreadFuzzNotifications.value = []
+    trackedFuzzTaskIds.value = []
     logout()
     showDeleteAccountDialog.value = false
     ElMessage.success(t('app.deleteAccountSuccess'))
@@ -224,6 +341,7 @@ const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2
 const ZOOM_STEP = 0.1
 const LAYOUT_SAVE_DEBOUNCE_MS = 700
+const LAYOUT_LOGOUT_FLUSH_TIMEOUT_MS = 1_500
 const DEFAULT_CONTROL_PANEL_WIDTH = 320
 const DEFAULT_INSPECTOR_PANEL_WIDTH = 320
 
@@ -234,6 +352,7 @@ const ASYNC_TASK_MAX_POLLS = 600
 const TASK_INBOX_REFRESH_INTERVAL_MS = 5000
 const AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH = 2000
 const pollingAborted = ref(false)
+let boardLifecycleDisposed = false
 
 const formatEnvironmentSnapshot = (variable: ModelEnvironmentVariable | null | undefined): string => {
   if (!variable) return ''
@@ -320,6 +439,20 @@ class AsyncTaskCancelledError extends Error {
   }
 }
 
+class FuzzTaskRecoveryPendingError extends Error {
+  constructor() {
+    super('Fuzz task or completed result is awaiting recovery')
+    this.name = 'FuzzTaskRecoveryPendingError'
+  }
+}
+
+class FuzzCompletedResultUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FuzzCompletedResultUnavailableError'
+  }
+}
+
 const throwIfPollingAborted = () => {
   if (pollingAborted.value) {
     throw new PollingAbortedError()
@@ -332,8 +465,19 @@ const isPollingAbortedError = (error: unknown): boolean =>
 const isAsyncTaskCancelledError = (error: unknown): boolean =>
   error instanceof AsyncTaskCancelledError
 
+const isFuzzTaskRecoveryPendingError = (error: unknown): boolean =>
+  error instanceof FuzzTaskRecoveryPendingError
+
+const isFuzzCompletedResultUnavailableError = (error: unknown): boolean =>
+  error instanceof FuzzCompletedResultUnavailableError
+
 const waitForNextPoll = async () => {
   await new Promise(resolve => setTimeout(resolve, ASYNC_TASK_POLL_INTERVAL_MS))
+  throwIfPollingAborted()
+}
+
+const waitForPollingDelay = async (delayMs: number) => {
+  await new Promise(resolve => setTimeout(resolve, delayMs))
   throwIfPollingAborted()
 }
 
@@ -350,6 +494,7 @@ let isPanning = false
 let panStart = { x: 0, y: 0 }
 let panOrigin = { x: 0, y: 0 }
 let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null
+let layoutSaveFeedbackSuppressed = false
 
 type ControlCenterSection = 'devices' | 'templates' | 'rules' | 'specs'
 type InspectorSection = 'devices' | 'rules' | 'specs'
@@ -425,11 +570,13 @@ const restoreActionDockFromPacked = () => {
 }
 const hasActionDockActivity = computed(() =>
   isSimulating.value ||
+  isFuzzing.value ||
   isVerifying.value ||
   simulationAnimationState.value.visible ||
   traceAnimationState.value.visible ||
   isRecommendingScenario.value ||
-  isAnyRecommendationRunning()
+  isAnyRecommendationRunning() ||
+  unreadFuzzNotificationCount.value > 0
 )
 const actionDockRailWidth = computed(() => actionDockMode.value === 'expanded' ? '8.75rem' : '3.5rem')
 const actionDockReservedWidth = computed(() => actionDockMode.value === 'expanded' ? 150 : 64)
@@ -641,7 +788,41 @@ const extractApiErrorMessage = (error: any, fallback: string): string => {
   if (error?.code === RUN_RESPONSE_INCOMPLETE_CODE) {
     return t('app.runResponseIncomplete')
   }
+  if (error?.code === FUZZ_RESPONSE_INCOMPLETE_CODE) {
+    return t('app.fuzzResponseIncomplete')
+  }
   return localizedErrorMessage(error, fallback, locale.value)
+}
+
+const hasApiValidationError = (error: any, field: string): boolean => {
+  const status = Number(error?.response?.status || 0)
+  const fieldError = error?.response?.data?.data?.errors?.[field]
+  return (status === 400 || status === 422)
+    && typeof fieldError === 'string'
+    && fieldError.trim().length > 0
+}
+
+const fuzzTaskQuotaMessage = (error: any): string | null => {
+  const quota = getFuzzActiveTaskLimit(error)
+  if (quota) {
+    if (quota.activeTaskCount === undefined || quota.maxActiveTasksPerUser === undefined) {
+      return t('app.fuzzActiveTaskLimitGeneric')
+    }
+    return t('app.fuzzActiveTaskLimitReached', {
+      active: quota.activeTaskCount,
+      limit: quota.maxActiveTasksPerUser
+    })
+  }
+  const storedQuota = getFuzzStoredTaskLimit(error)
+  if (!storedQuota) return null
+  if (storedQuota.storedTaskCount === undefined
+    || storedQuota.maxStoredTasksPerUser === undefined) {
+    return t('app.fuzzStoredTaskLimitGeneric')
+  }
+  return t('app.fuzzStoredTaskLimitReached', {
+    stored: storedQuota.storedTaskCount,
+    limit: storedQuota.maxStoredTasksPerUser
+  })
 }
 
 const extractRecommendationErrorMessage = (error: any, fallback: string): string => {
@@ -2086,21 +2267,116 @@ const applyBoardLayout = (layout?: BoardLayoutDto | null) => {
   applyViewportPanelConstraints()
 }
 
-const saveBoardLayout = async () => {
+type QueuedBoardLayoutSave = {
+  payload: BoardLayoutDto
+  silent: boolean
+  resolve: Array<(saved: boolean) => void>
+}
+
+let pendingBoardLayoutSave: QueuedBoardLayoutSave | null = null
+let boardLayoutSaveDrainRunning = false
+let boardLayoutSaveIdleResolvers: Array<() => void> = []
+
+const persistBoardLayout = async (request: QueuedBoardLayoutSave): Promise<boolean> => {
+  if (!getToken()) return false
   try {
-    await boardApi.saveLayout(buildBoardLayoutPayload())
+    await boardApi.saveLayout(request.payload)
     layoutSaveErrorShown = false
+    return true
   } catch (e) {
-    console.error('保存画布布局失败', e)
-    if (!layoutSaveErrorShown) {
-      layoutSaveErrorShown = true
-      ElMessage.error(t('app.saveLayoutFailed'))
+    const mayShowFeedback = !request.silent
+      && !layoutSaveFeedbackSuppressed
+      && !boardLifecycleDisposed
+      && Boolean(getToken())
+    if (mayShowFeedback) {
+      console.error('保存画布布局失败', e)
+      if (!layoutSaveErrorShown) {
+        layoutSaveErrorShown = true
+        ElMessage.error(t('app.saveLayoutFailed'))
+      }
     }
+    return false
+  }
+}
+
+const drainBoardLayoutSaveQueue = async () => {
+  if (boardLayoutSaveDrainRunning) return
+  boardLayoutSaveDrainRunning = true
+  try {
+    while (pendingBoardLayoutSave) {
+      const request = pendingBoardLayoutSave
+      pendingBoardLayoutSave = null
+      const saved = await persistBoardLayout(request)
+      request.resolve.forEach(resolve => resolve(saved))
+    }
+  } finally {
+    boardLayoutSaveDrainRunning = false
+    const idleResolvers = boardLayoutSaveIdleResolvers
+    boardLayoutSaveIdleResolvers = []
+    idleResolvers.forEach(resolve => resolve())
+  }
+}
+
+const waitForBoardLayoutSaveIdle = (): Promise<void> => {
+  if (!boardLayoutSaveDrainRunning && !pendingBoardLayoutSave) return Promise.resolve()
+  return new Promise(resolve => boardLayoutSaveIdleResolvers.push(resolve))
+}
+
+const saveBoardLayout = (options: { silent?: boolean } = {}): Promise<boolean> => {
+  if (!getToken()) return Promise.resolve(false)
+  const payload = buildBoardLayoutPayload()
+  return new Promise(resolve => {
+    if (pendingBoardLayoutSave) {
+      pendingBoardLayoutSave.payload = payload
+      pendingBoardLayoutSave.silent = options.silent === true
+      pendingBoardLayoutSave.resolve.push(resolve)
+    } else {
+      pendingBoardLayoutSave = {
+        payload,
+        silent: options.silent === true,
+        resolve: [resolve]
+      }
+    }
+    void drainBoardLayoutSaveQueue()
+  })
+}
+
+const flushPendingBoardLayout = async (options: {
+  silent?: boolean
+  timeoutMs?: number
+} = {}): Promise<boolean> => {
+  const hasPendingSave = layoutSaveTimer !== null
+  if (layoutSaveTimer) {
+    clearTimeout(layoutSaveTimer)
+    layoutSaveTimer = null
+  }
+
+  const flush = async () => {
+    let saved = true
+    if (hasPendingSave && layoutHydrated.value && getToken()) {
+      saved = await saveBoardLayout({ silent: options.silent })
+    }
+    await waitForBoardLayoutSaveIdle()
+    return saved
+  }
+
+  if (!options.timeoutMs || options.timeoutMs <= 0) return flush()
+
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      flush(),
+      new Promise<boolean>(resolve => {
+        timeout = setTimeout(() => resolve(false), options.timeoutMs)
+      })
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
   }
 }
 
 const scheduleBoardLayoutSave = () => {
-  if (!layoutHydrated.value) return
+  if (!layoutHydrated.value || boardLifecycleDisposed || !getToken()) return
   if (layoutSaveTimer) {
     clearTimeout(layoutSaveTimer)
   }
@@ -2284,6 +2560,28 @@ const refreshEnvironmentVariables = async (): Promise<boolean> => {
   }
 }
 
+const refreshBoardSnapshot = async (): Promise<boolean> => {
+  allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'loading' })
+  templatesLoading.value = true
+  try {
+    const snapshot = await boardApi.getSnapshot()
+    deviceTemplates.value = snapshot.deviceTemplates
+    nodes.value = getVisibleDeviceNodes(snapshot.nodes)
+    environmentVariables.value = snapshot.environmentVariables
+    rules.value = snapshot.rules
+    specifications.value = snapshot.specifications
+    syncRuleDerivedEdges()
+    allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'ready' })
+    return true
+  } catch (error) {
+    console.error('加载画布语义快照失败:', error)
+    allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'error' })
+    return false
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
 const environmentPatchFieldLabel = (field: EnvironmentVariablePatchResult['suppliedFields'][number]) => {
   if (field === 'value') return t('app.variableValue')
   if (field === 'trust') return t('app.sourceLabel')
@@ -2418,9 +2716,10 @@ const normalizeSceneVariables = (value: unknown, field: string) => {
       assertSceneAllowedFields(row, ['name', 'value', 'trust'], `${field}[${index}]`)
       const name = normalizeSceneString(row?.name, `${field}[${index}].name`)
       if (!name) throw new Error(t('app.sceneImportMissingField', { field: `${field}[${index}].name` }))
-      if (!seenNames.add(name)) {
+      if (seenNames.has(name)) {
         throw new Error(t('app.sceneImportDuplicateRuntimeEntry', { field, name }))
       }
+      seenNames.add(name)
       if (!Object.prototype.hasOwnProperty.call(row, 'value')) {
         throw new Error(t('app.sceneImportMissingField', { field: `${field}[${index}].value` }))
       }
@@ -2452,9 +2751,10 @@ const normalizeScenePrivacies = (value: unknown, field: string) => {
       assertSceneAllowedFields(row, ['name', 'privacy'], `${field}[${index}]`)
       const name = normalizeSceneString(row?.name, `${field}[${index}].name`)
       if (!name) throw new Error(t('app.sceneImportMissingField', { field: `${field}[${index}].name` }))
-      if (!seenNames.add(name)) {
+      if (seenNames.has(name)) {
         throw new Error(t('app.sceneImportDuplicateRuntimeEntry', { field, name }))
       }
+      seenNames.add(name)
       const privacy = normalizeScenePrivacy(row?.privacy, `${field}[${index}].privacy`)
       if (!privacy) throw new Error(t('app.sceneImportMissingField', { field: `${field}[${index}].privacy` }))
       return { name, privacy }
@@ -2584,9 +2884,10 @@ const normalizeSceneEnvironmentVariables = (value: unknown): ModelEnvironmentVar
     if (!Object.prototype.hasOwnProperty.call(row, 'value')) {
       throw new Error(t('app.sceneImportEnvironmentValueRequired', { name }))
     }
-    if (!seenNames.add(name)) {
+    if (seenNames.has(name)) {
       throw new Error(t('app.sceneImportDuplicateEnvironmentVariable', { name }))
     }
+    seenNames.add(name)
     const trust = normalizeSceneTrust(row.trust, `environmentVariables[${index}].trust`)
     const privacy = normalizeScenePrivacy(row.privacy, `environmentVariables[${index}].privacy`)
     const normalizedValue = normalizeSceneString(row.value, `environmentVariables[${index}].value`)
@@ -3321,6 +3622,7 @@ const triggerSceneImport = () => {
 const getSceneErrorMessage = (error: any) => {
   const rawMessage = String(error?.response?.data?.message || error?.message || '')
   const message = localizedErrorMessage(error, t('app.sceneImportFailed'), locale.value)
+  if (!error?.response) return message
   const field = rawMessage.match(/\b(?:templates|devices|nodes|environmentVariables|rules|specs)\[\d+](?:\.[A-Za-z0-9_]+)*/)?.[0]
   if (!field) return message
   return `${formatSceneValidationCoordinate(field)}: ${t('app.sceneImportValidationItemInvalid')}`
@@ -3679,8 +3981,24 @@ const handleSceneImportFile = async (event: Event) => {
   if (!file) return
   try {
     const text = await file.text()
-    const raw = JSON.parse(text)
-    const scene = normalizeSceneFile(raw)
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch (error) {
+      console.error('场景 JSON 解析失败', error)
+      ElMessage.error(t('app.invalidJsonFile'))
+      return
+    }
+    let scene: BoardSceneModel
+    try {
+      scene = normalizeSceneFile(raw)
+    } catch (error) {
+      console.error('场景文件校验失败', error)
+      ElMessage.error(error instanceof Error && error.message.trim()
+        ? error.message
+        : t('app.sceneImportFailed'))
+      return
+    }
     await importScene(scene)
   } catch (error) {
     console.error('读取场景文件失败', error)
@@ -3723,13 +4041,7 @@ const refreshSpecifications = async (): Promise<boolean> => {
 }
 
 const retryBoardDataLoad = async () => {
-  await Promise.all([
-    refreshDeviceTemplates(),
-    refreshDevices(),
-    refreshRules(),
-    refreshSpecifications()
-  ])
-  await refreshEnvironmentVariables()
+  await refreshBoardSnapshot()
   if (isBoardDataReady.value) {
     ElMessage.success(t('app.boardDataReloaded'))
   } else {
@@ -3743,37 +4055,30 @@ onMounted(async () => {
   updateActionDockViewport()
   window.addEventListener('resize', updateActionDockViewport)
 
-  // Load the first board screen in parallel. Registration creates the initial default catalog;
-  // catalog GET itself is intentionally side-effect free.
-  await Promise.all([
-    refreshDeviceTemplates(),
-    refreshDevices(),
-    refreshRules(),
-    refreshSpecifications()
+  hydrateFuzzNotificationState()
+  const [boardLoaded, , layout] = await Promise.all([
+    refreshBoardSnapshot(),
+    loadTaskInbox(false, { showLoading: false }),
+    boardApi.getLayout().catch(() => null)
   ])
-  await refreshEnvironmentVariables()
-  if (!isBoardDataReady.value) {
+  if (boardLifecycleDisposed) return
+  if (!boardLoaded || !isBoardDataReady.value) {
     ElMessage.error(t('app.boardDataLoadFailed'))
   }
-  await loadTaskInbox(false, { showLoading: false })
   taskInboxRefreshTimer = setInterval(() => {
-    if (activeBackgroundTaskCount.value > 0 || showHistoryPanel.value) {
-      void loadTaskInbox(false, { showLoading: false })
+    if (activeBackgroundTaskCount.value > 0
+      || trackedFuzzTaskIds.value.length > 0
+      || showHistoryPanel.value) {
+      void refreshTaskInboxInBackground()
     }
   }, TASK_INBOX_REFRESH_INTERVAL_MS)
 
   // 监听 AI 推荐的设备添加事件
 
-  // Load Layout (only canvas)
-  try {
-    const layout = await boardApi.getLayout()
-    applyBoardLayout(layout)
-  } catch {
-    // Layout loading failed
-  } finally {
-    layoutHydrated.value = true
-  }
+  if (layout) applyBoardLayout(layout)
+  layoutHydrated.value = true
 
+  if (boardLifecycleDisposed) return
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
@@ -4529,19 +4834,35 @@ const getNextNodePosition = (occupiedNodes: DeviceNode[] = nodes.value): { x: nu
 }
 
 onBeforeUnmount(() => {
+  boardLifecycleDisposed = true
+  layoutSaveFeedbackSuppressed = true
   pollingAborted.value = true
   stopTraceAnimation()
+  ruleRecommendationRequestEpoch += 1
+  if (ruleRecommendationRequestId.value) void boardApi.cancelRecommendation(ruleRecommendationRequestId.value)
+  ruleRecommendationAbortController.value?.abort()
+  ruleRecommendationAbortController.value = null
+  deviceRecommendationRequestEpoch += 1
+  if (deviceRecommendationRequestId.value) void boardApi.cancelRecommendation(deviceRecommendationRequestId.value)
+  deviceRecommendationAbortController.value?.abort()
+  deviceRecommendationAbortController.value = null
+  specRecommendationRequestEpoch += 1
+  if (specRecommendationRequestId.value) void boardApi.cancelRecommendation(specRecommendationRequestId.value)
+  specRecommendationAbortController.value?.abort()
+  specRecommendationAbortController.value = null
+  scenarioRecommendationRequestEpoch += 1
+  if (scenarioRecommendationRequestId.value) void boardApi.cancelRecommendation(scenarioRecommendationRequestId.value)
+  scenarioRecommendationAbortController.value?.abort()
+  scenarioRecommendationAbortController.value = null
+  if (recommendationProgressTimer) {
+    clearInterval(recommendationProgressTimer)
+    recommendationProgressTimer = null
+  }
   if (taskInboxRefreshTimer) {
     clearInterval(taskInboxRefreshTimer)
     taskInboxRefreshTimer = null
   }
-  if (layoutSaveTimer) {
-    clearTimeout(layoutSaveTimer)
-    layoutSaveTimer = null
-    if (layoutHydrated.value) {
-      void saveBoardLayout()
-    }
-  }
+  void flushPendingBoardLayout({ silent: true })
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('resize', updateActionDockViewport)
   window.removeEventListener('pointermove', onCanvasPointerMove)
@@ -4559,9 +4880,7 @@ const refreshRulesFromChat = async () => enqueueBoardMutation(() => refreshRules
 const refreshSpecificationsFromChat = async () => enqueueBoardMutation(() => refreshSpecifications())
 const refreshTemplatesFromChat = async () => enqueueBoardMutation(() => refreshDeviceTemplates())
 const refreshRunHistoryFromChat = async () => refreshRunHistory()
-const refreshAllBoardStateFromChat = async () => enqueueBoardMutation(async () => {
-  await refreshAllBoardState()
-})
+const refreshAllBoardStateFromChat = async () => enqueueBoardMutation(() => refreshAllBoardState())
 
 const getChatSuggestionContext = () => {
   const visibleNodes = getVisibleDeviceNodes()
@@ -4661,6 +4980,9 @@ const submissionForTask = <T,>(submission: RunSubmission<T> | null, taskId: numb
 
 // ==== Rule Recommendation Logic ====
 const isRecommendingRules = ref(false)
+const isRecommendingDevices = ref(false)
+const isRecommendingSpecs = ref(false)
+const isRecommendingScenario = ref(false)
 const ruleRecommendations = ref<RuleRecommendation[]>([])
 const ruleRecommendationMessage = ref('')
 const localizedRecommendationText = (value: unknown, fallback = ''): string =>
@@ -4681,6 +5003,7 @@ const ruleRecommendationFilters = reactive({
   userRequirement: ''
 })
 const ruleRecommendationAbortController = ref<AbortController | null>(null)
+const ruleRecommendationRequestId = ref<string | null>(null)
 let ruleRecommendationRequestEpoch = 0
 const ruleRecommendationCategories = [
   { labelKey: 'app.recommendationCategoryAll', value: 'all' },
@@ -4796,6 +5119,38 @@ const buildSpecDeviceRefsFromConditions = (
 
 type RecommendationPanelKind = 'rule' | 'device' | 'spec' | 'scenario'
 
+const recommendationStopRequestsInFlight = new Set<RecommendationPanelKind>()
+
+const stopActiveRecommendation = async (
+  kind: RecommendationPanelKind,
+  requestIdRef: Ref<string | null>,
+  abortControllerRef: Ref<AbortController | null>,
+  setRunning: (running: boolean) => void,
+  cancelledMessageKey: string,
+  options: { showMessage?: boolean } = {}
+) => {
+  if (recommendationStopRequestsInFlight.has(kind)) return
+  recommendationStopRequestsInFlight.add(kind)
+  const requestId = requestIdRef.value
+  const controller = abortControllerRef.value
+  controller?.abort()
+  if (abortControllerRef.value === controller) abortControllerRef.value = null
+  try {
+    if (requestId) await boardApi.cancelRecommendation(requestId)
+    if (requestIdRef.value === requestId) requestIdRef.value = null
+    setRunning(false)
+    if (options.showMessage !== false) {
+      ElMessage.info(t(cancelledMessageKey))
+    }
+  } catch (error) {
+    console.error('Failed to cancel recommendation request:', error)
+    if (requestId && requestIdRef.value === requestId) setRunning(true)
+    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+  } finally {
+    recommendationStopRequestsInFlight.delete(kind)
+  }
+}
+
 const getRunningRecommendationKind = (): RecommendationPanelKind | null => {
   if (isRecommendingScenario.value) return 'scenario'
   if (isRecommendingRules.value) return 'rule'
@@ -4805,6 +5160,21 @@ const getRunningRecommendationKind = (): RecommendationPanelKind | null => {
 }
 
 const isAnyRecommendationRunning = (): boolean => getRunningRecommendationKind() !== null
+
+const recommendationProgressElapsed = ref(0)
+let recommendationProgressTimer: ReturnType<typeof setInterval> | null = null
+watch(() => getRunningRecommendationKind(), kind => {
+  if (recommendationProgressTimer) {
+    clearInterval(recommendationProgressTimer)
+    recommendationProgressTimer = null
+  }
+  recommendationProgressElapsed.value = 0
+  if (!kind) return
+  const startedAt = Date.now()
+  recommendationProgressTimer = setInterval(() => {
+    recommendationProgressElapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+})
 
 const isAnyRecommendationPanelVisible = (): boolean =>
   showRecommendationPanel.value ||
@@ -4881,10 +5251,15 @@ const resetScenarioRecommendationResults = () => {
 }
 
 function closeResultSurfaces() {
+  fuzzingResultRequestEpoch += 1
   verificationResult.value = null
   verificationError.value = null
   simulationResult.value = null
   simulationError.value = null
+  fuzzingResult.value = null
+  fuzzingError.value = null
+  fuzzingResultLoading.value = false
+  showFuzzingResultDialog.value = false
 }
 
 const openRuleRecommendationPanel = (): boolean => {
@@ -4894,6 +5269,7 @@ const openRuleRecommendationPanel = (): boolean => {
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeDeviceRecommendationPanel()
   closeSpecRecommendationPanel()
   closeScenarioRecommendationPanel()
@@ -4909,6 +5285,7 @@ const openDeviceRecommendationPanel = (): boolean => {
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeRecommendationPanel()
   closeSpecRecommendationPanel()
   closeScenarioRecommendationPanel()
@@ -4924,6 +5301,7 @@ const openSpecRecommendationPanel = (): boolean => {
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeRecommendationPanel()
   closeDeviceRecommendationPanel()
   closeScenarioRecommendationPanel()
@@ -4939,6 +5317,7 @@ const openScenarioRecommendationPanel = (): boolean => {
   closeHistoryPanel()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeRecommendationPanel()
   closeDeviceRecommendationPanel()
   closeSpecRecommendationPanel()
@@ -4951,10 +5330,13 @@ const openScenarioRecommendationPanel = (): boolean => {
 const fetchRuleRecommendations = async () => {
   if (isRecommendingRules.value) {
     ruleRecommendationRequestEpoch += 1
-    ruleRecommendationAbortController.value?.abort()
-    ruleRecommendationAbortController.value = null
-    isRecommendingRules.value = false
-    ElMessage.info(t('app.ruleRecommendationCancelled'))
+    await stopActiveRecommendation(
+      'rule',
+      ruleRecommendationRequestId,
+      ruleRecommendationAbortController,
+      running => { isRecommendingRules.value = running },
+      'app.ruleRecommendationCancelled'
+    )
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules'])) return
@@ -4979,13 +5361,16 @@ const fetchRuleRecommendations = async () => {
   applyingRuleRecommendations.value.clear()
   const requestEpoch = ++ruleRecommendationRequestEpoch
   const controller = new AbortController()
+  const requestId = crypto.randomUUID()
   ruleRecommendationAbortController.value = controller
+  ruleRecommendationRequestId.value = requestId
   try {
     const response = await rulesApi.recommendRules(
       validateRecommendationCount(ruleRecommendationFilters.maxRecommendations),
       ruleRecommendationFilters.category,
       locale.value,
       ruleRecommendationFilters.userRequirement,
+      requestId,
       controller.signal
     )
     if (requestEpoch !== ruleRecommendationRequestEpoch) return
@@ -5014,6 +5399,7 @@ const fetchRuleRecommendations = async () => {
       if (ruleRecommendationAbortController.value === controller) {
         ruleRecommendationAbortController.value = null
       }
+      if (ruleRecommendationRequestId.value === requestId) ruleRecommendationRequestId.value = null
     }
   }
 }
@@ -5021,15 +5407,19 @@ const fetchRuleRecommendations = async () => {
 // 关闭推荐面板
 const closeRecommendationPanel = () => {
   ruleRecommendationRequestEpoch += 1
-  ruleRecommendationAbortController.value?.abort()
-  ruleRecommendationAbortController.value = null
-  isRecommendingRules.value = false
+  void stopActiveRecommendation(
+    'rule',
+    ruleRecommendationRequestId,
+    ruleRecommendationAbortController,
+    running => { isRecommendingRules.value = running },
+    'app.ruleRecommendationCancelled',
+    { showMessage: false }
+  )
   showRecommendationPanel.value = false
   resetRuleRecommendationResults()
 }
 
 // ==== Device Recommendation Logic ====
-const isRecommendingDevices = ref(false)
 const deviceRecommendations = ref<DeviceRecommendation[]>([])
 const deviceRecommendationMessage = ref('')
 const deviceRecommendationFilteredCount = ref(0)
@@ -5042,6 +5432,7 @@ const appliedDeviceRecommendations = ref<Set<number>>(new Set())
 const applyingDeviceRecommendations = ref<Set<number>>(new Set())
 const showDeviceRecommendationPanel = ref(false)
 const deviceRecommendationAbortController = ref<AbortController | null>(null)
+const deviceRecommendationRequestId = ref<string | null>(null)
 const deviceRecommendationRequested = ref(false)
 const deviceRecommendationFilters = reactive({
   maxRecommendations: 5,
@@ -5050,7 +5441,6 @@ const deviceRecommendationFilters = reactive({
 let deviceRecommendationRequestEpoch = 0
 
 // ==== Specification Recommendation Logic ====
-const isRecommendingSpecs = ref(false)
 const specRecommendations = ref<SpecificationRecommendation[]>([])
 const specRecommendationMessage = ref('')
 const specRecommendationFilteredCount = ref(0)
@@ -5062,6 +5452,7 @@ const appliedSpecRecommendations = ref<Set<number>>(new Set())
 const applyingSpecRecommendations = ref<Set<number>>(new Set())
 const showSpecRecommendationPanel = ref(false)
 const specRecommendationAbortController = ref<AbortController | null>(null)
+const specRecommendationRequestId = ref<string | null>(null)
 const specRecommendationRequested = ref(false)
 const specRecommendationFilters = reactive({
   maxRecommendations: 5,
@@ -5078,9 +5469,9 @@ const specRecommendationCategories = [
 ]
 
 // ==== Coupled Scenario Recommendation Logic ====
-const isRecommendingScenario = ref(false)
 const showScenarioRecommendationPanel = ref(false)
 const scenarioRecommendationAbortController = ref<AbortController | null>(null)
+const scenarioRecommendationRequestId = ref<string | null>(null)
 const scenarioRecommendationRequested = ref(false)
 const scenarioRecommendationMessage = ref('')
 const scenarioRecommendationResult = ref<ScenarioRecommendationResult | null>(null)
@@ -5096,10 +5487,13 @@ const recommendedScenarioScene = computed(() => scenarioRecommendationResult.val
 const fetchDeviceRecommendations = async () => {
   if (isRecommendingDevices.value) {
     deviceRecommendationRequestEpoch += 1
-    deviceRecommendationAbortController.value?.abort()
-    deviceRecommendationAbortController.value = null
-    isRecommendingDevices.value = false
-    ElMessage.info(t('app.deviceRecommendationCancelled'))
+    await stopActiveRecommendation(
+      'device',
+      deviceRecommendationRequestId,
+      deviceRecommendationAbortController,
+      running => { isRecommendingDevices.value = running },
+      'app.deviceRecommendationCancelled'
+    )
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates'])) return
@@ -5124,13 +5518,16 @@ const fetchDeviceRecommendations = async () => {
   applyingDeviceRecommendations.value.clear()
   const requestEpoch = ++deviceRecommendationRequestEpoch
   const controller = new AbortController()
+  const requestId = crypto.randomUUID()
   deviceRecommendationAbortController.value = controller
+  deviceRecommendationRequestId.value = requestId
   
   try {
     const response = await boardApi.recommendRelatedDevices(
       validateRecommendationCount(deviceRecommendationFilters.maxRecommendations),
       locale.value,
       deviceRecommendationFilters.userRequirement,
+      requestId,
       controller.signal
     )
     if (requestEpoch !== deviceRecommendationRequestEpoch) return
@@ -5158,6 +5555,7 @@ const fetchDeviceRecommendations = async () => {
       if (deviceRecommendationAbortController.value === controller) {
         deviceRecommendationAbortController.value = null
       }
+      if (deviceRecommendationRequestId.value === requestId) deviceRecommendationRequestId.value = null
     }
   }
 }
@@ -5165,9 +5563,14 @@ const fetchDeviceRecommendations = async () => {
 // 关闭设备推荐面板
 const closeDeviceRecommendationPanel = () => {
   deviceRecommendationRequestEpoch += 1
-  deviceRecommendationAbortController.value?.abort()
-  deviceRecommendationAbortController.value = null
-  isRecommendingDevices.value = false
+  void stopActiveRecommendation(
+    'device',
+    deviceRecommendationRequestId,
+    deviceRecommendationAbortController,
+    running => { isRecommendingDevices.value = running },
+    'app.deviceRecommendationCancelled',
+    { showMessage: false }
+  )
   showDeviceRecommendationPanel.value = false
   resetDeviceRecommendationResults()
 }
@@ -5176,10 +5579,13 @@ const closeDeviceRecommendationPanel = () => {
 const fetchSpecRecommendations = async () => {
   if (isRecommendingSpecs.value) {
     specRecommendationRequestEpoch += 1
-    specRecommendationAbortController.value?.abort()
-    specRecommendationAbortController.value = null
-    isRecommendingSpecs.value = false
-    ElMessage.info(t('app.specificationRecommendationCancelled'))
+    await stopActiveRecommendation(
+      'spec',
+      specRecommendationRequestId,
+      specRecommendationAbortController,
+      running => { isRecommendingSpecs.value = running },
+      'app.specificationRecommendationCancelled'
+    )
     return
   }
   if (!ensureBoardDataReady(['nodes', 'templates', 'rules', 'specs'])) return
@@ -5203,7 +5609,9 @@ const fetchSpecRecommendations = async () => {
   applyingSpecRecommendations.value.clear()
   const requestEpoch = ++specRecommendationRequestEpoch
   const controller = new AbortController()
+  const requestId = crypto.randomUUID()
   specRecommendationAbortController.value = controller
+  specRecommendationRequestId.value = requestId
 
   try {
     const response = await boardApi.recommendSpecifications(
@@ -5211,6 +5619,7 @@ const fetchSpecRecommendations = async () => {
       specRecommendationFilters.category,
       locale.value,
       specRecommendationFilters.userRequirement,
+      requestId,
       controller.signal
     )
     if (requestEpoch !== specRecommendationRequestEpoch) return
@@ -5237,6 +5646,7 @@ const fetchSpecRecommendations = async () => {
       if (specRecommendationAbortController.value === controller) {
         specRecommendationAbortController.value = null
       }
+      if (specRecommendationRequestId.value === requestId) specRecommendationRequestId.value = null
     }
   }
 }
@@ -5244,9 +5654,14 @@ const fetchSpecRecommendations = async () => {
 // 关闭规约推荐面板
 const closeSpecRecommendationPanel = () => {
   specRecommendationRequestEpoch += 1
-  specRecommendationAbortController.value?.abort()
-  specRecommendationAbortController.value = null
-  isRecommendingSpecs.value = false
+  void stopActiveRecommendation(
+    'spec',
+    specRecommendationRequestId,
+    specRecommendationAbortController,
+    running => { isRecommendingSpecs.value = running },
+    'app.specificationRecommendationCancelled',
+    { showMessage: false }
+  )
   showSpecRecommendationPanel.value = false
   resetSpecRecommendationResults()
 }
@@ -5254,10 +5669,13 @@ const closeSpecRecommendationPanel = () => {
 const fetchScenarioRecommendation = async () => {
   if (isRecommendingScenario.value) {
     scenarioRecommendationRequestEpoch += 1
-    scenarioRecommendationAbortController.value?.abort()
-    scenarioRecommendationAbortController.value = null
-    isRecommendingScenario.value = false
-    ElMessage.info(t('app.scenarioRecommendationCancelled'))
+    await stopActiveRecommendation(
+      'scenario',
+      scenarioRecommendationRequestId,
+      scenarioRecommendationAbortController,
+      running => { isRecommendingScenario.value = running },
+      'app.scenarioRecommendationCancelled'
+    )
     return
   }
   if (!ensureBoardDataReady()) return
@@ -5274,7 +5692,9 @@ const fetchScenarioRecommendation = async () => {
   scenarioRecommendationMessage.value = ''
   const requestEpoch = ++scenarioRecommendationRequestEpoch
   const controller = new AbortController()
+  const requestId = crypto.randomUUID()
   scenarioRecommendationAbortController.value = controller
+  scenarioRecommendationRequestId.value = requestId
 
   try {
     const response = await boardApi.recommendScenario({
@@ -5283,7 +5703,7 @@ const fetchScenarioRecommendation = async () => {
       maxSpecs: validateRecommendationCount(scenarioRecommendationFilters.maxSpecs, t('app.maxSpecsField')),
       language: locale.value,
       userRequirement: scenarioRecommendationFilters.userRequirement
-    }, controller.signal)
+    }, requestId, controller.signal)
     if (requestEpoch !== scenarioRecommendationRequestEpoch) return
 
     const rawScene = response.scene
@@ -5326,15 +5746,21 @@ const fetchScenarioRecommendation = async () => {
       if (scenarioRecommendationAbortController.value === controller) {
         scenarioRecommendationAbortController.value = null
       }
+      if (scenarioRecommendationRequestId.value === requestId) scenarioRecommendationRequestId.value = null
     }
   }
 }
 
 const closeScenarioRecommendationPanel = () => {
   scenarioRecommendationRequestEpoch += 1
-  scenarioRecommendationAbortController.value?.abort()
-  scenarioRecommendationAbortController.value = null
-  isRecommendingScenario.value = false
+  void stopActiveRecommendation(
+    'scenario',
+    scenarioRecommendationRequestId,
+    scenarioRecommendationAbortController,
+    running => { isRecommendingScenario.value = running },
+    'app.scenarioRecommendationCancelled',
+    { showMessage: false }
+  )
   showScenarioRecommendationPanel.value = false
   resetScenarioRecommendationResults()
 }
@@ -5746,6 +6172,87 @@ const verificationForm = reactive({
   isAsync: false
 })
 
+// The bounded counterexample explorer is intentionally background-only. The first-level controls describe the
+// search budget; population/seed remain advanced inputs so the formal run controls
+// stay visually distinct from heuristic exploration.
+const fuzzingForm = reactive<{
+  explorationMode: FuzzingExplorationMode
+  targetSelectionMode: 'ALL' | 'EXPLICIT'
+  targetSpecIds: string[]
+  maxIterations: number
+  pathLength: number
+  populationSize: number
+  seed: number | null
+}>({
+  explorationMode: 'BOARD_SNAPSHOT',
+  targetSelectionMode: 'ALL',
+  targetSpecIds: [],
+  maxIterations: 500,
+  pathLength: 20,
+  populationSize: 10,
+  seed: null
+})
+const fuzzingWatchedTask = ref<FuzzingTaskSummary | null>(null)
+
+const knownFuzzEligibleSpecifications = computed(() =>
+  specifications.value.filter(isKnownFuzzingSpecificationSupported))
+
+const normalizedFuzzTargetSpecIds = computed(() => {
+  const eligibleIds = new Set(knownFuzzEligibleSpecifications.value.map(spec => spec.id))
+  return fuzzingForm.targetSpecIds.filter(id => eligibleIds.has(id))
+})
+
+const invalidFuzzTargetSpecIds = computed(() => {
+  const eligibleIds = new Set(knownFuzzEligibleSpecifications.value.map(spec => spec.id))
+  return fuzzingForm.targetSelectionMode === 'EXPLICIT'
+    ? fuzzingForm.targetSpecIds.filter(id => !eligibleIds.has(id))
+    : []
+})
+
+const availableFuzzTargetCount = computed(() => knownFuzzEligibleSpecifications.value.length)
+const fuzzingPreviewPrerequisitesReady = computed(() =>
+  isBoardDataReady.value
+  && nodes.value.length > 0
+  && availableFuzzTargetCount.value > 0)
+
+const fuzzingContentCommandUnsupported = computed(() => rules.value.some(rule =>
+  Boolean(rule.contentDevice?.trim()) || Boolean(rule.content?.trim())
+))
+
+const fuzzingLocalConfigurationError = computed(() => {
+  if (invalidFuzzTargetSpecIds.value.length > 0) {
+    return t('app.fuzzTargetSelectionChanged', { count: invalidFuzzTargetSpecIds.value.length })
+  }
+  const issue = getFuzzingConfigurationIssue({
+    ...fuzzingForm,
+    targetSpecIds: normalizedFuzzTargetSpecIds.value
+  }, availableFuzzTargetCount.value)
+  if (!issue) return ''
+  if (issue.code === 'INVALID_INTEGER_FIELD') {
+    const labels = {
+      maxIterations: t('app.fuzzMaxIterations'),
+      pathLength: t('app.fuzzPathLength'),
+      populationSize: t('app.fuzzPopulationSize'),
+      seed: t('app.fuzzSeed')
+    }
+    return t('app.fuzzIntegerFieldRange', {
+      field: labels[issue.field],
+      minimum: issue.minimum.toLocaleString(),
+      maximum: issue.maximum.toLocaleString()
+    })
+  }
+  if (issue.code === 'TARGET_SELECTION_REQUIRED') {
+    return t('app.fuzzTargetSelectionRequired', {
+      count: issue.availableSpecCount,
+      limit: issue.limit
+    })
+  }
+  if (issue.code === 'TOO_MANY_TARGETS') {
+    return t('app.fuzzTooManyTargetSpecifications', { limit: issue.limit })
+  }
+  return ''
+})
+
 const ATTACK_BUDGET_HARD_MAX = 50
 const boardAttackSurface = computed(() => analyzeBoardAttackSurface(
   nodes.value,
@@ -5777,6 +6284,17 @@ const verificationAttackConfigurationError = computed(() =>
   attackConfigurationError(verificationForm.isAttack, verificationForm.attackBudget))
 const simulationAttackConfigurationError = computed(() =>
   attackConfigurationError(simulationForm.isAttack, simulationForm.attackBudget))
+
+const boardRunBlockedReason = computed(() => {
+  if (isSceneReplacementInProgress.value) return t('app.sceneReplacementInProgress')
+  if (failedBoardDataKeys.value.length > 0) return t('app.boardDataLoadFailed')
+  if (!isBoardDataReady.value) return t('app.loading')
+  return ''
+})
+const verificationRunBlockedReason = computed(() =>
+  boardRunBlockedReason.value || verificationAttackConfigurationError.value)
+const simulationRunBlockedReason = computed(() =>
+  boardRunBlockedReason.value || simulationAttackConfigurationError.value)
 
 const hasPrivacySpecification = computed(() => specifications.value.some(spec =>
   [spec.aConditions, spec.ifConditions, spec.thenConditions]
@@ -5816,25 +6334,400 @@ const asyncVerificationActive = ref(false)
 const cancellingVerificationTask = ref(false)
 const verificationCancelRequested = ref(false)
 
+const asyncFuzzingTask = ref<{
+  taskId: number | null
+  progress: number
+  status: string
+}>({
+  taskId: null,
+  progress: 0,
+  status: t('app.taskInitializing')
+})
+const isFuzzing = ref(false)
+const asyncFuzzingActive = ref(false)
+const cancellingFuzzingTask = ref(false)
+const fuzzingCancelRequested = ref(false)
+const showFuzzingPanel = ref(false)
+const showFuzzingResultDialog = ref(false)
+const fuzzingResult = ref<FuzzingRun | null>(null)
+const fuzzingError = ref<string | null>(null)
+const fuzzingSettingsNotice = ref<string | null>(null)
+const fuzzingResultLoading = ref(false)
+const activeFuzzingFinding = ref<FuzzingFinding | null>(null)
+let fuzzingResultRequestEpoch = 0
+const fuzzingWorkloadPreview = ref<FuzzWorkloadPreview | null>(null)
+const fuzzingWorkloadPreviewLoading = ref(false)
+const fuzzingWorkloadPreviewError = ref<string | null>(null)
+const fuzzingWorkloadPreviewSemanticKey = ref<string | null>(null)
+let fuzzingWorkloadPreviewEpoch = 0
+let fuzzingWorkloadPreviewTimer: ReturnType<typeof setTimeout> | null = null
+const paperDomainPreview = ref<FuzzPaperDomainPreview | null>(null)
+const paperDomainPreviewLoading = ref(false)
+const paperDomainPreviewError = ref<string | null>(null)
+const paperDomainPreviewSemanticKey = ref<string | null>(null)
+const paperDomainStaleRecoveryActive = ref(false)
+let paperDomainPreviewEpoch = 0
+let paperDomainPreviewTimer: ReturnType<typeof setTimeout> | null = null
+
+const paperDomainSemanticKey = computed(() => JSON.stringify({
+  deviceTemplates: deviceTemplates.value,
+  devices: nodes.value.map(device => ({
+    id: device.id,
+    templateName: device.templateName,
+    label: device.label,
+    state: device.state,
+    currentStateTrust: device.currentStateTrust,
+    currentStatePrivacy: device.currentStatePrivacy,
+    variables: device.variables,
+    privacies: device.privacies
+  })),
+  environmentVariables: environmentVariables.value,
+  rules: rules.value,
+  specifications: specifications.value
+}))
+
+const fuzzingWorkloadSemanticKey = computed(() => JSON.stringify({
+  board: paperDomainSemanticKey.value,
+  maxIterations: fuzzingForm.maxIterations,
+  pathLength: fuzzingForm.pathLength,
+  populationSize: fuzzingForm.populationSize
+}))
+
+const validFuzzingBudgetFields = () => [
+  [fuzzingForm.maxIterations, FUZZ_ITERATIONS_MIN, FUZZ_ITERATIONS_MAX],
+  [fuzzingForm.pathLength, FUZZ_PATH_LENGTH_MIN, FUZZ_PATH_LENGTH_MAX],
+  [fuzzingForm.populationSize, FUZZ_POPULATION_MIN, FUZZ_POPULATION_MAX]
+].every(([value, minimum, maximum]) => Number.isInteger(value)
+  && value >= minimum
+  && value <= maximum)
+
+const fuzzingWorkloadReady = computed(() => {
+  const preview = fuzzingWorkloadPreview.value
+  return !!preview
+    && !fuzzingWorkloadPreviewLoading.value
+    && !fuzzingWorkloadPreviewError.value
+    && fuzzingWorkloadPreviewSemanticKey.value === fuzzingWorkloadSemanticKey.value
+    && preview.maxIterations === fuzzingForm.maxIterations
+    && preview.pathLength === fuzzingForm.pathLength
+    && preview.populationSize === fuzzingForm.populationSize
+})
+
+const fuzzingWorkload = computed(() => fuzzingWorkloadReady.value
+  ? fuzzingWorkloadPreview.value?.estimatedWorkload
+  : undefined)
+
+const fuzzingWorkloadLimit = computed(() => fuzzingWorkloadReady.value
+  ? fuzzingWorkloadPreview.value?.workloadLimit
+  : undefined)
+
+const validPaperPathLength = () => Number.isInteger(fuzzingForm.pathLength)
+  && fuzzingForm.pathLength >= 1
+  && fuzzingForm.pathLength <= FUZZ_PATH_LENGTH_MAX
+
+const invalidatePaperDomainPreview = (clearError = true) => {
+  if (paperDomainPreviewTimer) {
+    clearTimeout(paperDomainPreviewTimer)
+    paperDomainPreviewTimer = null
+  }
+  paperDomainPreviewEpoch += 1
+  paperDomainPreview.value = null
+  paperDomainPreviewSemanticKey.value = null
+  paperDomainPreviewLoading.value = false
+  if (clearError) paperDomainPreviewError.value = null
+}
+
+const paperDomainReady = computed(() => {
+  if (fuzzingForm.explorationMode !== 'PAPER_COMPATIBLE') return true
+  const preview = paperDomainPreview.value
+  return !!preview
+    && !paperDomainPreviewLoading.value
+    && !paperDomainPreviewError.value
+    && preview.pathLength === fuzzingForm.pathLength
+    && paperDomainPreviewSemanticKey.value === paperDomainSemanticKey.value
+    && isValidFuzzPaperDomainFingerprint(preview.modelFingerprint)
+})
+
+const paperDomainConfigurationError = computed(() =>
+  fuzzingForm.explorationMode === 'PAPER_COMPATIBLE'
+    && fuzzingPreviewPrerequisitesReady.value
+    && !paperDomainReady.value
+    ? t('app.fuzzPaperDomainRequired')
+    : '')
+
+const fuzzingWorkloadConfigurationError = computed(() => {
+  const preview = fuzzingWorkloadReady.value ? fuzzingWorkloadPreview.value : null
+  if (!preview?.accepted) {
+    if (!preview) return ''
+    return t('app.fuzzWorkloadExceeded', {
+      workload: preview.estimatedWorkload.toLocaleString(),
+      limit: preview.workloadLimit.toLocaleString()
+    })
+  }
+  return ''
+})
+
+const effectiveFuzzingConfigurationError = computed(() =>
+  fuzzingLocalConfigurationError.value
+  || fuzzingWorkloadConfigurationError.value
+  || paperDomainConfigurationError.value)
+
+const refreshPaperDomainPreview = async () => {
+  if (paperDomainPreviewTimer) {
+    clearTimeout(paperDomainPreviewTimer)
+    paperDomainPreviewTimer = null
+  }
+  if (fuzzingForm.explorationMode !== 'PAPER_COMPATIBLE'
+    || !validPaperPathLength()
+    || !fuzzingPreviewPrerequisitesReady.value) {
+    invalidatePaperDomainPreview()
+    return
+  }
+  const requestedPathLength = fuzzingForm.pathLength
+  const requestedSemanticKey = paperDomainSemanticKey.value
+  const requestEpoch = ++paperDomainPreviewEpoch
+  paperDomainPreview.value = null
+  paperDomainPreviewSemanticKey.value = null
+  paperDomainPreviewLoading.value = true
+  paperDomainPreviewError.value = null
+  try {
+    const preview = await fuzzingApi.previewPaperDomain(requestedPathLength)
+    if (requestEpoch !== paperDomainPreviewEpoch
+      || fuzzingForm.explorationMode !== 'PAPER_COMPATIBLE'
+      || fuzzingForm.pathLength !== requestedPathLength
+      || paperDomainSemanticKey.value !== requestedSemanticKey) return
+    paperDomainPreview.value = preview
+    paperDomainPreviewSemanticKey.value = requestedSemanticKey
+    if (paperDomainStaleRecoveryActive.value) {
+      paperDomainStaleRecoveryActive.value = false
+      fuzzingError.value = null
+    }
+  } catch (error: any) {
+    if (requestEpoch !== paperDomainPreviewEpoch) return
+    paperDomainPreview.value = null
+    paperDomainPreviewSemanticKey.value = null
+    paperDomainPreviewError.value = extractApiErrorMessage(
+      error,
+      t('app.fuzzPaperDomainPreviewFailed')
+    )
+  } finally {
+    if (requestEpoch === paperDomainPreviewEpoch) paperDomainPreviewLoading.value = false
+  }
+}
+
+const schedulePaperDomainPreview = () => {
+  if (paperDomainPreviewTimer) clearTimeout(paperDomainPreviewTimer)
+  paperDomainPreviewTimer = setTimeout(() => {
+    paperDomainPreviewTimer = null
+    void refreshPaperDomainPreview()
+  }, 250)
+}
+
+const invalidateFuzzingWorkloadPreview = (clearError = true) => {
+  if (fuzzingWorkloadPreviewTimer) {
+    clearTimeout(fuzzingWorkloadPreviewTimer)
+    fuzzingWorkloadPreviewTimer = null
+  }
+  fuzzingWorkloadPreviewEpoch += 1
+  fuzzingWorkloadPreview.value = null
+  fuzzingWorkloadPreviewSemanticKey.value = null
+  fuzzingWorkloadPreviewLoading.value = false
+  if (clearError) fuzzingWorkloadPreviewError.value = null
+}
+
+const refreshFuzzingWorkloadPreview = async () => {
+  if (fuzzingWorkloadPreviewTimer) {
+    clearTimeout(fuzzingWorkloadPreviewTimer)
+    fuzzingWorkloadPreviewTimer = null
+  }
+  if (!showFuzzingPanel.value
+    || !validFuzzingBudgetFields()
+    || !fuzzingPreviewPrerequisitesReady.value) {
+    invalidateFuzzingWorkloadPreview()
+    return
+  }
+  const request = {
+    maxIterations: fuzzingForm.maxIterations,
+    pathLength: fuzzingForm.pathLength,
+    populationSize: fuzzingForm.populationSize
+  }
+  const requestedSemanticKey = fuzzingWorkloadSemanticKey.value
+  const requestEpoch = ++fuzzingWorkloadPreviewEpoch
+  fuzzingWorkloadPreview.value = null
+  fuzzingWorkloadPreviewSemanticKey.value = null
+  fuzzingWorkloadPreviewLoading.value = true
+  fuzzingWorkloadPreviewError.value = null
+  try {
+    const preview = await fuzzingApi.previewWorkload(request)
+    if (requestEpoch !== fuzzingWorkloadPreviewEpoch
+      || fuzzingWorkloadSemanticKey.value !== requestedSemanticKey) return
+    fuzzingWorkloadPreview.value = preview
+    fuzzingWorkloadPreviewSemanticKey.value = requestedSemanticKey
+  } catch (error: any) {
+    if (requestEpoch !== fuzzingWorkloadPreviewEpoch) return
+    fuzzingWorkloadPreview.value = null
+    fuzzingWorkloadPreviewSemanticKey.value = null
+    fuzzingWorkloadPreviewError.value = extractApiErrorMessage(
+      error,
+      t('app.fuzzWorkloadPreviewFailed')
+    )
+  } finally {
+    if (requestEpoch === fuzzingWorkloadPreviewEpoch) {
+      fuzzingWorkloadPreviewLoading.value = false
+    }
+  }
+}
+
+const scheduleFuzzingWorkloadPreview = () => {
+  if (fuzzingWorkloadPreviewTimer) clearTimeout(fuzzingWorkloadPreviewTimer)
+  fuzzingWorkloadPreviewTimer = setTimeout(() => {
+    fuzzingWorkloadPreviewTimer = null
+    void refreshFuzzingWorkloadPreview()
+  }, 250)
+}
+
+watch(
+  [
+    showFuzzingPanel,
+    () => fuzzingForm.explorationMode,
+    () => fuzzingForm.pathLength,
+    paperDomainSemanticKey,
+    fuzzingPreviewPrerequisitesReady
+  ],
+  ([visible, mode]) => {
+    invalidatePaperDomainPreview()
+    if (mode !== 'PAPER_COMPATIBLE' && paperDomainStaleRecoveryActive.value) {
+      paperDomainStaleRecoveryActive.value = false
+      fuzzingError.value = null
+    }
+    if (visible
+      && mode === 'PAPER_COMPATIBLE'
+      && validPaperPathLength()
+      && fuzzingPreviewPrerequisitesReady.value) {
+      schedulePaperDomainPreview()
+    }
+  },
+  { flush: 'sync' }
+)
+
+watch(
+  [showFuzzingPanel, fuzzingWorkloadSemanticKey, fuzzingPreviewPrerequisitesReady],
+  ([visible]) => {
+    invalidateFuzzingWorkloadPreview()
+    if (visible && validFuzzingBudgetFields() && fuzzingPreviewPrerequisitesReady.value) {
+      scheduleFuzzingWorkloadPreview()
+    }
+  },
+  { flush: 'sync' }
+)
+
+onBeforeUnmount(() => {
+  invalidatePaperDomainPreview()
+  invalidateFuzzingWorkloadPreview()
+  taskInboxRequests.invalidate()
+  verificationHistoryRequests.invalidate()
+  simulationHistoryRequests.invalidate()
+  fuzzingHistoryRequests.invalidate()
+  historyDetailRequests.invalidate()
+})
+
+const currentFuzzingBoardScope = computed(() => ({
+  deviceCount: nodes.value.length,
+  ruleCount: rules.value.length,
+  specificationCount: specifications.value.length,
+  environmentVariableCount: environmentVariables.value.length,
+  deviceTemplateCount: new Set(nodes.value
+    .map(device => device.templateName?.trim())
+    .filter((name): name is string => Boolean(name))).size
+}))
+
+const fuzzingResultBoardDrifted = computed(() => {
+  const snapshot = fuzzingResult.value?.modelSnapshot
+  const current = currentFuzzingBoardScope.value
+  if (!snapshot) return false
+  return snapshot.deviceCount !== current.deviceCount
+    || snapshot.ruleCount !== current.ruleCount
+    || snapshot.specificationCount !== current.specificationCount
+    || snapshot.environmentVariableCount !== current.environmentVariableCount
+    || snapshot.deviceTemplateCount !== current.deviceTemplateCount
+})
+
 type HistoryLayer = 'tasks' | 'results'
-type HistoryResultFilter = 'all' | 'verification' | 'simulation'
+type HistoryResultFilter = 'all' | 'verification' | 'fuzzing' | 'simulation'
+type HistoryResultSource = Exclude<HistoryResultFilter, 'all'>
 
 const verificationTasks = ref<VerificationTaskSummary[]>([])
+const fuzzingTasks = ref<FuzzingTaskSummary[]>([])
 const simulationTasks = ref<SimulationTaskSummary[]>([])
 const verificationRuns = ref<VerificationRunSummary[]>([])
+const fuzzingRuns = ref<FuzzingRunSummary[]>([])
 const simulationRuns = ref<SimulationTraceSummary[]>([])
+const FUZZ_TASK_INBOX_PAGE_SIZE = 100
+const FUZZ_RUN_HISTORY_PAGE_SIZE = 25
+const fuzzingRunsPage = ref(0)
+const fuzzingRunsHasMore = ref(false)
+const loadingMoreFuzzingRuns = ref(false)
+const taskInboxRequests = createPagedRequestCoordinator()
+const verificationHistoryRequests = createPagedRequestCoordinator()
+const simulationHistoryRequests = createPagedRequestCoordinator()
+const fuzzingHistoryRequests = createPagedRequestCoordinator()
+const historyDetailRequests = createPagedRequestCoordinator()
+let historyPanelIntentEpoch = 0
+let fuzzingHistoryAppendPromise: Promise<boolean> | null = null
 const showHistoryPanel = ref(false)
 const activeHistoryLayer = ref<HistoryLayer>('tasks')
 const activeHistoryResultFilter = ref<HistoryResultFilter>('all')
 const loadingTaskHistory = ref(false)
 const loadingResultHistory = ref(false)
+const pendingTaskActionKeys = ref<Set<string>>(new Set())
+const historyResultErrors = reactive<Record<HistoryResultSource, string | null>>({
+  verification: null,
+  fuzzing: null,
+  simulation: null
+})
 let taskInboxRefreshTimer: ReturnType<typeof setInterval> | null = null
+let taskInboxBackgroundRefreshPromise: Promise<boolean> | null = null
+let taskInboxLoadingEpoch = 0
+let historyResultsLoadingEpoch = 0
+const fuzzRunRecoveryAttempts = new Map<number, number>()
+const fuzzRunRecoveryNextAttemptAt = new Map<number, number>()
+const fuzzRunRecoveryRequests = new Map<number, Promise<FuzzingRun>>()
 
 const historyActionLocked = computed(() =>
   traceAnimationState.value.visible ||
   simulationAnimationState.value.visible ||
   isAnimationLocked.value
 )
+
+const isCurrentHistoryPanelIntent = (
+  epoch: number,
+  layer: HistoryLayer,
+  filter?: HistoryResultFilter
+) => !boardLifecycleDisposed
+  && epoch === historyPanelIntentEpoch
+  && showHistoryPanel.value
+  && activeHistoryLayer.value === layer
+  && (filter === undefined || activeHistoryResultFilter.value === filter)
+
+const taskActionKey = (
+  action: 'cancel' | 'dismiss',
+  kind: 'verification' | 'fuzzing' | 'simulation',
+  taskId: number
+) => `${action}:${kind}:${taskId}`
+
+const withTaskActionLock = async (
+  key: string,
+  action: () => Promise<void>
+): Promise<void> => {
+  if (pendingTaskActionKeys.value.has(key)) return
+  pendingTaskActionKeys.value = new Set(pendingTaskActionKeys.value).add(key)
+  try {
+    await action()
+  } finally {
+    const next = new Set(pendingTaskActionKeys.value)
+    next.delete(key)
+    pendingTaskActionKeys.value = next
+  }
+}
 
 const isActiveTaskStatus = (status?: string) => status === 'PENDING' || status === 'RUNNING'
 
@@ -5848,6 +6741,137 @@ const taskSummaryTimestamp = (value?: string) => {
   if (!value) return 0
   const parsed = new Date(value).getTime()
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+const fuzzNotificationStorageKey = () =>
+  fuzzNotificationStorageKeyForUser(currentUser.value?.userId)
+
+const persistFuzzNotificationState = () => {
+  try {
+    localStorage.setItem(fuzzNotificationStorageKey(), JSON.stringify({
+      unread: unreadFuzzNotifications.value.slice(0, 100),
+      trackedTaskIds: trackedFuzzTaskIds.value.slice(0, 100)
+    }))
+  } catch {
+    // Notification persistence is best-effort; task/run history remains authoritative.
+  }
+}
+
+const clearFuzzRunRecoveryState = (taskId: number) => {
+  fuzzRunRecoveryAttempts.delete(taskId)
+  fuzzRunRecoveryNextAttemptAt.delete(taskId)
+}
+
+const scheduleFuzzRunRecovery = (taskId: number): number => {
+  const attempt = fuzzRunRecoveryAttempts.get(taskId) ?? 0
+  const delay = fuzzRunRetryDelayMs(attempt)
+  fuzzRunRecoveryAttempts.set(taskId, attempt + 1)
+  fuzzRunRecoveryNextAttemptAt.set(taskId, Date.now() + delay)
+  return delay
+}
+
+const canAttemptFuzzRunRecovery = (taskId: number) =>
+  Date.now() >= (fuzzRunRecoveryNextAttemptAt.get(taskId) ?? 0)
+
+const loadFuzzRunSingleFlight = (taskId: number, runId = taskId): Promise<FuzzingRun> => {
+  const existing = fuzzRunRecoveryRequests.get(taskId)
+  if (existing) return existing
+  const request = fuzzingApi.getRun(runId)
+  fuzzRunRecoveryRequests.set(taskId, request)
+  void request.finally(() => {
+    if (fuzzRunRecoveryRequests.get(taskId) === request) {
+      fuzzRunRecoveryRequests.delete(taskId)
+    }
+  }).catch(() => undefined)
+  return request
+}
+
+const hydrateFuzzNotificationState = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(fuzzNotificationStorageKey()) || '{}')
+    const unread = Array.isArray(parsed.unread) ? parsed.unread : []
+    unreadFuzzNotifications.value = unread.filter((item: any) =>
+      Number.isSafeInteger(item?.taskId)
+      && item.taskId > 0
+      && (item.kind === 'COMPLETED' || item.kind === 'FAILED' || item.kind === 'UNAVAILABLE')
+      && typeof item.createdAt === 'string').slice(0, 100)
+    trackedFuzzTaskIds.value = (Array.isArray(parsed.trackedTaskIds) ? parsed.trackedTaskIds : [])
+      .filter((id: unknown) => Number.isSafeInteger(id) && Number(id) > 0)
+      .map(Number)
+      .filter((id: number, index: number, values: number[]) => values.indexOf(id) === index)
+      .slice(0, 100)
+  } catch {
+    unreadFuzzNotifications.value = []
+    trackedFuzzTaskIds.value = []
+  }
+}
+
+const trackFuzzTask = (taskId: number) => {
+  if (!trackedFuzzTaskIds.value.includes(taskId)) {
+    clearFuzzRunRecoveryState(taskId)
+    trackedFuzzTaskIds.value = [taskId, ...trackedFuzzTaskIds.value].slice(0, 100)
+    persistFuzzNotificationState()
+  }
+}
+
+const untrackFuzzTask = (taskId: number) => {
+  clearFuzzRunRecoveryState(taskId)
+  if (!trackedFuzzTaskIds.value.includes(taskId)) return
+  trackedFuzzTaskIds.value = trackedFuzzTaskIds.value.filter(id => id !== taskId)
+  persistFuzzNotificationState()
+}
+
+const markFuzzNotificationUnread = (notification: FuzzUnreadNotification): boolean => {
+  if (notification.kind === 'COMPLETED'
+    && notification.runId
+    && showFuzzingResultDialog.value
+    && fuzzingResult.value?.id === notification.runId) {
+    unreadFuzzNotifications.value = unreadFuzzNotifications.value
+      .filter(item => item.taskId !== notification.taskId)
+    untrackFuzzTask(notification.taskId)
+    persistFuzzNotificationState()
+    return false
+  }
+  unreadFuzzNotifications.value = [
+    notification,
+    ...unreadFuzzNotifications.value.filter(item => item.taskId !== notification.taskId)
+  ].slice(0, 100)
+  untrackFuzzTask(notification.taskId)
+  persistFuzzNotificationState()
+  return true
+}
+
+const clearFuzzNotifications = (kind?: FuzzUnreadNotification['kind'], taskId?: number) => {
+  unreadFuzzNotifications.value = unreadFuzzNotifications.value.filter(item => {
+    if (taskId !== undefined && item.taskId !== taskId && item.runId !== taskId) return true
+    if (kind && item.kind !== kind) return true
+    return false
+  })
+  persistFuzzNotificationState()
+}
+
+const clearVisibleFuzzResultNotifications = () => {
+  const visibleRunIds = new Set(fuzzingRuns.value.map(run => run.id))
+  unreadFuzzNotifications.value = unreadFuzzNotifications.value.filter(notification =>
+    !(['COMPLETED', 'UNAVAILABLE'].includes(notification.kind)
+      && visibleRunIds.has(notification.runId ?? notification.taskId)))
+  persistFuzzNotificationState()
+}
+
+const withUnreadFuzzUnavailablePlaceholders = (runs: FuzzingRunSummary[]): FuzzingRunSummary[] => {
+  const knownIds = new Set(runs.map(run => run.id))
+  const placeholders: FuzzingRunSummary[] = unreadFuzzNotifications.value
+    .filter(notification => notification.kind === 'UNAVAILABLE' && !knownIds.has(notification.taskId))
+    .map(notification => ({
+      id: notification.taskId,
+      createdAt: notification.createdAt,
+      completedAt: notification.createdAt,
+      findingCount: 0,
+      findings: [],
+      dataAvailable: false,
+      unavailableReasonCode: 'RESULT_UNAVAILABLE'
+    }))
+  return [...placeholders, ...runs]
 }
 
 const mergeTaskSummariesPreservingExcluded = <T extends { id?: number; createdAt?: string }>(
@@ -5875,6 +6899,11 @@ const watchedSimulationTaskIds = computed(() => {
   return isSimulating.value && asyncSimulationActive.value && taskId ? [taskId] : []
 })
 
+const watchedFuzzingTaskIds = computed(() => {
+  const taskId = asyncFuzzingTask.value.taskId
+  return isFuzzing.value && asyncFuzzingActive.value && taskId ? [taskId] : []
+})
+
 const activeVerificationTasks = computed(() =>
   verificationTasks.value.filter(task => isActiveTaskStatus(task.status))
 )
@@ -5883,14 +6912,18 @@ const activeSimulationTasks = computed(() =>
   simulationTasks.value.filter(task => isActiveTaskStatus(task.status))
 )
 
+const activeFuzzingTasks = computed(() =>
+  fuzzingTasks.value.filter(task => isActiveTaskStatus(task.status))
+)
+
 const activeBackgroundTaskCount = computed(() =>
-  activeVerificationTasks.value.length + activeSimulationTasks.value.length
+  activeVerificationTasks.value.length + activeSimulationTasks.value.length + activeFuzzingTasks.value.length
 )
 
 const miniTaskItems = computed(() => {
   const items: Array<{
     key: string
-    kind: 'verification' | 'simulation'
+    kind: 'verification' | 'fuzzing' | 'simulation'
     id: number
     label: string
     status: string
@@ -5915,6 +6948,29 @@ const miniTaskItems = computed(() => {
       kind: 'verification',
       id: task.id,
       label: t('app.verification'),
+      status: formatAsyncTaskStatus(task.status),
+      progress: normalizeTaskProgress(task.progress)
+    })
+  }
+
+  const currentFuzzingId = asyncFuzzingTask.value.taskId
+  if (isFuzzing.value && asyncFuzzingActive.value && currentFuzzingId) {
+    items.push({
+      key: `fuzzing-${currentFuzzingId}`,
+      kind: 'fuzzing',
+      id: currentFuzzingId,
+      label: t('app.fuzzSearch'),
+      status: asyncFuzzingTask.value.status,
+      progress: normalizeTaskProgress(asyncFuzzingTask.value.progress)
+    })
+  }
+  for (const task of activeFuzzingTasks.value) {
+    if (task.id === currentFuzzingId) continue
+    items.push({
+      key: `fuzzing-${task.id}`,
+      kind: 'fuzzing',
+      id: task.id,
+      label: t('app.fuzzSearch'),
       status: formatAsyncTaskStatus(task.status),
       progress: normalizeTaskProgress(task.progress)
     })
@@ -5946,8 +7002,16 @@ const miniTaskItems = computed(() => {
   return items
 })
 
+const invalidateTaskInboxRequests = () => {
+  taskInboxRequests.invalidate()
+  taskInboxBackgroundRefreshPromise = null
+  taskInboxLoadingEpoch += 1
+  loadingTaskHistory.value = false
+}
+
 const upsertVerificationTaskSummary = (task: Partial<VerificationTaskSummary> & { id?: number }) => {
   if (!task.id) return
+  invalidateTaskInboxRequests()
   const existing = verificationTasks.value.findIndex(item => item.id === task.id)
   const next = task as VerificationTaskSummary
   verificationTasks.value = existing >= 0
@@ -5957,6 +7021,7 @@ const upsertVerificationTaskSummary = (task: Partial<VerificationTaskSummary> & 
 
 const upsertSimulationTaskSummary = (task: Partial<SimulationTaskSummary> & { id?: number }) => {
   if (!task.id) return
+  invalidateTaskInboxRequests()
   const existing = simulationTasks.value.findIndex(item => item.id === task.id)
   const next = task as SimulationTaskSummary
   simulationTasks.value = existing >= 0
@@ -5964,38 +7029,180 @@ const upsertSimulationTaskSummary = (task: Partial<SimulationTaskSummary> & { id
     : [next, ...simulationTasks.value]
 }
 
-const loadVerificationTasks = async () => {
-  const excludedIds = watchedVerificationTaskIds.value
-  const tasks = await boardApi.getTasks(excludedIds)
-  verificationTasks.value = mergeTaskSummariesPreservingExcluded(
-    verificationTasks.value,
-    tasks || [],
-    excludedIds
-  )
+const upsertFuzzingTaskSummary = (task: Partial<FuzzingTaskSummary> & { id?: number }) => {
+  if (!task.id) return
+  invalidateTaskInboxRequests()
+  const existing = fuzzingTasks.value.findIndex(item => item.id === task.id)
+  const next = task as FuzzingTaskSummary
+  fuzzingTasks.value = existing >= 0
+    ? fuzzingTasks.value.map(item => item.id === task.id ? { ...item, ...next } : item)
+    : [next, ...fuzzingTasks.value]
 }
 
-const loadSimulationTasks = async () => {
-  const excludedIds = watchedSimulationTaskIds.value
+type TaskInboxBatch<T> = {
+  tasks: T[]
+  excludedIds: number[]
+}
+
+const fetchVerificationTasks = async (): Promise<TaskInboxBatch<VerificationTaskSummary>> => {
+  const excludedIds = [...watchedVerificationTaskIds.value]
+  const tasks = await boardApi.getTasks(excludedIds)
+  return { tasks: tasks || [], excludedIds }
+}
+
+const fetchSimulationTasks = async (): Promise<TaskInboxBatch<SimulationTaskSummary>> => {
+  const excludedIds = [...watchedSimulationTaskIds.value]
   const tasks = await simulationApi.getTasks(excludedIds)
-  simulationTasks.value = mergeTaskSummariesPreservingExcluded(
-    simulationTasks.value,
-    tasks || [],
-    excludedIds
-  )
+  return { tasks: tasks || [], excludedIds }
+}
+
+const reconcileTrackedFuzzTasks = async (
+  tasks: FuzzingTaskSummary[],
+  excludedIds: number[],
+  isCurrent: () => boolean
+) => {
+  if (!isCurrent()) return
+  const unavailableTaskIds: number[] = []
+  tasks.filter(task => isActiveTaskStatus(task.status)).forEach(task => trackFuzzTask(task.id))
+  const excluded = new Set(excludedIds)
+  const byId = new Map(tasks.map(task => [task.id, task]))
+  const completedCandidates: Array<{ taskId: number; task?: FuzzingTaskSummary }> = []
+
+  for (const taskId of [...trackedFuzzTaskIds.value]) {
+    if (excluded.has(taskId)) continue
+    const task = byId.get(taskId)
+    if (task && isActiveTaskStatus(task.status)) continue
+    if (task?.status === 'CANCELLED') {
+      untrackFuzzTask(taskId)
+      continue
+    }
+    if (task?.status === 'FAILED') {
+      markFuzzNotificationUnread({
+        taskId,
+        kind: 'FAILED',
+        createdAt: task.completedAt || task.createdAt
+      })
+      continue
+    }
+    if (canAttemptFuzzRunRecovery(taskId)) completedCandidates.push({ taskId, task })
+  }
+
+  // A bounded batch avoids turning a restored list of task IDs into a request burst.
+  await Promise.all(completedCandidates.slice(0, 4).map(async ({ taskId, task }) => {
+    let resolvedTask = task
+    try {
+      // Completed tasks are omitted from the inbox, but an active task can also be
+      // absent because the inbox is paged. Resolve status before treating absence as completion.
+      if (!resolvedTask) {
+        resolvedTask = await fuzzingApi.getTask(taskId)
+        if (!isCurrent()) return
+      }
+      if (!isCurrent() || isActiveTaskStatus(resolvedTask.status)) return
+      if (resolvedTask.status === 'CANCELLED') {
+        untrackFuzzTask(taskId)
+        return
+      }
+      if (resolvedTask.status === 'FAILED') {
+        markFuzzNotificationUnread({
+          taskId,
+          kind: 'FAILED',
+          createdAt: resolvedTask.completedAt || resolvedTask.createdAt
+        })
+        return
+      }
+      const run = await loadFuzzRunSingleFlight(taskId, resolvedTask.runId ?? taskId)
+      if (!isCurrent()) return
+      clearFuzzRunRecoveryState(taskId)
+      markFuzzNotificationUnread({
+        taskId,
+        runId: run.id,
+        kind: 'COMPLETED',
+        outcome: run.outcome,
+        createdAt: run.completedAt
+      })
+    } catch (error: any) {
+      if (!isCurrent()) return
+      if (classifyTrackedFuzzRunError(error) === 'RETRY') {
+        scheduleFuzzRunRecovery(taskId)
+        return
+      }
+      const createdAt = resolvedTask?.completedAt
+        || resolvedTask?.createdAt
+        || new Date().toISOString()
+      upsertFuzzingRunSummary({
+        id: taskId,
+        explorationMode: resolvedTask?.explorationMode,
+        createdAt,
+        completedAt: resolvedTask?.completedAt,
+        findingCount: 0,
+        findings: [],
+        dataAvailable: false,
+        unavailableReasonCode: 'RESULT_UNAVAILABLE'
+      })
+      markFuzzNotificationUnread({
+        taskId,
+        runId: taskId,
+        kind: 'UNAVAILABLE',
+        createdAt
+      })
+      unavailableTaskIds.push(taskId)
+    }
+  }))
+  if (isCurrent() && unavailableTaskIds.length > 0) {
+    ElMessage.error({
+      message: t('app.fuzzTrackedRunsUnavailable', { count: unavailableTaskIds.length }),
+      type: 'error',
+      duration: 6500
+    })
+  }
+}
+
+const fetchFuzzingTasks = async (): Promise<TaskInboxBatch<FuzzingTaskSummary>> => {
+  const excludedIds = [...watchedFuzzingTaskIds.value]
+  const tasks = await fuzzingApi.getTasks(excludedIds, 0, FUZZ_TASK_INBOX_PAGE_SIZE)
+  return { tasks: tasks || [], excludedIds }
 }
 
 const loadTaskInbox = async (
   showError = true,
   options: { showLoading?: boolean } = {}
 ): Promise<boolean> => {
+  if (boardLifecycleDisposed) return false
   const showLoading = options.showLoading ?? true
-  if (showLoading) {
-    loadingTaskHistory.value = true
-  }
+  const token = taskInboxRequests.beginReplace()
+  const loadingEpoch = ++taskInboxLoadingEpoch
+  if (showLoading) loadingTaskHistory.value = true
   try {
-    await Promise.all([loadVerificationTasks(), loadSimulationTasks()])
+    const [verification, simulation, fuzzing] = await Promise.all([
+      fetchVerificationTasks(),
+      fetchSimulationTasks(),
+      fetchFuzzingTasks()
+    ])
+    if (!taskInboxRequests.isCurrent(token)) return true
+    await reconcileTrackedFuzzTasks(
+      fuzzing.tasks,
+      fuzzing.excludedIds,
+      () => taskInboxRequests.isCurrent(token)
+    )
+    if (!taskInboxRequests.isCurrent(token)) return true
+    verificationTasks.value = mergeTaskSummariesPreservingExcluded(
+      verificationTasks.value,
+      verification.tasks,
+      verification.excludedIds
+    )
+    simulationTasks.value = mergeTaskSummariesPreservingExcluded(
+      simulationTasks.value,
+      simulation.tasks,
+      simulation.excludedIds
+    )
+    fuzzingTasks.value = mergeTaskSummariesPreservingExcluded(
+      fuzzingTasks.value,
+      fuzzing.tasks,
+      fuzzing.excludedIds
+    )
     return true
   } catch (e: any) {
+    if (!taskInboxRequests.isCurrent(token)) return true
     console.error('Failed to load async tasks:', e)
     if (showError) {
       ElMessage.error({
@@ -6005,50 +7212,166 @@ const loadTaskInbox = async (
     }
     return false
   } finally {
-    if (showLoading) {
-      loadingTaskHistory.value = false
-    }
+    if (loadingEpoch === taskInboxLoadingEpoch) loadingTaskHistory.value = false
+    taskInboxRequests.finish(token)
   }
 }
 
+const refreshTaskInboxInBackground = (): Promise<boolean> => {
+  if (boardLifecycleDisposed) return Promise.resolve(false)
+  if (taskInboxBackgroundRefreshPromise) return taskInboxBackgroundRefreshPromise
+  const refresh = loadTaskInbox(false, { showLoading: false })
+  taskInboxBackgroundRefreshPromise = refresh
+  void refresh.finally(() => {
+    if (taskInboxBackgroundRefreshPromise === refresh) {
+      taskInboxBackgroundRefreshPromise = null
+    }
+  })
+  return refresh
+}
+
 const loadVerificationRuns = async (showError = true): Promise<boolean> => {
+  if (boardLifecycleDisposed) return false
+  const token = verificationHistoryRequests.beginReplace()
   try {
     const runs = await boardApi.getVerificationRuns()
+    if (!verificationHistoryRequests.isCurrent(token)) return true
     verificationRuns.value = runs || []
+    historyResultErrors.verification = null
     return true
   } catch (e: any) {
+    if (!verificationHistoryRequests.isCurrent(token)) return true
     console.error('Failed to load verification run history:', e)
+    historyResultErrors.verification = localizedErrorMessage(
+      e,
+      t('app.failedToLoadVerificationHistory'),
+      locale.value
+    )
     if (showError) {
       ElMessage.error({ message: t('app.failedToLoadVerificationHistory'), type: 'error' })
     }
     return false
+  } finally {
+    verificationHistoryRequests.finish(token)
   }
 }
 
 const loadSimulationRuns = async (showError = true): Promise<boolean> => {
+  if (boardLifecycleDisposed) return false
+  const token = simulationHistoryRequests.beginReplace()
   try {
     const runs = await simulationApi.getUserSimulations()
+    if (!simulationHistoryRequests.isCurrent(token)) return true
     simulationRuns.value = runs || []
+    historyResultErrors.simulation = null
     return true
   } catch (e: any) {
+    if (!simulationHistoryRequests.isCurrent(token)) return true
     console.error('Failed to load simulation run history:', e)
+    historyResultErrors.simulation = localizedErrorMessage(
+      e,
+      t('app.failedToLoadSimulationHistory'),
+      locale.value
+    )
     if (showError) {
       ElMessage.error({ message: t('app.failedToLoadSimulationHistory'), type: 'error' })
     }
     return false
+  } finally {
+    simulationHistoryRequests.finish(token)
   }
 }
 
+const executeFuzzingRunsRequest = async (
+  token: PagedRequestToken,
+  showError = true,
+  page = 0,
+  append = false
+): Promise<boolean> => {
+  try {
+    const runs = await fuzzingApi.getRuns(page, FUZZ_RUN_HISTORY_PAGE_SIZE)
+    if (!fuzzingHistoryRequests.isCurrent(token)) return true
+    if (append) {
+      const existingIds = new Set(fuzzingRuns.value.map(run => run.id))
+      fuzzingRuns.value = [
+        ...fuzzingRuns.value,
+        ...runs.filter(run => !existingIds.has(run.id))
+      ]
+    } else {
+      fuzzingRuns.value = withUnreadFuzzUnavailablePlaceholders(runs)
+    }
+    historyResultErrors.fuzzing = null
+    fuzzingRunsPage.value = page
+    fuzzingRunsHasMore.value = runs.length === FUZZ_RUN_HISTORY_PAGE_SIZE
+    return true
+  } catch (e: any) {
+    if (!fuzzingHistoryRequests.isCurrent(token)) return true
+    console.error('Failed to load fuzzing run history:', e)
+    historyResultErrors.fuzzing = localizedErrorMessage(
+      e,
+      t('app.failedToLoadFuzzingHistory'),
+      locale.value
+    )
+    if (showError) {
+      ElMessage.error({
+        message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingHistory')),
+        type: 'error'
+      })
+    }
+    return false
+  } finally {
+    fuzzingHistoryRequests.finish(token)
+  }
+}
+
+const loadFuzzingRuns = (
+  showError = true,
+  options: { page?: number; append?: boolean } = {}
+): Promise<boolean> => {
+  if (boardLifecycleDisposed) return Promise.resolve(false)
+  const page = options.page ?? 0
+  const append = options.append === true
+  if (append && fuzzingHistoryAppendPromise) return fuzzingHistoryAppendPromise
+
+  const token = append
+    ? fuzzingHistoryRequests.beginAppend()
+    : fuzzingHistoryRequests.beginReplace()
+  if (!token) return Promise.resolve(true)
+
+  if (!append) return executeFuzzingRunsRequest(token, showError, page, false)
+
+  loadingMoreFuzzingRuns.value = true
+  let trackedRequest: Promise<boolean>
+  trackedRequest = executeFuzzingRunsRequest(token, showError, page, true)
+    .finally(() => {
+      if (fuzzingHistoryAppendPromise === trackedRequest) {
+        fuzzingHistoryAppendPromise = null
+        loadingMoreFuzzingRuns.value = false
+      }
+    })
+  fuzzingHistoryAppendPromise = trackedRequest
+  return trackedRequest
+}
+
+const loadMoreFuzzingRuns = async () => {
+  if (boardLifecycleDisposed || loadingMoreFuzzingRuns.value || !fuzzingRunsHasMore.value) return
+  await loadFuzzingRuns(true, { page: fuzzingRunsPage.value + 1, append: true })
+}
+
 const loadHistoryResults = async (showError = true): Promise<boolean> => {
+  if (boardLifecycleDisposed) return false
+  const loadingEpoch = ++historyResultsLoadingEpoch
   loadingResultHistory.value = true
   try {
     const results = await Promise.all([
       loadVerificationRuns(false),
-      loadSimulationRuns(false)
+      loadSimulationRuns(false),
+      loadFuzzingRuns(false)
     ])
     const failedSources = [
       !results[0] ? t('app.verificationRunResult') : null,
-      !results[1] ? t('app.simulationRunResult') : null
+      !results[1] ? t('app.simulationRunResult') : null,
+      !results[2] ? t('app.fuzzRunResult') : null
     ].filter((source): source is string => Boolean(source))
     if (failedSources.length > 0 && showError) {
       ElMessage.error({
@@ -6060,7 +7383,7 @@ const loadHistoryResults = async (showError = true): Promise<boolean> => {
     }
     return results.every(Boolean)
   } finally {
-    loadingResultHistory.value = false
+    if (loadingEpoch === historyResultsLoadingEpoch) loadingResultHistory.value = false
   }
 }
 
@@ -6072,34 +7395,54 @@ const refreshRunHistory = async (): Promise<boolean> => {
   return results.every(Boolean)
 }
 
-const refreshAllBoardState = async (): Promise<void> => {
+const refreshAllBoardState = async (): Promise<boolean> => {
   const results = await Promise.all([
     refreshSceneForReconciliation(),
     refreshRunHistory()
   ])
-  if (!results.every(Boolean)) {
-    ElMessage.warning(t('app.chatStateReconcileFailed'))
-  }
+  return results.every(Boolean)
 }
 
-const refreshHistoryLayer = async (layer: HistoryLayer = activeHistoryLayer.value) => {
+const refreshHistoryLayer = async (layer: HistoryLayer = activeHistoryLayer.value): Promise<boolean> => {
+  historyDetailRequests.invalidate()
   if (layer === 'tasks') {
-    await loadTaskInbox()
-  } else {
-    await loadHistoryResults()
+    return loadTaskInbox()
   }
+  return loadHistoryResults()
 }
 
 const setHistoryLayer = async (layer: HistoryLayer) => {
+  const intentEpoch = ++historyPanelIntentEpoch
+  historyDetailRequests.invalidate()
   activeHistoryLayer.value = layer
-  await refreshHistoryLayer(layer)
+  const loaded = await refreshHistoryLayer(layer)
+  if (!loaded || !isCurrentHistoryPanelIntent(intentEpoch, layer)) return
+  if (layer === 'results') {
+    if (activeHistoryResultFilter.value === 'all' || activeHistoryResultFilter.value === 'fuzzing') {
+      clearVisibleFuzzResultNotifications()
+    }
+  } else {
+    clearFuzzNotifications('FAILED')
+  }
 }
 
-const setHistoryResultFilter = (filter: HistoryResultFilter) => {
+const setHistoryResultFilter = async (filter: HistoryResultFilter) => {
+  const intentEpoch = ++historyPanelIntentEpoch
+  historyDetailRequests.invalidate()
   activeHistoryResultFilter.value = filter
+  if (showHistoryPanel.value
+    && activeHistoryLayer.value === 'results'
+    && (filter === 'all' || filter === 'fuzzing')) {
+    const loaded = await loadFuzzingRuns(true)
+    if (loaded && isCurrentHistoryPanelIntent(intentEpoch, 'results', filter)) {
+      clearVisibleFuzzResultNotifications()
+    }
+  }
 }
 
-const closeHistoryPanel = () => {
+const closeHistoryPanel = (invalidatePendingDetail = true) => {
+  historyPanelIntentEpoch += 1
+  if (invalidatePendingDetail) historyDetailRequests.invalidate()
   showHistoryPanel.value = false
 }
 
@@ -6120,14 +7463,25 @@ const toggleHistoryPanel = async (layer: HistoryLayer = activeHistoryLayer.value
   closeResultSurfaces()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeRecommendationPanel()
   closeDeviceRecommendationPanel()
   closeSpecRecommendationPanel()
   closeScenarioRecommendationPanel()
 
+  const intentEpoch = ++historyPanelIntentEpoch
+  historyDetailRequests.invalidate()
   activeHistoryLayer.value = layer
   showHistoryPanel.value = true
-  await refreshHistoryLayer(layer)
+  const loaded = await refreshHistoryLayer(layer)
+  if (!loaded || !isCurrentHistoryPanelIntent(intentEpoch, layer)) return
+  if (layer === 'results') {
+    if (activeHistoryResultFilter.value === 'all' || activeHistoryResultFilter.value === 'fuzzing') {
+      clearVisibleFuzzResultNotifications()
+    }
+  } else {
+    clearFuzzNotifications('FAILED')
+  }
 }
 
 const formatRunTimestamp = (value?: string): string => {
@@ -6137,8 +7491,19 @@ const formatRunTimestamp = (value?: string): string => {
   return date.toLocaleString(locale.value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
 }
 
+const refreshHistoryTasks = () => {
+  historyDetailRequests.invalidate()
+  return loadTaskInbox()
+}
+
+const refreshHistoryResults = () => {
+  historyDetailRequests.invalidate()
+  return loadHistoryResults()
+}
+
 const deleteVerificationRun = async (run: VerificationRunSummary) => {
   const runId = run.id
+  historyDetailRequests.invalidate()
   try {
     await ElMessageBox.confirm(
       t('app.deleteVerificationRunMessage', {
@@ -6155,12 +7520,16 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
       }
     )
     await boardApi.deleteVerificationRun(runId)
+    if (boardLifecycleDisposed) return
+    verificationHistoryRequests.invalidate()
     verificationRuns.value = verificationRuns.value.filter(item => item.id !== runId)
     ElMessage.success({ message: t('app.verificationRunDeleted'), type: 'success' })
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
+    if (boardLifecycleDisposed) return
     console.error('Failed to delete verification run:', e)
     const refreshed = await loadVerificationRuns(false)
+    if (boardLifecycleDisposed) return
     if (refreshed && !verificationRuns.value.some(item => item.id === runId)) {
       ElMessage.warning({ message: t('app.verificationRunDeleteOutcomeRefreshed'), type: 'warning' })
       return
@@ -6173,19 +7542,25 @@ const deleteVerificationRun = async (run: VerificationRunSummary) => {
 }
 
 const openVerificationRun = async (runId: number) => {
+  const requestToken = historyDetailRequests.beginReplace()
   try {
     const run = await boardApi.getVerificationRun(runId)
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     const traces = run.outcome === 'VIOLATED'
       ? await boardApi.getVerificationRunTraces(runId)
       : []
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     verificationResult.value = attachLocalRunSubmission(
       buildVerificationResultFromRun(run, traces),
       null
     )
-    closeHistoryPanel()
+    closeHistoryPanel(false)
   } catch (e: any) {
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load verification run:', e)
     ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToLoadVerificationRun')), type: 'error' })
+  } finally {
+    historyDetailRequests.finish(requestToken)
   }
 }
 
@@ -6228,7 +7603,9 @@ const watchVerificationTask = async (taskId: number) => {
     asyncVerificationActive.value = false
     cancellingVerificationTask.value = false
     verificationCancelRequested.value = false
-    await loadTaskInbox(false, { showLoading: false })
+    if (!boardLifecycleDisposed) {
+      await loadTaskInbox(false, { showLoading: false })
+    }
   }
 }
 
@@ -6260,6 +7637,7 @@ const watchSimulationTask = async (taskId: number) => {
     )
     lastSimulationResult.value = result
     if (result.traceId) {
+      simulationHistoryRequests.invalidate()
       simulationRuns.value = [
         {
           id: result.traceId,
@@ -6314,72 +7692,289 @@ const watchSimulationTask = async (taskId: number) => {
     asyncSimulationActive.value = false
     cancellingSimulationTask.value = false
     simulationCancelRequested.value = false
-    await loadTaskInbox(false, { showLoading: false })
+    if (!boardLifecycleDisposed) {
+      await loadTaskInbox(false, { showLoading: false })
+    }
   }
 }
 
-const cancelVerificationTaskFromInbox = async (taskId: number) => {
-  if (asyncVerificationTask.value.taskId === taskId) {
-    await cancelAsyncVerification()
-  } else {
-    const result = await boardApi.cancelTask(taskId)
-    notifyTaskCancellationResult('verification', result)
+const upsertFuzzingRunSummary = (run: FuzzingRunSummary) => {
+  fuzzingHistoryRequests.invalidate()
+  const existingIndex = fuzzingRuns.value.findIndex(item => item.id === run.id)
+  if (existingIndex >= 0) {
+    fuzzingRuns.value = fuzzingRuns.value.map(item => item.id === run.id ? run : item)
+    return
   }
-  await loadTaskInbox(false, { showLoading: false })
+  const previousCount = fuzzingRuns.value.length
+  fuzzingRuns.value = [run, ...fuzzingRuns.value].slice(0, FUZZ_RUN_HISTORY_PAGE_SIZE)
+  fuzzingRunsPage.value = 0
+  fuzzingRunsHasMore.value = fuzzingRunsHasMore.value || previousCount >= FUZZ_RUN_HISTORY_PAGE_SIZE
 }
 
-const cancelSimulationTaskFromInbox = async (taskId: number) => {
-  if (asyncSimulationTask.value.taskId === taskId) {
-    await cancelAsyncSimulation()
-  } else {
-    const result = await simulationApi.cancelTask(taskId)
-    notifyTaskCancellationResult('simulation', result)
-  }
-  await loadTaskInbox(false, { showLoading: false })
+const summarizeFuzzingRun = (run: FuzzingRun): AvailableFuzzingRunSummary => ({
+  ...run,
+  dataAvailable: true,
+  findings: run.findings.map(finding => ({
+    id: finding.id,
+    fuzzTaskId: finding.fuzzTaskId,
+    violatedSpecId: finding.violatedSpecId,
+    violatedSpec: finding.violatedSpec,
+    specificationLabel: finding.violatedSpec.templateLabel
+      || finding.violatedSpec.formula
+      || finding.violatedSpecId,
+    firstViolationStep: finding.firstViolationStep,
+    seed: finding.seed,
+    createdAt: finding.createdAt,
+    stateCount: finding.states.length,
+    dataAvailable: true
+  }))
+})
+
+const presentFuzzingRun = (run: FuzzingRun) => {
+  // Transient notices must not cover the result's title or primary actions.
+  ElMessage.closeAll()
+  const summary = summarizeFuzzingRun(run)
+  upsertFuzzingRunSummary(summary)
+  fuzzingError.value = null
+  fuzzingResult.value = run
+  showFuzzingResultDialog.value = true
+  clearFuzzNotifications(undefined, run.id)
 }
 
-const dismissVerificationTask = async (taskId: number) => {
+const watchFuzzingTask = async (taskId: number) => {
+  if (isFuzzing.value) {
+    if (asyncFuzzingTask.value.taskId === taskId) {
+      showFuzzingPanel.value = true
+    } else {
+      ElMessage.info({ message: t('app.taskWatchAlreadyActive'), type: 'info' })
+    }
+    closeHistoryPanel()
+    return
+  }
+
+  const taskSummary = fuzzingTasks.value.find(task => task.id === taskId)
+  // Keep the running request separate from the editable form. Its persisted summary is
+  // the only truthful source after a refresh or after the current Board has changed.
+  fuzzingWatchedTask.value = taskSummary || null
+  isFuzzing.value = true
+  asyncFuzzingActive.value = true
+  fuzzingCancelRequested.value = false
+  cancellingFuzzingTask.value = false
+  fuzzingError.value = null
+  paperDomainStaleRecoveryActive.value = false
+  asyncFuzzingTask.value = {
+    taskId,
+    progress: normalizeTaskProgress(taskSummary?.progress),
+    status: formatAsyncTaskStatus(taskSummary?.status) || t('app.taskInitializing')
+  }
+  trackFuzzTask(taskId)
+  closeHistoryPanel()
+  showFuzzingPanel.value = true
   try {
-    await boardApi.deleteTask(taskId)
-    verificationTasks.value = verificationTasks.value.filter(task => task.id !== taskId)
-    ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
-  } catch (e: any) {
-    ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
-    await loadTaskInbox(false, { showLoading: false })
+    const run = await pollAsyncFuzzing(taskId)
+    untrackFuzzTask(taskId)
+    showFuzzingPanel.value = false
+    presentFuzzingRun(run)
+  } catch (error: any) {
+    if (!isPollingAbortedError(error)) {
+      if (isAsyncTaskCancelledError(error)) {
+        untrackFuzzTask(taskId)
+        fuzzingError.value = null
+        ElMessage.info({ message: t('app.fuzzSearchCancelled'), type: 'info' })
+      } else if (isFuzzTaskRecoveryPendingError(error)) {
+        fuzzingError.value = null
+        fuzzingSettingsNotice.value = t('app.fuzzResultRecoveryPending')
+        ElMessage.info({ message: fuzzingSettingsNotice.value, type: 'info', duration: 6500 })
+      } else if (isFuzzCompletedResultUnavailableError(error)) {
+        fuzzingError.value = error.message || t('app.failedToLoadFuzzingRun')
+        markFuzzNotificationUnread({
+          taskId,
+          runId: taskId,
+          kind: 'UNAVAILABLE',
+          createdAt: new Date().toISOString()
+        })
+      } else {
+        console.error('Fuzz task watch failed:', error)
+        fuzzingError.value = localizedErrorMessage(error, t('app.fuzzSearchFailed'), locale.value)
+        if (showFuzzingPanel.value) {
+          untrackFuzzTask(taskId)
+        } else {
+          markFuzzNotificationUnread({
+            taskId,
+            kind: 'FAILED',
+            createdAt: new Date().toISOString()
+          })
+          ElMessage.error({ message: fuzzingError.value, type: 'error' })
+        }
+      }
+    }
+  } finally {
+    isFuzzing.value = false
+    asyncFuzzingActive.value = false
+    cancellingFuzzingTask.value = false
+    fuzzingCancelRequested.value = false
+    fuzzingWatchedTask.value = null
+    if (!boardLifecycleDisposed) {
+      await loadTaskInbox(false, { showLoading: false })
+    }
   }
 }
 
-const dismissSimulationTask = async (taskId: number) => {
-  try {
-    await simulationApi.deleteTask(taskId)
-    simulationTasks.value = simulationTasks.value.filter(task => task.id !== taskId)
-    ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
-  } catch (e: any) {
-    ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
-    await loadTaskInbox(false, { showLoading: false })
+const cancelVerificationTaskFromInbox = (taskId: number) => withTaskActionLock(
+  taskActionKey('cancel', 'verification', taskId),
+  async () => {
+    try {
+      if (asyncVerificationTask.value.taskId === taskId) {
+        await cancelAsyncVerification()
+      } else {
+        const result = await boardApi.cancelTask(taskId)
+        if (boardLifecycleDisposed) return
+        notifyTaskCancellationResult('verification', result)
+      }
+    } catch (error) {
+      if (boardLifecycleDisposed) return
+      console.error('Failed to cancel verification task from inbox:', error)
+      ElMessage.error({ message: t('app.failedToCancelVerificationTask'), type: 'error' })
+    } finally {
+      if (!boardLifecycleDisposed) {
+        await loadTaskInbox(false, { showLoading: false })
+      }
+    }
   }
-}
+)
+
+const cancelSimulationTaskFromInbox = (taskId: number) => withTaskActionLock(
+  taskActionKey('cancel', 'simulation', taskId),
+  async () => {
+    try {
+      if (asyncSimulationTask.value.taskId === taskId) {
+        await cancelAsyncSimulation()
+      } else {
+        const result = await simulationApi.cancelTask(taskId)
+        if (boardLifecycleDisposed) return
+        notifyTaskCancellationResult('simulation', result)
+      }
+    } catch (error) {
+      if (boardLifecycleDisposed) return
+      console.error('Failed to cancel simulation task from inbox:', error)
+      ElMessage.error({ message: t('app.failedToCancelSimulationTask'), type: 'error' })
+    } finally {
+      if (!boardLifecycleDisposed) {
+        await loadTaskInbox(false, { showLoading: false })
+      }
+    }
+  }
+)
+
+const cancelFuzzingTaskFromInbox = (taskId: number) => withTaskActionLock(
+  taskActionKey('cancel', 'fuzzing', taskId),
+  async () => {
+    try {
+      if (asyncFuzzingTask.value.taskId === taskId) {
+        await cancelAsyncFuzzing()
+      } else {
+        const result = await fuzzingApi.cancelTask(taskId)
+        if (boardLifecycleDisposed) return
+        notifyTaskCancellationResult('fuzzing', result)
+      }
+    } catch (error) {
+      if (boardLifecycleDisposed) return
+      console.error('Failed to cancel fuzzing task from inbox:', error)
+      ElMessage.error({ message: t('app.failedToCancelFuzzingTask'), type: 'error' })
+    } finally {
+      if (!boardLifecycleDisposed) {
+        await loadTaskInbox(false, { showLoading: false })
+      }
+    }
+  }
+)
+
+const dismissVerificationTask = (taskId: number) => withTaskActionLock(
+  taskActionKey('dismiss', 'verification', taskId),
+  async () => {
+    try {
+      await boardApi.deleteTask(taskId)
+      if (boardLifecycleDisposed) return
+      invalidateTaskInboxRequests()
+      verificationTasks.value = verificationTasks.value.filter(task => task.id !== taskId)
+      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+    } catch (e: any) {
+      if (boardLifecycleDisposed) return
+      ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
+      await loadTaskInbox(false, { showLoading: false })
+    }
+  }
+)
+
+const dismissSimulationTask = (taskId: number) => withTaskActionLock(
+  taskActionKey('dismiss', 'simulation', taskId),
+  async () => {
+    try {
+      await simulationApi.deleteTask(taskId)
+      if (boardLifecycleDisposed) return
+      invalidateTaskInboxRequests()
+      simulationTasks.value = simulationTasks.value.filter(task => task.id !== taskId)
+      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+    } catch (e: any) {
+      if (boardLifecycleDisposed) return
+      ElMessage.error({ message: extractApiErrorMessage(e, t('app.failedToDismissTask')), type: 'error' })
+      await loadTaskInbox(false, { showLoading: false })
+    }
+  }
+)
+
+const dismissFuzzingTask = (taskId: number) => withTaskActionLock(
+  taskActionKey('dismiss', 'fuzzing', taskId),
+  async () => {
+    try {
+      await fuzzingApi.deleteTask(taskId)
+      if (boardLifecycleDisposed) return
+      invalidateTaskInboxRequests()
+      fuzzingTasks.value = fuzzingTasks.value.filter(task => task.id !== taskId)
+      clearFuzzNotifications(undefined, taskId)
+      untrackFuzzTask(taskId)
+      ElMessage.success({ message: t('app.taskDismissed'), type: 'success' })
+    } catch (e: any) {
+      if (boardLifecycleDisposed) return
+      console.error('Failed to dismiss fuzzing task:', e)
+      ElMessage.error({ message: t('app.failedToDismissTask'), type: 'error' })
+      await loadTaskInbox(false, { showLoading: false })
+    }
+  }
+)
 
 const openTaskInbox = async () => {
   if (isModelPlaybackActive.value) {
     ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
     return
   }
+  const intentEpoch = ++historyPanelIntentEpoch
+  historyDetailRequests.invalidate()
   closeResultSurfaces()
   showSimulationPanel.value = false
   showVerificationPanel.value = false
+  showFuzzingPanel.value = false
   closeRecommendationPanel()
   closeDeviceRecommendationPanel()
   closeSpecRecommendationPanel()
   closeScenarioRecommendationPanel()
   activeHistoryLayer.value = 'tasks'
   showHistoryPanel.value = true
-  await loadTaskInbox(false)
+  const loaded = await loadTaskInbox(false)
+  if (loaded && isCurrentHistoryPanelIntent(intentEpoch, 'tasks')) {
+    clearFuzzNotifications('FAILED')
+  }
 }
 
-const cancelMiniTask = async (kind: 'verification' | 'simulation', taskId: number) => {
+const miniTaskCancelLabel = (kind: 'verification' | 'fuzzing' | 'simulation') => kind === 'verification'
+  ? t('app.cancelVerificationTask')
+  : kind === 'fuzzing' ? t('app.cancelFuzzingTask') : t('app.cancelSimulationTask')
+
+const cancelMiniTask = async (kind: 'verification' | 'fuzzing' | 'simulation', taskId: number) => {
   if (kind === 'verification') {
     await cancelVerificationTaskFromInbox(taskId)
+  } else if (kind === 'fuzzing') {
+    await cancelFuzzingTaskFromInbox(taskId)
   } else {
     await cancelSimulationTaskFromInbox(taskId)
   }
@@ -6402,14 +7997,17 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
     return
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
+  const requestToken = historyDetailRequests.beginReplace()
   try {
     const trace = await boardApi.getVerificationTrace(traceId)
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     if (!trace?.states?.length) {
       ElMessage.warning({ message: t('app.traceHasNoStates'), type: 'warning' })
       return
     }
     closeResultDialog()
-    closeHistoryPanel()
+    closeHistoryPanel(false)
+    activeFuzzingFinding.value = null
     savedTraces.value = [trace]
     traceAnimationState.value = {
       visible: true,
@@ -6425,8 +8023,11 @@ const selectAndPlayVerificationTrace = async (traceId: number) => {
       }
     }
   } catch (e: any) {
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load trace:', e)
     ElMessage.error({ message: t('app.failedToLoadTrace'), type: 'error' })
+  } finally {
+    historyDetailRequests.finish(requestToken)
   }
 }
 
@@ -6454,8 +8055,10 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
   }
   if (!ensureLiveBoardEditorClosedForPlayback()) return
 
+  const requestToken = historyDetailRequests.beginReplace()
   try {
     const trace = await simulationApi.getSimulation(traceId)
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     if (!trace?.states?.length) {
       ElMessage.warning({ message: t('app.simulationRunHasNoStates'), type: 'warning' })
       return
@@ -6477,7 +8080,7 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
       modelSnapshot: trace.modelSnapshot
     }
 
-    closeHistoryPanel()
+    closeHistoryPanel(false)
     lastSimulationResult.value = result
     simulationResult.value = null
     savedSimulationStates.value = [...trace.states]
@@ -6489,13 +8092,17 @@ const selectAndPlaySimulationTrace = async (traceId: number) => {
       selectedStateIndex: 0
     }
   } catch (e: any) {
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
     console.error('Failed to load simulation trace:', e)
     ElMessage.error({ message: t('app.failedToLoadSimulationRun'), type: 'error' })
+  } finally {
+    historyDetailRequests.finish(requestToken)
   }
 }
 
 const deleteSimulationRun = async (run: SimulationTraceSummary) => {
   const traceId = run.id
+  historyDetailRequests.invalidate()
   try {
     await ElMessageBox.confirm(
       t('app.deleteSimulationRunMessage', { time: formatRunTimestamp(run.createdAt) }),
@@ -6509,12 +8116,16 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
       }
     )
     await simulationApi.deleteSimulation(traceId)
+    if (boardLifecycleDisposed) return
+    simulationHistoryRequests.invalidate()
     simulationRuns.value = simulationRuns.value.filter(t => t.id !== traceId)
     ElMessage.success({ message: t('app.simulationRunDeleted'), type: 'success' })
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
+    if (boardLifecycleDisposed) return
     console.error('Failed to delete simulation trace:', e)
     const refreshed = await loadSimulationRuns(false)
+    if (boardLifecycleDisposed) return
     if (refreshed && !simulationRuns.value.some(item => item.id === traceId)) {
       ElMessage.warning({ message: t('app.simulationDeleteOutcomeRefreshed'), type: 'warning' })
       return
@@ -6526,8 +8137,285 @@ const deleteSimulationRun = async (run: SimulationTraceSummary) => {
   }
 }
 
+const fuzzingCompletionMessage = (run: AvailableFuzzingRunSummary | FuzzingRun): string => {
+  if (run.outcome === 'FOUND_VIOLATION') {
+    return t('app.fuzzSearchCompletedWithFindings', { count: run.findings.length })
+  }
+  if (run.outcome === 'BUDGET_EXHAUSTED') return t('app.fuzzNoViolationWithinBudget')
+  return t('app.fuzzInconclusiveDetail')
+}
+
+const openFuzzingRun = async (runId: number) => {
+  if (isModelPlaybackActive.value) {
+    ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
+    return
+  }
+  const requestEpoch = ++fuzzingResultRequestEpoch
+  const requestToken = historyDetailRequests.beginReplace()
+  closeHistoryPanel(false)
+  try {
+    await nextTick()
+    if (requestEpoch !== fuzzingResultRequestEpoch
+      || !historyDetailRequests.isCurrent(requestToken)
+      || boardLifecycleDisposed) return
+    fuzzingError.value = null
+    fuzzingResult.value = null
+    fuzzingResultLoading.value = true
+    showFuzzingResultDialog.value = true
+    const run = await fuzzingApi.getRun(runId)
+    if (requestEpoch !== fuzzingResultRequestEpoch
+      || !historyDetailRequests.isCurrent(requestToken)
+      || boardLifecycleDisposed) return
+    presentFuzzingRun(run)
+  } catch (e: any) {
+    if (requestEpoch !== fuzzingResultRequestEpoch
+      || !historyDetailRequests.isCurrent(requestToken)
+      || boardLifecycleDisposed) return
+    console.error('Failed to load fuzzing run:', e)
+    showFuzzingResultDialog.value = false
+    fuzzingError.value = null
+    ElMessage.error({
+      message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingRun')),
+      type: 'error'
+    })
+  } finally {
+    if (requestEpoch === fuzzingResultRequestEpoch) {
+      fuzzingResultLoading.value = false
+      if (!historyDetailRequests.isCurrent(requestToken) && !fuzzingResult.value) {
+        showFuzzingResultDialog.value = false
+      }
+    }
+    historyDetailRequests.finish(requestToken)
+  }
+}
+
+const closeFuzzingResult = () => {
+  fuzzingResultRequestEpoch += 1
+  showFuzzingResultDialog.value = false
+  fuzzingResult.value = null
+  fuzzingError.value = null
+  fuzzingResultLoading.value = false
+}
+
+const deleteFuzzingRun = async (run: FuzzingRunSummary) => {
+  historyDetailRequests.invalidate()
+  try {
+    await ElMessageBox.confirm(
+      t('app.deleteFuzzingRunMessage', { time: formatRunTimestamp(run.completedAt || run.createdAt) }),
+      t('app.deleteFuzzingRunTitle'),
+      {
+        confirmButtonText: t('app.delete'),
+        cancelButtonText: t('app.cancel'),
+        type: 'warning',
+        appendTo: 'body',
+        lockScroll: false
+      }
+    )
+    await fuzzingApi.deleteRun(run.id)
+    if (boardLifecycleDisposed) return
+    fuzzingHistoryRequests.invalidate()
+    fuzzingRuns.value = fuzzingRuns.value.filter(item => item.id !== run.id)
+    fuzzingRunsPage.value = 0
+    fuzzingRunsHasMore.value = false
+    const refreshed = await loadFuzzingRuns(false)
+    if (boardLifecycleDisposed) return
+    if (fuzzingResult.value?.id === run.id) closeFuzzingResult()
+    if (!refreshed) {
+      ElMessage.warning({ message: t('app.fuzzingRunDeletedRefreshPending'), type: 'warning' })
+      return
+    }
+    ElMessage.success({ message: t('app.fuzzingRunDeleted'), type: 'success' })
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    if (boardLifecycleDisposed) return
+    console.error('Failed to delete fuzzing run:', e)
+    const refreshed = await loadFuzzingRuns(false)
+    if (boardLifecycleDisposed) return
+    if (refreshed && !fuzzingRuns.value.some(item => item.id === run.id)) {
+      ElMessage.warning({ message: t('app.fuzzingDeleteOutcomeRefreshed'), type: 'warning' })
+      return
+    }
+    ElMessage.error({
+      message: t('app.failedToDeleteFuzzingRun'),
+      type: 'error'
+    })
+  }
+}
+
+const selectAndPlayFuzzingFinding = async (findingId: number, runId?: number) => {
+  if (simulationAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCurrentSimulationFirst'), type: 'warning' })
+    return
+  }
+  if (traceAnimationState.value.visible) {
+    ElMessage.warning({ message: t('app.closeCounterexampleFirst'), type: 'warning' })
+    return
+  }
+  if (isAnyRecommendationPanelVisible()) {
+    ElMessage.warning({ message: t('app.closeRecommendationPanelsFirst'), type: 'warning' })
+    return
+  }
+  if (!ensureLiveBoardEditorClosedForPlayback()) return
+
+  const requestToken = historyDetailRequests.beginReplace()
+  try {
+    const existingRun = runId
+      ? fuzzingRuns.value.find(run => run.id === runId)
+      : fuzzingResult.value
+    const [finding, resolvedRun] = await Promise.all([
+      fuzzingApi.getFinding(findingId),
+      existingRun ? Promise.resolve(existingRun) : (runId ? fuzzingApi.getRun(runId) : Promise.resolve(null))
+    ])
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    if (!finding.states.length) {
+      ElMessage.warning({ message: t('app.fuzzFindingHasNoStates'), type: 'warning' })
+      return
+    }
+    if (!resolvedRun || resolvedRun.dataAvailable === false || !resolvedRun.modelSnapshot) {
+      throw new Error(t('app.fuzzFindingSnapshotUnavailable'))
+    }
+    assertFuzzingFindingBelongsToRun(finding, resolvedRun.id, 'Fuzz finding replay')
+
+    const trace: Trace = {
+      id: finding.id,
+      violatedSpecId: finding.violatedSpecId,
+      violatedSpec: finding.violatedSpec,
+      checkedExpression: '',
+      modelComplete: false,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      generationIssues: [],
+      states: finding.states,
+      modelSnapshot: resolvedRun.modelSnapshot,
+      createdAt: finding.createdAt
+    }
+
+    closeHistoryPanel(false)
+    closeFuzzingResult()
+    activeFuzzingFinding.value = finding
+    savedTraces.value = [trace]
+    traceAnimationState.value = {
+      visible: true,
+      selectedTraceIndex: 0,
+      selectedStateIndex: 0,
+      isPlaying: false
+    }
+    highlightedTrace.value = { ...trace, selectedStateIndex: 0 }
+  } catch (e: any) {
+    if (!historyDetailRequests.isCurrent(requestToken) || boardLifecycleDisposed) return
+    console.error('Failed to load fuzzing finding:', e)
+    ElMessage.error({
+      message: extractApiErrorMessage(e, t('app.failedToLoadFuzzingFinding')),
+      type: 'error'
+    })
+  } finally {
+    historyDetailRequests.finish(requestToken)
+  }
+}
+
+type FuzzVerificationHandoff = {
+  runId: number
+  specificationId?: string
+  specificationLabel?: string
+  targetPresent: boolean
+  scopeCountDrifted: boolean
+}
+
+const fuzzVerificationHandoff = ref<FuzzVerificationHandoff | null>(null)
+
+const availableFuzzRunForFinding = (finding: FuzzingFindingSummary | FuzzingFinding) => {
+  if (fuzzingResult.value?.id === finding.fuzzTaskId) return fuzzingResult.value
+  const historyRun = fuzzingRuns.value.find(run => run.id === finding.fuzzTaskId)
+  return historyRun?.dataAvailable ? historyRun : null
+}
+
+const openFormalVerificationForFuzzFinding = (finding: FuzzingFindingSummary | FuzzingFinding) => {
+  const sourceRun = availableFuzzRunForFinding(finding)
+  const specificationLabel = finding.violatedSpec?.templateLabel
+    || finding.violatedSpec?.formula
+    || ('specificationLabel' in finding ? finding.specificationLabel : '')
+    || finding.violatedSpecId
+  fuzzVerificationHandoff.value = {
+    runId: finding.fuzzTaskId,
+    specificationId: finding.violatedSpecId,
+    specificationLabel,
+    targetPresent: specifications.value.some(spec => spec.id === finding.violatedSpecId),
+    scopeCountDrifted: sourceRun ? (
+      sourceRun.modelSnapshot.deviceCount !== currentFuzzingBoardScope.value.deviceCount
+      || sourceRun.modelSnapshot.ruleCount !== currentFuzzingBoardScope.value.ruleCount
+      || sourceRun.modelSnapshot.specificationCount !== currentFuzzingBoardScope.value.specificationCount
+      || sourceRun.modelSnapshot.environmentVariableCount !== currentFuzzingBoardScope.value.environmentVariableCount
+      || sourceRun.modelSnapshot.deviceTemplateCount !== currentFuzzingBoardScope.value.deviceTemplateCount
+    ) : true
+  }
+  closeHistoryPanel()
+  closeFuzzingResult()
+  showSimulationPanel.value = false
+  showFuzzingPanel.value = false
+  showVerificationPanel.value = true
+}
+
+const openFormalVerificationForCurrentBoard = () => {
+  const sourceRun = fuzzingResult.value
+  fuzzVerificationHandoff.value = sourceRun ? {
+    runId: sourceRun.id,
+    targetPresent: true,
+    scopeCountDrifted: fuzzingResultBoardDrifted.value
+  } : null
+  closeHistoryPanel()
+  closeFuzzingResult()
+  showSimulationPanel.value = false
+  showFuzzingPanel.value = false
+  showVerificationPanel.value = true
+}
+
+const closeVerificationPanel = () => {
+  showVerificationPanel.value = false
+  fuzzVerificationHandoff.value = null
+  void nextTick(() => verificationActionButtonRef.value?.focus())
+}
+
+const reuseFuzzingSettings = () => {
+  const run = fuzzingResult.value
+  if (!run) return
+  const eligibleCurrentIds = new Set(knownFuzzEligibleSpecifications.value.map(spec => spec.id))
+  const usedFrozenAllTargets = run.targetSpecIds.length === 0
+  const historicalTargetIds = usedFrozenAllTargets
+    ? [...new Set([
+        ...run.eligibility.eligibleSpecIds,
+        ...run.eligibility.ineligibleSpecs.map(issue => issue.specId)
+      ])]
+    : [...run.targetSpecIds]
+  const unavailableTargetCount = historicalTargetIds.filter(id => !eligibleCurrentIds.has(id)).length
+  fuzzingForm.explorationMode = run.explorationMode
+  fuzzingForm.maxIterations = run.maxIterations
+  fuzzingForm.pathLength = run.pathLength
+  fuzzingForm.populationSize = run.populationSize
+  fuzzingForm.seed = run.effectiveSeed
+  fuzzingForm.targetSelectionMode = 'EXPLICIT'
+  // Keep unavailable explicit IDs visible so the user, not filtering code, chooses a replacement scope.
+  fuzzingForm.targetSpecIds = historicalTargetIds
+  fuzzingSettingsNotice.value = usedFrozenAllTargets
+    ? t('app.fuzzSettingsReusedAllTargets')
+    : unavailableTargetCount > 0
+      ? t('app.fuzzSettingsReusedWithMissingTargets', { count: unavailableTargetCount })
+      : t('app.fuzzSettingsReused')
+  closeFuzzingResult()
+  closeHistoryPanel()
+  showSimulationPanel.value = false
+  showVerificationPanel.value = false
+  showFuzzingPanel.value = true
+}
+
 // Floating panel visibility state
 const showVerificationPanel = ref(false)
+const verificationPanelCloseButtonRef = ref<HTMLButtonElement | null>(null)
+const verificationActionButtonRef = ref<HTMLButtonElement | null>(null)
+
+watch(showVerificationPanel, visible => {
+  if (!visible) return
+  void nextTick(() => verificationPanelCloseButtonRef.value?.focus())
+})
 
 // 异步模拟任务状态
 const asyncSimulationTask = ref<{
@@ -6544,10 +8432,12 @@ const cancellingSimulationTask = ref(false)
 const simulationCancelRequested = ref(false)
 
 const notifyTaskCancellationResult = (
-  kind: 'verification' | 'simulation',
+  kind: 'verification' | 'fuzzing' | 'simulation',
   result: TaskCancellationResult
 ) => {
-  const task = t(kind === 'verification' ? 'app.verificationTaskName' : 'app.simulationTaskName')
+  const task = t(kind === 'verification'
+    ? 'app.verificationTaskName'
+    : kind === 'fuzzing' ? 'app.fuzzTaskName' : 'app.simulationTaskName')
   switch (result.cancellationOutcome) {
     case 'ACCEPTED':
       ElMessage.info({
@@ -6595,6 +8485,7 @@ const cancelAsyncVerification = async () => {
   asyncVerificationTask.value.status = t('app.taskCancelling')
   try {
     const result = await boardApi.cancelTask(taskId)
+    if (boardLifecycleDisposed) return
     notifyTaskCancellationResult('verification', result)
     if (result.cancellationAccepted || result.cancellationOutcome === 'ALREADY_CANCELLED') {
       verificationCancelRequested.value = true
@@ -6602,6 +8493,7 @@ const cancelAsyncVerification = async () => {
       verificationCancelRequested.value = false
     }
   } catch (error: any) {
+    if (boardLifecycleDisposed) return
     verificationCancelRequested.value = false
     const msg = localizedErrorMessage(error, t('app.failedToCancelVerificationTask'), locale.value)
     ElMessage.error({ message: msg, type: 'error' })
@@ -6619,6 +8511,7 @@ const cancelAsyncSimulation = async () => {
   asyncSimulationTask.value.status = t('app.taskCancelling')
   try {
     const result = await simulationApi.cancelTask(taskId)
+    if (boardLifecycleDisposed) return
     notifyTaskCancellationResult('simulation', result)
     if (result.cancellationAccepted || result.cancellationOutcome === 'ALREADY_CANCELLED') {
       simulationCancelRequested.value = true
@@ -6626,11 +8519,38 @@ const cancelAsyncSimulation = async () => {
       simulationCancelRequested.value = false
     }
   } catch (error: any) {
+    if (boardLifecycleDisposed) return
     simulationCancelRequested.value = false
     const msg = localizedErrorMessage(error, t('app.failedToCancelSimulationTask'), locale.value)
     ElMessage.error({ message: msg, type: 'error' })
   } finally {
     cancellingSimulationTask.value = false
+  }
+}
+
+const cancelAsyncFuzzing = async () => {
+  const taskId = asyncFuzzingTask.value.taskId
+  if (!taskId || cancellingFuzzingTask.value) return
+
+  fuzzingCancelRequested.value = true
+  cancellingFuzzingTask.value = true
+  asyncFuzzingTask.value.status = t('app.taskCancelling')
+  try {
+    const result = await fuzzingApi.cancelTask(taskId)
+    if (boardLifecycleDisposed) return
+    notifyTaskCancellationResult('fuzzing', result)
+    fuzzingCancelRequested.value = result.cancellationAccepted
+      || result.cancellationOutcome === 'ALREADY_CANCELLED'
+  } catch (error: any) {
+    if (boardLifecycleDisposed) return
+    fuzzingCancelRequested.value = false
+    console.error('Failed to cancel fuzzing task:', error)
+    ElMessage.error({
+      message: t('app.failedToCancelFuzzingTask'),
+      type: 'error'
+    })
+  } finally {
+    cancellingFuzzingTask.value = false
   }
 }
 
@@ -6678,7 +8598,7 @@ const waitForPendingFixRefresh = async () => {
 }
 
 // 面板互斥切换函数
-const togglePanel = (panel: 'simulation' | 'verification') => {
+const togglePanel = (panel: 'simulation' | 'fuzzing' | 'verification') => {
   if (isModelPlaybackActive.value) {
     ElMessage.warning({ message: t('app.playbackReadOnlyCloseFirst'), type: 'warning' })
     return
@@ -6700,6 +8620,15 @@ const togglePanel = (panel: 'simulation' | 'verification') => {
       showSimulationPanel.value = false
     } else {
       showSimulationPanel.value = true
+      showFuzzingPanel.value = false
+      showVerificationPanel.value = false
+    }
+  } else if (panel === 'fuzzing') {
+    if (showFuzzingPanel.value) {
+      showFuzzingPanel.value = false
+    } else {
+      showFuzzingPanel.value = true
+      showSimulationPanel.value = false
       showVerificationPanel.value = false
     }
   } else {
@@ -6708,6 +8637,7 @@ const togglePanel = (panel: 'simulation' | 'verification') => {
     } else {
       showVerificationPanel.value = true
       showSimulationPanel.value = false
+      showFuzzingPanel.value = false
     }
   }
 }
@@ -6717,10 +8647,29 @@ const openSimulationFromActionDock = () => {
 }
 
 const openVerificationFromActionDock = () => {
+  fuzzVerificationHandoff.value = null
   togglePanel('verification')
 }
 
+const openFuzzingFromActionDock = () => {
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    return
+  }
+  // Dismiss earlier scene/task notices before placing a tool panel beneath them.
+  ElMessage.closeAll()
+  if (!isFuzzing.value) fuzzingWatchedTask.value = null
+  fuzzingSettingsNotice.value = null
+  togglePanel('fuzzing')
+}
+
 const openHistoryFromActionDock = () => {
+  if (unreadFuzzNotificationCount.value > 0) {
+    const layer: HistoryLayer = unreadFailedFuzzCount.value > 0 ? 'tasks' : 'results'
+    if (layer === 'results') activeHistoryResultFilter.value = 'fuzzing'
+    void toggleHistoryPanel(layer)
+    return
+  }
   void toggleHistoryPanel()
 }
 
@@ -6772,8 +8721,9 @@ const isModelPlaybackActive = isAnimationLocked
 const playbackChangesDismissedKey = ref<string | null>(null)
 const playbackChangePosition = ref({ x: 0, y: 0 })
 
-const activePlaybackKind = computed<'simulation' | 'counterexample' | null>(() => {
+const activePlaybackKind = computed<'simulation' | 'counterexample' | 'fuzzing' | null>(() => {
   if (simulationAnimationState.value.visible) return 'simulation'
+  if (traceAnimationState.value.visible && activeFuzzingFinding.value) return 'fuzzing'
   if (traceAnimationState.value.visible) return 'counterexample'
   return null
 })
@@ -6821,6 +8771,23 @@ const activePlaybackEnvironmentChanges = computed<PlaybackEnvironmentChange[]>((
 
 const activePlaybackTriggeredRules = computed<TraceTriggeredRule[]>(() =>
   activePlaybackStates.value[activePlaybackStateIndex.value]?.triggeredRules || [])
+
+const activeFuzzingStepInputEvents = computed<Array<FuzzingInputEvent & { targetLabel?: string }>>(() => {
+  const finding = activeFuzzingFinding.value
+  if (!finding) return []
+  const state = activePlaybackStates.value[activePlaybackStateIndex.value]
+  return finding.inputEvents
+    .filter(event => event.step === activePlaybackStateIndex.value)
+    .map(event => {
+      if (event.kind !== 'DEVICE_VARIABLE' && event.kind !== 'DEVICE_STATE') return event
+      const device = state?.devices?.find(candidate =>
+        normalizePlaybackDeviceId(candidate.deviceId) === normalizePlaybackDeviceId(event.targetId))
+      return { ...event, targetLabel: device?.deviceLabel || event.targetId }
+    })
+})
+
+const firstFuzzingViolationStateNumber = computed(() =>
+  activeFuzzingFinding.value ? activeFuzzingFinding.value.firstViolationStep + 1 : undefined)
 
 const activePlaybackCompromisedLinks = computed<TraceTriggeredRule[]>(() =>
   activePlaybackStates.value[activePlaybackStateIndex.value]?.compromisedAutomationLinks || [])
@@ -6912,6 +8879,7 @@ let playInterval: ReturnType<typeof setInterval> | null = null
 const isCanvasMapHiddenByOverlay = computed(() =>
   showVerificationPanel.value ||
   showSimulationPanel.value ||
+  showFuzzingPanel.value ||
   showHistoryPanel.value ||
   showRecommendationPanel.value ||
   showDeviceRecommendationPanel.value ||
@@ -7047,6 +9015,7 @@ const selectAndPlayTrace = (traceIndex: number) => {
   
   if (verificationResult.value?.traces?.length > 0 && traceIndex < verificationResult.value.traces.length) {
     resetPlaybackChanges()
+    activeFuzzingFinding.value = null
     // 保存 traces 数据到独立变量
     savedTraces.value = [...verificationResult.value.traces]
     
@@ -7077,6 +9046,7 @@ const closeTraceAnimation = () => {
   stopTraceAnimation()
   traceAnimationState.value.visible = false
   highlightedTrace.value = null
+  activeFuzzingFinding.value = null
   resetPlaybackChanges()
 }
 
@@ -7112,7 +9082,10 @@ const handleTraceStateKeydown = (event: KeyboardEvent, index: number) => {
 }
 
 const getTraceStateAriaLabel = (index: number) => {
-  return `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
+  const base = `${t('app.traceVisualization.state', { index: index + 1 })} (${index + 1}/${totalStates.value})`
+  return activeFuzzingFinding.value?.firstViolationStep === index
+    ? `${base}, ${t('app.fuzzFirstViolation')}`
+    : base
 }
 
 const revealTraceStateButton = (index: number, focus = false) => {
@@ -7392,7 +9365,196 @@ const handleVerify = async (): Promise<boolean> => {
 const runVerification = async () => {
   const completed = await handleVerify()
   if (completed && !verificationForm.isAsync) {
-    showVerificationPanel.value = false
+    closeVerificationPanel()
+  }
+}
+
+const runFuzzing = async (): Promise<boolean> => {
+  if (isFuzzing.value) return false
+  if (isSceneReplacementInProgress.value) {
+    ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
+    return false
+  }
+  await waitForPendingFixRefresh()
+  await waitForPendingBoardMutations()
+  if (!ensureBoardDataReady(['templates', 'nodes', 'environment', 'rules', 'specs'])) return false
+  if (nodes.value.length === 0) {
+    ElMessage.warning({ message: t('app.noDevicesToFuzz'), type: 'warning' })
+    return false
+  }
+  if (specifications.value.length === 0) {
+    ElMessage.warning({ message: t('app.noSpecsToFuzz'), type: 'warning' })
+    return false
+  }
+  if (!assertRulesHaveTriggers(rules.value)) return false
+
+  if (!fuzzingWorkloadReady.value) {
+    if (!fuzzingWorkloadPreviewLoading.value && validFuzzingBudgetFields()) {
+      scheduleFuzzingWorkloadPreview()
+    }
+    ElMessage.warning({
+      message: fuzzingWorkloadPreviewError.value || t('app.fuzzWorkloadRequired'),
+      type: 'warning'
+    })
+    return false
+  }
+
+  if (fuzzingContentCommandUnsupported.value) {
+    ElMessage.warning({ message: t('app.fuzzContentCommandPreflightBlocked'), type: 'warning' })
+    return false
+  }
+
+  const eligibleSpecIds = knownFuzzEligibleSpecifications.value.map(spec => spec.id)
+  if (eligibleSpecIds.length === 0) {
+    ElMessage.warning({ message: t('app.noEligibleSpecsToFuzz'), type: 'warning' })
+    return false
+  }
+  if (effectiveFuzzingConfigurationError.value) {
+    ElMessage.warning({ message: effectiveFuzzingConfigurationError.value, type: 'warning' })
+    return false
+  }
+  const requestTargetSpecIds = fuzzingForm.targetSelectionMode === 'EXPLICIT'
+    ? normalizedFuzzTargetSpecIds.value
+    : (eligibleSpecIds.length === specifications.value.length ? [] : eligibleSpecIds)
+  const requestFields = {
+    maxIterations: fuzzingForm.maxIterations,
+    pathLength: fuzzingForm.pathLength,
+    populationSize: fuzzingForm.populationSize,
+    ...(requestTargetSpecIds.length > 0
+      ? { targetSpecIds: [...requestTargetSpecIds] }
+      : {}),
+    ...(fuzzingForm.seed === null ? {} : { seed: fuzzingForm.seed })
+  }
+  const paperDomainFingerprint = paperDomainPreview.value?.modelFingerprint
+  let request: FuzzingRequest
+  if (fuzzingForm.explorationMode === 'PAPER_COMPATIBLE') {
+    if (!isValidFuzzPaperDomainFingerprint(paperDomainFingerprint)) {
+      ElMessage.warning({ message: t('app.fuzzPaperDomainRequired'), type: 'warning' })
+      return false
+    }
+    request = {
+      ...requestFields,
+      explorationMode: 'PAPER_COMPATIBLE',
+      paperDomainFingerprint
+    }
+  } else {
+    request = {
+      ...requestFields,
+      explorationMode: 'BOARD_SNAPSHOT'
+    }
+  }
+
+  isFuzzing.value = true
+  fuzzingWatchedTask.value = null
+  asyncFuzzingActive.value = true
+  cancellingFuzzingTask.value = false
+  fuzzingCancelRequested.value = false
+  fuzzingError.value = null
+  fuzzingSettingsNotice.value = null
+  asyncFuzzingTask.value = { taskId: null, progress: 0, status: t('app.taskInitializing') }
+  let submittedTaskId: number | null = null
+
+  try {
+    const submittedTask = await fuzzingApi.startAsync(request)
+    submittedTaskId = submittedTask.id
+    trackFuzzTask(submittedTask.id)
+    asyncFuzzingTask.value = {
+      taskId: submittedTask.id,
+      progress: normalizeTaskProgress(submittedTask.progress),
+      status: formatAsyncTaskStatus(submittedTask.status)
+    }
+    upsertFuzzingTaskSummary(submittedTask)
+    fuzzingWatchedTask.value = submittedTask
+
+    const run = await pollAsyncFuzzing(submittedTask.id)
+    untrackFuzzTask(submittedTask.id)
+    const shouldPresent = showFuzzingPanel.value
+    showFuzzingPanel.value = false
+    if (shouldPresent) {
+      presentFuzzingRun(run)
+    } else {
+      const notificationShown = markFuzzNotificationUnread({
+        taskId: submittedTask.id,
+        runId: run.id,
+        kind: 'COMPLETED',
+        outcome: run.outcome,
+        createdAt: run.completedAt
+      })
+      if (notificationShown && run.outcome === 'BUDGET_EXHAUSTED') {
+        ElMessage.info({ message: fuzzingCompletionMessage(run), type: 'info', duration: 6500 })
+      } else if (notificationShown) {
+        ElMessage.warning({ message: fuzzingCompletionMessage(run), type: 'warning', duration: 6500 })
+      }
+    }
+    return true
+  } catch (error: any) {
+    if (isPollingAbortedError(error)) return false
+    if (isAsyncTaskCancelledError(error)) {
+      if (submittedTaskId) untrackFuzzTask(submittedTaskId)
+      fuzzingError.value = null
+      ElMessage.info({ message: t('app.fuzzSearchCancelled'), type: 'info' })
+    } else if (submittedTaskId && isFuzzTaskRecoveryPendingError(error)) {
+      fuzzingError.value = null
+      fuzzingSettingsNotice.value = t('app.fuzzResultRecoveryPending')
+      if (!showFuzzingPanel.value) {
+        ElMessage.info({ message: fuzzingSettingsNotice.value, type: 'info', duration: 6500 })
+      }
+    } else if (submittedTaskId && isFuzzCompletedResultUnavailableError(error)) {
+      const unavailableMessage = error.message || t('app.failedToLoadFuzzingRun')
+      fuzzingError.value = unavailableMessage
+      markFuzzNotificationUnread({
+        taskId: submittedTaskId,
+        runId: submittedTaskId,
+        kind: 'UNAVAILABLE',
+        createdAt: new Date().toISOString()
+      })
+      if (!showFuzzingPanel.value) {
+        ElMessage.error({ message: unavailableMessage, type: 'error' })
+      }
+    } else {
+      console.error('Fuzz search failed:', error)
+      const stalePaperDomain = submittedTaskId === null
+        && request.explorationMode === 'PAPER_COMPATIBLE'
+        && hasApiValidationError(error, 'paperDomainFingerprint')
+      if (stalePaperDomain) {
+        paperDomainStaleRecoveryActive.value = true
+        const boardRefreshed = await refreshSceneForReconciliation()
+        invalidatePaperDomainPreview()
+        fuzzingError.value = t(boardRefreshed
+          ? 'app.fuzzPaperDomainStale'
+          : 'app.fuzzPaperDomainStaleBoardRefreshFailed')
+        if (boardRefreshed && showFuzzingPanel.value && validPaperPathLength()) {
+          schedulePaperDomainPreview()
+        } else {
+          ElMessage.warning({ message: fuzzingError.value, type: 'warning' })
+        }
+      } else {
+        fuzzingError.value = fuzzTaskQuotaMessage(error)
+          || extractApiErrorMessage(error, t('app.fuzzSearchFailed'))
+      }
+      if (submittedTaskId && !showFuzzingPanel.value) {
+        markFuzzNotificationUnread({
+          taskId: submittedTaskId,
+          kind: 'FAILED',
+          createdAt: new Date().toISOString()
+        })
+        ElMessage.error({ message: fuzzingError.value, type: 'error' })
+      } else if (submittedTaskId) {
+        untrackFuzzTask(submittedTaskId)
+      } else if (!showFuzzingPanel.value && !stalePaperDomain) {
+        ElMessage.error({ message: fuzzingError.value, type: 'error' })
+      }
+    }
+    return false
+  } finally {
+    isFuzzing.value = false
+    asyncFuzzingActive.value = false
+    cancellingFuzzingTask.value = false
+    fuzzingCancelRequested.value = false
+    fuzzingWatchedTask.value = null
+    if (!boardLifecycleDisposed) {
+      await loadTaskInbox(false, { showLoading: false })
+    }
   }
 }
 
@@ -7521,6 +9683,7 @@ const handleSimulate = async (simConfig: {
     result = attachLocalRunSubmission(result, submission)
     lastSimulationResult.value = result
     if (result.traceId) {
+      simulationHistoryRequests.invalidate()
       simulationRuns.value = [
         {
           id: result.traceId,
@@ -7623,9 +9786,13 @@ const openSimulationRunDetails = () => {
 // it is an auth/not-found/client error — retrying will never succeed. Network blips and
 // 5xx are treated as transient.
 const isPermanentPollError = (error: any): boolean => {
-  if (error?.code === RUN_RESPONSE_INCOMPLETE_CODE) return true
+  if (error?.code === RUN_RESPONSE_INCOMPLETE_CODE
+    || error?.code === FUZZ_RESPONSE_INCOMPLETE_CODE) return true
   const status = error?.response?.status
-  return typeof status === 'number' && status >= 400 && status < 500
+  return typeof status === 'number'
+    && status >= 400
+    && status < 500
+    && !isTransientTaskHttpStatus(status)
 }
 
 // 轮询异步验证任务：await 到终态/超时/永久错误为止，供 handleVerify await。
@@ -7770,10 +9937,84 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
   throw new Error(t('app.simulationTimeout'))
 }
 
+const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
+  let pollCount = 0
+  let completedResultFailures = 0
+
+  while (pollCount < ASYNC_TASK_MAX_POLLS) {
+    throwIfPollingAborted()
+    let task: FuzzingTask
+    try {
+      const progress = await fuzzingApi.getTaskProgress(taskId)
+      throwIfPollingAborted()
+      asyncFuzzingTask.value.progress = normalizeTaskProgress(progress)
+      task = await fuzzingApi.getTask(taskId)
+      throwIfPollingAborted()
+      asyncFuzzingTask.value.status = formatAsyncTaskStatus(task.status)
+      upsertFuzzingTaskSummary(task)
+    } catch (error: any) {
+      if (isPollingAbortedError(error)) throw error
+      if (isPermanentPollError(error)) throw error
+      await waitForNextPoll()
+      pollCount++
+      continue
+    }
+
+    if (task.status === 'COMPLETED') {
+      asyncFuzzingTask.value.progress = 100
+      try {
+        const run = await loadFuzzRunSingleFlight(taskId, task.runId ?? task.id)
+        clearFuzzRunRecoveryState(taskId)
+        upsertFuzzingRunSummary(summarizeFuzzingRun(run))
+        return run
+      } catch (error: any) {
+        if (classifyTrackedFuzzRunError(error) !== 'RETRY') {
+          throw new FuzzCompletedResultUnavailableError(
+            localizedErrorMessage(error, t('app.failedToLoadFuzzingRun'), locale.value)
+          )
+        }
+        asyncFuzzingTask.value.status = t('app.fuzzResultRecoveryPending')
+        const retryDelay = scheduleFuzzRunRecovery(taskId)
+        completedResultFailures++
+        if (completedResultFailures >= FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES) {
+          throw new FuzzTaskRecoveryPendingError()
+        }
+        await waitForPollingDelay(retryDelay)
+        pollCount++
+        continue
+      }
+    }
+    if (task.status === 'FAILED') {
+      throw new Error(task.errorMessage || t('app.fuzzSearchFailed'))
+    }
+    if (task.status === 'CANCELLED' || fuzzingCancelRequested.value) {
+      throw new AsyncTaskCancelledError(task.errorMessage || t('app.fuzzSearchCancelled'))
+    }
+
+    await waitForNextPoll()
+    pollCount++
+  }
+
+  throw new FuzzTaskRecoveryPendingError()
+}
+
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
 const isResultSurfaceVisible = computed(() =>
   showResultDialog.value || !!simulationResult.value || !!simulationError.value
+  || showFuzzingResultDialog.value
+)
+const showCanvasEmptyState = computed(() =>
+  isBoardDataReady.value
+  && nodes.value.length === 0
+  && !isSceneReplacementInProgress.value
+  && !isModelPlaybackActive.value
+  && !isResultSurfaceVisible.value
+  && !showSimulationPanel.value
+  && !showVerificationPanel.value
+  && !showFuzzingPanel.value
+  && !showHistoryPanel.value
+  && !isAnyRecommendationPanelVisible()
 )
 const verificationGenerationWarningCounts = computed(() => getGenerationWarningCounts(verificationResult.value))
 const verificationGenerationIssues = computed(() => getGenerationIssues(verificationResult.value))
@@ -7908,6 +10149,12 @@ const traceModelSemanticsConsistent = computed(() => isModelSemanticsConsistent(
 ))
 
 const counterexampleTraceHelpText = computed(() => {
+  if (activeFuzzingFinding.value) {
+    return [
+      t('app.fuzzFindingReplayHint'),
+      t('app.traceVisualization.playbackSnapshotReadOnly')
+    ].join('\n\n')
+  }
   const context = activeTraceContext.value
   const details = [
     t('app.traceVisualization.counterexampleTraceHint'),
@@ -7950,6 +10197,7 @@ const closeResultDialog = () => {
       { 'is-inspector-collapsed': boardPanels.inspector.collapsed }
     ]"
     data-testid="board-root"
+    :aria-busy="!isBoardDataReady"
     :style="boardShellStyle"
     @wheel.ctrl.prevent="onBoardWheel"
   >
@@ -8037,6 +10285,17 @@ const closeResultDialog = () => {
     </nav>
 
     <div
+      v-if="!isBoardDataReady && failedBoardDataKeys.length === 0"
+      class="fixed inset-x-0 top-14 z-[2200] flex h-9 items-center justify-center gap-2 border-b border-teal-200 bg-teal-50 text-xs font-semibold text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-100"
+      role="status"
+      aria-live="polite"
+      data-testid="board-data-loading"
+    >
+      <span class="material-symbols-outlined animate-spin text-base" aria-hidden="true">progress_activity</span>
+      {{ t('app.boardSnapshotLoading') }}
+    </div>
+
+    <div
       v-if="failedBoardDataKeys.length > 0"
       class="fixed left-1/2 top-16 z-[2300] flex w-[min(92vw,720px)] -translate-x-1/2 items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-lg dark:border-red-800 dark:bg-red-950 dark:text-red-100"
       role="alert"
@@ -8060,6 +10319,7 @@ const closeResultDialog = () => {
 
     <!-- Logout Confirmation Dialog -->
     <LogoutConfirmDialog
+      v-if="showLogoutDialog"
       v-model:visible="showLogoutDialog"
       :loading="isLoggingOut"
       @confirm="handleLogoutConfirm"
@@ -8068,6 +10328,7 @@ const closeResultDialog = () => {
     />
 
     <AccountDeleteDialog
+      v-if="showDeleteAccountDialog"
       v-model:visible="showDeleteAccountDialog"
       :username="currentUser?.username"
       :phone="currentUser?.phone"
@@ -8454,6 +10715,52 @@ const closeResultDialog = () => {
           @node-moved-or-resized="handleNodeMovedOrResized"
       />
 
+      <section
+        v-if="showCanvasEmptyState"
+        class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-20 py-24"
+        data-testid="canvas-empty-state"
+        aria-labelledby="canvas-empty-state-title"
+      >
+        <div class="pointer-events-auto max-w-xl text-center">
+          <span class="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-500" aria-hidden="true">account_tree</span>
+          <h2 id="canvas-empty-state-title" class="mt-3 text-xl font-bold text-slate-800 dark:text-slate-100">
+            {{ t('app.emptyCanvasTitle') }}
+          </h2>
+          <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            {{ t('app.emptyCanvasDescription') }}
+          </p>
+          <div class="mt-5 flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              class="inline-flex min-h-10 items-center gap-2 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+              data-testid="empty-state-add-device"
+              @click="openControlSection('devices')"
+            >
+              <span class="material-symbols-outlined text-lg" aria-hidden="true">add</span>
+              {{ t('app.emptyCanvasAddDevice') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 bg-white/90 px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-white dark:border-slate-600 dark:bg-slate-900/90 dark:text-slate-100 dark:hover:bg-slate-900"
+              data-testid="empty-state-generate-scenario"
+              @click="openScenarioRecommendationPanel"
+            >
+              <span class="material-symbols-outlined text-lg" aria-hidden="true">auto_awesome</span>
+              {{ t('app.emptyCanvasGenerateScenario') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-300 bg-white/90 px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-white dark:border-slate-600 dark:bg-slate-900/90 dark:text-slate-100 dark:hover:bg-slate-900"
+              data-testid="empty-state-import-scene"
+              @click="triggerSceneImport"
+            >
+              <span class="material-symbols-outlined text-lg" aria-hidden="true">upload_file</span>
+              {{ t('app.emptyCanvasImportScene') }}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <PlaybackChangePopover
         v-if="showPlaybackChangePopover && activePlaybackKind"
         :changes="activePlaybackChanges"
@@ -8466,6 +10773,8 @@ const closeResultDialog = () => {
         :total-states="activePlaybackStates.length"
         :kind="activePlaybackKind"
         :position="playbackChangePosition"
+        :input-events="activeFuzzingStepInputEvents"
+        :first-violation-state-number="firstFuzzingViolationStateNumber"
         @dismiss="dismissPlaybackChanges"
         @move="movePlaybackChanges"
       />
@@ -8566,11 +10875,42 @@ const closeResultDialog = () => {
         </div>
 
         <div class="board-tool-wrapper group">
+          <div v-if="isFuzzing" class="board-tool-pulse bg-indigo-400"></div>
+          <button
+            type="button"
+            @click="openFuzzingFromActionDock"
+            data-testid="open-fuzzing-panel"
+            :disabled="isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning()"
+            :aria-label="isSceneReplacementInProgress
+              ? t('app.sceneReplacementInProgress')
+              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
+            :aria-pressed="showFuzzingPanel"
+            :class="[
+              'board-tool-button text-white shadow-lg transition-all hover:scale-[1.03] hover:shadow-xl active:scale-95',
+              (isSceneReplacementInProgress || traceAnimationState.visible || simulationAnimationState.visible || isAnimationLocked || isAnyRecommendationRunning())
+                ? 'cursor-not-allowed bg-indigo-300 disabled:hover:scale-100'
+                : showFuzzingPanel ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-700'
+            ]"
+            :title="isSceneReplacementInProgress
+              ? t('app.sceneReplacementInProgress')
+              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings')"
+          >
+            <span v-if="isFuzzing" class="material-symbols-outlined animate-spin" aria-hidden="true">sync</span>
+            <span v-else class="material-symbols-outlined" aria-hidden="true">radar</span>
+            <span class="board-tool-label">{{ t('app.fuzzSearch') }}</span>
+            <span class="board-tool-tooltip" role="tooltip">{{ isSceneReplacementInProgress
+              ? t('app.sceneReplacementInProgress')
+              : isFuzzing ? t('app.fuzzRunning') : t('app.openFuzzSettings') }}</span>
+          </button>
+        </div>
+
+        <div class="board-tool-wrapper group">
           <div
             v-if="traceAnimationState.visible"
             class="board-tool-pulse bg-green-400"
           ></div>
           <button
+            ref="verificationActionButtonRef"
             type="button"
             @click="openVerificationFromActionDock"
             data-testid="open-verification-panel"
@@ -8601,7 +10941,11 @@ const closeResultDialog = () => {
             @click="openHistoryFromActionDock"
             data-testid="open-history-panel"
             :disabled="isModelPlaybackActive || isAnyRecommendationRunning()"
-            :aria-label="isModelPlaybackActive ? t('app.playbackReadOnlyCloseFirst') : t('app.openRunHistory')"
+            :aria-label="isModelPlaybackActive
+              ? t('app.playbackReadOnlyCloseFirst')
+              : unreadFuzzNotificationCount > 0
+                ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
+                : t('app.openRunHistory')"
             :aria-pressed="showHistoryPanel"
             :class="[
               'board-tool-button text-white shadow-lg hover:shadow-xl transition-all hover:scale-[1.03] active:scale-95',
@@ -8613,7 +10957,17 @@ const closeResultDialog = () => {
           >
             <span class="material-symbols-outlined" aria-hidden="true">history</span>
             <span class="board-tool-label">{{ t('app.runHistory') }}</span>
-            <span class="board-tool-tooltip" role="tooltip">{{ t('app.openRunHistory') }}</span>
+            <span
+              v-if="unreadFuzzNotificationCount > 0"
+              class="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-black text-white"
+              data-testid="fuzz-unread-badge"
+              aria-hidden="true"
+            >{{ unreadFuzzNotificationCount > 99 ? '99+' : unreadFuzzNotificationCount }}</span>
+            <span class="board-tool-tooltip" role="tooltip">
+              {{ unreadFuzzNotificationCount > 0
+                ? t('app.fuzzUnreadUpdates', { count: unreadFuzzNotificationCount })
+                : t('app.openRunHistory') }}
+            </span>
           </button>
         </div>
       </div>
@@ -8747,22 +11101,33 @@ const closeResultDialog = () => {
       :active-layer="activeHistoryLayer"
       :result-filter="activeHistoryResultFilter"
       :verification-tasks="verificationTasks"
+      :fuzzing-tasks="fuzzingTasks"
       :simulation-tasks="simulationTasks"
       :verification-runs="verificationRuns"
+      :fuzzing-runs="fuzzingRuns"
       :simulation-runs="simulationRuns"
       :loading-tasks="loadingTaskHistory"
       :loading-results="loadingResultHistory"
+      :result-errors="historyResultErrors"
+      :has-more-fuzzing-runs="fuzzingRunsHasMore"
+      :loading-more-fuzzing-runs="loadingMoreFuzzingRuns"
+      :pending-task-action-keys="pendingTaskActionKeys"
       :action-locked="historyActionLocked"
+      :current-board-scope="currentFuzzingBoardScope"
       @update:active-layer="setHistoryLayer"
       @update:result-filter="setHistoryResultFilter"
       @close="closeHistoryPanel"
-      @refresh-tasks="loadTaskInbox"
-      @refresh-results="loadHistoryResults"
+      @refresh-tasks="refreshHistoryTasks"
+      @refresh-results="refreshHistoryResults"
+      @load-more-fuzzing-runs="loadMoreFuzzingRuns"
       @watch-verification-task="watchVerificationTask"
+      @watch-fuzzing-task="watchFuzzingTask"
       @watch-simulation-task="watchSimulationTask"
       @cancel-verification-task="cancelVerificationTaskFromInbox"
+      @cancel-fuzzing-task="cancelFuzzingTaskFromInbox"
       @cancel-simulation-task="cancelSimulationTaskFromInbox"
       @dismiss-verification-task="dismissVerificationTask"
+      @dismiss-fuzzing-task="dismissFuzzingTask"
       @dismiss-simulation-task="dismissSimulationTask"
       @open-verification-run="openVerificationRun"
       @delete-verification-run="deleteVerificationRun"
@@ -8770,6 +11135,10 @@ const closeResultDialog = () => {
       @fix-verification-trace="openFixForVerificationTrace"
       @view-simulation-run="selectAndPlaySimulationTrace"
       @delete-simulation-run="deleteSimulationRun"
+      @open-fuzzing-run="openFuzzingRun"
+      @delete-fuzzing-run="deleteFuzzingRun"
+      @view-fuzzing-finding="selectAndPlayFuzzingFinding"
+      @verify-fuzzing-finding="openFormalVerificationForFuzzFinding"
     />
 
     <div
@@ -8812,14 +11181,22 @@ const closeResultDialog = () => {
             </div>
             <button
               type="button"
-              class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600"
-              :title="task.kind === 'verification' ? t('app.cancelVerificationTask') : t('app.cancelSimulationTask')"
+              class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600"
+              :title="miniTaskCancelLabel(task.kind)"
+              :aria-label="miniTaskCancelLabel(task.kind)"
               @click="cancelMiniTask(task.kind, task.id)"
             >
-              <span class="material-symbols-outlined text-sm">cancel</span>
+              <span class="material-symbols-outlined text-sm" aria-hidden="true">cancel</span>
             </button>
           </div>
-          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+          <div
+            class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
+            role="progressbar"
+            :aria-label="`${task.label}: ${task.status}`"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="task.progress"
+          >
             <div
               class="h-full rounded-full bg-cyan-600 transition-all"
               :style="{ width: `${task.progress}%` }"
@@ -8837,11 +11214,44 @@ const closeResultDialog = () => {
       </div>
     </div>
 
+    <FuzzingPanel
+      v-if="showFuzzingPanel"
+      :form="fuzzingForm"
+      :specifications="specifications"
+      :running="isFuzzing"
+      :progress="asyncFuzzingTask.progress"
+      :status="asyncFuzzingTask.status"
+      :task-id="asyncFuzzingTask.taskId"
+      :cancelling="cancellingFuzzingTask"
+      :error="fuzzingError"
+      :configuration-error="effectiveFuzzingConfigurationError"
+      :workload="fuzzingWorkload"
+      :workload-limit="fuzzingWorkloadLimit"
+      :workload-ready="fuzzingWorkloadReady"
+      :workload-loading="fuzzingWorkloadPreviewLoading"
+      :workload-error="fuzzingWorkloadPreviewError"
+      :paper-domain-preview="paperDomainPreview"
+      :paper-domain-loading="paperDomainPreviewLoading"
+      :paper-domain-error="paperDomainPreviewError"
+      :notice="fuzzingSettingsNotice"
+      :preflight-blocked="fuzzingContentCommandUnsupported"
+      :preflight-message="fuzzingContentCommandUnsupported ? t('app.fuzzContentCommandPreflightBlocked') : null"
+      :frozen-task="fuzzingWatchedTask"
+      @submit="runFuzzing"
+      @cancel="cancelAsyncFuzzing"
+      @close="showFuzzingPanel = false"
+      @refresh-paper-domain="refreshPaperDomainPreview"
+      @refresh-workload="refreshFuzzingWorkloadPreview"
+    />
+
     <!-- Verification Panel -->
     <div 
       v-if="showVerificationPanel"
       data-testid="verification-panel"
       class="board-floating-panel board-run-panel board-surface-panel fixed top-20 z-30 w-72 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl border overflow-hidden"
+      role="dialog"
+      aria-labelledby="verification-panel-title"
+      tabindex="-1"
     >
       <!-- Verification Header with gradient -->
       <div class="relative overflow-hidden">
@@ -8853,21 +11263,53 @@ const closeResultDialog = () => {
               <span class="material-symbols-outlined text-white text-xl">verified_user</span>
             </div>
             <div>
-              <h3 class="text-black font-bold text-base">{{ t('app.verification') }}</h3>
+              <h3 id="verification-panel-title" class="text-black font-bold text-base">{{ t('app.verification') }}</h3>
               <p class="text-green-900/80 text-xs">{{ t('app.configureAndRunVerification') }}</p>
             </div>
           </div>
-          <button 
-            @click="showVerificationPanel = false"
+          <button
+            ref="verificationPanelCloseButtonRef"
+            type="button"
+            @click="closeVerificationPanel"
             data-testid="close-verification-panel"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
       <!-- Verification Options -->
       <div class="p-3 space-y-3 bg-gradient-to-b from-white to-green-50/30">
+        <section
+          v-if="fuzzVerificationHandoff"
+          data-testid="fuzz-verification-handoff"
+          class="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-[11px] leading-4 text-indigo-950"
+          aria-labelledby="fuzz-verification-handoff-title"
+        >
+          <h4 id="fuzz-verification-handoff-title" class="font-bold">
+            {{ t('app.fuzzVerificationHandoffTitle', { run: fuzzVerificationHandoff.runId }) }}
+          </h4>
+          <p v-if="fuzzVerificationHandoff.specificationLabel" class="mt-1 break-words font-semibold">
+            {{ t('app.fuzzVerificationHandoffTarget', { specification: fuzzVerificationHandoff.specificationLabel }) }}
+          </p>
+          <p class="mt-1">{{ t('app.fuzzVerificationHandoffCurrentBoard') }}</p>
+          <p
+            v-if="!fuzzVerificationHandoff.targetPresent"
+            class="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-950"
+            role="alert"
+          >
+            {{ t('app.fuzzVerificationHandoffTargetMissing') }}
+          </p>
+          <p
+            v-else-if="fuzzVerificationHandoff.scopeCountDrifted"
+            class="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-950"
+          >
+            {{ t('app.fuzzVerificationHandoffScopeChanged') }}
+          </p>
+        </section>
+
         <!-- Attack Mode -->
         <div class="p-3 bg-white rounded-xl border border-slate-200/60 shadow-sm">
           <div class="flex items-center justify-between gap-3">
@@ -9055,11 +11497,15 @@ const closeResultDialog = () => {
         <button
           @click="runVerification"
           data-testid="run-verification"
-          :disabled="isVerifying || Boolean(verificationAttackConfigurationError)"
-          :title="verificationAttackConfigurationError || undefined"
+          :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
+          :title="verificationRunBlockedReason || undefined"
           class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
-          <template v-if="isVerifying">
+          <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
+            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+            {{ t('app.loading') }}
+          </template>
+          <template v-else-if="isVerifying">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
             {{ t('app.verifying') }}
           </template>
@@ -9090,11 +11536,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button
+            type="button"
             @click="closeScenarioRecommendationPanel"
             data-testid="close-scenario-recommendations"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -9166,6 +11615,16 @@ const closeResultDialog = () => {
           </span>
           {{ isRecommendingScenario ? t('app.stopScenarioRecommendation') : t('app.generateScenarioRecommendation') }}
         </button>
+
+        <RecommendationProgressStatus
+          v-if="isRecommendingScenario"
+          kind="scenario"
+          :elapsed-seconds="recommendationProgressElapsed"
+          :template-count="deviceTemplates.length"
+          :device-count="nodes.length"
+          :rule-count="rules.length"
+          :spec-count="specifications.length"
+        />
 
         <div
           v-if="scenarioRecommendationMessage && !isRecommendingScenario"
@@ -9423,11 +11882,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button 
+            type="button"
             @click="closeRecommendationPanel"
             data-testid="close-rule-recommendations"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -9494,6 +11956,16 @@ const closeResultDialog = () => {
           </span>
           {{ isRecommendingRules ? t('app.stopRuleRecommendations') : t('app.generateRecommendations') }}
         </button>
+
+        <RecommendationProgressStatus
+          v-if="isRecommendingRules"
+          kind="rule"
+          :elapsed-seconds="recommendationProgressElapsed"
+          :template-count="deviceTemplates.length"
+          :device-count="nodes.length"
+          :rule-count="rules.length"
+          :spec-count="specifications.length"
+        />
 
         <div
           v-if="ruleRecommendationMessage && !isRecommendingRules"
@@ -9711,11 +12183,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button 
+            type="button"
             @click="closeDeviceRecommendationPanel"
             data-testid="close-device-recommendations"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -9766,6 +12241,16 @@ const closeResultDialog = () => {
           </span>
           {{ isRecommendingDevices ? t('app.stopDeviceRecommendations') : t('app.generateRecommendations') }}
         </button>
+
+        <RecommendationProgressStatus
+          v-if="isRecommendingDevices"
+          kind="device"
+          :elapsed-seconds="recommendationProgressElapsed"
+          :template-count="deviceTemplates.length"
+          :device-count="nodes.length"
+          :rule-count="rules.length"
+          :spec-count="specifications.length"
+        />
 
         <div
           v-if="deviceRecommendationMessage && !isRecommendingDevices"
@@ -9987,11 +12472,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button 
+            type="button"
             @click="closeSpecRecommendationPanel"
             data-testid="close-spec-recommendations"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -10058,6 +12546,16 @@ const closeResultDialog = () => {
           </span>
           {{ isRecommendingSpecs ? t('app.stopSpecificationRecommendations') : t('app.generateRecommendations') }}
         </button>
+
+        <RecommendationProgressStatus
+          v-if="isRecommendingSpecs"
+          kind="spec"
+          :elapsed-seconds="recommendationProgressElapsed"
+          :template-count="deviceTemplates.length"
+          :device-count="nodes.length"
+          :rule-count="rules.length"
+          :spec-count="specifications.length"
+        />
 
         <div
           v-if="specRecommendationMessage && !isRecommendingSpecs"
@@ -10275,11 +12773,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button 
+            type="button"
             @click="showSimulationPanel = false"
             data-testid="close-simulation-panel"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-8 h-8 flex items-center justify-center rounded-lg text-black/70 hover:text-black hover:bg-black/10 transition-all"
           >
-            <span class="material-symbols-outlined">close</span>
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -10562,11 +13063,15 @@ const closeResultDialog = () => {
         <button
           @click="runSimulation"
           data-testid="run-simulation"
-          :disabled="isSimulating || traceAnimationState.visible || simulationAnimationState.visible || Boolean(simulationAttackConfigurationError)"
-          :title="simulationAttackConfigurationError || undefined"
+          :disabled="isSimulating || traceAnimationState.visible || simulationAnimationState.visible || Boolean(simulationRunBlockedReason)"
+          :title="simulationRunBlockedReason || undefined"
           class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
-          <template v-if="isSimulating">
+          <template v-if="!isBoardDataReady && failedBoardDataKeys.length === 0">
+            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+            {{ t('app.loading') }}
+          </template>
+          <template v-else-if="isSimulating">
             <span class="material-symbols-outlined text-sm animate-spin">sync</span>
             {{ simulationForm.isAsync ? t('app.runningAsync') : t('app.running') }}
           </template>
@@ -10584,6 +13089,7 @@ const closeResultDialog = () => {
     </div>
 
     <DeviceDialog
+        v-if="dialogVisible"
         :visible="dialogVisible"
         :device-name="dialogMeta.deviceName"
         :description="dialogMeta.description"
@@ -10644,6 +13150,7 @@ const closeResultDialog = () => {
 
 
     <RuleBuilderDialog
+        v-if="ruleBuilderVisible"
         v-model="ruleBuilderVisible"
         :nodes="nodes"
         :device-templates="deviceTemplates"
@@ -10776,6 +13283,21 @@ const closeResultDialog = () => {
       </div>
     </Teleport>
   </div>
+
+  <FuzzingResultDialog
+    v-if="showFuzzingResultDialog"
+    :visible="showFuzzingResultDialog"
+    :run="fuzzingResult"
+    :loading="fuzzingResultLoading"
+    :error="fuzzingError"
+    :action-locked="historyActionLocked"
+    :board-drifted="fuzzingResultBoardDrifted"
+    @close="closeFuzzingResult"
+    @replay="selectAndPlayFuzzingFinding($event, fuzzingResult?.id)"
+    @verify="openFormalVerificationForFuzzFinding"
+    @verify-current-board="openFormalVerificationForCurrentBoard"
+    @reuse-settings="reuseFuzzingSettings"
+  />
 
   <!-- Simulation Run Details Dialog -->
   <div
@@ -11019,11 +13541,14 @@ const closeResultDialog = () => {
             </div>
           </div>
           <button
+            type="button"
             data-testid="close-verification-result"
             @click="closeResultDialog"
+            :aria-label="t('app.close')"
+            :title="t('app.close')"
             class="w-9 h-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-200 transition-all"
           >
-            <span class="material-symbols-outlined text-xl">close</span>
+            <span class="material-symbols-outlined text-xl" aria-hidden="true">close</span>
           </button>
         </div>
       </div>
@@ -11354,10 +13879,18 @@ const closeResultDialog = () => {
           <div class="flex items-center gap-2 flex-wrap">
             <div class="min-w-0">
               <div class="flex items-center gap-1">
-                <div class="text-sm font-bold text-slate-700">{{ t('app.traceVisualization.counterexampleTracePlayback') }}</div>
+                <div class="text-sm font-bold text-slate-700">
+                  {{ activeFuzzingFinding
+                    ? t('app.fuzzFindingReplay')
+                    : t('app.traceVisualization.counterexampleTracePlayback') }}
+                </div>
                 <InfoTooltip
                   :text="counterexampleTraceHelpText"
-                  :label="t('app.showHelpFor', { topic: t('app.traceVisualization.counterexampleTracePlayback') })"
+                  :label="t('app.showHelpFor', {
+                    topic: activeFuzzingFinding
+                      ? t('app.fuzzFindingReplay')
+                      : t('app.traceVisualization.counterexampleTracePlayback')
+                  })"
                   placement="right"
                   tone="danger"
                   test-id="counterexample-trace-help"
@@ -11368,33 +13901,41 @@ const closeResultDialog = () => {
               {{ traceAnimationState.selectedStateIndex + 1 }} / {{ totalStates }}
             </span>
             <span
-              v-if="traceModelSemanticsConsistent && !activeTraceContext.isAttack"
+              v-if="activeFuzzingFinding && traceAnimationState.selectedStateIndex === activeFuzzingFinding.firstViolationStep"
+              class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700"
+              data-testid="fuzzing-timeline-first-violation"
+            >
+              <span class="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+              {{ t('app.fuzzFirstViolation') }}
+            </span>
+            <span
+              v-if="!activeFuzzingFinding && traceModelSemanticsConsistent && !activeTraceContext.isAttack"
               class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full"
             >
               {{ t('app.traceVisualization.noAttackModelShort') }}
             </span>
             <span
-              v-if="!traceModelSemanticsConsistent"
+              v-if="!activeFuzzingFinding && !traceModelSemanticsConsistent"
               data-testid="trace-model-semantics-warning"
               class="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-semibold rounded-full"
             >
               {{ t('app.traceVisualization.modelSemanticsUnavailableShort') }}
             </span>
             <!-- Verification Info (from the viewed trace's own context, not the live form) -->
-            <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
+            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full flex items-center gap-1">
               <span class="material-symbols-outlined text-[10px]">warning</span>
               {{ t('app.traceVisualization.attack') }}
             </span>
-            <span v-if="activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
+            <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
               {{ t('app.traceVisualization.attackBudget') }}: {{ activeTraceContext.attackBudget }}
             </span>
             <span v-if="currentTraceCompromisedPointCount !== null" class="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">
               {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ currentTraceCompromisedPointCount }}
             </span>
-            <span v-if="activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-xs rounded-full">
+            <span v-if="!activeFuzzingFinding && activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-fuchsia-100 text-fuchsia-700 text-xs rounded-full">
               {{ t('app.traceVisualization.privacyPropagationEnabled') }}
             </span>
-            <span v-if="!activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full">
+            <span v-if="!activeFuzzingFinding && !activeTraceContext.enablePrivacy && traceModelSemanticsConsistent" class="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full">
               {{ t('app.traceVisualization.privacyPropagationNotModeled') }}
             </span>
           </div>
@@ -11429,7 +13970,7 @@ const closeResultDialog = () => {
         </div>
 
         <div
-          v-if="currentTrace.modelComplete === false"
+          v-if="!activeFuzzingFinding && currentTrace.modelComplete === false"
           class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium leading-4 text-amber-800"
           data-testid="trace-timeline-incomplete-warning"
         >
@@ -11437,6 +13978,14 @@ const closeResultDialog = () => {
             rules: currentTrace.disabledRuleCount || 0,
             specs: currentTrace.skippedSpecCount || 0
           }) }}
+        </div>
+
+        <div
+          v-if="activeFuzzingFinding"
+          class="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-medium leading-4 text-indigo-900"
+          data-testid="fuzzing-playback-notice"
+        >
+          {{ t('app.fuzzFindingReplayHint') }}
         </div>
 
         <details class="group mb-2" data-testid="trace-timeline-state-details">
@@ -11623,12 +14172,22 @@ const closeResultDialog = () => {
                 :aria-current="Number(index) === traceAnimationState.selectedStateIndex ? 'step' : undefined"
                 :data-testid="`trace-timeline-state-${Number(index)}`"
                 class="w-7 h-7 rounded-full border-3 transition-all flex items-center justify-center relative z-10 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-                :class="Number(index) === traceAnimationState.selectedStateIndex 
-                  ? 'bg-red-500 border-red-500 scale-125 shadow-lg' 
-                  : Number(index) < traceAnimationState.selectedStateIndex 
-                    ? 'bg-red-200 border-red-300'
-                    : 'bg-white border-slate-300 hover:border-red-300'"
+                :class="[
+                  Number(index) === traceAnimationState.selectedStateIndex
+                    ? 'bg-red-500 border-red-500 scale-125 shadow-lg'
+                    : Number(index) < traceAnimationState.selectedStateIndex
+                      ? 'bg-red-200 border-red-300'
+                      : 'bg-white border-slate-300 hover:border-red-300',
+                  activeFuzzingFinding?.firstViolationStep === Number(index)
+                    ? 'ring-2 ring-amber-400 ring-offset-2'
+                    : ''
+                ]"
               >
+                <span
+                  v-if="activeFuzzingFinding?.firstViolationStep === Number(index)"
+                  class="absolute -top-4 text-[10px] font-black text-red-700"
+                  aria-hidden="true"
+                >!</span>
                 <span 
                   v-if="Number(index) === traceAnimationState.selectedStateIndex" 
                   class="text-white text-[8px] font-bold"
@@ -11644,6 +14203,7 @@ const closeResultDialog = () => {
 
   <!-- Simulation Timeline 组件 -->
   <SimulationTimeline
+    v-if="simulationAnimationState.visible"
     :visible="simulationAnimationState.visible"
     :states="savedSimulationStates"
     :actual-steps="lastSimulationResult?.steps"
@@ -11666,6 +14226,7 @@ const closeResultDialog = () => {
 
   <!-- Fix Result Dialog 组件 -->
   <FixResultDialog
+    v-if="showFixDialog"
     :visible="showFixDialog"
     :trace-id="fixTraceId || 0"
     :violated-spec-id="fixViolatedSpecId"

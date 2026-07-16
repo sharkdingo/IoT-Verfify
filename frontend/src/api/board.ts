@@ -30,6 +30,7 @@ import type {
     FixApplyResult,
     FixRequest,
     FixResult,
+    FixSuggestion,
     FixStrategyName,
     PreferredRangeSelection
 } from '@/types/fix'
@@ -203,6 +204,14 @@ interface BackendRuleDto {
         content: string | null
     }
     ruleString: string
+}
+
+export interface BoardSemanticSnapshot {
+    nodes: DeviceNode[]
+    environmentVariables: ModelEnvironmentVariable[]
+    rules: RuleForm[]
+    specifications: Specification[]
+    deviceTemplates: DeviceTemplate[]
 }
 
 const fromBackendRuleDto = (rule: BackendRuleDto): RuleForm => ({
@@ -1154,10 +1163,11 @@ const validateFixApplyResult = (
 ): Omit<FixApplyResult, 'rules'> & { rules: BackendRuleDto[] } => {
     const context = 'Automatic fix apply'
     const result = requireResponseRecord(value, context)
-    if (result.applied !== true || result.verificationRechecked !== true) {
+    if (result.applied !== true
+        || (result.verificationRechecked !== true && result.verificationEvidenceReused !== true)) {
         throw new BoardResponseContractError(
             context,
-            'applied and verificationRechecked must confirm the committed verified fix'
+            'the response must confirm either fresh verification or reused verification evidence'
         )
     }
     if (result.strategy !== expectedStrategy) {
@@ -1189,6 +1199,31 @@ const validateFixApplyResult = (
 
 export default {
     // ==== 节点 ====
+    getSnapshot: async (): Promise<BoardSemanticSnapshot> => {
+        const context = 'Board semantic snapshot'
+        const snapshot = requireResponseRecord(
+            unpack<unknown>(await api.get('/board/snapshot')),
+            context
+        )
+        const rawRules = requireResponseArray<BackendRuleDto>(snapshot.rules, `${context}.rules`)
+        return {
+            nodes: requireResponseArray<DeviceNode>(snapshot.nodes, `${context}.nodes`),
+            environmentVariables: requireResponseArray<ModelEnvironmentVariable>(
+                snapshot.environmentVariables,
+                `${context}.environmentVariables`
+            ),
+            rules: rawRules.map(fromBackendRuleDto),
+            specifications: requireResponseArray<Specification>(
+                snapshot.specifications,
+                `${context}.specifications`
+            ),
+            deviceTemplates: requireResponseArray<DeviceTemplate>(
+                snapshot.deviceTemplates,
+                `${context}.deviceTemplates`
+            ).map((template, index) =>
+                validateDeviceTemplateResult(template, `${context}.deviceTemplates[${index}]`))
+        }
+    },
     getNodes: async (): Promise<DeviceNode[]> => {
         return requireResponseArray<DeviceNode>(
             unpack<unknown>(await api.get('/board/nodes')),
@@ -1573,10 +1608,11 @@ export default {
         maxRecommendations: number = 5,
         language: string = 'en',
         userRequirement: string = '',
+        requestId: string = crypto.randomUUID(),
         signal?: AbortSignal
     ): Promise<DeviceRecommendationResponse<DeviceRecommendation>> => {
         return validateStandaloneRecommendationResponse<DeviceRecommendationResponse<DeviceRecommendation>>(
-            unpack<unknown>(await api.post('/board/devices/recommend', {
+            unpack<unknown>(await api.post(`/board/devices/recommend?requestId=${encodeURIComponent(requestId)}`, {
                 maxRecommendations,
                 language,
                 userRequirement
@@ -1593,11 +1629,12 @@ export default {
         category: string = 'all',
         language: string = 'en',
         userRequirement: string = '',
+        requestId: string = crypto.randomUUID(),
         signal?: AbortSignal
     ): Promise<RecommendationResponse<SpecificationRecommendation>> => {
         return validateStandaloneRecommendationResponse<RecommendationResponse<SpecificationRecommendation>>(
             unpack<unknown>(await api.get('/board/specs/recommend', {
-                params: { maxRecommendations, category, language, userRequirement },
+                params: { maxRecommendations, category, language, userRequirement, requestId },
                 signal,
                 ...SERVER_BOUNDED_REQUEST
             })),
@@ -1615,14 +1652,23 @@ export default {
             language?: string,
             userRequirement?: string
         },
+        requestId: string = crypto.randomUUID(),
         signal?: AbortSignal
     ): Promise<ScenarioRecommendationResponse> => {
         return validateScenarioRecommendationResponse<ScenarioRecommendationResponse>(
             unpack<unknown>(await api.post(
-                '/board/scenario/recommend', request, { signal, ...SERVER_BOUNDED_REQUEST }
+                `/board/scenario/recommend?requestId=${encodeURIComponent(requestId)}`,
+                request,
+                { signal, ...SERVER_BOUNDED_REQUEST }
             )),
             'Scenario recommendation'
         );
+    },
+
+    cancelRecommendation: async (requestId: string): Promise<boolean> => {
+        return unpack<boolean>(await api.delete(
+            `/board/recommendations/${encodeURIComponent(requestId)}`
+        ));
     },
 
     // ==== 故障定位与修复 ====
@@ -1639,30 +1685,46 @@ export default {
     /**
      * 获取 Trace 的修复建议
      */
-    fixTrace: async (traceId: number, request?: FixRequest): Promise<FixResult> => {
+    fixTrace: async (
+        traceId: number,
+        request?: FixRequest,
+        options: { requestId?: string; signal?: AbortSignal } = {}
+    ): Promise<FixResult> => {
+        const requestId = options.requestId || crypto.randomUUID()
         return validateFixResult(
             unpack<unknown>(await api.post(
-                `/verify/traces/${traceId}/fix`, request || {}, SERVER_BOUNDED_REQUEST
+                `/verify/traces/${traceId}/fix`,
+                request || {},
+                { ...SERVER_BOUNDED_REQUEST, params: { requestId }, signal: options.signal }
             )),
             traceId,
             request?.strategies || []
         );
     },
 
-    /**
-     * Apply a selected repair strategy. The server recomputes and verifies its concrete proposal
-     * from the trace context before saving rules.
-     */
-    applyFix: async (traceId: number, strategy: FixStrategyName,
+    cancelFixRequest: async (requestId: string): Promise<boolean> => {
+        return unpack<boolean>(await api.delete(
+            `/verify/fix-requests/${encodeURIComponent(requestId)}`
+        ));
+    },
+
+    /** Apply the exact signed suggestion the user reviewed after server-side drift checks. */
+    applyFix: async (traceId: number, suggestion: FixSuggestion,
                      preferredRangeSelections?: PreferredRangeSelection[]): Promise<FixApplyResult> => {
-        // preferredRangeSelections must match the preceding /fix request so the server recompute
-        // searches the same parameter domain.
-        const payload: FixApplyRequest = { strategy, preferredRangeSelections };
+        if (!suggestion.suggestionToken) {
+            throw new BoardResponseContractError('Automatic fix apply', 'suggestionToken is required')
+        }
+        const payload: FixApplyRequest = {
+            strategy: suggestion.strategy,
+            suggestion,
+            suggestionToken: suggestion.suggestionToken,
+            preferredRangeSelections
+        };
         const result = validateFixApplyResult(
             unpack<unknown>(await api.post(
                 `/verify/traces/${traceId}/fix/apply`, payload, SERVER_BOUNDED_REQUEST
             )),
-            strategy
+            suggestion.strategy
         )
         return {
             ...result,

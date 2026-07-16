@@ -9,8 +9,9 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-09. Source:
-`backend/src/main/resources/application.yaml`, `configure/ProductionSafetyCheck`,
+Verified against code on 2026-07-16. Source:
+`backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
+`configure/FuzzAdmissionConfig`, `configure/ProductionSafetyCheck`,
 `frontend/src/api/`, `frontend/.env.example`.
 
 ---
@@ -25,7 +26,9 @@ Verified against code on 2026-07-09. Source:
 | `JPA_SHOW_SQL` | `false` | Log SQL statements |
 
 `spring.jpa.hibernate.ddl-auto` is fixed to `update` (tables auto-created on first
-start); dialect is `MySQL8Dialect`.
+start); Hibernate detects the MySQL dialect from the live JDBC connection. Open Session
+in View is disabled, so service methods must materialize response DTOs inside their
+transaction instead of issuing implicit queries during HTTP serialization.
 
 ## Server
 
@@ -73,6 +76,7 @@ relay. Point `IOT_VERIFY_OPENAI_BASE_URL` at the endpoint and supply the matchin
 | :--- | :--- | :--- |
 | `IOT_VERIFY_OPENAI_API_KEY` | `your_api_key_here` | API key for the endpoint. **Placeholder default — must be overridden in production.** |
 | `IOT_VERIFY_OPENAI_MODEL` | `gpt-5.5` | Model id / deployment name sent to the endpoint |
+| `IOT_VERIFY_OPENAI_RECOMMENDATION_MODEL` | *(empty; reuses `IOT_VERIFY_OPENAI_MODEL`)* | Optional model dedicated to device/rule/specification/scenario recommendations |
 | `IOT_VERIFY_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL (official API or relay) |
 | `LLM_PROVIDER` | `openai` | Provider implementation selector (currently only `openai`) |
 | `LLM_TIMEOUT_MINUTES` | `5` | AI request timeout (minutes) |
@@ -114,9 +118,24 @@ process that starts it.
 | :--- | :--- | :--- |
 | `DEVICE_TEMPLATE_SCHEMA_PATH` | `device-template-schema.json` | Optional filesystem override for the canonical device-template manifest schema. The repository source of truth is `backend/device-template-schema.json`; the Maven build also packages that file onto the backend classpath. Leave this unset unless a deployment intentionally supplies the same schema from a mounted path. |
 
+## Counterexample-search admission
+
+| Env var | Default | Notes |
+| :--- | :--- | :--- |
+| `FUZZ_MAX_ACTIVE_TASKS_PER_USER` | `2` | Maximum combined `PENDING` and `RUNNING` counterexample-search tasks owned by one user. Must be at least `1`; excess submissions return HTTP 429. |
+| `FUZZ_MAX_STORED_TASKS_PER_USER` | `100` | Maximum total counterexample-search task rows owned by one user, including active, completed, failed, and cancelled rows. Must be at least the active-task limit; users at the limit must delete old history or failed/cancelled tasks before submitting. |
+
+The per-user checks lock that user's database row and count both total stored tasks and
+active tasks in the same transaction that freezes and inserts the new task, so concurrent
+submissions cannot bypass either limit across backend instances. Each backend process
+also reserves one in-memory admission permit before reading the Board. The process-wide
+permit count is derived from
+`THREAD_POOL_FUZZ_TASK_MAX + THREAD_POOL_FUZZ_TASK_QUEUE` and is held until the worker
+ends; this keeps snapshot creation from outrunning the executor's configured capacity.
+
 ## Thread pools
 
-Five pools, each with the same four parameters. Env-var pattern:
+Seven pools, each with the same four parameters. Env-var pattern:
 `THREAD_POOL_{NAME}_{PARAM}` where `PARAM` ∈ `CORE`, `MAX`, `QUEUE`, `AWAIT`.
 
 Concrete env vars are: `THREAD_POOL_CHAT_CORE`, `THREAD_POOL_CHAT_MAX`,
@@ -128,15 +147,21 @@ Concrete env vars are: `THREAD_POOL_CHAT_CORE`, `THREAD_POOL_CHAT_MAX`,
 `THREAD_POOL_SYNC_SIMULATION_MAX`, `THREAD_POOL_SYNC_SIMULATION_QUEUE`,
 `THREAD_POOL_SYNC_SIMULATION_AWAIT`, `THREAD_POOL_SIMULATION_TASK_CORE`,
 `THREAD_POOL_SIMULATION_TASK_MAX`, `THREAD_POOL_SIMULATION_TASK_QUEUE`,
-`THREAD_POOL_SIMULATION_TASK_AWAIT`.
+`THREAD_POOL_SIMULATION_TASK_AWAIT`, `THREAD_POOL_FUZZ_TASK_CORE`,
+`THREAD_POOL_FUZZ_TASK_MAX`, `THREAD_POOL_FUZZ_TASK_QUEUE`, and
+`THREAD_POOL_FUZZ_TASK_AWAIT`, plus `THREAD_POOL_INTERACTIVE_AI_CORE`,
+`THREAD_POOL_INTERACTIVE_AI_MAX`, `THREAD_POOL_INTERACTIVE_AI_QUEUE`, and
+`THREAD_POOL_INTERACTIVE_AI_AWAIT`.
 
 | Pool (`NAME`) | CORE | MAX | QUEUE | AWAIT (s) |
 | :--- | :--- | :--- | :--- | :--- |
 | `CHAT` | 10 | 50 | 200 | 30 |
+| `INTERACTIVE_AI` | 2 | 4 | 8 | 30 |
 | `VERIFICATION_TASK` | 4 | 8 | 40 | 60 |
 | `SYNC_VERIFICATION` | 4 | 4 | 16 | 30 |
 | `SYNC_SIMULATION` | 4 | 4 | 16 | 30 |
 | `SIMULATION_TASK` | 4 | 8 | 40 | 60 |
+| `FUZZ_TASK` | 2 | 4 | 20 | 60 |
 
 Example override: `THREAD_POOL_CHAT_CORE=20`.
 

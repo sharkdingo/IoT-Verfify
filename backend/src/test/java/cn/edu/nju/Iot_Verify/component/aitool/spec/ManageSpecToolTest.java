@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.spec;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
@@ -40,11 +41,15 @@ class ManageSpecToolTest {
     private BoardStorageService boardStorageService;
 
     private ManageSpecTool tool;
+    private AiDestructiveActionGuard destructiveActionGuard;
 
     @BeforeEach
     void setUp() {
-        tool = new ManageSpecTool(boardStorageService, new ObjectMapper());
+        ObjectMapper objectMapper = new ObjectMapper();
+        destructiveActionGuard = new AiDestructiveActionGuard(objectMapper);
+        tool = new ManageSpecTool(boardStorageService, objectMapper, destructiveActionGuard);
         UserContextHolder.setUserId(1L);
+        UserContextHolder.setChatSessionId("spec-test-session");
     }
 
     @AfterEach
@@ -543,7 +548,7 @@ class ManageSpecToolTest {
         when(failingMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("boom") {
         });
 
-        ManageSpecTool fallbackTool = new ManageSpecTool(boardStorageService, failingMapper);
+        ManageSpecTool fallbackTool = new ManageSpecTool(boardStorageService, failingMapper, destructiveActionGuard);
         UserContextHolder.clear();
 
         String result = fallbackTool.execute("{}");
@@ -559,7 +564,7 @@ class ManageSpecToolTest {
         ObjectMapper failingMapper = spy(new ObjectMapper());
         doThrow(new RuntimeException("boom")).when(failingMapper).writeValueAsString(any());
 
-        ManageSpecTool fallbackTool = new ManageSpecTool(boardStorageService, failingMapper);
+        ManageSpecTool fallbackTool = new ManageSpecTool(boardStorageService, failingMapper, destructiveActionGuard);
 
         DeviceNodeDto node = new DeviceNodeDto();
         node.setId("ac_1");
@@ -597,19 +602,20 @@ class ManageSpecToolTest {
         target.setId("spec-9");
         target.setTemplateLabel("Smoke alarm must eventually sound");
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of(target));
-        when(boardStorageService.removeSpec(1L, "spec-9"))
+        when(boardStorageService.removeSpecIfUnchanged(1L, "spec-9", target))
                 .thenReturn(CollectionMutationResultDto.of("deleted", target, List.of()));
 
         String preview = tool.execute("{\"action\":\"delete\",\"specId\":\"spec-9\",\"confirmed\":true}");
         JsonNode previewJson = new ObjectMapper().readTree(preview);
         assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
-        verify(boardStorageService, never()).removeSpec(anyLong(), any());
+        verify(boardStorageService, never()).removeSpecIfUnchanged(anyLong(), any(), any());
 
         UserContextHolder.setDestructiveActionConfirmed(true);
-        String result = tool.execute("{\"action\":\"delete\",\"specId\":\"spec-9\",\"confirmed\":true}");
+        String result = tool.execute("{\"action\":\"delete\",\"specId\":\"spec-9\",\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("impactToken").asText() + "\"}");
         JsonNode resultJson = new ObjectMapper().readTree(result);
         assertEquals("deleted", resultJson.path("operation").asText());
-        verify(boardStorageService).removeSpec(1L, "spec-9");
+        verify(boardStorageService).removeSpecIfUnchanged(1L, "spec-9", target);
     }
 
     @Test

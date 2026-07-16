@@ -76,6 +76,7 @@ export const recommendRules = async (
   category: string = 'all',
   language: string = 'en',
   userRequirement: string = '',
+  requestId: string = crypto.randomUUID(),
   signal?: AbortSignal
 ): Promise<RecommendRulesResponse> => {
   const ownedController = signal ? null : new AbortController()
@@ -86,7 +87,7 @@ export const recommendRules = async (
 
   try {
     const response = await api.get<any>('/board/rules/recommend', {
-      params: { maxRecommendations, category, language, userRequirement },
+      params: { maxRecommendations, category, language, userRequirement, requestId },
       signal: signal || ownedController!.signal,
       timeout: 0
     })

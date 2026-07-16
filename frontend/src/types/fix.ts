@@ -60,6 +60,7 @@ export interface ConditionAdjustment {
 
 // 修复建议
 export interface FixSuggestion {
+  suggestionToken?: string
   strategy: FixStrategyName
   description: string
   parameterAdjustments?: ParameterAdjustment[]
@@ -123,9 +124,11 @@ export interface PreferredRangeSelection extends PreferredRange {
   targetId: string
 }
 
-// Apply a strategy only. The backend recomputes and verifies the concrete proposal from the trace.
+// Apply the exact signed suggestion shown to the user.
 export interface FixApplyRequest {
   strategy: FixStrategyName
+  suggestion: FixSuggestion
+  suggestionToken: string
   preferredRangeSelections?: PreferredRangeSelection[]
 }
 
@@ -134,6 +137,7 @@ export interface FixApplyResult {
   applied: boolean
   strategy: FixStrategyName
   verificationRechecked: boolean
+  verificationEvidenceReused: boolean
   appliedSuggestion: FixSuggestion
   previousRuleCount: number
   currentRuleCount: number

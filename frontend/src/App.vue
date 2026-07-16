@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, defineAsyncComponent, watch } from "vue";
 import { useRoute } from "vue-router";
-import type { StreamCommand } from "@/types/chat";
+import type { ChatLogoutPreparation, StreamCommand } from "@/types/chat";
 import { useChatStore } from "@/stores/chat";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
+const chatViewRef = ref<any>(null);
 const ChatView = defineAsyncComponent(() => import("./components/ChatView.vue"));
 const chatStore = useChatStore();
 
@@ -32,71 +33,75 @@ const getBoardChatContext = () => {
   return view.getChatSuggestionContext();
 };
 
-const invokeViewMethod = async (methodName: string) => {
+const invokeViewMethod = async (methodName: string): Promise<boolean> => {
   const view = routerViewRef.value;
   if (!view || typeof view[methodName] !== 'function') {
     console.warn(`Current view does not support command method: ${methodName}`);
-    return;
+    return false;
   }
-  await view[methodName]();
+  return await view[methodName]() !== false;
 };
 
-const handleSystemCommand = async (cmd: StreamCommand) => {
+const handleSystemCommand = async (cmd: StreamCommand): Promise<boolean> => {
   if (cmd.type === 'REFRESH_DATA') {
     const target = cmd.payload?.target as string | undefined;
     if (!target) {
-      return;
+      return false;
     }
 
     switch (target) {
       case 'device_list':
-        await invokeViewMethod('refreshDevices');
-        break;
+        return await invokeViewMethod('refreshDevices');
       case 'environment_list':
-        await invokeViewMethod('refreshEnvironmentVariables');
-        break;
+        return await invokeViewMethod('refreshEnvironmentVariables');
       case 'rule_list':
-        await invokeViewMethod('refreshRules');
-        break;
+        return await invokeViewMethod('refreshRules');
       case 'spec_list':
-        await invokeViewMethod('refreshSpecifications');
-        break;
+        return await invokeViewMethod('refreshSpecifications');
       case 'template_list':
-        await invokeViewMethod('refreshDeviceTemplates');
-        break;
+        return await invokeViewMethod('refreshDeviceTemplates');
       case 'run_history':
-        await invokeViewMethod('refreshRunHistory');
-        break;
+        return await invokeViewMethod('refreshRunHistory');
       case 'board_state':
-        await invokeViewMethod('refreshAllBoardState');
-        break;
+        return await invokeViewMethod('refreshAllBoardState');
       default:
         console.warn(`Unsupported REFRESH_DATA target: ${target}`);
+        return false;
     }
-    return;
   }
 
   if (cmd.type === 'NAVIGATE') {
     // router.push(...)
+    return false;
   }
+  return false;
 };
+
+const prepareChatForLogout = async (): Promise<ChatLogoutPreparation> => {
+  const view = chatViewRef.value;
+  if (!view || typeof view.prepareForLogout !== 'function') return 'ready';
+  return await view.prepareForLogout();
+};
+
+const routerViewProps = computed(() => isBoardChat.value
+  ? { prepareChatForLogout }
+  : {});
 </script>
 
 <template>
   <div class="app-layout">
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" ref="routerViewRef" />
-        </keep-alive>
+        <component :is="Component" ref="routerViewRef" v-bind="routerViewProps" />
       </router-view>
 
       <ChatView
         v-if="shouldMountChat"
+        ref="chatViewRef"
         :board-mode="isBoardChat"
         :get-board-context="getBoardChatContext"
         :interaction-locked="isBoardChatInteractionLocked"
-        @command="handleSystemCommand"
+        :execute-command="handleSystemCommand"
       />
     </main>
   </div>

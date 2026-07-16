@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-14. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-16. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -35,6 +35,15 @@ cannot admit a second request. The activity flag is cleared in the worker's `fin
 block and on queue rejection. Multi-instance deployments require shared request-affinity
 or distributed activity coordination; this in-memory guard is not a cluster-wide lock.
 
+Permanent account deletion is stronger than ordinary per-session activity handling. After the
+deletion transaction commits, the backend marks every local stream for that user as stopped and
+completes any bound emitter. Correctness does not depend on that in-memory optimization: each
+session/message write locks the active user row and rechecks that the session is still owned by
+that user in the same transaction. Database cascade constraints make this invariant independent
+of the chat process: work committed first is removed with the account, while a user/session/task
+write that arrives after deletion is rejected because its parent row no longer exists. A remote
+or late stream therefore cannot recreate data after the account has been removed.
+
 ---
 
 ## `POST /api/chat/completions` — streaming (SSE)
@@ -63,6 +72,17 @@ preview. The planning loop stops immediately for destructive previews and for pr
 alternatives such as an available replacement device name. The assistant must state that
 nothing was changed and wait for the user's choice; it cannot accept its own suggestion
 in a later planning round of the same message.
+
+Destructive deletion previews additionally return an opaque `impactToken`. The backend
+keeps one pending deletion per authenticated user and chat session, bound to the tool,
+target, and canonical digest of the visible preview. The immediately following explicit
+confirmation must return that token. It is valid for 15 minutes and is consumed once
+before mutation; a second tool call in the same model response cannot reuse it. Wrong,
+expired, cross-session, cross-user, changed-preview, and replayed tokens return a no-write
+`409` with `requiresUserConfirmation=true` and a fresh preview where available. A normal
+intervening user message clears the pending deletion, as do session/account deletion and
+backend restart. This binding applies uniformly to device, template, rule, specification,
+verification-trace, and simulation-trace deletion.
 
 `RESULT_UNAVAILABLE` is distinct from both success and failure. It means response details
 could not be serialized after the tool reached its response stage. The loop stops so it
@@ -95,6 +115,7 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
 | `command` | `CommandDto` | Optional front-end command: `{ type, payload }` where `type` is e.g. `REFRESH_DATA` / `SHOW_TOAST` / `NAVIGATE` and `payload` is a `Map<String, Object>` (e.g. `{"target":"device_list"}`) |
+| `progress` | `ProgressDto` | Optional non-persisted status `{ stage, toolName?, round? }`. `stage` is `CONTEXT_READY`, `PLANNING`, `TOOL_EXECUTION`, or `WRITING_RESPONSE` |
 
 Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
 
@@ -105,6 +126,12 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   then sent before the final streamed assistant text. If a later planning or reply step
   throws, pending refresh commands are sent before the SSE error when the connection is
   still usable.
+- Progress frames arrive before and between potentially slow model/tool calls. They let the UI
+  show the current verifiable phase and elapsed time without presenting private chain-of-thought.
+  They are not appended to the assistant message or saved in chat history.
+- After deterministic intent routing, planning receives only the relevant device/rule/spec/template/
+  verification/simulation tool subset plus `board_overview`; explicit confirmation keeps the full
+  tool set so a prior destructive preview can still be completed safely.
 - Board refresh targets are `device_list`, `environment_list`, `rule_list`, `spec_list`,
   `template_list`, and `run_history`. A tool emits every target it may have changed;
   device mutations therefore also refresh the shared Environment Pool, while async task
@@ -124,16 +151,35 @@ header is set manually. See
 callbacks and `AbortController` support). `onFinish` means the response stream reached
 normal completion; a client abort does not masquerade as completion.
 
+`REFRESH_DATA` commands use a promise-returning component callback rather than a
+fire-and-forget event. The assistant remains interaction-locked until the owning Board
+method confirms the targeted refresh. If that refresh fails, the client immediately
+attempts the client-only `board_state` reconciliation. A second failure leaves a visible,
+localized retry panel open and keeps assistant requests, scene replacement, and trace
+playback locked until a later full reconciliation succeeds.
+
 Aborting the browser stream means **stop receiving the AI response**, not cancel or roll
 back a tool transaction already running on the server. After an explicit stop or a
 session-switch/new-session request, the Board polls the session activity endpoint until
 `active=false`, keeps assistant mutations locked during that settling period, and only
 then reloads message history, board collections, and run history. Closing the floating
 panel only hides it and does not abort the request. If three consecutive activity checks
-fail, the client releases the wait with an outcome-unknown warning and reconciles current
-state; it does not claim cancellation or automatically repeat the command. The
+fail, each check uses a dedicated 2.5-second timeout instead of the general 100-second
+REST timeout, so the client reaches an outcome-unknown warning and authoritative
+reconciliation within seconds rather than several minutes. It does not claim cancellation
+or automatically repeat the command. The
 client-only `board_state` refresh target is used for full reconciliation; it is not an AI
 tool result.
+If the activity endpoint remains reachable but still reports `active=true` for the
+10-second settlement window, the client stops spinning, keeps the interaction lock, and
+asks the user to retry settlement later; it does not treat a running tool as cancelled.
+
+Signing out asks the mounted assistant to perform the same settlement first. A confirmed
+idle/reconciled result proceeds normally; an outcome-unknown result requires an explicit
+second confirmation, and a failed authoritative reconciliation blocks sign-out until the
+user retries synchronization. An SSE `401` clears local authentication and navigates to
+the login route like the axios interceptor. An SSE `403` is shown as an authorization
+failure and does not log out an otherwise valid session.
 Every stream and session-history load has a client request epoch. Late chunks, commands,
 completion callbacks, or history responses from a stopped/replaced request are ignored,
 so they cannot clear or overwrite a newer conversation. Loading session history has a

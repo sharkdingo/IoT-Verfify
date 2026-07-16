@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -85,6 +86,34 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(Result.conflict(e.getMessage()));
+    }
+
+    @ExceptionHandler(FuzzTaskQuotaExceededException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleFuzzTaskQuotaExceededException(
+            FuzzTaskQuotaExceededException e) {
+        log.warn("Counterexample-search active-task limit reached: active={}, limit={}",
+                e.getActiveTaskCount(), e.getMaxActiveTasksPerUser());
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.TOO_MANY_REQUESTS.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", FuzzTaskQuotaExceededException.REASON_CODE,
+                "activeTaskCount", e.getActiveTaskCount(),
+                "maxActiveTasksPerUser", e.getMaxActiveTasksPerUser()));
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
+    }
+
+    @ExceptionHandler(FuzzTaskStorageQuotaExceededException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleFuzzTaskStorageQuotaExceededException(
+            FuzzTaskStorageQuotaExceededException e) {
+        log.warn("Counterexample-search stored-task limit reached: stored={}, limit={}",
+                e.getStoredTaskCount(), e.getMaxStoredTasksPerUser());
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.TOO_MANY_REQUESTS.value(), e.getMessage());
+        result.setData(Map.of(
+                "reasonCode", FuzzTaskStorageQuotaExceededException.REASON_CODE,
+                "storedTaskCount", e.getStoredTaskCount(),
+                "maxStoredTasksPerUser", e.getMaxStoredTasksPerUser()));
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
     }
 
     @ExceptionHandler(ChatSessionBusyException.class)
@@ -183,6 +212,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest("Invalid parameter '" + e.getName() + "': expected a valid number"));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Result<Void>> handleMissingServletRequestParameter(
+            MissingServletRequestParameterException e) {
+        log.warn("Missing required request parameter: {}", e.getParameterName());
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Result.badRequest("Missing required parameter '" + e.getParameterName() + "'"));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

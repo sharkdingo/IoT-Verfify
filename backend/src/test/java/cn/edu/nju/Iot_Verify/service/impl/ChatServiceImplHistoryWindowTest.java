@@ -4,12 +4,15 @@ import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
+import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
+import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,9 +46,13 @@ class ChatServiceImplHistoryWindowTest {
     @Mock
     private ChatMessageRepository messageRepo;
     @Mock
+    private UserRepository userRepository;
+    @Mock
     private LlmChatService llmChatService;
     @Mock
     private AiToolManager aiToolManager;
+    @Mock
+    private AiDestructiveActionGuard destructiveActionGuard;
     @Mock
     private ChatMapper chatMapper;
     @Mock
@@ -56,13 +64,17 @@ class ChatServiceImplHistoryWindowTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(userRepository.findByIdForUpdate(1L))
+                .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
+                userRepository,
                 llmChatService,
                 new LlmMessageCodec(new ObjectMapper()),
                 new ChatIntentRouter(),
                 aiToolManager,
+                destructiveActionGuard,
                 new ObjectMapper(),
                 chatMapper,
                 transactionTemplate
@@ -241,5 +253,6 @@ class ChatServiceImplHistoryWindowTest {
         service.deleteSession(1L, "busy-session");
         verify(messageRepo).deleteBySessionId("busy-session");
         verify(sessionRepo).deleteById("busy-session");
+        verify(destructiveActionGuard).clearSession(1L, "busy-session");
     }
 }

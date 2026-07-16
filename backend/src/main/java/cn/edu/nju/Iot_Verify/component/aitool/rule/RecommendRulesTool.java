@@ -254,7 +254,8 @@ public class RecommendRulesTool extends AbstractAiTool {
         String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, maxRecommendations, category, language, userRequirement);
 
         log.info("Calling LLM for rule recommendations...");
-        String content = promptCompletionService.complete(SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
+        String content = promptCompletionService.completeRecommendation(
+                SYSTEM_PROMPT, userPrompt, TEMPERATURE, MAX_TOKENS);
 
         if (content == null || content.isBlank()) {
             log.warn("AI returned empty content");

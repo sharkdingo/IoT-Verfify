@@ -42,6 +42,7 @@ describe('CanvasBoard device context actions', () => {
       templateName: 'Motion Detector',
       label: 'Hall motion',
       position: { x: 40, y: 50 },
+      state: 'idle',
       width: 176,
       height: 128
     }

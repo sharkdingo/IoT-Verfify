@@ -56,6 +56,7 @@ const removeResult = (): FixResult => ({
   violatedSpecId: 'spec-1',
   faultRules: [],
   suggestions: [{
+    suggestionToken: 'signed-remove-suggestion',
     strategy: 'remove',
     description: 'Permanently remove the unsafe automation',
     removedRuleDescriptions: ['Gas leak unlocks exit'],
@@ -161,7 +162,10 @@ describe('FixResultDialog strategy workflow', () => {
     expect(boardApi.fixTrace).toHaveBeenCalledWith(7, {
       strategies: ['remove'],
       preferredRangeSelections: undefined
-    })
+    }, expect.objectContaining({
+      requestId: expect.any(String),
+      signal: expect.anything()
+    }))
     expect(wrapper.find('[data-testid="fix-strategy-loading"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="fix-apply-current"]').exists()).toBe(false)
 
@@ -225,7 +229,8 @@ describe('FixResultDialog strategy workflow', () => {
     boardApi.applyFix.mockResolvedValueOnce({
       applied: true,
       strategy: 'remove',
-      verificationRechecked: true,
+      verificationRechecked: false,
+      verificationEvidenceReused: true,
       appliedSuggestion: removeResult().suggestions[0],
       previousRuleCount: 1,
       currentRuleCount: 0,
@@ -242,7 +247,11 @@ describe('FixResultDialog strategy workflow', () => {
     await flush()
 
     expect(elementPlus.confirm).toHaveBeenCalledOnce()
-    expect(boardApi.applyFix).toHaveBeenCalledWith(7, 'remove', undefined)
+    expect(boardApi.applyFix).toHaveBeenCalledWith(
+      7,
+      removeResult().suggestions[0],
+      undefined
+    )
     expect(elementPlus.success).toHaveBeenCalledWith('fixAppliedSuccessfully')
     expect(elementPlus.success).not.toHaveBeenCalledWith('Removed one rule.')
     expect(wrapper.emitted('applied')?.[0]?.[0]).toMatchObject({

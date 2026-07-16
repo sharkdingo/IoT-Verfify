@@ -67,7 +67,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("not-json");
 
         JsonNode json = objectMapper.readTree(tool.execute("{}"));
@@ -84,7 +84,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName":"Empty draft",
@@ -107,7 +107,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 contains("全量替换 scene 草案"),
                 anyDouble(),
@@ -177,7 +177,7 @@ class RecommendScenarioToolTest {
         assertTrue(json.path("filteredItems").findValuesAsText("reasonCode")
                 .contains("duplicateEnvironmentVariable"));
         assertTrue(json.path("message").asText().contains("importable scene draft"));
-        verify(promptCompletionService).complete(
+        verify(promptCompletionService).completeRecommendation(
                 argThat(system -> system.contains("不要声称它安全、完整、已验证或已应用")
                         && system.contains("itemType=api 时")
                         && system.contains("必须省略 relation 和 value")
@@ -199,7 +199,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scene": {
@@ -260,7 +260,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Partially invalid scene",
@@ -316,7 +316,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Partially dropped nested candidates",
@@ -374,7 +374,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Unknown environment variable",
@@ -412,7 +412,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Invalid device runtime",
@@ -448,7 +448,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Incomplete content flow",
@@ -487,7 +487,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Runtime labels",
@@ -556,7 +556,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Invalid identities and layout",
@@ -592,7 +592,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scenarioName": "Literal identity",
@@ -646,7 +646,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scene": {
@@ -676,7 +676,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scene": {
@@ -717,7 +717,7 @@ class RecommendScenarioToolTest {
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
         when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "scene": {

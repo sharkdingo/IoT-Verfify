@@ -13,6 +13,8 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class FixSuggestionDto {
+    /** Opaque short-lived signature binding this exact suggestion to its trace and user. */
+    private String suggestionToken;
     /** Strategy name: "parameter", "condition", or "remove". */
     private String strategy;
     private String description;

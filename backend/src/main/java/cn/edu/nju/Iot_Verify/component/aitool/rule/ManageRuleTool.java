@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
@@ -9,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
@@ -33,10 +35,14 @@ public class ManageRuleTool extends AbstractAiTool {
     private static final Set<String> ENUM_RELATIONS = Set.of("=", "!=", "in", "not in");
 
     private final BoardStorageService boardStorageService;
+    private final AiDestructiveActionGuard destructiveActionGuard;
 
-    public ManageRuleTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+    public ManageRuleTool(BoardStorageService boardStorageService,
+                          ObjectMapper objectMapper,
+                          AiDestructiveActionGuard destructiveActionGuard) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
+        this.destructiveActionGuard = destructiveActionGuard;
     }
 
     @Override
@@ -100,6 +106,10 @@ public class ManageRuleTool extends AbstractAiTool {
                 "type", "boolean",
                 "description", "For delete: use false to preview the exact rule without changing it; use true only in a later turn after the user explicitly confirms that preview. Ignored for add."
         ));
+        props.put("impactToken", Map.of(
+                "type", "string",
+                "description", "For delete with confirmed=true, copy the opaque impactToken from the latest preview."
+        ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
                 "object", props, List.of("action")
@@ -117,7 +127,7 @@ public class ManageRuleTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
             requireOnlyFields(args, "arguments", Set.of(
-                    "action", "conditions", "command", "label", "ruleId", "confirmed"));
+                    "action", "conditions", "command", "label", "ruleId", "confirmed", "impactToken"));
             String action = requiredTextField(args, "action", "arguments").toLowerCase(Locale.ROOT);
 
             return switch (action) {
@@ -299,7 +309,7 @@ public class ManageRuleTool extends AbstractAiTool {
     }
 
     private String executeDelete(Long userId, JsonNode args) throws Exception {
-        requireOnlyFields(args, "arguments", Set.of("action", "ruleId", "confirmed"));
+        requireOnlyFields(args, "arguments", Set.of("action", "ruleId", "confirmed", "impactToken"));
         long ruleId = positiveLongArg(args, "ruleId");
         RuleDto target = safeList(boardStorageService.getRules(userId)).stream()
                 .filter(rule -> rule != null && java.util.Objects.equals(rule.getId(), ruleId))
@@ -309,17 +319,59 @@ public class ManageRuleTool extends AbstractAiTool {
             return errorJson("Rule not found: " + ruleId, "NOT_FOUND", 404);
         }
 
+        Object presentedRule = RuleToolPresenter.present(
+                target, safeList(boardStorageService.getNodes(userId)));
+        Map<String, Object> bindingSnapshot = Map.of("rule", presentedRule);
         boolean confirmed = booleanArg(args, "confirmed", false);
         if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+            String impactToken = destructiveActionGuard.issue(
+                    userId, getName(), Long.toString(ruleId), bindingSnapshot, null);
             Map<String, Object> preview = new LinkedHashMap<>();
             preview.put("message", "No changes were made. Explicit user confirmation is required before deleting this rule.");
             preview.put("operation", "preview");
             preview.put("requiresUserConfirmation", true);
-            preview.put("rule", RuleToolPresenter.present(target, safeList(boardStorageService.getNodes(userId))));
+            preview.put("rule", presentedRule);
+            preview.put("impactToken", impactToken);
             return readOnlySuccessJson(preview, "Rule deletion preview unavailable.");
         }
 
-        CollectionMutationResultDto<RuleDto> mutation = boardStorageService.removeRule(userId, ruleId);
+        String impactToken = requiredTextField(args, "impactToken", "arguments");
+        AiDestructiveActionGuard.ConsumeResult confirmation = destructiveActionGuard.consume(
+                userId, getName(), Long.toString(ruleId), impactToken, bindingSnapshot);
+        if (!confirmation.approved()) {
+            String freshToken = destructiveActionGuard.issue(
+                    userId, getName(), Long.toString(ruleId), bindingSnapshot, null);
+            return errorJson(confirmation.message(), confirmation.errorCode(), 409, Map.of(
+                    "requiresUserConfirmation", true,
+                    "currentPreview", Map.of(
+                            "operation", "preview",
+                            "rule", presentedRule,
+                            "impactToken", freshToken)));
+        }
+
+        CollectionMutationResultDto<RuleDto> mutation;
+        try {
+            mutation = boardStorageService.removeRuleIfUnchanged(userId, ruleId, target);
+        } catch (ConflictException conflict) {
+            RuleDto current = safeList(boardStorageService.getRules(userId)).stream()
+                    .filter(rule -> rule != null && java.util.Objects.equals(rule.getId(), ruleId))
+                    .findFirst()
+                    .orElse(null);
+            if (current == null) {
+                return errorJson("Rule not found: " + ruleId, "NOT_FOUND", 404);
+            }
+            Object currentPresentation = RuleToolPresenter.present(
+                    current, safeList(boardStorageService.getNodes(userId)));
+            Map<String, Object> currentBinding = Map.of("rule", currentPresentation);
+            String freshToken = destructiveActionGuard.issue(
+                    userId, getName(), Long.toString(ruleId), currentBinding, null);
+            return errorJson(conflict.getMessage(), "CONFIRMATION_STALE", 409, Map.of(
+                    "requiresUserConfirmation", true,
+                    "currentPreview", Map.of(
+                            "operation", "preview",
+                            "rule", currentPresentation,
+                            "impactToken", freshToken)));
+        }
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("message", "Rule deleted successfully.");

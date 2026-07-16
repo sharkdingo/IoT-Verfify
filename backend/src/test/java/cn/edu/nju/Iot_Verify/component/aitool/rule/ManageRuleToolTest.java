@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.board.CollectionMutationResultDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
@@ -38,11 +39,15 @@ class ManageRuleToolTest {
     private BoardStorageService boardStorageService;
 
     private ManageRuleTool tool;
+    private AiDestructiveActionGuard destructiveActionGuard;
 
     @BeforeEach
     void setUp() {
-        tool = new ManageRuleTool(boardStorageService, new ObjectMapper());
+        ObjectMapper objectMapper = new ObjectMapper();
+        destructiveActionGuard = new AiDestructiveActionGuard(objectMapper);
+        tool = new ManageRuleTool(boardStorageService, objectMapper, destructiveActionGuard);
         UserContextHolder.setUserId(1L);
+        UserContextHolder.setChatSessionId("rule-test-session");
     }
 
     @AfterEach
@@ -329,7 +334,7 @@ class ManageRuleToolTest {
         when(failingMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("boom") {
         });
 
-        ManageRuleTool fallbackTool = new ManageRuleTool(boardStorageService, failingMapper);
+        ManageRuleTool fallbackTool = new ManageRuleTool(boardStorageService, failingMapper, destructiveActionGuard);
         UserContextHolder.clear();
 
         String result = fallbackTool.execute("{}");
@@ -348,7 +353,7 @@ class ManageRuleToolTest {
         when(boardStorageService.getNodes(1L)).thenReturn(List.of(node("Light_1", "Light")));
         stubSuccessfulRuleAdd();
 
-        ManageRuleTool fallbackTool = new ManageRuleTool(boardStorageService, failingMapper);
+        ManageRuleTool fallbackTool = new ManageRuleTool(boardStorageService, failingMapper, destructiveActionGuard);
 
         String argsJson = """
                 {
@@ -381,19 +386,20 @@ class ManageRuleToolTest {
     void delete_requiresPreviewAndExplicitLaterConfirmation() throws Exception {
         RuleDto target = RuleDto.builder().id(9L).ruleString("When smoke is detected, sound alarm").build();
         when(boardStorageService.getRules(1L)).thenReturn(List.of(target));
-        when(boardStorageService.removeRule(1L, 9L))
+        when(boardStorageService.removeRuleIfUnchanged(1L, 9L, target))
                 .thenReturn(CollectionMutationResultDto.of("deleted", target, List.of()));
 
         String preview = tool.execute("{\"action\":\"delete\",\"ruleId\":9,\"confirmed\":true}");
         JsonNode previewJson = new ObjectMapper().readTree(preview);
         assertTrue(previewJson.path("requiresUserConfirmation").asBoolean());
-        verify(boardStorageService, never()).removeRule(anyLong(), anyLong());
+        verify(boardStorageService, never()).removeRuleIfUnchanged(anyLong(), anyLong(), any());
 
         UserContextHolder.setDestructiveActionConfirmed(true);
-        String result = tool.execute("{\"action\":\"delete\",\"ruleId\":9,\"confirmed\":true}");
+        String result = tool.execute("{\"action\":\"delete\",\"ruleId\":9,\"confirmed\":true,\"impactToken\":\""
+                + previewJson.path("impactToken").asText() + "\"}");
         JsonNode resultJson = new ObjectMapper().readTree(result);
         assertEquals("deleted", resultJson.path("operation").asText());
-        verify(boardStorageService).removeRule(1L, 9L);
+        verify(boardStorageService).removeRuleIfUnchanged(1L, 9L, target);
     }
 
     @Test

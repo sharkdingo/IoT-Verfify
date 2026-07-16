@@ -1,7 +1,14 @@
-import { expect, type APIRequestContext, type Locator, type Page, test } from '@playwright/test'
+import { type Locator, type Page } from '@playwright/test'
+import {
+  createAuthenticatedUser,
+  createTestAccountCredentials,
+  expect,
+  test,
+  trackTestAccount,
+  type AuthUser
+} from './support/auth'
 
 type ThemeMode = 'light' | 'dark'
-const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
 
 const parseRgb = (color: string) => {
   const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
@@ -72,32 +79,7 @@ const expectAuthHeaderActionsOnRight = async (page: Page) => {
   expect(viewport.width - (box.x + box.width)).toBeLessThan(96)
 }
 
-const createAuthenticatedUser = async (request: APIRequestContext) => {
-  const phone = `139${String(Date.now() % 100_000_000).padStart(8, '0')}`
-  const password = 'Pass1234'
-  const username = `e2e${Date.now().toString(36).slice(-10)}`
-
-  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
-    data: { phone, username, password }
-  })
-  expect(registerResponse.ok()).toBeTruthy()
-
-  const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { identifier: username, password }
-  })
-  expect(loginResponse.ok()).toBeTruthy()
-
-  const body = await loginResponse.json()
-  expect(body.code).toBe(200)
-  return body.data as {
-    userId: number
-    phone: string
-    username: string
-    token: string
-  }
-}
-
-const openWorkspace = async (page: Page, auth: Awaited<ReturnType<typeof createAuthenticatedUser>>) => {
+const openWorkspace = async (page: Page, auth: AuthUser) => {
   await page.addInitScript(({ token, user }) => {
     window.localStorage.setItem('iot_verify_token', token)
     window.localStorage.setItem('iot_verify_user', JSON.stringify(user))
@@ -131,11 +113,10 @@ test.describe('public theme and layout', () => {
     expect(registerCalls).toBe(0)
   })
 
-  test('user can register, log in, and reach the workspace through the UI', async ({ page }) => {
-    const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
-    const phone = `139${suffix}`
-    const password = 'Pass1234'
-    const username = `ui${Date.now().toString(36).slice(-10)}`
+  test('user can register and reach the workspace through the UI', async ({ page, request }) => {
+    const credentials = createTestAccountCredentials({ usernamePrefix: 'ui' })
+    const { phone, username, password } = credentials
+    trackTestAccount(request, credentials)
 
     await openPublicRoute(page, '/#/?mode=register', 'light')
     const registerInputs = page.locator('.auth-form input')
@@ -143,13 +124,6 @@ test.describe('public theme and layout', () => {
     await registerInputs.nth(1).fill(username)
     await registerInputs.nth(2).fill(password)
     await registerInputs.nth(3).fill(password)
-    await page.locator('.auth-submit').click()
-
-    await expect(page).toHaveURL(/mode=login/)
-
-    const loginInputs = page.locator('.auth-form input')
-    await loginInputs.nth(0).fill(phone)
-    await loginInputs.nth(1).fill(password)
     await page.locator('.auth-submit').click()
 
     await expect(page.locator('.iot-board')).toBeVisible({ timeout: 15_000 })

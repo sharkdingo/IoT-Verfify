@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router';
+import { isLocallyUsableJwt } from '@/utils/jwt';
 
 const TOKEN_KEY = 'iot_verify_token';
 
@@ -15,7 +16,10 @@ const normalizeDirectPathForHashHistory = () => {
 // 同步检查是否已登录（避免响应式状态时序问题）
 const checkAuthSync = (): boolean => {
   const token = localStorage.getItem(TOKEN_KEY);
-  return !!token;
+  if (isLocallyUsableJwt(token)) return true;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem('iot_verify_user');
+  return false;
 };
 
 // 在应用启动时清除可能的无效token，确保从登录页面开始

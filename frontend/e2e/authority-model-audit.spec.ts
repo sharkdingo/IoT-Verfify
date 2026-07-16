@@ -1,16 +1,14 @@
-import { expect, type APIRequestContext, type APIResponse, type Page, test } from '@playwright/test'
+import { type APIRequestContext, type APIResponse, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
-const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
-
-type AuthUser = {
-  userId: number
-  phone: string
-  username: string
-  token: string
-}
+import {
+  apiBaseURL,
+  createAuthenticatedUser,
+  expect,
+  test,
+  type AuthUser
+} from './support/auth'
 
 type CapturedModelPost = {
   path: string
@@ -21,28 +19,14 @@ const authHeaders = (auth: AuthUser) => ({
   Authorization: `Bearer ${auth.token}`
 })
 
+const fixRequestUrl = (traceId: number) =>
+  `${apiBaseURL}/api/verify/traces/${traceId}/fix?requestId=${crypto.randomUUID()}`
+
 const unwrap = async <T>(response: APIResponse): Promise<T> => {
   expect(response.ok(), await response.text()).toBeTruthy()
   const body = await response.json()
   expect(body.code, JSON.stringify(body)).toBe(200)
   return body.data as T
-}
-
-const createAuthenticatedUser = async (request: APIRequestContext): Promise<AuthUser> => {
-  const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
-  const phone = `139${suffix}`
-  const password = 'Pass1234'
-  const username = `authority${Date.now().toString(36).slice(-9)}`
-
-  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
-    data: { phone, username, password }
-  })
-  expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy()
-
-  const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { identifier: username, password }
-  })
-  return unwrap<AuthUser>(loginResponse)
 }
 
 const waitForApi = async <T>(
@@ -79,9 +63,20 @@ const waitForTask = async <T extends { status: string }>(
 )
 
 const saveEmptyBoard = async (request: APIRequestContext, auth: AuthUser) => {
+  const previewResponse = await request.get(`${apiBaseURL}/api/board/replacement-preview`, {
+    headers: authHeaders(auth)
+  })
+  const preview = await unwrap<{ impactToken: string }>(previewResponse)
   const response = await request.post(`${apiBaseURL}/api/board/batch`, {
     headers: authHeaders(auth),
-    data: { nodes: [], environmentVariables: [], rules: [], specs: [] }
+    data: {
+      impactToken: preview.impactToken,
+      nodes: [],
+      environmentVariables: [],
+      rules: [],
+      specs: [],
+      templateSnapshots: []
+    }
   })
   expect(response.ok(), await response.text()).toBeTruthy()
 }
@@ -542,12 +537,11 @@ const openFloatingPanel = async (page: Page, openButtonTestId: string, panelTest
   await expect(panel).toBeVisible({ timeout: 10_000 })
 }
 
-const closeVerificationResultIfVisible = async (page: Page) => {
+const closeVerificationResultWhenReady = async (page: Page) => {
   const dialog = page.getByTestId('verification-result-dialog')
-  if (await dialog.isVisible().catch(() => false)) {
-    await page.getByTestId('close-verification-result').click()
-    await expect(dialog).toBeHidden({ timeout: 10_000 })
-  }
+  await expect(dialog).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('close-verification-result').click()
+  await expect(dialog).toBeHidden({ timeout: 10_000 })
 }
 
 const openHistoryPanel = async (page: Page) => {
@@ -563,22 +557,28 @@ const ensureSwitchOn = async (page: Page, testId: string, onClass: string) => {
   }
 }
 
-const updateNodeRuntimeFields = async (
+const updateNodeLayouts = async (
   request: APIRequestContext,
   auth: AuthUser,
-  overridesByLabel: Record<string, Record<string, unknown>>
+  overridesByLabel: Record<string, { position: { x: number, y: number } }>
 ) => {
   const nodesResponse = await request.get(`${apiBaseURL}/api/board/nodes`, { headers: authHeaders(auth) })
   const nodes = await unwrap<any[]>(nodesResponse)
-  const updated = nodes.map(node => ({
-    ...node,
-    ...(overridesByLabel[node.label] || {})
-  }))
-  const saveResponse = await request.post(`${apiBaseURL}/api/board/batch`, {
-    headers: authHeaders(auth),
-    data: { nodes: updated }
-  })
-  return (await unwrap<{ nodes: any[] }>(saveResponse)).nodes
+  for (const node of nodes) {
+    const override = overridesByLabel[node.label]
+    if (!override) continue
+    await unwrap(await request.put(
+      `${apiBaseURL}/api/board/nodes/${encodeURIComponent(node.id)}/layout`,
+      {
+        headers: authHeaders(auth),
+        data: {
+          position: override.position,
+          width: node.width,
+          height: node.height
+        }
+      }
+    ))
+  }
 }
 
 const runSyncSimulation = async (page: Page) => {
@@ -612,7 +612,9 @@ const runAsyncSimulation = async (page: Page) => {
   await page.getByTestId('simulation-mode-async').click()
   await page.getByTestId('run-simulation').click()
   const response = await responsePromise
-  return unwrap<number>(response)
+  const task = await unwrap<{ id: number }>(response)
+  expect(task.id).toBeGreaterThan(0)
+  return task.id
 }
 
 const runAsyncVerification = async (page: Page) => {
@@ -621,7 +623,9 @@ const runAsyncVerification = async (page: Page) => {
   await page.getByTestId('verification-mode-async').click()
   await page.getByTestId('run-verification').click()
   const response = await responsePromise
-  return unwrap<number>(response)
+  const task = await unwrap<{ id: number }>(response)
+  expect(task.id).toBeGreaterThan(0)
+  return task.id
 }
 
 const expectTimelinePlays = async (page: Page, testId: 'simulation-timeline' | 'trace-timeline', playTestId: string) => {
@@ -640,10 +644,15 @@ const expectTimelineNavigationAndContext = async (
   prefix: 'simulation' | 'trace'
 ) => {
   const timeline = page.getByTestId(testId)
+  const stateDetails = page.getByTestId(`${prefix}-timeline-state-details`)
+  if (!await stateDetails.evaluate(element => (element as HTMLDetailsElement).open)) {
+    await stateDetails.locator(':scope > summary').click()
+  }
   await expect(page.getByTestId(`${prefix}-timeline-range`)).toBeVisible()
   await expect(page.getByTestId(`${prefix}-timeline-step-input`)).toBeVisible()
-  await expect(page.getByTestId(`${prefix}-timeline-env`)).toBeVisible()
-  await expect(page.getByTestId(`${prefix}-timeline-env`)).toContainText(/temperature|motion/i)
+  const environment = page.getByTestId(`${prefix}-timeline-env`)
+  await expect(environment).toBeVisible()
+  await expect(environment).toContainText(/temperature|motion/i)
 
   const track = page.getByTestId(`${prefix}-timeline-track`)
   const stateCount = Number(await page.getByTestId(`${prefix}-timeline-step-input`).getAttribute('max') || '1')
@@ -718,6 +727,9 @@ const expectTimelineNavigationAndContext = async (
 
 test.describe('authority model full-stack audit', () => {
   test.setTimeout(900_000)
+  test.beforeEach(({ page }) => {
+    page.setDefaultTimeout(30_000)
+  })
 
   test('builds multi-scene boards through UI, audits API payloads, SMV semantics, history, animation, and fix closure', async ({ page, request }) => {
     const browserErrors: string[] = []
@@ -791,7 +803,7 @@ test.describe('authority model full-stack audit', () => {
       currentStateTrust: 'trusted'
     })
 
-    await updateNodeRuntimeFields(request, auth, {
+    await updateNodeLayouts(request, auth, {
       motion_entry: {
         position: { x: 80, y: 120 }
       },
@@ -948,6 +960,16 @@ test.describe('authority model full-stack audit', () => {
     }, 6)
     expect(specs.map(spec => spec.templateId)).toEqual(['3', '5', '5', '5', '3', '1'])
 
+    const smvName = {
+      motion: normalizeNuSmvDeviceName(motion.id),
+      camera: normalizeNuSmvDeviceName(camera.id),
+      alarm: normalizeNuSmvDeviceName(alarm.id),
+      phone: normalizeNuSmvDeviceName(phone.id),
+      tempSensor: normalizeNuSmvDeviceName(tempSensor.id),
+      thermostat: normalizeNuSmvDeviceName(thermostat.id),
+      homeMode: normalizeNuSmvDeviceName(homeMode.id)
+    }
+
     const simStarted = Date.now()
     const simulation = await runSyncSimulation(page)
     const simPayload = lastCapturedPost(capturedPosts, '/api/simulate/traces')?.payload
@@ -956,7 +978,7 @@ test.describe('authority model full-stack audit', () => {
     expect(simPayload.devices).toHaveLength(9)
     expect(simPayload.rules).toHaveLength(9)
     expect(simPayload.specs).toBeUndefined()
-    expect(simPayload.devices.find((device: any) => device.varName === 'motion_entry').variables || []).toHaveLength(0)
+    expect(simPayload.devices.find((device: any) => device.varName === smvName.motion).variables || []).toHaveLength(0)
     expect(simPayload.environmentVariables).toEqual(expect.arrayContaining([expect.objectContaining({
       name: 'motion',
       value: 'active',
@@ -968,18 +990,18 @@ test.describe('authority model full-stack audit', () => {
       && rule.conditions[0].targetType === 'api')).toBeTruthy()
 
     const simSmv = latestSmv('nusmv_sim_', simStarted, [
-      'MODULE Camera_hall_camera',
-      'MODULE Thermostat_main_thermostat'
+      `MODULE Camera_${smvName.camera}`,
+      `MODULE Thermostat_${smvName.thermostat}`
     ])
     const compactSim = simSmv.text.replace(/\s+/g, '')
-    expect(simSmv.text).toContain('MODULE MotionDetector_motion_entry')
-    expect(simSmv.text).toContain('MODULE Camera_hall_camera')
-    expect(simSmv.text).toContain('MODULE Thermostat_main_thermostat')
-    expect(simSmv.text).toContain('resident_phone.privacy_photo')
-    expect(compactSim).toContain('motion_entry.motion=active&hall_camera.MachineState=on:takingphoto;')
-    expect(compactSim).toContain('temp_sensor.temperature>28')
-    expect(compactSim).toContain('main_thermostat.ThermostatMode=cool')
-    expect(compactSim).toContain('home_mode.Mode=sleep')
+    expect(simSmv.text).toContain(`MODULE MotionDetector_${smvName.motion}`)
+    expect(simSmv.text).toContain(`MODULE Camera_${smvName.camera}`)
+    expect(simSmv.text).toContain(`MODULE Thermostat_${smvName.thermostat}`)
+    expect(simSmv.text).toContain(`${smvName.phone}.privacy_photo`)
+    expect(compactSim).toContain(`${smvName.motion}.motion=active&${smvName.camera}.MachineState=on:takingphoto;`)
+    expect(compactSim).toContain(`${smvName.tempSensor}.temperature>28`)
+    expect(compactSim).toContain(`${smvName.thermostat}.ThermostatMode=cool`)
+    expect(compactSim).toContain(`${smvName.homeMode}.Mode=sleep`)
 
     await expectTimelineNavigationAndContext(page, 'simulation-timeline', 'simulation')
     await expectTimelinePlays(page, 'simulation-timeline', 'simulation-timeline-play')
@@ -1001,16 +1023,16 @@ test.describe('authority model full-stack audit', () => {
         && condition.propertyScope === 'state' && condition.key === 'MachineState'))).toBeTruthy()
 
     const verifySmv = latestSmv('nusmv_verify_', verifyStarted, [
-      'MODULE Camera_hall_camera',
-      'MODULE Thermostat_main_thermostat',
+      `MODULE Camera_${smvName.camera}`,
+      `MODULE Thermostat_${smvName.thermostat}`,
       '-- Specifications'
     ])
     const compactVerify = verifySmv.text.replace(/\s+/g, '')
     expect(verifySmv.text).toContain('-- Specifications')
-    expect(compactVerify).toContain('CTLSPECAG!(hall_camera.MachineState=takingphoto)')
-    expect(compactVerify).toContain('CTLSPECAG((a_motion=active)->AF(night_alarm.AlertState=siren))')
-    expect(compactVerify).toContain('CTLSPECAG((a_temperature>28)->AF(main_thermostat.ThermostatMode=cool))')
-    expect(compactVerify).toContain('hall_camera.MachineState=takingphoto&hall_camera.privacy_MachineState_takingphoto=private')
+    expect(compactVerify).toContain(`CTLSPECAG!(${smvName.camera}.MachineState=takingphoto)`)
+    expect(compactVerify).toContain(`CTLSPECAG((a_motion=active)->AF(${smvName.alarm}.AlertState=siren))`)
+    expect(compactVerify).toContain(`CTLSPECAG((a_temperature>28)->AF(${smvName.thermostat}.ThermostatMode=cool))`)
+    expect(compactVerify).toContain(`${smvName.camera}.MachineState=takingphoto&${smvName.camera}.privacy_MachineState_takingphoto=private`)
 
     await page.getByTestId('close-verification-result').click()
     const verificationTraces = await waitForApi<any[]>(request, auth, '/api/verify/traces',
@@ -1035,7 +1057,7 @@ test.describe('authority model full-stack audit', () => {
     expect(asyncVerifyTask.specResults.some((result: any) => result.outcome === 'VIOLATED')).toBeTruthy()
     await waitForApi<any[]>(request, auth, `/api/verify/tasks/${asyncVerifyTaskId}/traces`,
       traces => traces.some(trace => JSON.stringify(trace.violatedSpec || {}).includes('taking photo')))
-    await closeVerificationResultIfVisible(page)
+    await closeVerificationResultWhenReady(page)
 
     await openHistoryPanel(page)
     await page.getByTestId('history-layer-results').click()
@@ -1058,7 +1080,7 @@ test.describe('authority model full-stack audit', () => {
     await expectTimelinePlays(page, 'trace-timeline', 'trace-timeline-play')
     await page.getByTestId('trace-timeline-close').click()
 
-    const fixProbeResponse = await request.post(`${apiBaseURL}/api/verify/traces/${violatingTrace.id}/fix`, {
+    const fixProbeResponse = await request.post(fixRequestUrl(violatingTrace.id), {
       headers: authHeaders(auth),
       data: { strategies: ['remove', 'condition'] }
     })
@@ -1098,8 +1120,8 @@ test.describe('authority model full-stack audit', () => {
     expect(postFixVerification.modelComplete).toBe(true)
     await page.getByTestId('close-verification-result').click()
     const postFixSmv = latestSmv('nusmv_verify_', postFixStarted, [
-      'MODULE Camera_hall_camera',
-      'MODULE Thermostat_main_thermostat'
+      `MODULE Camera_${smvName.camera}`,
+      `MODULE Thermostat_${smvName.thermostat}`
     ])
     expect(postFixSmv.text).not.toContain('--entry motion captures hallway camera evidence')
 
@@ -1200,6 +1222,8 @@ test.describe('authority model full-stack audit', () => {
     expect(stateSpecCondition.value).toContain('home;idle')
     expect(stateSpecCondition.value).toContain('sleep;idle')
 
+    const homeModeSmvName = normalizeNuSmvDeviceName(homeMode.id)
+
     const simStarted = Date.now()
     await runSyncSimulation(page)
     const simPayload = lastCapturedPost(capturedPosts, '/api/simulate/traces')?.payload
@@ -1210,14 +1234,14 @@ test.describe('authority model full-stack audit', () => {
       relation: 'in'
     })
     const simSmv = latestSmv('nusmv_sim_', simStarted, [
-      'home_mode_set.Mode'
+      `${homeModeSmvName}.Mode`
     ])
     const compactSim = simSmv.text.replace(/\s+/g, '')
-    expect(compactSim).toMatch(/\(home_mode_set\.Mode=(home|sleep)\|home_mode_set\.Mode=(home|sleep)\)/)
-    expect(compactSim).toContain('home_mode_set.Mode=home')
-    expect(compactSim).toContain('home_mode_set.Mode=sleep')
-    expect(compactSim).toContain('home_mode_set.Mode=home&home_mode_set.State=idle')
-    expect(compactSim).toContain('home_mode_set.Mode=sleep&home_mode_set.State=idle')
+    expect(compactSim).toContain(`(${homeModeSmvName}.Mode=home|${homeModeSmvName}.Mode=sleep)`)
+    expect(compactSim).toContain(`${homeModeSmvName}.Mode=home`)
+    expect(compactSim).toContain(`${homeModeSmvName}.Mode=sleep`)
+    expect(compactSim).toContain(`${homeModeSmvName}.Mode=home&${homeModeSmvName}.State=idle`)
+    expect(compactSim).toContain(`${homeModeSmvName}.Mode=sleep&${homeModeSmvName}.State=idle`)
     await page.getByTestId('simulation-timeline-close').click()
 
     const verifyStarted = Date.now()
@@ -1234,12 +1258,12 @@ test.describe('authority model full-stack audit', () => {
     expect(verifyPayload.specs[0].aConditions[0].value).toContain('sleep')
     expect(verifyPayload.specs[0].aConditions[0].value).toContain('home')
     const verifySmv = latestSmv('nusmv_verify_', verifyStarted, [
-      'home_mode_set.Mode'
+      `${homeModeSmvName}.Mode`
     ])
     const compactVerify = verifySmv.text.replace(/\s+/g, '')
-    expect(compactVerify).toContain('CTLSPECAG!((home_mode_set.Mode=home|home_mode_set.Mode=sleep))')
-    expect(compactVerify).toContain('home_mode_set.Mode=home&home_mode_set.State=idle')
-    expect(compactVerify).toContain('home_mode_set.Mode=sleep&home_mode_set.State=idle')
+    expect(compactVerify).toContain(`CTLSPECAG!((${homeModeSmvName}.Mode=home|${homeModeSmvName}.Mode=sleep))`)
+    expect(compactVerify).toContain(`${homeModeSmvName}.Mode=home&${homeModeSmvName}.State=idle`)
+    expect(compactVerify).toContain(`${homeModeSmvName}.Mode=sleep&${homeModeSmvName}.State=idle`)
     await page.getByTestId('close-verification-result').click()
   })
 
@@ -1295,7 +1319,7 @@ test.describe('authority model full-stack audit', () => {
       ]
     })
 
-    await updateNodeRuntimeFields(request, auth, {
+    await updateNodeLayouts(request, auth, {
       kitchen_smoke: {
         position: { x: 100, y: 120 }
       },
@@ -1408,6 +1432,15 @@ test.describe('authority model full-stack audit', () => {
     }, 5)
     expect(specs).toHaveLength(5)
 
+    const smvName = {
+      smoke: normalizeNuSmvDeviceName(smoke.id),
+      gas: normalizeNuSmvDeviceName(gas.id),
+      hood: normalizeNuSmvDeviceName(hood.id),
+      alarm: normalizeNuSmvDeviceName(alarm.id),
+      exitDoor: normalizeNuSmvDeviceName(exitDoor.id),
+      waterHeater: normalizeNuSmvDeviceName(waterHeater.id)
+    }
+
     const simStarted = Date.now()
     const simulation = await runSyncSimulation(page)
     expect(simulation.states.length).toBeGreaterThan(1)
@@ -1415,15 +1448,15 @@ test.describe('authority model full-stack audit', () => {
     expect(simPayload.devices).toHaveLength(7)
     expect(simPayload.rules).toHaveLength(5)
     const simSmv = latestSmv('nusmv_sim_', simStarted, [
-      'MODULE SmokeSensor_kitchen_smoke',
-      'MODULE RangeHood_range_hood'
+      `MODULE SmokeSensor_${smvName.smoke}`,
+      `MODULE RangeHood_${smvName.hood}`
     ])
     const compactSim = simSmv.text.replace(/\s+/g, '')
-    expect(simSmv.text).toContain('MODULE SmokeSensor_kitchen_smoke')
-    expect(simSmv.text).toContain('MODULE GasSensor_kitchen_gas')
-    expect(simSmv.text).toContain('MODULE RangeHood_range_hood')
-    expect(compactSim).toContain('next(range_hood.MachineState):=casekitchen_gas.gas>70:on;')
-    expect(compactSim).toContain('next(kitchen_exit.LockState):=casekitchen_gas.gas>70:unlocked;')
+    expect(simSmv.text).toContain(`MODULE SmokeSensor_${smvName.smoke}`)
+    expect(simSmv.text).toContain(`MODULE GasSensor_${smvName.gas}`)
+    expect(simSmv.text).toContain(`MODULE RangeHood_${smvName.hood}`)
+    expect(compactSim).toContain(`next(${smvName.hood}.MachineState):=case${smvName.gas}.gas>70:on;`)
+    expect(compactSim).toContain(`next(${smvName.exitDoor}.LockState):=case${smvName.gas}.gas>70:unlocked;`)
     await expectTimelinePlays(page, 'simulation-timeline', 'simulation-timeline-play')
     await page.getByTestId('simulation-timeline-close').click()
 
@@ -1435,14 +1468,14 @@ test.describe('authority model full-stack audit', () => {
     expect(verifyPayload.devices).toHaveLength(7)
     expect(verifyPayload.specs).toHaveLength(5)
     const verifySmv = latestSmv('nusmv_verify_', verifyStarted, [
-      'MODULE SmokeSensor_kitchen_smoke',
-      'MODULE RangeHood_range_hood',
+      `MODULE SmokeSensor_${smvName.smoke}`,
+      `MODULE RangeHood_${smvName.hood}`,
       '-- Specifications'
     ])
     const compactVerify = verifySmv.text.replace(/\s+/g, '')
-    expect(compactVerify).toContain('CTLSPECAG!(kitchen_exit.LockState=unlocked)')
-    expect(compactVerify).toContain('CTLSPECAG((a_smoke=detected)->AF(kitchen_alarm.AlertState=siren))')
-    expect(compactVerify).toContain('CTLSPECAG((a_gas>70)->AF(water_heater.MachineState=off))')
+    expect(compactVerify).toContain(`CTLSPECAG!(${smvName.exitDoor}.LockState=unlocked)`)
+    expect(compactVerify).toContain(`CTLSPECAG((a_smoke=detected)->AF(${smvName.alarm}.AlertState=siren))`)
+    expect(compactVerify).toContain(`CTLSPECAG((a_gas>70)->AF(${smvName.waterHeater}.MachineState=off))`)
     await page.getByTestId('close-verification-result').click()
 
     const verificationTraces = await waitForApi<any[]>(request, auth, '/api/verify/traces',
@@ -1450,7 +1483,7 @@ test.describe('authority model full-stack audit', () => {
     const violatingTrace = verificationTraces.find(trace => JSON.stringify(trace.violatedSpec || {}).includes('unlocked'))
     expect(violatingTrace).toBeTruthy()
 
-    const fixProbeResponse = await request.post(`${apiBaseURL}/api/verify/traces/${violatingTrace.id}/fix`, {
+    const fixProbeResponse = await request.post(fixRequestUrl(violatingTrace.id), {
       headers: authHeaders(auth),
       data: { strategies: ['remove'] }
     })

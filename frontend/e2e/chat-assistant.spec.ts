@@ -1,35 +1,17 @@
-import { expect, type APIRequestContext, type Page, test } from '@playwright/test'
-
-const apiBaseURL = process.env.E2E_API_BASE_URL || 'http://127.0.0.1:8080'
-
-type AuthUser = {
-  userId: number
-  phone: string
-  username: string
-  token: string
-}
+import { type APIRequestContext, type Page } from '@playwright/test'
+import {
+  apiBaseURL,
+  createAuthenticatedUser,
+  expect,
+  test,
+  type AuthUser
+} from './support/auth'
 
 const unwrap = async <T>(response: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> => {
   expect(response.ok(), await response.text()).toBeTruthy()
   const body = await response.json()
   expect(body.code, JSON.stringify(body)).toBe(200)
   return body.data as T
-}
-
-const createAuthenticatedUser = async (request: APIRequestContext): Promise<AuthUser> => {
-  const suffix = String(Date.now() % 100_000_000).padStart(8, '0')
-  const phone = `139${suffix}`
-  const password = 'Pass1234'
-  const username = `chat${Date.now().toString(36).slice(-10)}`
-
-  const registerResponse = await request.post(`${apiBaseURL}/api/auth/register`, {
-    data: { phone, username, password }
-  })
-  expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy()
-
-  return unwrap<AuthUser>(await request.post(`${apiBaseURL}/api/auth/login`, {
-    data: { identifier: username, password }
-  }))
 }
 
 const openWorkspace = async (page: Page, auth: AuthUser) => {

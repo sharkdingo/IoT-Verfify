@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.configure.LlmConfig;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.core.JsonValue;
@@ -33,7 +34,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -188,11 +191,10 @@ public class OpenAiLlmProvider implements LlmProvider {
     }
 
     private ChatCompletionFunctionTool toFunctionTool(LlmToolSpec spec) {
-        FunctionParameters parameters = FunctionParameters.builder()
-                .putAdditionalProperty("type", JsonValue.from(spec.parameters().type))
-                .putAdditionalProperty("properties", JsonValue.from(spec.parameters().properties))
-                .putAdditionalProperty("required", JsonValue.from(spec.parameters().required))
-                .build();
+        FunctionParameters.Builder parametersBuilder = FunctionParameters.builder();
+        toJsonSchemaObject(spec.parameters()).forEach((key, value) ->
+                parametersBuilder.putAdditionalProperty(key, JsonValue.from(value)));
+        FunctionParameters parameters = parametersBuilder.build();
 
         FunctionDefinition definition = FunctionDefinition.builder()
                 .name(spec.name())
@@ -201,6 +203,31 @@ public class OpenAiLlmProvider implements LlmProvider {
                 .build();
 
         return ChatCompletionFunctionTool.builder().function(definition).build();
+    }
+
+    private Map<String, Object> toJsonSchemaObject(FunctionParameterSchema schema) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("type", schema.type);
+        json.put("properties", normalizeJsonSchemaValue(schema.properties));
+        json.put("required", normalizeJsonSchemaValue(schema.required));
+        json.put("additionalProperties", schema.additionalProperties);
+        return json;
+    }
+
+    private Object normalizeJsonSchemaValue(Object value) {
+        if (value instanceof FunctionParameterSchema nestedSchema) {
+            return toJsonSchemaObject(nestedSchema);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            map.forEach((key, nestedValue) -> normalized.put(
+                    String.valueOf(key), normalizeJsonSchemaValue(nestedValue)));
+            return normalized;
+        }
+        if (value instanceof List<?> list) {
+            return list.stream().map(this::normalizeJsonSchemaValue).toList();
+        }
+        return value;
     }
 
     // ── SDK → domain ─────────────────────────────────────────────────────

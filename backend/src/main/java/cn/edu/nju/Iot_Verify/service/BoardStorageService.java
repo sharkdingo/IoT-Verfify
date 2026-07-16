@@ -63,12 +63,18 @@ public interface BoardStorageService {
     CollectionMutationResultDto<SpecificationDto> addSpec(Long userId, SpecificationDto spec);
     /** Atomically remove a single spec by ID under user-level lock. */
     CollectionMutationResultDto<SpecificationDto> removeSpec(Long userId, String specId);
+    /** Atomically remove a spec only when its complete persisted snapshot is unchanged. */
+    CollectionMutationResultDto<SpecificationDto> removeSpecIfUnchanged(
+            Long userId, String specId, SpecificationDto expected);
 
     List<RuleDto> getRules(Long userId);
     /** Atomically add a single rule under user-level lock. */
     CollectionMutationResultDto<RuleDto> addRule(Long userId, RuleDto rule);
     /** Atomically remove a single rule by ID under user-level lock. */
     CollectionMutationResultDto<RuleDto> removeRule(Long userId, long ruleId);
+    /** Atomically remove a rule only when its complete persisted snapshot is unchanged. */
+    CollectionMutationResultDto<RuleDto> removeRuleIfUnchanged(
+            Long userId, long ruleId, RuleDto expected);
     /** Atomically replace only the execution order; the request must contain every current rule id once. */
     List<RuleDto> reorderRules(Long userId, List<Long> ruleIds);
 

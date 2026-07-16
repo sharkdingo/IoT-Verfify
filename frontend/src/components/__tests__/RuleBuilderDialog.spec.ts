@@ -71,6 +71,9 @@ const i18n = createI18n({
         contentItemWithSensitivity: '{name}',
         completeRequiredFields: 'Complete fields',
         completeRequiredFieldsBeforeDuplicateCheck: 'Complete fields',
+        configureRuleSourceBeforeSubmit: 'Configure and add at least one IF condition.',
+        addConfiguredRuleSourceBeforeSubmit: 'Add the configured IF condition to the rule before continuing.',
+        selectRuleTargetBeforeSubmit: 'Select the THEN target device and action.',
         completeContentPayloadFields: 'Complete payload',
         close: 'Close'
       }
@@ -132,5 +135,65 @@ describe('RuleBuilderDialog action semantics', () => {
 
     await wrapper.get('#rule-target-action').setValue('turn_on')
     expect(wrapper.find('#rule-content-device').exists()).toBe(true)
+  })
+
+  it('keeps rule actions disabled until the configured IF condition is explicitly added', async () => {
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+
+    const saveButton = wrapper.get('[data-testid="rule-save"]')
+    const similarityButton = wrapper.get('[data-testid="rule-check-duplicate"]')
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect((similarityButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text())
+      .toBe('Configure and add at least one IF condition.')
+
+    await wrapper.get('#rule-source-device').setValue('source')
+    await wrapper.get('#rule-source-type').setValue('api')
+    await wrapper.get('#rule-source-api').setValue('turn_on')
+    await wrapper.get('#rule-target-device').setValue('target')
+    await wrapper.get('#rule-target-action').setValue('turn_off')
+
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect((similarityButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text())
+      .toBe('Add the configured IF condition to the rule before continuing.')
+
+    await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(false)
+    expect((similarityButton.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="rule-draft-readiness"]').exists()).toBe(false)
+  })
+
+  it('explains missing THEN and partial content payload fields before enabling rule actions', async () => {
+    const wrapper = mount(RuleBuilderDialog, {
+      props: { modelValue: true, nodes, deviceTemplates: [template] },
+      global: { plugins: [i18n] }
+    })
+
+    await wrapper.get('#rule-source-device').setValue('source')
+    await wrapper.get('#rule-source-type').setValue('api')
+    await wrapper.get('#rule-source-api').setValue('turn_on')
+    await wrapper.get('[data-testid="rule-add-source"]').trigger('click')
+
+    const saveButton = wrapper.get('[data-testid="rule-save"]')
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text())
+      .toBe('Select the THEN target device and action.')
+
+    await wrapper.get('#rule-target-device').setValue('target')
+    await wrapper.get('#rule-target-action').setValue('turn_on')
+    await wrapper.get('[data-testid="rule-content-device"]').setValue('source')
+
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="rule-draft-readiness"]').text()).toBe('Complete payload')
+
+    await wrapper.get('[data-testid="rule-content-name"]').setValue('photo')
+
+    expect((saveButton.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="rule-draft-readiness"]').exists()).toBe(false)
   })
 })

@@ -19,11 +19,14 @@ fix suggestions when a specification is violated.
   synchronous/asynchronous tasks, progress tracking, and cancellation.
 - **Counterexample analysis** — parses NuSMV counterexamples into a step-by-step
   state timeline.
+- **Bounded counterexample exploration** — a reproducible, HAFuzz-inspired background
+  search finds candidate violating paths before formal verification without presenting
+  budget exhaustion as a safety proof.
 - **Automatic fix** — parameter adjustment, condition adjustment, and rule disabling,
   each candidate re-verified before it is offered.
 - **Attack simulation** and **interactive simulation** (random N-step traces).
 - **AI assistant** — any OpenAI-compatible LLM endpoint with SSE-streamed final replies
-  and 30 built-in tools; device / rule / specification recommendations.
+  and 33 built-in tools; device / rule / specification recommendations.
 - **Bilingual UI** — full zh-CN / en internationalization.
 
 ## Tech stack
@@ -65,11 +68,13 @@ Start at the **[Documentation Hub / Doc Map](docs/README.md)**. Highlights:
   [endpoint index](docs/api/rest-endpoints.md) ·
   [auth](docs/api/auth.md) · [board](docs/api/board.md) ·
   [verification](docs/api/verification.md) · [chat (SSE)](docs/api/chat-sse.md) ·
+  [counterexample exploration](docs/api/fuzzing.md) ·
   [AI tools](docs/api/ai-tools.md)
 - Architecture: [overview](docs/architecture/overview.md) ·
   [device identity](docs/architecture/device-identity.md) ·
   [data authority](docs/architecture/data-authority-model.md) ·
   [verification flow](docs/architecture/verification-flow.md) ·
+  [counterexample exploration flow](docs/architecture/fuzzing-flow.md) ·
   [NuSMV model](docs/architecture/nusmv-model.md) ·
   [spec templates & P1–P5](docs/architecture/spec-templates.md) ·
   [auto-fix](docs/architecture/auto-fix.md)

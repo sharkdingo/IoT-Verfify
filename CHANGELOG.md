@@ -15,9 +15,305 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-16
+
+#### Added
+- Added atomic `GET /api/board/snapshot` hydration so the first Board screen receives
+  devices, templates, environment, rules, and specifications as one authoritative model
+  snapshot while layout and task history load in parallel.
+- Added request-scoped cancellation for standalone AI recommendations and automatic-fix
+  searches, backed by bounded executors, server-side task interruption, and explicit progress
+  displays with elapsed time and observable processing phases.
+- Added non-persisted chat SSE progress frames for context loading, tool planning, tool
+  execution, and visible-response generation.
+- Added a contextual empty-canvas start state with direct device, AI-scene, and scene-import
+  actions for newly registered users.
+
+#### Changed
+- Registration now returns `AuthResponseDto` with a JWT and the frontend enters the Board
+  directly. Bundled default device definitions are parsed and schema-validated once per backend
+  process before per-user transactional insertion.
+- Signed each verified automatic-fix suggestion and changed apply to persist the exact proposal
+  the user reviewed after atomic model-drift checks. Apply no longer repeats the full strategy
+  search or silently substitutes a newly recomputed suggestion.
+- Added an optional recommendation-specific LLM model, compacted scenario template prompts to
+  capability projections, and logged prompt size, output size, and model latency.
+- Revised authentication and recommendation wait states using Nielsen-style status visibility:
+  action-specific loading text, persistent recoverable errors, explicit panel exit, and progress
+  copy that does not guess private model phases from elapsed time.
+
+#### Fixed
+- Kept chat sessions locked when backend activity could not be confirmed, preventing a second
+  interaction from starting while an earlier tool might still be running.
+- Made AI rule/specification deletion compare the confirmed entity snapshot inside the same
+  user-level transaction as deletion, closing the confirmation-to-delete race.
+- Stopped blocked template-deletion conflicts from incorrectly requesting confirmation when no
+  fresh confirmation token can be issued.
+- Rejected expired or malformed JWTs before routing to the Board, avoiding a burst of initial
+  authenticated requests that can only return `401`.
+- Fixed a recommendation-state initialization order that could leave the Board completely blank
+  immediately after registration, and restored parent read-only styling on the teleported Control
+  Center component.
+- Added accessible names to icon-only recommendation, simulation, and verification-result close
+  controls and focused the first invalid authentication field after validation.
+- Mapped missing required query parameters to structured `400 Bad Request` responses instead of
+  reporting them as internal server failures, and aligned full-stack repair tests with request ids
+  and exact signed-suggestion application.
+- Removed a duplicate first-round chat planning progress event observed in the live SSE path.
+- Restricted public security access to registration and login only, removed Spring Boot's
+  generated default user from the JWT-only service, disabled Open Session in View, and updated
+  Hibernate to detect its supported MySQL dialect from the live JDBC connection.
+- Kept cancelled recommendation and automatic-fix request slots reserved until the underlying
+  provider or checker call actually exits, and stopped a successful fuzz-run deletion from being
+  misreported as failed when only the follow-up history refresh fails.
+- Preserved the active recommendation request id when a stop call cannot reach the server, so the
+  interface remains locked to the real operation and the user can retry stopping it.
+- Disabled rule creation and similarity checks until an IF condition is explicitly added and the
+  THEN action and optional content payload are complete, with a persistent inline reason.
+
+### 2026-07-15
+
+#### Added
+- Added `POST /api/fuzz/workload/preview`, which calculates the same frozen-model
+  complexity and 12,500,000-unit ceiling used at submission. The search panel now waits
+  for this authoritative check, refreshes it when the Board or budget changes, and shows
+  a retryable status instead of estimating from visible item counts.
+- Added a server-authoritative semantic fingerprint to paper-domain previews and
+  submissions. Paper runs now fail before task creation when devices, environment,
+  rules, specifications, or referenced manifests changed after preview; canvas-only
+  layout changes do not invalidate it.
+- Added paper-mode device-local initial-value domains to preflight and frozen eligible
+  specification labels to result history, so both upcoming randomization and historical
+  no-finding targets remain understandable without relying on the current Board.
+- Added inclusive numeric bounds to paper-domain preflight so large device-local and
+  environment integer domains remain complete without expanding thousands of values.
+
+#### Changed
+- Bound every AI-assisted destructive deletion confirmation to one authenticated chat
+  session, tool, target, and canonical preview digest through a 15-minute opaque token.
+  Tokens are single-use, only one deletion can be pending per session, and device/template,
+  rule/specification, and saved verification/simulation trace deletion now reject target
+  drift, wrong-session use, and replay without writing.
+- Added a full-stack CI suite with real MySQL, Redis, NuSMV, backend, and Chromium
+  services. It now runs every Chromium E2E workflow, including account deletion, chat,
+  portable-scene import, authority boundaries, counterexample search/replay, and formal
+  verification, rather than only the counterexample journey.
+- Deferred conditionally opened Board dialogs and overlays, including account actions,
+  device/rule editors, simulation/fix views, counterexample search, results, history, and
+  playback, until first use instead of including them in the initial Board route chunk.
+- Replaced research-paper and internal algorithm terminology in counterexample-search
+  screens with user-facing choices: Board initial state or random initial state with
+  reproducible inputs. Capability disclosures now explain behavior and safety boundaries
+  without exposing FSM/BFS/predecessor implementation names or the underlying verifier
+  brand in the ordinary exploration workflow.
+- Aligned paper-compatible mutation with the paper's position-first selection and the
+  reference artifact's mutable initial vector. The 95% local branch can now modify one
+  device state, device-local variable, or environment initial value without resampling
+  unrelated initial targets; sparse overrides remain reproducible, while only the 5%
+  fresh-random branch replaces the nonce. Mutation counts now use the artifact's rounded
+  1%-10% formula with the existing 128-operation safety cap.
+- Made the three-level, rule-produced state/mode/API scope of `GetPrevConditions`
+  explicit as a stable limitation code instead of implying a general variable-producer
+  graph.
+- Exposed multi-specification per-target guidance as a localized paper-mode product
+  extension instead of leaving the single-monitor difference only in architecture docs.
+
+#### Fixed
+- Made AI-tool refresh commands completion-aware across `ChatView`, `App`, and the
+  current Board. Failed targeted refreshes now fall back to full Board/run-history
+  reconciliation; a second failure presents a bilingual retry state and keeps assistant,
+  scene-replacement, and trace-playback interactions locked instead of exposing stale UI.
+- Bounded failed chat-activity checks with a dedicated 2.5-second timeout, settled active
+  assistant work before sign-out (with explicit confirmation for unknown outcomes), and
+  aligned SSE authentication handling with the REST client: `401` returns to login while
+  `403` no longer logs out an authorized session.
+- Stopped trace playback from rendering an empty automation card on every state. The
+  summary now distinguishes observable device/environment changes from user automations,
+  and the automation section appears only when the backend reports a rule that actually
+  ran in that step.
+- Preserved complete AI tool JSON Schemas when adapting vendor-neutral definitions to
+  the OpenAI SDK. Root and nested `additionalProperties`, required fields, array-item
+  schemas, and nested property constraints are no longer dropped before model calls.
+- Prevented account deletion from leaving or recreating AI-chat rows: counterexample bulk
+  cleanup now flushes earlier derived deletes before clearing JPA state, every chat write
+  locks the active user and revalidates session ownership, and committed deletion stops local
+  queued or in-flight SSE chat work. Idempotent startup integrity repair removes legacy orphan
+  rows and installs cascade ownership constraints, so writes committed first are deleted with
+  the account and writes arriving after deletion are rejected by the database.
+- Kept keyboard focus inside the active workflow when opening a saved counterexample
+  result from history, exposed selected history layers and filters to assistive technology,
+  and removed per-user counterexample notification state after account deletion without
+  allowing browser-storage failures to override a successful server deletion.
+- Made counterexample response handling fail closed when finding evidence belongs to a
+  different run or contradicts the frozen run budget, eligible targets, effective seed,
+  trace length, uniqueness, model counts, or exact safe-integer workload product.
+- Rejected impossible counterexample execution statistics across engine output,
+  persistence/history mapping, and frontend responses, and enforced causal replay-event
+  ordering by step and provenance before evidence can be stored or displayed.
+- Restored portable-scene duplicate-name rejection for device-local variables, privacy
+  overrides, and shared environment variables before any replacement preview is opened.
+- Matched the HAFuzz reference aggregation for mixed direct conjunctions: a direct
+  condition without a rule predecessor now contributes zero at the first predecessor
+  level, while absent branches deeper in the rule chain remain omitted.
+- Made paper-compatible environment Event interpretation domain-aware, so discrete
+  direct values beginning with `rate:` are no longer misread as numeric deltas.
+- Rejected engine and persisted finding prefixes whose state count exceeds the owning
+  run's captured `pathLength`, including lightweight history projections.
+- Made accepted background-task cancellation conservative across process boundaries:
+  only work definitively removed from the local queue reports that no execution remains,
+  while remote, racing, or already-running execution reports that it may still be stopping.
+- Strengthened the counterexample-search workload guard with the engine's key operational
+  cross-products, including environment/device traversal, device transition/API lookup,
+  same-target rule arbitration, and specification predecessor search. High-interaction
+  Boards are now rejected consistently by preflight and submission before they can monopolize
+  the bounded executor.
+- Rotated paper-compatible multi-target guidance parents across generations when the
+  unresolved target count exceeds the population size, so later targets are not permanently
+  excluded from mutation while preserving the per-offspring parent/fresh-random policy.
+- Prevented Board teardown and logout races from issuing unauthenticated or user-visible
+  late requests: pending layout saves are serialized, coalesced to the latest layout, and
+  given a bounded best-effort flush while authenticated,
+  recommendation requests are aborted on unmount, and task/history refreshes stop with the
+  disposed workspace. Historical result and replay actions now honor the latest user choice,
+  unread updates clear only for the history view the user still has open, and task-box
+  cancel/dismiss actions are single-flight with consistent failure feedback.
+- Preserved unrelated exploration errors when random-input preflight succeeds, made history
+  and exploration controls meet touch-target sizing, exposed task progress semantics to
+  assistive technology, and formatted result timestamps and workload counts in the selected
+  application language.
+- Disabled verification and simulation submission while Board collections are still loading,
+  failed, or being replaced, and exposed the loading state directly on the primary action so
+  an early click cannot be silently rejected before the run request is created.
+- Stopped empty or ineligible Boards from being presented as counterexample-service failures:
+  workload and random-input preflight now wait for a loaded device model and an eligible target,
+  and the frontend accepts the backend's valid zero complexity for a structurally empty Board.
+- Separated completed-run detail from list-only availability markers in the frontend contract
+  and now reject a summary-only `dataAvailable` field on detail responses instead of hiding
+  backend drift with a type assertion.
+- Pinned the NuSMV archive checksum directly in both CI installation paths so the artifact and
+  its integrity value are not fetched from the same mutable origin.
+- Preserved precise, localized client-side scene-import validation messages for unknown
+  and internal fields regardless of identifier language, mapped malformed JSON to a
+  stable localized error, and continued to reduce backend diagnostics to safe item-level
+  coordinates so users can identify and correct rejected portable-scene fields.
+- Prevented stale task-inbox and verification, simulation, and counterexample-history
+  responses from overwriting newer local or remote state or re-inserting deleted items,
+  while keeping counterexample-history page append requests single-flight.
+- Scoped specification persistence identity by `(id, user_id)` and added an idempotent
+  startup migration for the legacy global primary key, preventing concurrent users who
+  import the same scene from overwriting or losing each other's specifications.
+- Unmounted cached workspace routes when users navigate away, so Board polling, task
+  refresh, and global keyboard/resize listeners stop immediately after logout or route changes.
+- Prevented the asynchronous Board startup sequence from installing polling or global
+  listeners after users leave during initial loading.
+- Kept counterexample-search panels to one scroll region, added an explicit retry for
+  unavailable random-state input ranges, kept history headers/actions fixed above one
+  scrolling body, restored launcher focus on close, labelled task progress/cancel controls,
+  and enlarged primary controls for touch use.
+- Added counterexample-search admission guards before large frozen-snapshot
+  serialization: cross-instance atomic per-user active and total stored-task quotas
+  (HTTP 429 with stable reason payloads) and a process-wide executor-capacity permit.
+  Stored evidence is never silently evicted; users at the configured total must delete
+  old history or failed/cancelled tasks. A final executor rejection now deletes the
+  never-dispatched pending row instead of retaining an unreachable failed task with its
+  snapshot.
+- Removed every persisted-but-undispatched fuzz task when status rechecks or executor
+  dispatch fail, instead of leaving an unknown `PENDING` row until lease expiry.
+- Reclaimed local executor queue slots and capacity permits immediately when a queued
+  counterexample search is cancelled, including account deletion, while retaining the
+  permit until a running worker has actually stopped. Lease reconciliation now performs
+  the same cleanup when cancellation was accepted by another backend instance.
+- Kept the account-deletion task-stop hook proxyable so Spring transactional service
+  proxies actually interrupt or dequeue local verification, simulation, and fuzz work.
+- Added renewable per-instance leases for fuzz tasks, so startup and rolling deployments
+  recover only expired work instead of failing another healthy instance's tasks. Lease
+  decisions now use the database clock rather than each JVM's timezone or clock; worker
+  initialization failures fail by task ID and always release local lifecycle state.
+- Made account deletion defer token revocation and worker interruption until after the
+  deletion transaction commits, preventing rollback from leaving a valid account with
+  cancelled work or a revoked session.
+- Bounded frozen snapshots and persisted finding evidence, counted every captured
+  specification even under explicit target selection, and changed history lists to use
+  lightweight finding projections while preserving full run-context validation on detail.
+- Applied the frozen-snapshot byte ceiling to workload and paper-domain previews, rebuilt
+  queued engine inputs from their persisted snapshots instead of retaining duplicate Board object graphs,
+  and persisted async progress only when its visible percentage changes.
+- Bounded eligibility labels and diagnostics before persistence, capped combined run metadata,
+  and removed frozen finding specifications from list projections; history summaries now use
+  an explicit label/count shape while full detail remains snapshot-validated.
+- Made exploration eligibility structural and visible before submission: trust/privacy
+  predicates are marked formal-only in the panel, while ordinary identifiers containing words
+  such as `attack` or `privacy` no longer trigger unsupported semantics. Missing persisted
+  exploration modes or required limitation disclosures now fail closed instead of being
+  synthesized during history reads.
+- Kept ineligible-target explanations on stable localized reason categories and stopped
+  rendering backend diagnostic prose in the ordinary result dialog; persisted diagnostics
+  remain available to authenticated API clients for development and support tooling.
+- Enforced the finding-prefix invariant across engine output, persistence mapping, list
+  summaries, and frontend response validation: every replay now ends exactly at its first
+  violating state instead of accepting unexplained trailing states.
+- Excluded presentation-only labels, descriptions, icons, formula previews, and rule text
+  from paper-domain fingerprints while retaining executable Board semantics, including
+  device and rule order where first-match transition priority depends on it.
+- Restored the paper's binary atomic satisfaction rule, flattened nested
+  conjunction/disjunction guards before aggregation, fixed negative API predecessor
+  polarity and state-change guards, and prevented integer-range overflow in the
+  remaining product-mode distance calculations.
+- Made completed fuzz-result recovery single-flight and retry transient network,
+  `408`/`425`/`429`, and server failures with bounded exponential backoff instead of
+  marking the task failed. Inline result recovery now hands off after three failed reads
+  so the main workflow cannot remain locked for hours; tracked background reconciliation
+  continues independently. Historical target restoration now preserves the frozen scope,
+  and unavailable explicit targets require a visible user decision rather than silently
+  broadening the next run.
+- Corrected paper trace formation so an environment rate affects its own Event position,
+  replaces that step's free natural-rate choice, combines device impact once, and yields
+  to explicit formal transition assignments. Discrete paper environments now remain
+  stable without an Event or formal effect, and replay preserves causal Event/model-choice
+  order.
+- Separated the previous transition source from the Event-modified target state, so
+  rules and formal guards read `s(i-1)` while writing `s(i)`, and advanced paper monitor
+  FSMs online so violating prefixes stop path formation immediately.
+- Corrected `GetPrevConditions` priority guidance: only explicitly written modes count
+  as action outputs, earlier overlapping rule guards block lower actions, and synthetic
+  arbitration guards no longer recurse as if they were model-produced conditions.
+- Removed the 1,000-value sampling loss from numeric paper domains and fixed direct-value
+  numeric mutation at single-value bounds.
+- Canonicalized enum-backed environment rates to `rate:<integer>` before seed formation,
+  preventing a valid rate from being applied as an absolute value, and made enum-backed
+  mutation uniform across all legal alternatives after excluding the current value.
+- Invalidated stale paper previews across semantic and path changes, blocked submission
+  without a current preview, validated the complete limitation-code contract, displayed
+  local domains and device labels, and preserved an historical implicit-all target set
+  when restoring settings.
+- Stopped retrying permanently unavailable fuzz tasks: response-contract failures and
+  explicit 4xx responses are now untracked and surfaced in result history, while only
+  network failures and 5xx responses remain retryable. Stale-fingerprint rejection now
+  refreshes inline without leaving a covered or persistent error.
+
 ### 2026-07-14
 
 #### Added
+- Added a clean-room, HAFuzz-inspired bounded counterexample exploration module as a
+  supporting workflow before formal verification. It captures an immutable Board
+  snapshot, runs deterministic seed-based finite-path search in a dedicated background
+  pool, and persists independent task/run/finding history with replayable candidate paths.
+- Added Board controls, global task status, combined history, bilingual result surfaces,
+  eligibility/limitation reporting, reproducible seeds, cancellation, lazy finding
+  playback, and a formal-verification handoff for exploration results.
+- Added `/api/fuzz` task, run, and finding endpoints plus dedicated API and architecture
+  documentation. The finite monitor supports specification templates 1, 3, and 4; other
+  templates and attack/trust/privacy/content semantics fail closed as ineligible.
+- Added a persisted `explorationMode` contract for bounded exploration. `BOARD_SNAPSHOT`
+  remains the default product workflow; optional `PAPER_COMPATIBLE` uses HAFuzz-style
+  event tuples, random legal initial states, explicit monitor FSM/BFS guidance,
+  predecessor-condition weighting, and the paper's 95% mutation / 5% random-seed split.
+  The mode is returned by task and run history and remains a templates 1/3/4,
+  integer-domain subset rather than a complete paper reproduction.
+- Added a read-only paper-mode input-domain preview backed by the executable server
+  model. It exposes legal device initial states, environment initial values, Event
+  values, and the per-seed initialization policy without creating a task or pretending
+  that one concrete random initial state exists before candidate generation.
 - Added explicit `historyPersistence` metadata to synchronous verification and
   simulation responses, separating a completed formal/model result from whether its
   run-history write was saved, failed, not requested, or has an unknown outcome.
@@ -31,6 +327,12 @@ history into a technical spec. The spec content itself now lives under
   blockers for REST, frontend, and AI-tool callers.
 
 #### Changed
+- Kept NuSMV verification as the only proof and automatic-fix authority. Exploration
+  budget exhaustion is presented neutrally rather than as satisfaction, and heuristic
+  findings remain separate from formal counterexample `trace` rows.
+- Bounded exploration now applies one server-authoritative workload cap across path
+  budgets, frozen device/rule counts, and effective target specifications; task and run
+  history reads are paged so persisted evidence cannot create unbounded list queries.
 - Made persisted model-bearing JSON fail closed. Missing, blank, malformed, or unknown
   rule/spec/template/trace/task fields are no longer reinterpreted as empty/default
   semantics, and a database template name cannot silently overwrite a different
@@ -41,6 +343,34 @@ history into a technical spec. The spec content itself now lives under
   operation, preventing a visible 100% state without a committed result.
 
 #### Fixed
+- Hardened bounded counterexample exploration after the paper and interaction review:
+  search guidance now preserves a best candidate per unresolved specification instead
+  of averaging opposing goals, mutates only choices that affected the generated path,
+  periodically restarts even a single-member population, and responds to cancellation
+  during path simulation.
+- Bound exploration work to the frozen model's structural complexity and validate
+  persisted run eligibility and findings against that same frozen input. Malformed,
+  unsupported, or cross-snapshot evidence now fails closed instead of appearing
+  replayable.
+- Made exploration results causally inspectable and keyboard accessible. User-facing
+  steps are consistently one-based, replay distinguishes injected inputs from rule and
+  state changes, and paper-mode replay identifies random initialization, seed Events,
+  device states, environment rates, and ordinary model choices separately. Dialogs trap
+  and restore focus, unsupported targets are identified
+  before submission, budget fields report validation errors without silent rewriting,
+  and completed background results remain visible until reviewed.
+- Closed the exploration-to-verification workflow gaps: all stable paper limitation
+  codes are localized, multi-target results remain itemized, reproduction settings can
+  be restored without auto-running or broadening targets, and the verification handoff
+  persistently states that NuSMV checks the complete current Board rather than the
+  historical random state, Event sequence, or snapshot. Budget-exhausted completion is
+  no longer shown as a green success.
+- Made paper-domain preview capture compatible with MySQL's locking rules and suppressed
+  late background-completion notices when that same run is already open, preventing a
+  database error in preflight and a notification from covering the result title.
+- Disabled the exploration entry while an atomic scene replacement or clear is still
+  committing, preventing a late import-success message from covering the newly opened
+  exploration panel.
 - Preserved completed verification conclusions and playable simulation trajectories
   when their separate history save cannot be confirmed, while showing an explicit
   outcome-unknown warning and reconciling history instead of claiming success.

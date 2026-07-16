@@ -2,11 +2,17 @@
 
 Field-level contract for `/api/board` — the persisted canvas (nodes, rules, specs,
 layout), device templates, and AI-backed recommendation endpoints.
+
+`GET /api/board/snapshot` returns `BoardSemanticSnapshotDto` with `nodes`,
+`environmentVariables`, `rules`, `specifications`, and `deviceTemplates` captured under one
+user/database lock and transaction. The frontend uses it for initial Board hydration so an
+unloaded collection is never presented as an authoritative zero count. Layout remains separate
+because it does not affect formal-model semantics.
 The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-14. Source:
+Verified against code on 2026-07-16. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -290,8 +296,9 @@ execution order, it does not assign verification priority or short-circuit check
 
 Portable device-local `variables[]` entries contain a unique non-blank `name` and an
 explicit non-blank `value`; `privacies[]` names are also unique. Every shared
-`environmentVariables[]` entry likewise has an explicit non-blank `value`. An omitted or
-empty runtime value would mean "use a default" in targeted creation/update semantics,
+`environmentVariables[]` entry likewise has a unique non-blank `name` and an explicit
+non-blank `value`. Duplicate names fail before the replacement preview or batch request.
+An omitted or empty runtime value would mean "use a default" in targeted creation/update semantics,
 which is not lossless scene semantics, so v4 import rejects it. A rule's human-readable
 `name` is optional; rule array order and its structured trigger/action fields carry the
 model semantics.
@@ -444,6 +451,12 @@ normalized to `0.4..2.0`. There is no separate active-tabs endpoint.
 
 The project currently uses Hibernate `ddl-auto: update`, without Flyway/Liquibase.
 Removing entities or fields from Java code will not drop old MySQL schema objects.
+The deliberate compatibility exception is the specification identity guard: after
+Hibernate initializes the schema and before the application becomes ready,
+`SpecificationPrimaryKeyMigration` accepts either the legacy primary key `(id)` or the
+current user-scoped key `(id, user_id)`. It atomically upgrades the legacy MySQL key,
+preserves existing rows, is a no-op after migration, and refuses startup for any unknown
+primary-key shape rather than serving with ambiguous cross-user ownership.
 After deploying code that removes persisted edges, old floating/dock layout fields, or
 pre-authority internal variable canvas nodes, clean an existing database manually if you
 want the physical schema/data to match:
@@ -702,10 +715,11 @@ status by `throwIfToolError`.
 
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
-| GET | `/api/board/rules/recommend` | `maxRecommendations` (default 5; when provided, JSON integer `1..10`), `category` (default `all`), `language` (default `en`; `zh*` is normalized to `zh-CN`), `userRequirement` (optional scenario/goal) | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
-| GET | `/api/board/specs/recommend` | `maxRecommendations` (default 5; when provided, JSON integer `1..10`), `category` (default `all`), `language` (default `en`; `zh*` is normalized to `zh-CN`), `userRequirement` (optional scenario/goal) | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
-| POST | `/api/board/devices/recommend` | typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }`; `maxRecommendations` defaults to `5` and must be a JSON integer in `1..10` when provided; `language` defaults to `en`; current devices/templates are read from the authenticated user's saved board | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }`; counts default to `6`, `5`, and `5` respectively and must be JSON integers in `1..10` when provided; `language` defaults to `en`; current board and templates are read from the authenticated user's saved board | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. Its nested DTOs expose only portable fields; Board/template/spec persistence metadata is never serialized into the draft. |
+| GET | `/api/board/rules/recommend` | Required `requestId` plus `maxRecommendations` (default 5; integer `1..10`), `category`, `language`, and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
+| GET | `/api/board/specs/recommend` | Required `requestId` plus `maxRecommendations` (default 5; integer `1..10`), `category`, `language`, and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
+| POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means a tracked task accepted interruption |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |
 | POST | `/api/board/rules/check-similarity` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Explicit AI semantic similarity check available from `RuleBuilderDialog` and the Board rule-recommendation apply flow. It may call the configured LLM and returns a typed `RuleSimilarityResultDto`: required `isSimilar`, `isDuplicate`, authoritative `requiresReview`, `similarity` (`0..1`), stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Internal candidate references and LLM prose are not ordinary UI concepts. |
 
@@ -833,6 +847,13 @@ conflict freedom.
 > instead of reporting a complete scenario. Prefix-like business names such as `a_noise`, `trust_score`,
 > `privacy_level`, or `variable_mode` stay literal in the returned scene; generated NuSMV
 > identifiers remain an internal modeling detail.
+
+Standalone recommendations run in a bounded dedicated executor. Only one is admitted per user;
+pool saturation returns `503`. The UI shows the submitted Board-context counts, selected tool,
+elapsed time, and current transport/model phase while it waits. These are observable processing
+stages, not hidden model reasoning. Stop and panel-close actions call the cancellation endpoint
+before aborting the browser request. Recommendation prompts use a compact capability projection;
+the complete template manifests remain server-side for authoritative validation.
 
 If the AI provider's whole response is malformed JSON or lacks the required
 recommendation/scene arrays, recommendation endpoints return HTTP `502` through

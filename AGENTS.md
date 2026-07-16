@@ -12,15 +12,16 @@ paste reference material here that already lives in `docs/`.
 
 ## What this repo is
 
-A formal-verification platform for smart-home IoT systems. Users build a device
-topology on a visual canvas, define automation rules and safety specifications, and the
-NuSMV model checker verifies them — with counterexample analysis and automatic fix
-suggestions. Includes an AI assistant (any OpenAI-compatible LLM endpoint, SSE streaming).
+A verification platform for smart-home IoT systems. Users build a device topology on a
+visual canvas, define automation rules and safety specifications, run bounded candidate
+counterexample exploration, and use NuSMV for formal conclusions — with formal
+counterexample analysis and automatic fix suggestions. Includes an AI assistant (any
+OpenAI-compatible LLM endpoint, SSE streaming).
 
 ## Monorepo map
 
 ```
-backend/    Spring Boot API + NuSMV orchestration + AI tools   → backend/CLAUDE.md
+backend/    Spring Boot API + fuzz/NuSMV orchestration + AI tools → backend/CLAUDE.md
 frontend/   Vue 3 + TypeScript + Vite SPA                       → frontend/CLAUDE.md
 docs/       Single source of truth for all reference docs       → docs/README.md
 CHANGELOG.md      dated change log (Unreleased + dates)

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { TraceTriggeredRule } from '@/types/verify'
+import type { FuzzingInputEvent } from '@/types/fuzzing'
 import type {
   PlaybackChangeKind,
   PlaybackDeviceChange,
@@ -18,8 +19,10 @@ const props = defineProps<{
   compromisedEdgeCount: number
   stateNumber: number
   totalStates: number
-  kind: 'simulation' | 'counterexample'
+  kind: 'simulation' | 'counterexample' | 'fuzzing'
   position: { x: number; y: number }
+  inputEvents?: Array<FuzzingInputEvent & { targetLabel?: string }>
+  firstViolationStateNumber?: number
 }>()
 
 const emit = defineEmits<{
@@ -29,16 +32,51 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const title = computed(() => props.kind === 'simulation'
-  ? t('app.traceVisualization.simulationStepChanges')
-  : t('app.traceVisualization.counterexampleStepChanges'))
+const title = computed(() => {
+  if (props.kind === 'simulation') return t('app.traceVisualization.simulationStepChanges')
+  if (props.kind === 'fuzzing') return t('app.traceVisualization.fuzzingStepChanges')
+  return t('app.traceVisualization.counterexampleStepChanges')
+})
 
 const isInitialState = computed(() => props.stateNumber <= 1)
+const isFirstViolationState = computed(() =>
+  props.kind === 'fuzzing' && props.firstViolationStateNumber === props.stateNumber)
 const hasObservableChanges = computed(() =>
   props.changes.length > 0 || props.environmentChanges.length > 0)
+const playbackSummary = computed(() => {
+  if (isInitialState.value) {
+    return t('app.traceVisualization.playbackInitialStateSummary')
+  }
+  const counts = {
+    devices: props.changes.length,
+    environment: props.environmentChanges.length,
+    rules: props.triggeredRules.length
+  }
+  return props.triggeredRules.length > 0
+    ? t('app.traceVisualization.playbackChangesSummaryWithRules', counts)
+    : t('app.traceVisualization.playbackChangesSummaryWithoutRules', counts)
+})
 
 const ruleLabel = (rule: TraceTriggeredRule, index: number): string =>
   rule.ruleLabel?.trim() || t('app.ruleNumber', { number: index + 1 })
+
+const inputEventKindLabel = (event: FuzzingInputEvent) => {
+  if (event.kind === 'DEVICE_STATE') return t('app.traceVisualization.fuzzDeviceStateInput')
+  if (event.kind === 'DEVICE_VARIABLE') return t('app.traceVisualization.fuzzDeviceInput')
+  if (event.kind === 'ENVIRONMENT_RATE') return t('app.traceVisualization.fuzzEnvironmentRateInput')
+  return t('app.traceVisualization.fuzzEnvironmentInput')
+}
+
+const inputEventSourceLabel = (event: FuzzingInputEvent) => {
+  if (event.source === 'RANDOM_INITIAL_STATE') return t('app.traceVisualization.fuzzRandomInitialSource')
+  if (event.source === 'SEED_EVENT') return t('app.traceVisualization.fuzzSeedEventSource')
+  return t('app.traceVisualization.fuzzModelChoiceSource')
+}
+
+const inputEventValue = (event: FuzzingInputEvent) =>
+  event.kind === 'ENVIRONMENT_RATE' && event.value.startsWith('rate:')
+    ? event.value.slice(5)
+    : event.value
 
 const popoverRef = ref<HTMLElement | null>(null)
 let dragState: {
@@ -186,13 +224,16 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
           <span class="shrink-0 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
             {{ t('app.traceVisualization.stateLabel') }} {{ stateNumber }} / {{ totalStates }}
           </span>
+          <span
+            v-if="isFirstViolationState"
+            class="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700"
+            data-testid="fuzzing-first-violation-badge"
+          >
+            {{ t('app.fuzzFirstViolation') }}
+          </span>
         </div>
         <p class="mt-0.5 text-[10px] leading-4 text-slate-500" aria-live="polite" aria-atomic="true">
-          {{ t('app.traceVisualization.playbackChangesSummary', {
-            devices: changes.length,
-            environment: environmentChanges.length,
-            rules: triggeredRules.length
-          }) }}
+          {{ playbackSummary }}
         </p>
       </div>
       <button
@@ -214,6 +255,34 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
         :key="`${kind}-${stateNumber}`"
         class="playback-change-popover__body max-h-[15rem] space-y-1.5 overflow-y-auto px-3 py-2"
       >
+        <article
+          v-if="kind === 'fuzzing'"
+          class="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-2"
+          data-testid="playback-change-fuzz-inputs"
+        >
+          <div class="flex items-center gap-1.5 text-[11px] font-bold text-indigo-900">
+            <span class="material-symbols-outlined text-sm text-indigo-700" aria-hidden="true">input</span>
+            <span>{{ t('app.traceVisualization.fuzzInputsInThisStep') }}</span>
+          </div>
+          <ul v-if="inputEvents?.length" class="mt-1.5 space-y-1">
+            <li
+              v-for="(event, index) in inputEvents"
+              :key="`${event.kind}-${event.targetId}-${event.property}-${index}`"
+              class="rounded-md border border-indigo-100 bg-white px-2 py-1.5 text-[10px] leading-4 text-indigo-950"
+            >
+              <span class="mr-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 font-bold text-indigo-800">{{ inputEventSourceLabel(event) }}</span>
+              <span class="font-semibold">{{ inputEventKindLabel(event) }}</span>
+              <span class="px-1 text-indigo-400" aria-hidden="true">·</span>
+              <span>{{ event.targetLabel || event.targetId }}.{{ event.property }}</span>
+              <span class="px-1 font-bold text-indigo-500" aria-hidden="true">=</span>
+              <span class="break-all font-mono font-semibold">{{ inputEventValue(event) }}</span>
+            </li>
+          </ul>
+          <p v-else class="mt-1 text-[10px] leading-4 text-indigo-800">
+            {{ t('app.traceVisualization.noFuzzInputInThisStep') }}
+          </p>
+        </article>
+
         <div
           v-if="isInitialState"
           class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] leading-4 text-slate-600"
@@ -228,6 +297,13 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
           data-testid="playback-change-empty"
         >
           {{ t('app.traceVisualization.playbackNoObservableChanges') }}
+        </div>
+
+        <div
+          v-if="kind === 'fuzzing' && !isInitialState"
+          class="pt-0.5 text-[10px] font-bold uppercase text-slate-500"
+        >
+          {{ t('app.traceVisualization.fuzzObservedModelChanges') }}
         </div>
 
         <article
@@ -292,6 +368,7 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
         </article>
 
         <article
+          v-if="triggeredRules.length > 0"
           class="playback-change-popover__automation rounded-lg border px-2.5 py-2"
           data-testid="playback-change-automation"
         >
@@ -299,27 +376,20 @@ const formatValue = (value: string, kind: PlaybackChangeKind): string => {
             <span class="material-symbols-outlined text-sm text-emerald-600" aria-hidden="true">account_tree</span>
             <span>{{ t('app.traceVisualization.automationInThisStep') }}</span>
           </div>
-          <template v-if="triggeredRules.length > 0">
-            <div class="mt-1.5 flex flex-wrap gap-1">
-              <span
-                v-for="(rule, index) in triggeredRules"
-                :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
-                class="max-w-full truncate rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-800"
-                :title="ruleLabel(rule, index)"
-              >
-                {{ ruleLabel(rule, index) }}
-              </span>
-            </div>
-            <p class="mt-1.5 text-[10px] leading-4 text-slate-600">
-              {{ animatedEdgeCount > 0
-                ? t('app.traceVisualization.playbackAnimatedEdges', { count: animatedEdgeCount })
-                : t('app.traceVisualization.playbackTriggeredRuleWithoutCurrentEdge') }}
-            </p>
-          </template>
-          <p v-else class="mt-1 text-[10px] leading-4 text-slate-600">
-            {{ isInitialState
-              ? t('app.traceVisualization.playbackInitialEdgesStatic')
-              : t('app.traceVisualization.playbackEdgesStaticNoRule') }}
+          <div class="mt-1.5 flex flex-wrap gap-1">
+            <span
+              v-for="(rule, index) in triggeredRules"
+              :key="rule.ruleId || `${rule.ruleLabel}-${index}`"
+              class="max-w-full truncate rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-800"
+              :title="ruleLabel(rule, index)"
+            >
+              {{ ruleLabel(rule, index) }}
+            </span>
+          </div>
+          <p class="mt-1.5 text-[10px] leading-4 text-slate-600">
+            {{ animatedEdgeCount > 0
+              ? t('app.traceVisualization.playbackAnimatedEdges', { count: animatedEdgeCount })
+              : t('app.traceVisualization.playbackTriggeredRuleWithoutCurrentEdge') }}
           </p>
         </article>
 

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.aitool.template;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDeletionResultDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -11,6 +12,7 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -25,10 +27,14 @@ import java.util.Set;
 public class DeleteTemplateTool extends AbstractAiTool {
 
     private final BoardStorageService boardStorageService;
+    private final AiDestructiveActionGuard destructiveActionGuard;
 
-    public DeleteTemplateTool(BoardStorageService boardStorageService, ObjectMapper objectMapper) {
+    public DeleteTemplateTool(BoardStorageService boardStorageService,
+                              ObjectMapper objectMapper,
+                              AiDestructiveActionGuard destructiveActionGuard) {
         super(objectMapper);
         this.boardStorageService = boardStorageService;
+        this.destructiveActionGuard = destructiveActionGuard;
     }
 
     @Override
@@ -60,6 +66,7 @@ public class DeleteTemplateTool extends AbstractAiTool {
     }
 
     protected String doExecute(Long userId, String argsJson) {
+        Long requestedTemplateId = null;
         try {
             JsonNode args;
             try {
@@ -69,22 +76,50 @@ public class DeleteTemplateTool extends AbstractAiTool {
             }
             requireOnlyFields(args, "arguments", Set.of("templateId", "confirmed", "impactToken"));
             long templateId = positiveLongArg(args, "templateId");
+            requestedTemplateId = templateId;
             boolean confirmed = booleanArg(args, "confirmed", false);
-            if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
-                DeviceTemplateDeletionResultDto preview =
-                        boardStorageService.previewDeviceTemplateDeletion(userId, templateId);
+            DeviceTemplateDeletionResultDto preview =
+                    boardStorageService.previewDeviceTemplateDeletion(userId, templateId);
+            Map<String, Object> previewView = previewView(preview);
+            String domainImpactToken = trimToNull(preview.getImpactToken());
+            if (!preview.isCanDelete()) {
+                destructiveActionGuard.clearSession(userId, UserContextHolder.getChatSessionId());
                 Map<String, Object> response = new LinkedHashMap<>();
-                response.put("message", preview.isCanDelete()
-                        ? "No changes were made. Confirm this exact preview to delete the device type."
-                        : "No changes were made. This device type cannot be deleted while listed device instances use it.");
-                response.put("requiresUserConfirmation", preview.isCanDelete());
-                response.put("preview", preview);
+                response.put("message", "No changes were made. This device type cannot be deleted while listed device instances use it.");
+                response.put("requiresUserConfirmation", false);
+                response.put("preview", previewView);
+                return readOnlySuccessJson(response, "Template deletion preview unavailable.");
+            }
+            if (domainImpactToken == null) {
+                return errorJson("Template deletion preview did not provide an impact token. No changes were made; retry the preview.",
+                        "RESULT_UNAVAILABLE", 503);
+            }
+            Map<String, Object> bindingSnapshot = bindingSnapshot(previewView, domainImpactToken);
+            if (!confirmed || !UserContextHolder.isDestructiveActionConfirmed()) {
+                String confirmationToken = destructiveActionGuard.issue(
+                        userId, getName(), Long.toString(templateId), bindingSnapshot, domainImpactToken);
+                previewView.put("impactToken", confirmationToken);
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("message", "No changes were made. Confirm this exact preview to delete the device type.");
+                response.put("requiresUserConfirmation", true);
+                response.put("preview", previewView);
                 return readOnlySuccessJson(response, "Template deletion preview unavailable.");
             }
 
             String impactToken = requiredTextField(args, "impactToken", "arguments");
+            AiDestructiveActionGuard.ConsumeResult confirmation = destructiveActionGuard.consume(
+                    userId, getName(), Long.toString(templateId), impactToken, bindingSnapshot);
+            if (!confirmation.approved()) {
+                String freshToken = destructiveActionGuard.issue(
+                        userId, getName(), Long.toString(templateId), bindingSnapshot, domainImpactToken);
+                previewView.put("impactToken", freshToken);
+                return errorJson(confirmation.message(), confirmation.errorCode(), 409, Map.of(
+                        "requiresUserConfirmation", true,
+                        "currentPreview", previewView));
+            }
             DeviceTemplateDeletionResultDto deleted =
-                    boardStorageService.deleteDeviceTemplate(userId, templateId, impactToken);
+                    boardStorageService.deleteDeviceTemplate(
+                            userId, templateId, confirmation.domainImpactToken());
             return successJson(Map.of(
                     "message", "Template deleted successfully.",
                     "operation", "deleted",
@@ -97,8 +132,25 @@ public class DeleteTemplateTool extends AbstractAiTool {
             return errorJson(e.getMessage(), "SERVICE_UNAVAILABLE", 503);
         } catch (TemplateDeletionConflictException e) {
             log.warn("delete_template conflict [{}]", e.getReasonCode());
-            return errorJson(e.getMessage(), e.getReasonCode(), 409,
-                    Map.of("currentPreview", e.getCurrentPreview()));
+            Map<String, Object> extras = new LinkedHashMap<>();
+            extras.put("requiresUserConfirmation", false);
+            DeviceTemplateDeletionResultDto currentPreview = e.getCurrentPreview();
+            if (currentPreview != null && requestedTemplateId != null) {
+                Map<String, Object> currentView = previewView(currentPreview);
+                String currentDomainToken = trimToNull(currentPreview.getImpactToken());
+                if (currentPreview.isCanDelete() && currentDomainToken != null) {
+                    String freshToken = destructiveActionGuard.issue(
+                            userId,
+                            getName(),
+                            Long.toString(requestedTemplateId),
+                            bindingSnapshot(currentView, currentDomainToken),
+                            currentDomainToken);
+                    currentView.put("impactToken", freshToken);
+                    extras.put("requiresUserConfirmation", true);
+                }
+                extras.put("currentPreview", currentView);
+            }
+            return errorJson(e.getMessage(), e.getReasonCode(), 409, extras);
         } catch (BaseException e) {
             log.warn("delete_template business error [{}]: {}", e.getCode(), e.getMessage());
             return errorJson(e.getMessage(), "BUSINESS_ERROR", e.getCode());
@@ -106,5 +158,19 @@ public class DeleteTemplateTool extends AbstractAiTool {
             log.error("delete_template failed", e);
             return errorJson("Failed to delete template.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> previewView(DeviceTemplateDeletionResultDto preview) {
+        Map<String, Object> view = objectMapper.convertValue(
+                preview, new TypeReference<LinkedHashMap<String, Object>>() { });
+        view.remove("impactToken");
+        return view;
+    }
+
+    private Map<String, Object> bindingSnapshot(Map<String, Object> previewView,
+                                                String domainImpactToken) {
+        return Map.of(
+                "preview", previewView,
+                "domainImpactToken", domainImpactToken);
     }
 }

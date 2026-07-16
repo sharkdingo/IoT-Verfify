@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onBeforeUnmount, onMounted, useAttrs, watch } from 'vue'
 import { ElMessage as ElMessageRaw } from 'element-plus'
 import { 
   specTemplateDetails, 
@@ -45,6 +45,9 @@ import boardApi, {
 import type { ModelEnvironmentVariable } from '@/types/model'
 import { deviceLabelKey, reserveUniqueDeviceLabel } from '@/utils/canvas/nodeCreate'
 import { localizedErrorMessage } from '@/utils/userMessage'
+
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
 
 // Element-Plus typings vary by version; we use an `any` alias to keep runtime behavior (e.g. `center`) without TS errors.
 const ElMessage = ElMessageRaw as any
@@ -2150,6 +2153,7 @@ const exportTemplate = (template: any) => {
 
 <template>
   <aside
+    v-bind="attrs"
     data-testid="control-center"
     class="absolute left-0 top-0 bottom-0 modern-panel board-side-panel z-40 flex flex-col overflow-hidden border-r border-white/20 shadow-xl transition-all duration-300 ease-in-out"
     :class="isCollapsed ? 'is-collapsed' : 'is-expanded'"

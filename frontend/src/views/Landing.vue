@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
@@ -16,6 +16,14 @@ const { t, locale } = useI18n()
 const { login } = useAuth()
 
 const loading = ref(false)
+const requestError = ref('')
+const requestErrorRef = ref<HTMLElement | null>(null)
+const loginIdentifierRef = ref<HTMLInputElement | null>(null)
+const loginPasswordRef = ref<HTMLInputElement | null>(null)
+const registerPhoneRef = ref<HTMLInputElement | null>(null)
+const registerUsernameRef = ref<HTMLInputElement | null>(null)
+const registerPasswordRef = ref<HTMLInputElement | null>(null)
+const confirmPasswordRef = ref<HTMLInputElement | null>(null)
 const mouseX = ref(0)
 const mouseY = ref(0)
 const authMode = ref<AuthMode>(route.query.mode === 'register' ? 'register' : 'login')
@@ -38,6 +46,7 @@ const formErrors = reactive<Record<string, string>>({})
 const isRegisterMode = computed(() => authMode.value === 'register')
 const panelTitle = computed(() => isRegisterMode.value ? t('auth.getStarted') : t('auth.welcomeBack'))
 const panelSubtitle = computed(() => isRegisterMode.value ? t('auth.getStartedSubtitle') : t('auth.welcomeBackSubtitle'))
+const loadingLabel = computed(() => isRegisterMode.value ? t('auth.creatingAccount') : t('auth.signingIn'))
 const redirectTarget = computed(() => {
   const redirect = route.query.redirect
   if (typeof redirect !== 'string') return '/board'
@@ -57,6 +66,24 @@ const clearErrors = () => {
   for (const key of Object.keys(formErrors)) {
     delete formErrors[key]
   }
+  requestError.value = ''
+}
+
+const clearFieldError = (key: string) => {
+  delete formErrors[key]
+  requestError.value = ''
+}
+
+const focusRequestError = async () => {
+  await nextTick()
+  requestErrorRef.value?.focus()
+}
+
+const closeAuthPanel = () => {
+  if (loading.value) return
+  showAuthPanel.value = false
+  clearErrors()
+  void router.replace({ path: '/' })
 }
 
 const setAuthMode = (mode: AuthMode) => {
@@ -66,6 +93,12 @@ const setAuthMode = (mode: AuthMode) => {
   authMode.value = mode
   clearErrors()
   router.replace({ path: '/', query })
+}
+
+const setAuthModeFromKeyboard = async (mode: AuthMode) => {
+  setAuthMode(mode)
+  await nextTick()
+  document.getElementById(`auth-tab-${mode}`)?.focus()
 }
 
 const openAuthPanel = () => {
@@ -92,7 +125,14 @@ const validateLogin = () => {
   if (!loginForm.password) {
     formErrors.loginPassword = t('auth.passwordRequired')
   }
-  return !formErrors.loginIdentifier && !formErrors.loginPassword
+  const valid = !formErrors.loginIdentifier && !formErrors.loginPassword
+  if (!valid) {
+    void nextTick(() => {
+      if (formErrors.loginIdentifier) loginIdentifierRef.value?.focus()
+      else loginPasswordRef.value?.focus()
+    })
+  }
+  return valid
 }
 
 const validateRegister = () => {
@@ -118,15 +158,25 @@ const validateRegister = () => {
     formErrors.confirmPassword = t('auth.passwordMismatch')
   }
 
-  return validPhone &&
+  const valid = validPhone &&
     !formErrors.registerUsername &&
     !formErrors.registerPassword &&
     !formErrors.confirmPassword
+  if (!valid) {
+    void nextTick(() => {
+      if (formErrors.registerPhone) registerPhoneRef.value?.focus()
+      else if (formErrors.registerUsername) registerUsernameRef.value?.focus()
+      else if (formErrors.registerPassword) registerPasswordRef.value?.focus()
+      else confirmPasswordRef.value?.focus()
+    })
+  }
+  return valid
 }
 
 const handleLogin = async () => {
   if (!validateLogin()) return
 
+  requestError.value = ''
   loading.value = true
   try {
     const res = await authApi.login({
@@ -144,12 +194,14 @@ const handleLogin = async () => {
         username: res.data.username
       })
       ElMessage.success(t('auth.loginSuccess'))
-      router.push(redirectTarget.value)
+      await router.push(redirectTarget.value)
     } else {
-      ElMessage.error(localizedTextOrFallback(res.message, t('auth.loginFailed'), locale.value))
+      requestError.value = localizedTextOrFallback(res.message, t('auth.loginFailed'), locale.value)
+      await focusRequestError()
     }
   } catch (error: any) {
-    ElMessage.error(localizedErrorMessage(error, t('auth.loginFailed'), locale.value))
+    requestError.value = localizedErrorMessage(error, t('auth.loginFailed'), locale.value)
+    await focusRequestError()
   } finally {
     loading.value = false
   }
@@ -158,6 +210,7 @@ const handleLogin = async () => {
 const handleRegister = async () => {
   if (!validateRegister()) return
 
+  requestError.value = ''
   loading.value = true
   try {
     const res = await authApi.register({
@@ -170,15 +223,20 @@ const handleRegister = async () => {
       if (!res.data) {
         throw new Error(t('auth.registerFailed'))
       }
+      login(res.data.token, {
+        userId: res.data.userId,
+        phone: res.data.phone,
+        username: res.data.username
+      })
       ElMessage.success(t('auth.registerSuccess'))
-      loginForm.identifier = registerForm.username.trim()
-      loginForm.password = ''
-      setAuthMode('login')
+      await router.push(redirectTarget.value)
     } else {
-      ElMessage.error(localizedTextOrFallback(res.message, t('auth.registerFailed'), locale.value))
+      requestError.value = localizedTextOrFallback(res.message, t('auth.registerFailed'), locale.value)
+      await focusRequestError()
     }
   } catch (error: any) {
-    ElMessage.error(localizedErrorMessage(error, t('auth.registerFailed'), locale.value))
+    requestError.value = localizedErrorMessage(error, t('auth.registerFailed'), locale.value)
+    await focusRequestError()
   } finally {
     loading.value = false
   }
@@ -253,27 +311,51 @@ onUnmounted(() => {
       <section
         v-show="showAuthPanel"
         class="auth-panel"
+        :aria-busy="loading"
         :aria-labelledby="isRegisterMode ? 'register-title' : 'login-title'"
       >
-        <div class="auth-tabs" role="tablist" :aria-label="t('auth.getStarted')">
+        <div class="auth-panel__topbar">
           <button
             type="button"
-            role="tab"
-            :aria-selected="!isRegisterMode"
-            :class="{ active: !isRegisterMode }"
-            @click="setAuthMode('login')"
+            class="auth-panel__back"
+            :aria-label="t('auth.backToOverview')"
+            :title="t('auth.backToOverview')"
+            :disabled="loading"
+            @click="closeAuthPanel"
           >
-            {{ t('auth.login') }}
+            <span class="material-symbols-outlined" aria-hidden="true">arrow_back</span>
           </button>
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="isRegisterMode"
-            :class="{ active: isRegisterMode }"
-            @click="setAuthMode('register')"
-          >
-            {{ t('auth.register') }}
-          </button>
+          <div class="auth-tabs" role="tablist" :aria-label="t('auth.getStarted')">
+            <button
+              id="auth-tab-login"
+              type="button"
+              role="tab"
+              aria-controls="login-panel"
+              :aria-selected="!isRegisterMode"
+              :tabindex="isRegisterMode ? -1 : 0"
+              :disabled="loading"
+              :class="{ active: !isRegisterMode }"
+              @click="setAuthMode('login')"
+              @keydown.right.prevent="setAuthModeFromKeyboard('register')"
+            >
+              {{ t('auth.login') }}
+            </button>
+            <button
+              id="auth-tab-register"
+              type="button"
+              role="tab"
+              aria-controls="register-panel"
+              :aria-selected="isRegisterMode"
+              :tabindex="isRegisterMode ? 0 : -1"
+              :disabled="loading"
+              :class="{ active: isRegisterMode }"
+              @click="setAuthMode('register')"
+              @keydown.left.prevent="setAuthModeFromKeyboard('login')"
+            >
+              {{ t('auth.register') }}
+            </button>
+          </div>
+          <span aria-hidden="true"></span>
         </div>
 
         <div class="auth-heading">
@@ -281,17 +363,43 @@ onUnmounted(() => {
           <p>{{ panelSubtitle }}</p>
         </div>
 
-        <form v-if="!isRegisterMode" class="auth-form" @submit.prevent="handleLogin">
+        <div
+          v-if="requestError"
+          ref="requestErrorRef"
+          class="auth-request-error"
+          role="alert"
+          tabindex="-1"
+        >
+          <span class="material-symbols-outlined" aria-hidden="true">error</span>
+          <span>{{ requestError }}</span>
+        </div>
+
+        <form
+          v-if="!isRegisterMode"
+          id="login-panel"
+          class="auth-form"
+          role="tabpanel"
+          aria-labelledby="auth-tab-login"
+          @submit.prevent="handleLogin"
+        >
           <label>
             <span>{{ t('auth.account') }}</span>
             <input
+              ref="loginIdentifierRef"
               v-model="loginForm.identifier"
               type="text"
               autocomplete="username"
               :placeholder="t('auth.accountPlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.loginIdentifier)"
+              aria-describedby="login-account-hint"
+              @input="clearFieldError('loginIdentifier')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.loginIdentifier }">
+            <small
+              id="login-account-hint"
+              :role="formErrors.loginIdentifier ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.loginIdentifier }"
+            >
               {{ formErrors.loginIdentifier || t('auth.accountHint') }}
             </small>
           </label>
@@ -299,34 +407,58 @@ onUnmounted(() => {
           <label>
             <span>{{ t('auth.password') }}</span>
             <input
+              ref="loginPasswordRef"
               v-model="loginForm.password"
               type="password"
               autocomplete="current-password"
               :placeholder="t('auth.passwordPlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.loginPassword)"
+              aria-describedby="login-password-hint"
+              @input="clearFieldError('loginPassword')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.loginPassword }">
+            <small
+              id="login-password-hint"
+              :role="formErrors.loginPassword ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.loginPassword }"
+            >
               {{ formErrors.loginPassword || t('auth.loginPasswordHint') }}
             </small>
           </label>
 
           <button class="auth-submit" type="submit" :disabled="loading">
-            {{ loading ? t('app.loading') : t('auth.signInToConsole') }}
+            <span v-if="loading" class="material-symbols-outlined auth-submit__spinner" aria-hidden="true">progress_activity</span>
+            {{ loading ? loadingLabel : t('auth.signInToConsole') }}
           </button>
         </form>
 
-        <form v-else class="auth-form" @submit.prevent="handleRegister">
+        <form
+          v-else
+          id="register-panel"
+          class="auth-form"
+          role="tabpanel"
+          aria-labelledby="auth-tab-register"
+          @submit.prevent="handleRegister"
+        >
           <label>
             <span>{{ t('auth.phoneNumber') }}</span>
             <input
+              ref="registerPhoneRef"
               v-model="registerForm.phone"
               type="tel"
               inputmode="numeric"
               autocomplete="tel"
               :placeholder="t('auth.phonePlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.registerPhone)"
+              aria-describedby="register-phone-hint"
+              @input="clearFieldError('registerPhone')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.registerPhone }">
+            <small
+              id="register-phone-hint"
+              :role="formErrors.registerPhone ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.registerPhone }"
+            >
               {{ formErrors.registerPhone || t('auth.phoneHint') }}
             </small>
           </label>
@@ -334,13 +466,21 @@ onUnmounted(() => {
           <label>
             <span>{{ t('auth.username') }}</span>
             <input
+              ref="registerUsernameRef"
               v-model="registerForm.username"
               type="text"
               autocomplete="username"
               :placeholder="t('auth.usernamePlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.registerUsername)"
+              aria-describedby="register-username-hint"
+              @input="clearFieldError('registerUsername')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.registerUsername }">
+            <small
+              id="register-username-hint"
+              :role="formErrors.registerUsername ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.registerUsername }"
+            >
               {{ formErrors.registerUsername || t('auth.usernameHint') }}
             </small>
           </label>
@@ -348,13 +488,21 @@ onUnmounted(() => {
           <label>
             <span>{{ t('auth.password') }}</span>
             <input
+              ref="registerPasswordRef"
               v-model="registerForm.password"
               type="password"
               autocomplete="new-password"
               :placeholder="t('auth.passwordPlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.registerPassword)"
+              aria-describedby="register-password-hint"
+              @input="clearFieldError('registerPassword')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.registerPassword }">
+            <small
+              id="register-password-hint"
+              :role="formErrors.registerPassword ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.registerPassword }"
+            >
               {{ formErrors.registerPassword || t('auth.passwordHint') }}
             </small>
           </label>
@@ -362,21 +510,34 @@ onUnmounted(() => {
           <label>
             <span>{{ t('auth.confirmPassword') }}</span>
             <input
+              ref="confirmPasswordRef"
               v-model="registerForm.confirmPassword"
               type="password"
               autocomplete="new-password"
               :placeholder="t('auth.confirmPasswordPlaceholder')"
+              :disabled="loading"
               :aria-invalid="Boolean(formErrors.confirmPassword)"
+              aria-describedby="register-confirm-password-hint"
+              @input="clearFieldError('confirmPassword')"
             />
-            <small :class="{ 'auth-form__hint--error': formErrors.confirmPassword }">
+            <small
+              id="register-confirm-password-hint"
+              :role="formErrors.confirmPassword ? 'alert' : undefined"
+              :class="{ 'auth-form__hint--error': formErrors.confirmPassword }"
+            >
               {{ formErrors.confirmPassword || t('auth.confirmPasswordHint') }}
             </small>
           </label>
 
           <button class="auth-submit" type="submit" :disabled="loading">
-            {{ loading ? t('app.loading') : t('auth.registerNow') }}
+            <span v-if="loading" class="material-symbols-outlined auth-submit__spinner" aria-hidden="true">progress_activity</span>
+            {{ loading ? loadingLabel : t('auth.registerNow') }}
           </button>
         </form>
+
+        <p v-if="loading" class="sr-only" role="status" aria-live="polite">
+          {{ loadingLabel }}
+        </p>
       </section>
     </section>
   </div>
@@ -523,6 +684,36 @@ onUnmounted(() => {
   text-align: left;
 }
 
+.auth-panel__topbar {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-panel__back {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+}
+
+.auth-panel__back:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.auth-panel__back:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
 @media (min-width: 1101px) {
   .auth-panel {
     position: absolute;
@@ -558,6 +749,10 @@ onUnmounted(() => {
 .auth-tabs button.active {
   background: rgba(255, 255, 255, 0.9);
   color: hsl(0, 0%, 4%);
+}
+
+.auth-tabs button:disabled {
+  cursor: wait;
 }
 
 .auth-heading {
@@ -618,6 +813,11 @@ onUnmounted(() => {
   border-color: #fca5a5;
 }
 
+.auth-form input:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .auth-form small {
   color: rgba(255, 255, 255, 0.58);
   font-size: 0.74rem;
@@ -628,7 +828,35 @@ onUnmounted(() => {
   color: #fecaca !important;
 }
 
+.auth-request-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 0.8rem;
+  border: 1px solid rgba(252, 165, 165, 0.5);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.34);
+  padding: 0.65rem 0.75rem;
+  color: #fee2e2;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.auth-request-error:focus {
+  outline: 2px solid rgba(254, 202, 202, 0.8);
+  outline-offset: 2px;
+}
+
+.auth-request-error .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 1rem;
+}
+
 .auth-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   min-height: 42px;
   margin-top: 0.1rem;
   border: 0;
@@ -637,6 +865,15 @@ onUnmounted(() => {
   color: hsl(0, 0%, 4%);
   cursor: pointer;
   font-weight: 900;
+}
+
+.auth-submit__spinner {
+  font-size: 1rem;
+  animation: auth-spin 1s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
 }
 
 .auth-submit:disabled {

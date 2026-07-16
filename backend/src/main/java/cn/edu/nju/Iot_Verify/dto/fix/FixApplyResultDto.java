@@ -26,7 +26,10 @@ public class FixApplyResultDto {
     /** Whether the server recomputed and forward-verified the applied suggestion. */
     private boolean verificationRechecked;
 
-    /** The server-recomputed suggestion that was actually applied. */
+    /** Whether prior verification evidence was reused after the complete model snapshot matched. */
+    private boolean verificationEvidenceReused;
+
+    /** The signed suggestion that was actually applied. */
     private FixSuggestionDto appliedSuggestion;
 
     private int previousRuleCount;

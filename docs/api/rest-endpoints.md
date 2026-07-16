@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-14.
+Verified against code on 2026-07-15.
 
 ---
 
@@ -50,6 +50,7 @@ Verified against code on 2026-07-14.
 | DELETE | `/api/board/rules/{ruleId}` | Delete one automation rule | `docs/api/board.md` |
 | GET | `/api/board/replacement-preview` | Preview authoritative current-scene counts and obtain the confirmation impact token | `docs/api/board.md` |
 | POST | `/api/board/batch` | Confirmed atomic full-scene replacement/clear with exact template snapshots | `docs/api/board.md` |
+| GET | `/api/board/snapshot` | Atomic initial Board semantic snapshot | `docs/api/board.md` |
 | GET | `/api/board/layout` | Get board layout | `docs/api/board.md` |
 | POST | `/api/board/layout` | Save board layout | `docs/api/board.md` |
 | GET | `/api/board/templates` | List device templates | `docs/api/board.md` |
@@ -65,6 +66,7 @@ Verified against code on 2026-07-14.
 | POST | `/api/board/rules/check-similarity` | Explicit AI rule-similarity check available from `RuleBuilderDialog` | `docs/api/board.md` |
 | GET | `/api/board/specs/recommend` | AI specification recommendations | `docs/api/board.md` |
 | POST | `/api/board/scenario/recommend` | AI importable scene-draft recommendation | `docs/api/board.md` |
+| DELETE | `/api/board/recommendations/{requestId}` | Cancel an in-flight standalone recommendation | `docs/api/board.md` |
 
 ## Verification — `VerificationController`
 
@@ -85,8 +87,9 @@ Verified against code on 2026-07-14.
 | GET | `/api/verify/traces/{id}` | Trace detail | `docs/api/verification.md` |
 | DELETE | `/api/verify/traces/{id}` | Delete trace | `docs/api/verification.md` |
 | GET | `/api/verify/traces/{id}/fault-rules` | Counterexample rule involvement with source-model completeness and limitations | `docs/api/verification.md` |
-| POST | `/api/verify/traces/{id}/fix` | Fix suggestions | `docs/api/verification.md` |
-| POST | `/api/verify/traces/{id}/fix/apply` | Apply a fix suggestion (server re-verifies) to board rules | `docs/api/verification.md` |
+| POST | `/api/verify/traces/{id}/fix` | Generate signed fix suggestions | `docs/api/verification.md` |
+| DELETE | `/api/verify/fix-requests/{requestId}` | Cancel an in-flight fix search | `docs/api/verification.md` |
+| POST | `/api/verify/traces/{id}/fix/apply` | Apply the exact signed suggestion after snapshot checks | `docs/api/verification.md` |
 | GET | `/api/verify/tasks/{id}/traces` | Traces for a specific async verification task | `docs/api/verification.md` |
 
 ## Simulation — `SimulationController`
@@ -104,6 +107,24 @@ Verified against code on 2026-07-14.
 | GET | `/api/simulate/traces` | List saved simulations (summary) | `docs/api/verification.md` |
 | GET | `/api/simulate/traces/{id}` | Simulation detail (full states) | `docs/api/verification.md` |
 | DELETE | `/api/simulate/traces/{id}` | Delete simulation | `docs/api/verification.md` |
+
+## Counterexample exploration — `FuzzController`
+
+| Method | Path | Note | Detail |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/fuzz/workload/preview` | Calculate the current Board's authoritative bounded-search workload without creating a task | `docs/api/fuzzing.md` |
+| POST | `/api/fuzz/paper-domain/preview` | Read the current Board's authoritative paper-mode initial-state and Event domains without creating a task | `docs/api/fuzzing.md` |
+| POST | `/api/fuzz/async` | Capture the current Board and submit a bounded background search | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/tasks` | Active/failed/cancelled exploration task status (completed results excluded) | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/tasks/{id}` | Exploration task detail | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/tasks/{id}/progress` | Exploration progress (0-100) | `docs/api/fuzzing.md` |
+| POST | `/api/fuzz/tasks/{id}/cancel` | Request cancellation and return the actual outcome | `docs/api/fuzzing.md` |
+| DELETE | `/api/fuzz/tasks/{id}` | Dismiss a failed/cancelled task with no result | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/runs` | Completed exploration result summaries with finding summaries | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/runs/{id}` | Completed exploration result with full findings | `docs/api/fuzzing.md` |
+| DELETE | `/api/fuzz/runs/{id}` | Delete an exploration result and all findings | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/runs/{id}/findings` | Full candidate findings for one completed run | `docs/api/fuzzing.md` |
+| GET | `/api/fuzz/findings/{id}` | One owned candidate finding | `docs/api/fuzzing.md` |
 
 ## Chat — `ChatController`
 
@@ -130,6 +151,7 @@ backend/src/main/java/cn/edu/nju/Iot_Verify/controller/
 ├── AuthController.java
 ├── BoardStorageController.java
 ├── ChatController.java
+├── FuzzController.java
 ├── SimulationController.java
 └── VerificationController.java
 ```

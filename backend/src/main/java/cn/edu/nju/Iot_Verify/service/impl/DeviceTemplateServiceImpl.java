@@ -39,6 +39,7 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
     private final DeviceTemplateRepository templateRepo;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final ObjectMapper objectMapper;
+    private volatile List<DefaultTemplateDefinition> cachedDefaultTemplateDefinitions;
 
     @Override
     @Transactional(readOnly = true)
@@ -86,15 +87,39 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
     }
 
     private List<DeviceTemplatePo> loadDefaultTemplateEntities(Long userId) {
-        List<DeviceTemplatePo> templates = new ArrayList<>();
+        return defaultTemplateDefinitions().stream()
+                .map(definition -> DeviceTemplatePo.builder()
+                        .userId(userId)
+                        .name(definition.name())
+                        .manifestJson(definition.manifestJson())
+                        .defaultTemplate(true)
+                        .build())
+                .toList();
+    }
+
+    private List<DefaultTemplateDefinition> defaultTemplateDefinitions() {
+        List<DefaultTemplateDefinition> cached = cachedDefaultTemplateDefinitions;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            if (cachedDefaultTemplateDefinitions == null) {
+                cachedDefaultTemplateDefinitions = loadAndValidateDefaultTemplateDefinitions();
+            }
+            return cachedDefaultTemplateDefinitions;
+        }
+    }
+
+    private List<DefaultTemplateDefinition> loadAndValidateDefaultTemplateDefinitions() {
+        List<DefaultTemplateDefinition> templates = new ArrayList<>();
         try {
             PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
             Resource[] resources = resolver.getResources("classpath:deviceTemplate/*.json");
-            log.info("Found {} device template resources on classpath for user {}", resources.length, userId);
+            log.info("Found {} bundled device template resources on classpath", resources.length);
 
             if (resources.length == 0) {
                 resources = resolver.getResources("classpath*:deviceTemplate/*.json");
-                log.info("Fallback found {} device template resources for user {}", resources.length, userId);
+                log.info("Fallback found {} bundled device template resources", resources.length);
             }
 
             if (resources.length == 0) {
@@ -128,12 +153,7 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
                     }
                     deviceTemplateSchemaValidator.validateRawManifest(name, manifestNode);
 
-                    templates.add(DeviceTemplatePo.builder()
-                            .userId(userId)
-                            .name(name)
-                            .manifestJson(json)
-                            .defaultTemplate(true)
-                            .build());
+                    templates.add(new DefaultTemplateDefinition(name, json));
                 } catch (Exception e) {
                     if (e instanceof InternalServerException internal) {
                         throw internal;
@@ -150,6 +170,9 @@ public class DeviceTemplateServiceImpl implements DeviceTemplateService {
             throw new InternalServerException("Failed to load bundled default device templates; no defaults were imported.", e);
         }
         return List.copyOf(templates);
+    }
+
+    private record DefaultTemplateDefinition(String name, String manifestJson) {
     }
 
     private String extractManifestName(JsonNode manifestNode) {

@@ -5,7 +5,6 @@ import cn.edu.nju.Iot_Verify.dto.auth.AuthResponseDto;
 import cn.edu.nju.Iot_Verify.dto.auth.DeleteAccountRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.LoginRequestDto;
 import cn.edu.nju.Iot_Verify.dto.auth.RegisterRequestDto;
-import cn.edu.nju.Iot_Verify.dto.auth.RegisterResponseDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.AuthService;
 import jakarta.validation.Valid;
@@ -22,7 +21,7 @@ public class AuthController {
     private final AuthService authService;
 
     @PostMapping("/register")
-    public Result<RegisterResponseDto> register(@Valid @RequestBody RegisterRequestDto request) {
+    public Result<AuthResponseDto> register(@Valid @RequestBody RegisterRequestDto request) {
         return Result.success(authService.register(request));
     }
 

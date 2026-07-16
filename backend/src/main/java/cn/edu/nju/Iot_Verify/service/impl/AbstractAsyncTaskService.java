@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.TaskCancellationResultDto;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.po.TaskView;
+import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * @param <T> 任务 PO 类型，必须实现 {@link TaskView}
  */
 @Slf4j
-public abstract class AbstractAsyncTaskService<T extends TaskView> {
+public abstract class AbstractAsyncTaskService<T extends TaskView>
+        implements AsyncTaskExecutionControl {
 
     protected static final int MAX_OUTPUT_LENGTH = 10_000;
     private static final String DIAGNOSTIC_LOSS_MESSAGE =
@@ -75,6 +77,43 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
 
     protected void removeTaskProgress(Long taskId) {
         taskProgress.remove(taskId);
+    }
+
+    protected enum LocalExecutionStopResult {
+        NONE(false, false),
+        STOPPED_BEFORE_START(true, false),
+        STOP_REQUESTED(true, true);
+
+        private final boolean requested;
+        private final boolean mayStillBeStopping;
+
+        LocalExecutionStopResult(boolean requested, boolean mayStillBeStopping) {
+            this.requested = requested;
+            this.mayStillBeStopping = mayStillBeStopping;
+        }
+    }
+
+    @Override
+    public boolean requestLocalExecutionStop(Long taskId) {
+        if (taskId == null) return false;
+        return stopLocalExecution(taskId).requested;
+    }
+
+    private LocalExecutionStopResult stopLocalExecution(Long taskId) {
+        LocalExecutionStopResult additionalStop = Objects.requireNonNull(
+                stopAdditionalLocalExecution(taskId),
+                "stopAdditionalLocalExecution must not return null");
+        Thread taskThread = runningTasks.get(taskId);
+        if (taskThread != null && taskThread.isAlive()) {
+            taskThread.interrupt();
+            return LocalExecutionStopResult.STOP_REQUESTED;
+        }
+        return additionalStop;
+    }
+
+    /** Lets a domain service stop work that is accepted locally but has no runner thread yet. */
+    protected LocalExecutionStopResult stopAdditionalLocalExecution(Long taskId) {
+        return LocalExecutionStopResult.NONE;
     }
 
     // ── 直接搬入的具体方法（无领域差异）─────────────────────────────
@@ -125,8 +164,10 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
     protected void updateTaskProgress(Long taskId, int progress, String message) {
         Long requiredTaskId = Objects.requireNonNull(taskId, "taskId must not be null");
         int clamped = Math.min(100, Math.max(0, progress));
-        taskProgress.put(requiredTaskId, clamped);
-        atomicUpdateProgress(requiredTaskId, clamped);
+        Integer previous = taskProgress.put(requiredTaskId, clamped);
+        if (!Objects.equals(previous, clamped)) {
+            atomicUpdateProgress(requiredTaskId, clamped);
+        }
         log.debug("{} {} progress: {}% - {}", taskResourceType, requiredTaskId, progress, message);
     }
 
@@ -169,21 +210,20 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
     protected TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
         T task = findTaskByIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
-        String statusBeforeCancellation = task.getTaskStatusName();
-
         boolean markerWasPresent = cancelledTasks.contains(taskId);
         cancelledTasks.add(taskId);
         try {
             int updated = atomicCancelTask(taskId, LocalDateTime.now());
-            Thread taskThread = runningTasks.get(taskId);
             if (updated == 0) {
                 T currentTask = findTaskByIdAndUserId(taskId, userId)
                         .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
                 String currentStatus = currentTask.getTaskStatusName();
                 boolean alreadyCancelled = currentTask.isCancelledStatus();
-                if (alreadyCancelled && taskThread != null && taskThread.isAlive()) {
-                    taskThread.interrupt();
-                } else if (!markerWasPresent) {
+                LocalExecutionStopResult localStop = alreadyCancelled
+                        ? stopLocalExecution(taskId)
+                        : LocalExecutionStopResult.NONE;
+                if (!markerWasPresent
+                        && localStop != LocalExecutionStopResult.STOP_REQUESTED) {
                     cancelledTasks.remove(taskId);
                 }
                 return TaskCancellationResultDto.builder()
@@ -191,16 +231,15 @@ public abstract class AbstractAsyncTaskService<T extends TaskView> {
                         .cancellationAccepted(false)
                         .cancellationOutcome(cancellationOutcomeFor(currentStatus))
                         .taskStatus(currentStatus)
-                        .executionMayStillBeStopping(alreadyCancelled
-                                && taskThread != null && taskThread.isAlive())
+                        .executionMayStillBeStopping(localStop.mayStillBeStopping)
                         .build();
             }
 
-            boolean runningExecutionMayStillBeStopping = "RUNNING".equals(statusBeforeCancellation);
-            if (taskThread != null && taskThread.isAlive()) {
-                runningExecutionMayStillBeStopping = true;
-                taskThread.interrupt();
-            } else if (!markerWasPresent) {
+            LocalExecutionStopResult localStop = stopLocalExecution(taskId);
+            boolean runningExecutionMayStillBeStopping =
+                    localStop != LocalExecutionStopResult.STOPPED_BEFORE_START;
+            if (!markerWasPresent
+                    && localStop != LocalExecutionStopResult.STOP_REQUESTED) {
                 cancelledTasks.remove(taskId);
             }
             return TaskCancellationResultDto.builder()

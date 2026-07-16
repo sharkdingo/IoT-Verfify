@@ -66,7 +66,7 @@ class RecommendRulesToolTest {
     void execute_withUnparseableAiResponse_returnsUpstreamErrorNotEmptySuccess() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("not-json");
 
         JsonNode json = objectMapper.readTree(tool.execute("{}"));
@@ -80,7 +80,7 @@ class RecommendRulesToolTest {
     void execute_whenAiReturnsNoCandidates_distinguishesThatFromBackendFiltering() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("{\"recommendations\":[]}");
 
         JsonNode json = objectMapper.readTree(tool.execute("{}"));
@@ -94,7 +94,7 @@ class RecommendRulesToolTest {
     void execute_withChineseLanguage_returnsLocalizedBackendMessage() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(
+        when(promptCompletionService.completeRecommendation(
                 anyString(),
                 contains("输出语言: 简体中文"),
                 anyDouble(),
@@ -136,7 +136,7 @@ class RecommendRulesToolTest {
     void execute_acceptsModeAttributeRecommendation() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -165,7 +165,7 @@ class RecommendRulesToolTest {
     void execute_normalizesSetRelationRecommendation() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -195,7 +195,7 @@ class RecommendRulesToolTest {
     void execute_acceptsFullStateTupleSetRecommendation() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(homeModeDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -227,7 +227,7 @@ class RecommendRulesToolTest {
     void execute_acceptsApiSignalRecommendationWithoutRelationOrValue() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(motionSensorDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -260,7 +260,7 @@ class RecommendRulesToolTest {
     void execute_reportsEquivalentApiEventSyntaxNormalization() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(motionSensorDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -295,7 +295,7 @@ class RecommendRulesToolTest {
     void execute_filtersApiEventComparisonsThatChangeOrLeaveSemanticsAmbiguous() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(motionSensorDevice(), lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[
                           {"name":"False is not an event occurrence",
@@ -324,7 +324,7 @@ class RecommendRulesToolTest {
     void execute_canonicalizesAiFieldCaseBeforeReturningRecommendation() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -356,7 +356,7 @@ class RecommendRulesToolTest {
     void execute_reportsTruncatedRawCandidatesAfterRequestedLimit() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -393,7 +393,7 @@ class RecommendRulesToolTest {
     void execute_returnsFilteredItemsWithReasonsForInvalidCandidates() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -455,7 +455,7 @@ class RecommendRulesToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L))
                 .thenReturn(List.of(lightDevice(), phoneDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {
                           "recommendations": [
@@ -493,7 +493,7 @@ class RecommendRulesToolTest {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L))
                 .thenReturn(List.of(lightDevice(), motionSensorDevice(), phoneDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[{
                           "name":"Attach a photo to an ordinary action",
@@ -516,7 +516,7 @@ class RecommendRulesToolTest {
     void execute_filtersCandidateWithUnknownSemanticField() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[{
                           "name":"Open a door as a hidden effect",
@@ -539,7 +539,7 @@ class RecommendRulesToolTest {
     void execute_filtersCandidateWithoutPersistedRuleName() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
         when(boardStorageService.getRules(1L)).thenReturn(List.of());
-        when(promptCompletionService.complete(anyString(), anyString(), anyDouble(), anyInt()))
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
                 .thenReturn("""
                         {"recommendations":[{
                           "conditions":[{"deviceId":"node-light","attribute":"motion",
