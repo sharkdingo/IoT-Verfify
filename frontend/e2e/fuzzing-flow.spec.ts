@@ -172,12 +172,33 @@ test.describe('bounded counterexample exploration', () => {
       expect(configuredWorkloadPreview.estimatedWorkload)
         .toBeLessThanOrEqual(configuredWorkloadPreview.workloadLimit)
 
+      // Hold only the page-side poll until the user has explicitly moved the run to the background.
+      let releaseUiTaskPolling = () => {}
+      let uiTaskPollingReleased = false
+      const uiTaskPollingGate = new Promise<void>(resolve => {
+        releaseUiTaskPolling = () => {
+          uiTaskPollingReleased = true
+          resolve()
+        }
+      })
+      await page.route('**/api/fuzz/tasks/**', async route => {
+        const requestUrl = new URL(route.request().url())
+        const isTaskPoll = route.request().method() === 'GET'
+          && /^\/api\/fuzz\/tasks\/\d+(?:\/progress)?$/.test(requestUrl.pathname)
+        if (isTaskPoll && !uiTaskPollingReleased) await uiTaskPollingGate
+        await route.continue()
+      })
+
       const acceptedResponsePromise = page.waitForResponse(response =>
         response.request().method() === 'POST'
           && new URL(response.url()).pathname === '/api/fuzz/async')
       await page.getByTestId('run-fuzzing').click()
       const acceptedResponse = await acceptedResponsePromise
-      await closeFuzzingPanelIfPresent(page, panel)
+      try {
+        await closeFuzzingPanelIfPresent(page, panel)
+      } finally {
+        releaseUiTaskPolling()
+      }
       expect(acceptedResponse.request().postDataJSON()).toMatchObject({
         explorationMode: 'BOARD_SNAPSHOT',
         maxIterations: 60,
