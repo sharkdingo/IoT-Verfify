@@ -1,4 +1,4 @@
-import { type APIRequestContext, type APIResponse, type Page, type Route } from '@playwright/test'
+import { type APIRequestContext, type APIResponse, type Locator, type Page, type Route } from '@playwright/test'
 import path from 'node:path'
 import {
   apiBaseURL,
@@ -99,6 +99,16 @@ const waitForBoardSpecCount = async (
   throw new Error(`Timed out waiting for ${expectedCount} board specs; latestCount=${latestCount}`)
 }
 
+const closeFuzzingPanelIfPresent = async (page: Page, panel: Locator) => {
+  if (!(await panel.isVisible().catch(() => false))) return
+  try {
+    await page.getByTestId('close-fuzzing-panel').click({ timeout: 5_000 })
+  } catch (error) {
+    if (await panel.isVisible().catch(() => false)) throw error
+  }
+  await expect(panel).toBeHidden({ timeout: 20_000 })
+}
+
 test.describe('bounded counterexample exploration', () => {
   test('imports a scene, finds and replays a candidate, and remains usable on mobile', async ({ page, request }) => {
     test.setTimeout(180_000)
@@ -166,9 +176,8 @@ test.describe('bounded counterexample exploration', () => {
         response.request().method() === 'POST'
           && new URL(response.url()).pathname === '/api/fuzz/async')
       await page.getByTestId('run-fuzzing').click()
-      await page.getByTestId('close-fuzzing-panel').click()
-      await expect(panel).toBeHidden()
       const acceptedResponse = await acceptedResponsePromise
+      await closeFuzzingPanelIfPresent(page, panel)
       expect(acceptedResponse.request().postDataJSON()).toMatchObject({
         explorationMode: 'BOARD_SNAPSHOT',
         maxIterations: 60,
@@ -351,8 +360,8 @@ test.describe('bounded counterexample exploration', () => {
         response.request().method() === 'POST'
           && new URL(response.url()).pathname === '/api/fuzz/async')
       await page.getByTestId('run-fuzzing').click()
-      await page.getByTestId('close-fuzzing-panel').click()
       const paperAcceptedResponse = await paperAcceptedResponsePromise
+      await closeFuzzingPanelIfPresent(page, panel)
       const paperRequest = paperAcceptedResponse.request().postDataJSON()
       expect(paperRequest).toMatchObject({
         explorationMode: 'PAPER_COMPATIBLE',

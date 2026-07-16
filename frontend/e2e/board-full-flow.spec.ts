@@ -1199,18 +1199,45 @@ test.describe('board full-stack NuSMV user flow', () => {
     expect(Array.isArray(fix.suggestions)).toBeTruthy()
     expect(fix.suggestions.some((suggestion: any) => suggestion.verified === true)).toBeTruthy()
 
+    const asyncSimulationResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/simulate/async')
     await page.getByTestId('open-simulation-panel').click()
     await page.getByTestId('simulation-mode-async').click()
     await page.getByTestId('run-simulation').click()
-    await waitForApi<any[]>(request, auth, '/api/simulate/traces', runs => runs.length > 0, 45_000)
+    const asyncSimulationTask = await unwrap<{ id: number }>(
+      (await asyncSimulationResponsePromise) as any)
+    const completedSimulationTask = await waitForApi<any>(
+      request,
+      auth,
+      `/api/simulate/tasks/${asyncSimulationTask.id}`,
+      task => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status),
+      120_000)
+    expect(completedSimulationTask.status).toBe('COMPLETED')
+    await expect(page.getByTestId('open-simulation-panel'))
+      .toHaveAttribute('aria-label', 'Open simulation settings', { timeout: 30_000 })
     if (await page.getByTestId('simulation-timeline').isVisible().catch(() => false)) {
       await page.getByTestId('simulation-timeline-close').click()
     }
+    await expect(page.getByTestId('open-verification-panel')).toBeEnabled({ timeout: 30_000 })
 
+    const asyncVerificationResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/verify/async')
     await page.getByTestId('open-verification-panel').click()
     await page.getByTestId('verification-mode-async').click()
     await page.getByTestId('run-verification').click()
-    await waitForApi<any[]>(request, auth, '/api/verify/runs', runs => runs.length > 0, 45_000)
+    const asyncVerificationTask = await unwrap<{ id: number }>(
+      (await asyncVerificationResponsePromise) as any)
+    const completedVerificationTask = await waitForApi<any>(
+      request,
+      auth,
+      `/api/verify/tasks/${asyncVerificationTask.id}`,
+      task => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status),
+      120_000)
+    expect(completedVerificationTask.status).toBe('COMPLETED')
+    await expect(page.getByTestId('open-verification-panel'))
+      .toHaveAttribute('aria-label', 'Open verification settings', { timeout: 30_000 })
     if (await page.getByTestId('verification-result-dialog').isVisible().catch(() => false)) {
       await page.getByTestId('close-verification-result').click()
     }
