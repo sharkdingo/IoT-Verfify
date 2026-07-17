@@ -43,9 +43,10 @@ public class AddNodeTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
-        String templateDesc = "Device template type name. Use board_overview tool to see available templates. " +
-                "Map user aliases to standard names. Do not modify template names like Air Purifier to Air_Purifier. " +
-                "If device is semantically unrelated to all templates, pass original name.";
+        String templateDesc = "Exact device template name returned by list_templates. " +
+                "Map user aliases to a returned template name, preserving spaces and punctuation exactly; " +
+                "for example, do not change Air Purifier to Air_Purifier. " +
+                "If no listed template matches the requested device, do not invent a template name.";
         props.put("templateName", Map.of("type", "string", "description", templateDesc));
 
         String labelDesc = "User-facing device display name, independent of the system-generated stable device id. " +
@@ -91,7 +92,9 @@ public class AddNodeTool extends AbstractAiTool {
                 "object", props, List.of("templateName")
         );
 
-        return LlmToolSpec.of(getName(), "Add a new device", schema);
+        return LlmToolSpec.of(getName(),
+                "Add one device instance from an exact template name returned by list_templates. " +
+                        "This targeted mutation preserves existing board items.", schema);
     }
 
     @Override

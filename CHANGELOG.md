@@ -45,6 +45,17 @@ history into a technical spec. The spec content itself now lives under
   indefinite generic spinner.
 
 #### Fixed
+- Corrected `add_device` planning guidance to use the authoritative `list_templates`
+  catalog instead of claiming that `board_overview` lists available device types. Scene
+  completion now obtains an exact template name before targeted creation rather than
+  guessing or silently degrading the requested composition.
+- Prevented ordinary continuation requests such as "go ahead and complete the scene" or
+  the equivalent Chinese wording from being treated as authorization for a pending
+  deletion. Longer confirmations must explicitly name deletion, while concise direct
+  confirmations remain supported.
+- Repaired blank or repeated tool-call correlation ids returned by OpenAI-compatible
+  providers before persistence and execution, keeping assistant calls and tool results
+  protocol-complete instead of failing after a tool may already have run.
 - Kept multi-call AI conversations provider-valid when an earlier call requires user
   confirmation or returns an unavailable result. Remaining same-round calls are now
   explicitly recorded as skipped without execution, so the final explanation no longer

@@ -67,8 +67,10 @@ Questions about the current scene, including device/rule/specification counts, a
 planned from `board_overview` rather than inferred from chat history. A request to extend
 or complete the current scene reads that overview first and may compose targeted device,
 environment, rule, and specification recommendation/mutation tools while preserving the
-existing scene. `recommend_scenario` remains a complete replacement/import draft and is
-used only when the user explicitly asks for that workflow.
+existing scene. Before adding a device, the planner reads `list_templates` for the exact
+available template name instead of treating `board_overview` as a template catalog or
+inventing a name. `recommend_scenario` remains a complete replacement/import draft and
+is used only when the user explicitly asks for that workflow.
 
 Tool execution is not one transaction across an entire user request. Each mutating tool
 commits or rejects independently. There is no five-round product budget: planning
@@ -97,12 +99,19 @@ exactly one matching tool-result id before sending that block back to a provider
 Incomplete, duplicate, malformed, or isolated internal tool blocks are omitted from the
 model context, while surrounding user-visible conversation remains available. This lets
 sessions created before the same-round skip rule recover without repeating a provider
-protocol error.
+protocol error. During the active request, blank or reused correlation ids returned by a
+compatible provider are replaced with unique internal ids before persistence or tool
+execution, and the same repaired ids are used for assistant calls and their results.
 
 Destructive deletion previews additionally return an opaque `impactToken`. The backend
 keeps one pending deletion per authenticated user and chat session, bound to the tool,
 target, and canonical digest of the visible preview. The immediately following explicit
-confirmation must return that token. It is valid for 15 minutes and is consumed once
+confirmation must return that token. A short confirmation such as `yes`, `confirm`, or
+an equivalent concise Chinese confirmation is accepted. A longer message beginning with
+`proceed`, `go ahead`, or the Chinese equivalent of "continue" counts only when it
+explicitly refers to deletion. Requests such as `go ahead and complete the scene`, or
+the equivalent Chinese scene-completion request, do not authorize a pending deletion.
+The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
 expired, cross-session, cross-user, changed-preview, and replayed tokens return a no-write
 `409` with `requiresUserConfirmation=true` and a fresh preview where available. A normal

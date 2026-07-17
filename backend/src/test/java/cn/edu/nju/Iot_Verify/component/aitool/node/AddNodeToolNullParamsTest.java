@@ -17,6 +17,8 @@ import org.mockito.Mock;
 import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -45,6 +47,18 @@ class AddNodeToolNullParamsTest {
     @AfterEach
     void tearDown() {
         UserContextHolder.clear();
+    }
+
+    @Test
+    void definition_directsModelToAuthoritativeTemplateCatalog() {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> templateProperty = (Map<String, Object>)
+                tool.getDefinition().parameters().properties.get("templateName");
+        String propertyDescription = String.valueOf(templateProperty.get("description"));
+
+        assertTrue(propertyDescription.contains("list_templates"));
+        assertFalse(propertyDescription.contains("board_overview"));
+        assertTrue(tool.getDefinition().description().contains("targeted mutation"));
     }
 
     @Test

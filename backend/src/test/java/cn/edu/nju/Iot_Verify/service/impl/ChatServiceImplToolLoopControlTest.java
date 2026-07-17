@@ -159,6 +159,7 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(planning.contains("truncated candidates were never inspected"));
         assertTrue(planning.contains("complete tool catalog"));
         assertTrue(planning.contains("call board_overview first"));
+        assertTrue(planning.contains("use list_templates"));
         assertTrue(planning.contains("Use recommend_scenario only"));
         assertTrue(planning.contains("Do not call"));
         assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));
@@ -295,6 +296,34 @@ class ChatServiceImplToolLoopControlTest {
         assertEquals(3, messages.size());
         JsonNode skipped = new ObjectMapper().readTree(messages.get(2).content());
         assertEquals("PRIOR_RESULT_UNAVAILABLE", skipped.path("reasonCode").asText());
+    }
+
+    @Test
+    void executeToolLoop_repairsBlankDuplicateAndReusedProviderToolCallIds() throws Exception {
+        List<LlmToolCall> plannedCalls = List.of(
+                new LlmToolCall("", "list_rules", "{}"),
+                new LlmToolCall("already_used", "list_specs", "{}"),
+                new LlmToolCall("already_used", "board_overview", "{}"));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofToolCalls(plannedCalls))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute(anyString(), anyString())).thenReturn("{\"count\":0}");
+
+        List<LlmMessage> messages = new ArrayList<>(List.of(
+                LlmMessage.assistantToolCalls(List.of(
+                        new LlmToolCall("already_used", "list_templates", "{}"))),
+                LlmMessage.tool("already_used", "{\"count\":45}")));
+        invokeToolLoop(new AtomicBoolean(false), new LinkedHashSet<>(), mock(SseEmitter.class), messages);
+
+        List<String> assistantIds = messages.get(2).toolCalls().stream().map(LlmToolCall::id).toList();
+        List<String> resultIds = messages.subList(3, 6).stream().map(LlmMessage::toolCallId).toList();
+        assertEquals(3, new LinkedHashSet<>(assistantIds).size());
+        assertTrue(assistantIds.stream().noneMatch(String::isBlank));
+        assertFalse(assistantIds.contains("already_used"));
+        assertEquals(assistantIds, resultIds);
+        verify(aiToolManager).execute("list_rules", "{}");
+        verify(aiToolManager).execute("list_specs", "{}");
+        verify(aiToolManager).execute("board_overview", "{}");
     }
 
     @Test

@@ -331,8 +331,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
           board_overview first and answer from its current counts and semantic data rather than chat history.
         - To extend or complete the existing scene, call board_overview first, identify concrete gaps, then freely
           compose recommend_related_devices, recommend_rules, recommend_specifications, add_device, manage_rule,
-          manage_spec, and manage_environment. Preserve existing scene content unless the user explicitly asks for
-          full replacement.
+          manage_spec, and manage_environment. Before add_device, use list_templates to obtain an exact available
+          template name instead of guessing one. Preserve existing scene content unless the user explicitly asks
+          for full replacement.
         - A recommendation is a reviewed candidate, not an applied change and not a formal-verification result.
         - If the user asks only to recommend or explore, return the candidates and ask what to apply. Do not call
           add_device, manage_rule, or manage_spec in the same turn on the user's behalf.
@@ -493,7 +494,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         confirmationPending);
             }
 
-            List<LlmToolCall> toolCalls = response.toolCalls();
+            List<LlmToolCall> toolCalls = normalizeToolCallIds(response.toolCalls(), messages);
             if (toolCalls.isEmpty()) {
                 String aiText = response.text();
                 if (!aiText.isBlank()) {
@@ -641,6 +642,37 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             isDisconnect.set(true);
         }
         return guardResult;
+    }
+
+    private List<LlmToolCall> normalizeToolCallIds(List<LlmToolCall> toolCalls,
+                                                    List<LlmMessage> messages) {
+        Set<String> usedIds = new LinkedHashSet<>();
+        if (messages != null) {
+            for (LlmMessage message : messages) {
+                if (message == null || !message.hasToolCalls()) {
+                    continue;
+                }
+                for (LlmToolCall existingCall : message.toolCalls()) {
+                    if (existingCall != null && existingCall.id() != null && !existingCall.id().isBlank()) {
+                        usedIds.add(existingCall.id().trim());
+                    }
+                }
+            }
+        }
+
+        List<LlmToolCall> normalized = new ArrayList<>(toolCalls.size());
+        for (LlmToolCall toolCall : toolCalls) {
+            String id = safeString(toolCall.id()).trim();
+            if (id.isBlank() || !usedIds.add(id)) {
+                String reason = id.isBlank() ? "blank" : "duplicate";
+                do {
+                    id = "call_" + UUID.randomUUID().toString().replace("-", "");
+                } while (!usedIds.add(id));
+                log.warn("Replaced {} provider tool-call id with a unique internal correlation id", reason);
+            }
+            normalized.add(new LlmToolCall(id, toolCall.name(), toolCall.argumentsJson()));
+        }
+        return List.copyOf(normalized);
     }
 
     private void appendSkippedToolResults(Long userId,

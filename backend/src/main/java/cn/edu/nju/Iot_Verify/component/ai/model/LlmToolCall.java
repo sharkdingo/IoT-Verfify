@@ -3,7 +3,8 @@ package cn.edu.nju.Iot_Verify.component.ai.model;
 /**
  * A single tool/function call requested by the model, in provider-agnostic form.
  *
- * @param id           provider-assigned tool-call id (echoed back on the TOOL result message)
+ * @param id           tool-call correlation id echoed back on the TOOL result message; the chat loop
+ *                     replaces blank or reused provider ids before persistence and execution
  * @param name         function name the model wants to invoke
  * @param argumentsJson raw JSON arguments string produced by the model (may be empty, never null)
  */
