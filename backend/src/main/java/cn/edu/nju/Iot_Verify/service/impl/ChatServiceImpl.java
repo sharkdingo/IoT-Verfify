@@ -1,6 +1,6 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
-import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
@@ -45,7 +45,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -67,7 +66,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private final UserRepository userRepository;
     private final LlmChatService llmChatService;
     private final LlmMessageCodec messageCodec;
-    private final ChatIntentRouter chatIntentRouter;
+    private final ChatConfirmationDetector chatConfirmationDetector;
     private final AiToolManager aiToolManager;
     private final AiDestructiveActionGuard destructiveActionGuard;
     private final ObjectMapper objectMapper;
@@ -181,7 +180,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     @Override
     public void processStreamChat(Long userId, String sessionId, String content, SseEmitter emitter) {
-        boolean explicitConfirmation = chatIntentRouter.isExplicitConfirmation(content);
+        boolean explicitConfirmation = chatConfirmationDetector.isExplicitConfirmation(content);
         UserContextHolder.setUserId(userId);
         UserContextHolder.setChatSessionId(sessionId);
         UserContextHolder.setDestructiveActionConfirmed(explicitConfirmation);
@@ -223,21 +222,15 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return;
             }
 
-            ChatIntentRouter.Decision routeDecision = chatIntentRouter.route(content);
             List<ChatMessagePo> historyPO = getSmartHistory(sessionId, HISTORY_CHAR_LIMIT);
             List<LlmMessage> messages = new ArrayList<>();
-            messages.add(routeDecision.requiresToolLoop() ? buildToolPlanningSystemPrompt() : buildVisibleReplySystemPrompt(false));
+            messages.add(buildToolPlanningSystemPrompt());
             messages.addAll(llmChatService.toMessages(historyPO));
 
-            if (routeDecision.requiresToolLoop()) {
-                log.debug("Routing chat message to tool loop: reason={}", routeDecision.reason());
-                List<LlmToolSpec> tools = selectRelevantTools(
-                        aiToolManager.getAllToolDefinitions(), content, routeDecision.reason());
-                log.debug("Selected {} tool definition(s) for chat planning", tools.size());
-                loopResult = executeToolLoop(userId, sessionId, messages, tools, commandSet, emitter, isDisconnect);
-            } else {
-                log.debug("Skipping tool planning for conversational chat message: reason={}", routeDecision.reason());
-            }
+            List<LlmToolSpec> availableTools = aiToolManager.getAllToolDefinitions();
+            List<LlmToolSpec> tools = availableTools == null ? List.of() : availableTools;
+            log.debug("Starting model-driven planning with the complete {}-tool catalog", tools.size());
+            loopResult = executeToolLoop(userId, sessionId, messages, tools, commandSet, emitter, isDisconnect);
 
             if (isDisconnect.get()) {
                 log.info("Client disconnected during tool loop, stopping chat processing");
@@ -331,20 +324,32 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
            Never accept a proposed alternative, rename, deletion, or other pending action on the user's behalf.
 
         Recommendation Guidelines:
+        - The complete tool catalog is available in every planning round. Choose tools from their schemas and chain
+          read, recommendation, mutation, verification, and status tools as needed; do not wait for a tool name or
+          keyword in the user's message.
+        - For any question about the current scene, including counts of devices, rules, or specifications, call
+          board_overview first and answer from its current counts and semantic data rather than chat history.
+        - To extend or complete the existing scene, call board_overview first, identify concrete gaps, then freely
+          compose recommend_related_devices, recommend_rules, recommend_specifications, add_device, manage_rule,
+          manage_spec, and manage_environment. Preserve existing scene content unless the user explicitly asks for
+          full replacement.
         - A recommendation is a reviewed candidate, not an applied change and not a formal-verification result.
         - If the user asks only to recommend or explore, return the candidates and ask what to apply. Do not call
           add_device, manage_rule, or manage_spec in the same turn on the user's behalf.
         - If a recommendation result reports filteredItems, truncatedCount, or adjustedItems, preserve those
           distinctions: rejected candidates have itemized reasons; truncated candidates were never inspected;
           deterministic defaults/normalizations are adjustments, not AI-authored values.
-        - Applying one device/rule/specification recommendation is a targeted append. recommend_scenario is instead
-          a complete scene-replacement draft and cannot be described as a local addition or as already applied.
+        - Applying one device/rule/specification recommendation is a targeted append. Use recommend_scenario only
+          when the user explicitly requests a complete replacement/import draft; it cannot be described as a local
+          addition or as already applied.
 
         Rule Recommendation Guidelines:
         - When users want to create rules or ask for rule suggestions, use recommend_rules tool first
         - analyze the device capabilities (APIs, variables, modes, states) from the recommendation result
         - Only recommend rules using APIs, variables, modes, or states that actually exist in the device templates
-        - Present recommended rules in a clear format and ask user to confirm before creating
+        - If the user only asks for suggestions, present them and ask what to apply. If the user explicitly delegates
+          completing or modifying the scene, validated recommendations may be applied with targeted mutation tools
+          in the same turn; report that newly created items are not formally verified.
         - Explain why each suggestion matches the user's goal and the available device capabilities; do not invent a numeric confidence score
 
         Destructive Action Guidelines:
@@ -355,9 +360,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         - If dependencies or target data changed after preview, explain the conflict and request a new preview.
 
         Available tools:
-        - Device: add_device, delete_device, search_devices
-        - Rule: list_rules, manage_rule, check_duplicate_rule, check_rule_similarity, recommend_rules, recommend_related_devices
+        - Device: add_device, delete_device, search_devices, recommend_related_devices
+        - Environment: manage_environment
+        - Rule: list_rules, manage_rule, check_duplicate_rule, check_rule_similarity, recommend_rules
         - Spec: list_specs, manage_spec, recommend_specifications
+        - Scene draft: recommend_scenario
         - Template: list_templates, add_template, delete_template
         - Verification sync: verify_model
         - Verification async: verify_model_async, verify_task_status, cancel_verify_task
@@ -378,9 +385,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 to summarize what happened and what the user should know next.
                 """
                 : """
-                No tools are available for this response. Answer as a normal conversational assistant.
-                If the user appears to request a platform operation, ask them to state the operation clearly
-                instead of inventing or printing a tool call.
+                The planning stage did not execute a tool for this response. Answer as a normal conversational
+                assistant, but do not claim to have read current platform data or completed an operation without
+                an authoritative tool result. If the request required current data or a platform mutation, say
+                that no authoritative result was obtained and ask the user to retry or clarify the request.
                 """;
 
         String systemPromptContent = """
@@ -502,7 +510,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             messages.add(LlmMessage.assistantToolCalls(toolCalls));
             StringBuilder roundFingerprint = new StringBuilder();
 
-            for (LlmToolCall toolCall : toolCalls) {
+            for (int toolCallIndex = 0; toolCallIndex < toolCalls.size(); toolCallIndex++) {
+                LlmToolCall toolCall = toolCalls.get(toolCallIndex);
                 if (isDisconnect.get()) {
                     log.info("Client disconnected, stopping remaining tool calls");
                     return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.DISCONNECTED, successfulToolCalls,
@@ -583,11 +592,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                             confirmationPending);
                 }
                 if (requiresConfirmation) {
+                    appendSkippedToolResults(userId, sessionId, messages, toolCalls, toolCallIndex + 1,
+                            "PRIOR_CONFIRMATION_REQUIRED",
+                            "Tool call was not executed because an earlier call in the same planning response "
+                                    + "requires user confirmation.");
                     return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.CONFIRMATION_REQUIRED,
                             successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, true);
                 }
                 if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
+                    appendSkippedToolResults(userId, sessionId, messages, toolCalls, toolCallIndex + 1,
+                            "PRIOR_RESULT_UNAVAILABLE",
+                            "Tool call was not executed because an earlier result in the same planning response "
+                                    + "was unavailable and may require state reconciliation.");
                     return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.RESULT_UNAVAILABLE,
                             successfulToolCalls,
                             failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls, false);
@@ -624,6 +641,34 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             isDisconnect.set(true);
         }
         return guardResult;
+    }
+
+    private void appendSkippedToolResults(Long userId,
+                                          String sessionId,
+                                          List<LlmMessage> messages,
+                                          List<LlmToolCall> toolCalls,
+                                          int startIndex,
+                                          String reasonCode,
+                                          String message) {
+        if (toolCalls == null || startIndex >= toolCalls.size()) {
+            return;
+        }
+        String skippedResult = objectMapper.createObjectNode()
+                .put("executed", false)
+                .put("skipped", true)
+                .put("reasonCode", reasonCode)
+                .put("message", message)
+                .toString();
+        for (int index = startIndex; index < toolCalls.size(); index++) {
+            LlmToolCall skippedCall = toolCalls.get(index);
+            if (skippedCall == null) {
+                continue;
+            }
+            String toolCallId = safeString(skippedCall.id());
+            executeOwnedSessionWrite(userId, sessionId, () ->
+                    saveToolExecutionResult(sessionId, toolCallId, skippedResult));
+            messages.add(LlmMessage.tool(toolCallId, skippedResult));
+        }
     }
 
     private void streamAssistantReply(List<LlmMessage> messages,
@@ -725,60 +770,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             log.debug("Failed to send chat progress stage {}: {}", stage, e.toString());
             return false;
         }
-    }
-
-    private List<LlmToolSpec> selectRelevantTools(
-            List<LlmToolSpec> allTools, String content, String routeReason) {
-        if (allTools == null || allTools.isEmpty()
-                || "explicit_confirmation".equals(routeReason)) {
-            return allTools == null ? List.of() : allTools;
-        }
-        String normalized = content == null ? "" : content.toLowerCase(Locale.ROOT);
-        Set<String> selected = new LinkedHashSet<>();
-        selected.add("board_overview");
-
-        for (LlmToolSpec tool : allTools) {
-            if (tool != null && tool.name() != null && normalized.contains(tool.name().toLowerCase(Locale.ROOT))) {
-                selected.add(tool.name());
-            }
-        }
-        if (containsAny(normalized, "device", "node", "sensor", "设备", "节点", "传感器")) {
-            selected.addAll(Set.of("add_device", "delete_device", "search_devices",
-                    "recommend_related_devices", "list_templates"));
-        }
-        if (containsAny(normalized, "rule", "automation", "trigger", "规则", "自动化", "联动", "触发")) {
-            selected.addAll(Set.of("list_rules", "manage_rule", "check_duplicate_rule",
-                    "check_rule_similarity", "recommend_rules"));
-        }
-        if (containsAny(normalized, "spec", "property", "safety", "ctl", "ltl", "规约", "安全性", "约束")) {
-            selected.addAll(Set.of("list_specs", "manage_spec", "recommend_specifications"));
-        }
-        if (containsAny(normalized, "template", "manifest", "capabil", "模板", "清单", "能力")) {
-            selected.addAll(Set.of("list_templates", "add_template", "delete_template"));
-        }
-        if (containsAny(normalized, "verify", "verification", "nusmv", "counterexample", "trace",
-                "fix", "验证", "反例", "轨迹", "修复")) {
-            selected.addAll(Set.of("verify_model", "verify_model_async", "verify_task_status",
-                    "cancel_verify_task", "list_traces", "get_trace", "delete_trace", "fix_violation"));
-        }
-        if (containsAny(normalized, "simulate", "simulation", "scenario", "仿真", "模拟", "场景")) {
-            selected.addAll(Set.of("simulate_model", "simulate_model_async", "simulate_task_status",
-                    "cancel_simulate_task", "list_simulation_traces", "get_simulation_trace",
-                    "delete_simulation_trace", "recommend_scenario"));
-        }
-
-        List<LlmToolSpec> filtered = allTools.stream()
-                .filter(Objects::nonNull)
-                .filter(tool -> selected.contains(tool.name()))
-                .toList();
-        return filtered.isEmpty() ? allTools : filtered;
-    }
-
-    private boolean containsAny(String value, String... needles) {
-        for (String needle : needles) {
-            if (value.contains(needle)) return true;
-        }
-        return false;
     }
 
     private void collectRefreshCommand(String functionName, Set<StreamResponseDto.CommandDto> commandSet) {
@@ -973,6 +964,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 }
                 int firstToolIndex = assistantIndex + 1;
                 if (assistantIndex >= 0 && isAssistantToolCallMessage(allMessages.get(assistantIndex))) {
+                    if (!isCompleteToolCallBlock(allMessages, assistantIndex, i)) {
+                        log.warn("Dropping incomplete persisted tool-call block from chat history: "
+                                + "sessionId={}, assistantMessageId={}",
+                                sessionId, allMessages.get(assistantIndex).getId());
+                        i = assistantIndex;
+                        continue;
+                    }
                     int blockLength = 0;
                     for (int j = assistantIndex; j <= i; j++) {
                         blockLength += messageLength(allMessages.get(j));
@@ -999,6 +997,12 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 continue;
             }
 
+            if (isAssistantToolCallMessage(current)) {
+                log.warn("Dropping persisted assistant tool-call message without adjacent results: "
+                        + "sessionId={}, assistantMessageId={}", sessionId, current.getId());
+                continue;
+            }
+
             int msgLen = messageLength(current);
             if (currentLength + msgLen > limitCharCount) {
                 // Ensure the latest user/assistant message is never dropped from context.
@@ -1012,6 +1016,33 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
 
         return new ArrayList<>(safeHistory);
+    }
+
+    private boolean isCompleteToolCallBlock(List<ChatMessagePo> messages,
+                                            int assistantIndex,
+                                            int lastToolIndex) {
+        try {
+            LlmMessage assistant = messageCodec.toMessage(messages.get(assistantIndex));
+            List<LlmToolCall> calls = assistant.toolCalls();
+            Set<String> expectedIds = calls.stream()
+                    .map(LlmToolCall::id)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            if (expectedIds.size() != calls.size()) {
+                return false;
+            }
+
+            Set<String> actualIds = new LinkedHashSet<>();
+            for (int index = assistantIndex + 1; index <= lastToolIndex; index++) {
+                LlmMessage toolMessage = messageCodec.toMessage(messages.get(index));
+                if (toolMessage.toolCallId() == null || !actualIds.add(toolMessage.toolCallId())) {
+                    return false;
+                }
+            }
+            return actualIds.equals(expectedIds);
+        } catch (Exception e) {
+            log.warn("Ignoring malformed persisted tool-call block: {}", e.toString());
+            return false;
+        }
     }
 
     private boolean isToolMessage(ChatMessagePo msg) {

@@ -2,7 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
-import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
 import cn.edu.nju.Iot_Verify.repository.ChatSessionRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.util.mapper.ChatMapper;
+import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -106,7 +108,7 @@ class ChatServiceImplToolLoopControlTest {
                 userRepository,
                 llmChatService,
                 messageCodec,
-                new ChatIntentRouter(),
+                new ChatConfirmationDetector(),
                 aiToolManager,
                 destructiveActionGuard,
                 new ObjectMapper(),
@@ -155,6 +157,9 @@ class ChatServiceImplToolLoopControlTest {
         String visible = ((LlmMessage) visibleMethod.invoke(service, true)).content();
 
         assertTrue(planning.contains("truncated candidates were never inspected"));
+        assertTrue(planning.contains("complete tool catalog"));
+        assertTrue(planning.contains("call board_overview first"));
+        assertTrue(planning.contains("Use recommend_scenario only"));
         assertTrue(planning.contains("Do not call"));
         assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));
         assertTrue(visible.contains("report rawCandidateCount"));
@@ -244,6 +249,52 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(commandSet.isEmpty());
         verify(llmChatService).chatWithTools(anyList(), anyList());
         verify(aiToolManager).execute("delete_device", "{\"id\":\"light_1\",\"confirmed\":false}");
+    }
+
+    @Test
+    void executeToolLoop_whenOneOfSeveralCallsNeedsConfirmation_shouldRecordRemainingCallsAsSkipped() throws Exception {
+        List<LlmToolCall> plannedCalls = List.of(
+                new LlmToolCall("tc_preview", "delete_device",
+                        "{\"id\":\"light_1\",\"confirmed\":false}"),
+                new LlmToolCall("tc_later", "manage_spec", "{\"action\":\"add\"}"));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofToolCalls(plannedCalls));
+        when(aiToolManager.execute("delete_device", "{\"id\":\"light_1\",\"confirmed\":false}"))
+                .thenReturn("{\"operation\":\"preview\",\"requiresUserConfirmation\":true}");
+
+        List<LlmMessage> messages = new ArrayList<>();
+        Object loopResult = invokeToolLoop(
+                new AtomicBoolean(false), new LinkedHashSet<>(), mock(SseEmitter.class), messages);
+
+        verify(aiToolManager, never()).execute("manage_spec", "{\"action\":\"add\"}");
+        assertTrue(recordBoolean(loopResult, "confirmationPending"));
+        assertEquals(3, messages.size());
+        assertEquals("tc_preview", messages.get(1).toolCallId());
+        assertEquals("tc_later", messages.get(2).toolCallId());
+        JsonNode skipped = new ObjectMapper().readTree(messages.get(2).content());
+        assertTrue(skipped.path("skipped").asBoolean());
+        assertFalse(skipped.path("executed").asBoolean(true));
+        assertEquals("PRIOR_CONFIRMATION_REQUIRED", skipped.path("reasonCode").asText());
+    }
+
+    @Test
+    void executeToolLoop_whenOneOfSeveralResultsIsUnavailable_shouldRecordRemainingCallsAsSkipped() throws Exception {
+        List<LlmToolCall> plannedCalls = List.of(
+                new LlmToolCall("tc_unavailable", "manage_rule", "{}"),
+                new LlmToolCall("tc_later", "manage_spec", "{\"action\":\"add\"}"));
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofToolCalls(plannedCalls));
+        when(aiToolManager.execute("manage_rule", "{}"))
+                .thenReturn("{\"resultStatus\":\"RESULT_UNAVAILABLE\",\"resultAvailable\":false,"
+                        + "\"mutationMayHaveCommitted\":true}");
+
+        List<LlmMessage> messages = new ArrayList<>();
+        invokeToolLoop(new AtomicBoolean(false), new LinkedHashSet<>(), mock(SseEmitter.class), messages);
+
+        verify(aiToolManager, never()).execute("manage_spec", "{\"action\":\"add\"}");
+        assertEquals(3, messages.size());
+        JsonNode skipped = new ObjectMapper().readTree(messages.get(2).content());
+        assertEquals("PRIOR_RESULT_UNAVAILABLE", skipped.path("reasonCode").asText());
     }
 
     @Test
@@ -605,7 +656,7 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void processStreamChat_whenNoToolIntent_shouldSkipToolPlanningAndStreamReply() throws Exception {
+    void processStreamChat_alwaysOffersCompleteCatalogAndLetsModelUseNoTool() throws Exception {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
         session.setUserId(1L);
@@ -613,6 +664,20 @@ class ChatServiceImplToolLoopControlTest {
 
         when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        List<LlmToolSpec> completeCatalog = List.of(
+                toolSpec("board_overview"),
+                toolSpec("recommend_scenario"),
+                toolSpec("add_device"),
+                toolSpec("manage_rule"),
+                toolSpec("manage_spec"));
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(completeCatalog);
+        AtomicReference<List<LlmToolSpec>> plannedTools = new AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<LlmToolSpec> tools = invocation.getArgument(1, List.class);
+            plannedTools.set(tools);
+            return textResult("No tool is needed.");
+        }).when(llmChatService).chatWithTools(anyList(), anyList());
         AtomicReference<List<LlmMessage>> streamedMessages = new AtomicReference<>();
         org.mockito.Mockito.doAnswer(invocation -> {
             @SuppressWarnings("unchecked")
@@ -629,11 +694,13 @@ class ChatServiceImplToolLoopControlTest {
         service.processStreamChat(1L, "s1", "hello", emitter);
 
         verify(destructiveActionGuard).clearSession(1L, "s1");
-        verify(aiToolManager, never()).getAllToolDefinitions();
-        verify(llmChatService, never()).chatWithTools(anyList(), anyList());
+        assertEquals(completeCatalog, plannedTools.get());
+        verify(aiToolManager).getAllToolDefinitions();
+        verify(llmChatService).chatWithTools(anyList(), eq(completeCatalog));
         verify(llmChatService).streamReply(anyList(), any(), any());
         String systemPrompt = streamedMessages.get().get(0).content();
-        assertTrue(systemPrompt.contains("No tools are available for this response"));
+        assertTrue(systemPrompt.contains("planning stage did not execute a tool"));
+        assertTrue(systemPrompt.contains("do not claim to have read current platform data"));
         assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));
         assertFalse(systemPrompt.contains("Available tools:"));
         verify(emitter).complete();
@@ -725,11 +792,18 @@ class ChatServiceImplToolLoopControlTest {
     private Object invokeToolLoop(AtomicBoolean disconnected,
                                   Set<StreamResponseDto.CommandDto> commandSet,
                                   SseEmitter emitter) throws Exception {
+        return invokeToolLoop(disconnected, commandSet, emitter, new ArrayList<>());
+    }
+
+    private Object invokeToolLoop(AtomicBoolean disconnected,
+                                  Set<StreamResponseDto.CommandDto> commandSet,
+                                  SseEmitter emitter,
+                                  List<LlmMessage> messages) throws Exception {
         return executeToolLoopMethod.invoke(
                 service,
                 1L,
                 "s1",
-                new ArrayList<LlmMessage>(),
+                messages,
                 new ArrayList<LlmToolSpec>(),
                 commandSet,
                 emitter,
@@ -743,6 +817,11 @@ class ChatServiceImplToolLoopControlTest {
 
     private LlmChatResponse textResult(String text) {
         return LlmChatResponse.ofText(text);
+    }
+
+    private LlmToolSpec toolSpec(String name) {
+        return LlmToolSpec.of(name, name,
+                new FunctionParameterSchema("object", Map.of(), List.of()));
     }
 
     private int recordInt(Object record, String accessor) throws Exception {

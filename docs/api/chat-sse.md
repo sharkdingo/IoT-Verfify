@@ -52,14 +52,23 @@ Sends a user message and streams the assistant's visible reply. **Not** wrapped 
 `Result<T>` — the response is `text/event-stream` produced by a Spring `SseEmitter`
 (60-minute default timeout, configured by `CHAT_SSE_TIMEOUT_MS`).
 
-Conversational messages without a board/tool intent stream directly. Messages that
-mention board operations such as devices, rules, specifications, verification,
-simulation, templates, traces, or recommendations first run one or more tool-planning
-rounds. Tool calls and full tool results are persisted as internal chat messages but are
-not exposed as raw user-visible text. Structured progress frames expose the verifiable
-execution state and outcome of each step while it runs. After planning completes, the
-final assistant reply is generated through the streaming LLM path so tool-backed answers
-also arrive as incremental text chunks.
+Every non-blank message first runs model-driven planning with the complete registered
+tool catalog. The model may choose zero tools for ordinary conversation, or freely chain
+read, recommendation, mutation, verification, and status tools when the request spans
+domains. This decision is based on the message meaning and conversation context rather
+than a keyword or deterministic intent route. Tool calls and full tool results are
+persisted as internal chat messages but are not exposed as raw user-visible text.
+Structured progress frames expose the verifiable execution state and outcome of each
+step while it runs. After planning completes, the final assistant reply is generated
+through the streaming LLM path so tool-backed answers also arrive as incremental text
+chunks.
+
+Questions about the current scene, including device/rule/specification counts, are
+planned from `board_overview` rather than inferred from chat history. A request to extend
+or complete the current scene reads that overview first and may compose targeted device,
+environment, rule, and specification recommendation/mutation tools while preserving the
+existing scene. `recommend_scenario` remains a complete replacement/import draft and is
+used only when the user explicitly asks for that workflow.
 
 Tool execution is not one transaction across an entire user request. Each mutating tool
 commits or rejects independently. There is no five-round product budget: planning
@@ -75,6 +84,20 @@ preview. The planning loop stops immediately for destructive previews and for pr
 alternatives such as an available replacement device name. The assistant must state that
 nothing was changed and wait for the user's choice; it cannot accept its own suggestion
 in a later planning round of the same message.
+
+If a model response contains several parallel tool calls and one call reaches this
+boundary, later calls in that same response are not executed. The backend records an
+explicit `skipped=true` tool result for each one so the provider conversation remains
+protocol-complete and the final visible explanation can still stream. The same rule
+applies after `RESULT_UNAVAILABLE`; skipped calls are not counted as successful or
+failed executions.
+
+History reconstruction also validates that every persisted assistant tool-call id has
+exactly one matching tool-result id before sending that block back to a provider.
+Incomplete, duplicate, malformed, or isolated internal tool blocks are omitted from the
+model context, while surrounding user-visible conversation remains available. This lets
+sessions created before the same-round skip rule recover without repeating a provider
+protocol error.
 
 Destructive deletion previews additionally return an opaque `impactToken`. The backend
 keeps one pending deletion per authenticated user and chat session, bound to the tool,
@@ -144,9 +167,10 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   show an accumulating execution trace and elapsed time without presenting private model
   chain-of-thought. The frontend retains the trace with the current in-memory assistant message
   so it remains expandable after completion; frames are not saved in server chat history.
-- After deterministic intent routing, planning receives only the relevant device/rule/spec/template/
-  verification/simulation tool subset plus `board_overview`; explicit confirmation keeps the full
-  tool set so a prior destructive preview can still be completed safely.
+- Every planning round receives the complete registered tool catalog. The model can use
+  conversation context and tool schemas to select zero or more tools across domains;
+  explicit destructive confirmation remains a separate deterministic authorization
+  check and is not delegated to the model.
 - Board refresh targets are `device_list`, `environment_list`, `rule_list`, `spec_list`,
   `template_list`, and `run_history`. A tool emits every target it may have changed;
   device mutations therefore also refresh the shared Environment Pool, while async task

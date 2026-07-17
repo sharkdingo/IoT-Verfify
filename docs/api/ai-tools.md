@@ -1,6 +1,6 @@
 # AI Tools
 
-The IoT-Verify AI assistant is backed by any OpenAI-compatible LLM endpoint (configured via `llm.*`; see [configuration.md](../getting-started/configuration.md)) and uses tool/function-calling: the model selects a tool by its snake_case `name`, and the backend runs the matching implementation. Each tool declares itself via a vendor-neutral `LlmToolSpec` (`getDefinition()`); the `LlmProvider` adapter translates specs and messages to the underlying SDK, so tools never depend on an SDK type. All 33 tools are Spring beans that implement `AiTool` (most extend `AbstractAiTool`) and are dispatched at runtime by `AiToolManager`. `AiToolManager.execute()` wraps every dispatch in a catch-all that logs the exception and returns a generic `Tool execution failed due to an internal error` message, so raw exception detail is never leaked back to the model.
+The IoT-Verify AI assistant is backed by any OpenAI-compatible LLM endpoint (configured via `llm.*`; see [configuration.md](../getting-started/configuration.md)) and uses tool/function-calling: the model selects a tool by its snake_case `name`, and the backend runs the matching implementation. Each tool declares itself via a vendor-neutral `LlmToolSpec` (`getDefinition()`); the `LlmProvider` adapter translates specs and messages to the underlying SDK, so tools never depend on an SDK type. All 33 tools are Spring beans that implement `AiTool` (most extend `AbstractAiTool`) and are dispatched at runtime by `AiToolManager`. The chat planner receives the complete registered catalog on every round, so it can choose zero tools for conversation or combine reads, recommendations, targeted mutations, verification, and task-status operations from the user's meaning and conversation context. There is no keyword-selected tool subset. `AiToolManager.execute()` wraps every dispatch in a catch-all that logs the exception and returns a generic `Tool execution failed due to an internal error` message, so raw exception detail is never leaked back to the model.
 
 **Tool responses are not the REST `Result<T>` envelope.** Internally each tool returns
 a raw JSON string (built by `AiToolResponseHelper`): on error, `{ "error", "errorCode",
@@ -10,7 +10,7 @@ inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 `Result<Map<String, Object>>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-16. Source: component/aitool/, component/ai/.
+Verified against code on 2026-07-17. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -105,6 +105,14 @@ contract.
 | --- | --- |
 | `board_overview` | Return the current semantic board: device runtime values, shared environment pool, rule-derived edges, typed rules, and typed specifications. Stable device ids remain separate tool references; every natural-language condition/command summary uses the current device label. Specifications include structured conditions and an explicitly named `formulaPreview`, not only template/count metadata. |
 | `manage_environment` | List or patch/reset one shared environment variable through the same board authority as the UI. |
+
+The assistant uses `board_overview` as the first source of truth for current-scene
+questions, including device, rule, and specification counts. To extend an existing
+scene, it can then combine `recommend_related_devices`, `recommend_rules`,
+`recommend_specifications`, `add_device`, `manage_environment`, `manage_rule`, and
+`manage_spec` in one contextual plan. Existing scene content is preserved unless the
+user explicitly requests a complete replacement/import draft through
+`recommend_scenario`.
 
 ## Scene Recommendation
 

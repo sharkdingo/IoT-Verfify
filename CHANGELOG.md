@@ -18,6 +18,11 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-17
 
 #### Changed
+- Replaced deterministic chat intent routing and keyword-selected tool subsets with
+  model-driven planning over the complete AI tool catalog. The assistant can now answer
+  current-scene count questions from `board_overview` and compose targeted device,
+  environment, rule, and specification tools to complete an existing scene without
+  turning it into a full-replacement draft.
 - Replaced the assistant's normal five-round planning cutoff with progress-aware
   continuation, exact repeated-call/result stagnation detection, and a configurable
   high emergency runaway guard. Long requests now retain full tool capability and still
@@ -40,6 +45,11 @@ history into a technical spec. The spec content itself now lives under
   indefinite generic spinner.
 
 #### Fixed
+- Kept multi-call AI conversations provider-valid when an earlier call requires user
+  confirmation or returns an unavailable result. Remaining same-round calls are now
+  explicitly recorded as skipped without execution, so the final explanation no longer
+  fails with a missing tool-output protocol error. History loading also omits older
+  incomplete tool-call blocks so affected sessions recover on their next request.
 - Made terminal background tasks display their completed, failed, or cancelled status
   instead of a stale last active phase, and prevented a closing automatic-fix request
   from stopping progress updates for a newly opened request.

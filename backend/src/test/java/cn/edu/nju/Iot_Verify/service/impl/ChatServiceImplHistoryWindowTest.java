@@ -2,7 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
-import cn.edu.nju.Iot_Verify.component.ai.ChatIntentRouter;
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
@@ -73,7 +73,7 @@ class ChatServiceImplHistoryWindowTest {
                 userRepository,
                 llmChatService,
                 new LlmMessageCodec(new ObjectMapper()),
-                new ChatIntentRouter(),
+                new ChatConfirmationDetector(),
                 aiToolManager,
                 destructiveActionGuard,
                 new ObjectMapper(),
@@ -134,6 +134,63 @@ class ChatServiceImplHistoryWindowTest {
 
         assertEquals(2, history.size());
         assertTrue(history.stream().noneMatch(m -> "tool".equalsIgnoreCase(m.getRole())));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void getSmartHistory_shouldDropIncompletePersistedToolCallBlock() throws Exception {
+        ChatMessagePo finalReply = new ChatMessagePo();
+        finalReply.setRole("assistant");
+        finalReply.setContent("The previous response could not be completed.");
+
+        ChatMessagePo oneOfTwoResults = new ChatMessagePo();
+        oneOfTwoResults.setRole("tool");
+        oneOfTwoResults.setContent("{\"type\":\"tool_result\",\"toolCallId\":\"tc_1\",\"result\":\"ok\"}");
+
+        ChatMessagePo incompleteCalls = new ChatMessagePo();
+        incompleteCalls.setRole("assistant");
+        incompleteCalls.setContent("{\"type\":\"tool_calls\",\"toolCalls\":["
+                + "{\"id\":\"tc_1\",\"function\":{\"name\":\"board_overview\",\"arguments\":\"{}\"}},"
+                + "{\"id\":\"tc_2\",\"function\":{\"name\":\"list_specs\",\"arguments\":\"{}\"}}]}");
+
+        ChatMessagePo user = new ChatMessagePo();
+        user.setRole("user");
+        user.setContent("inspect the board");
+
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("incomplete"))
+                .thenReturn(List.of(finalReply, oneOfTwoResults, incompleteCalls, user));
+
+        Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
+        method.setAccessible(true);
+        List<ChatMessagePo> history = (List<ChatMessagePo>) method.invoke(service, "incomplete", 4000);
+
+        assertEquals(2, history.size());
+        assertEquals("user", history.get(0).getRole());
+        assertEquals("assistant", history.get(1).getRole());
+        assertTrue(history.stream().noneMatch(m -> "tool".equalsIgnoreCase(m.getRole())));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void getSmartHistory_shouldDropAssistantToolCallWithoutAnyResult() throws Exception {
+        ChatMessagePo incompleteCalls = new ChatMessagePo();
+        incompleteCalls.setRole("assistant");
+        incompleteCalls.setContent("{\"type\":\"tool_calls\",\"toolCalls\":["
+                + "{\"id\":\"tc_1\",\"function\":{\"name\":\"board_overview\",\"arguments\":\"{}\"}}]}");
+
+        ChatMessagePo user = new ChatMessagePo();
+        user.setRole("user");
+        user.setContent("inspect the board");
+
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("missing-results"))
+                .thenReturn(List.of(incompleteCalls, user));
+
+        Method method = ChatServiceImpl.class.getDeclaredMethod("getSmartHistory", String.class, int.class);
+        method.setAccessible(true);
+        List<ChatMessagePo> history = (List<ChatMessagePo>) method.invoke(service, "missing-results", 4000);
+
+        assertEquals(1, history.size());
+        assertEquals("user", history.get(0).getRole());
     }
 
     @SuppressWarnings("unchecked")
