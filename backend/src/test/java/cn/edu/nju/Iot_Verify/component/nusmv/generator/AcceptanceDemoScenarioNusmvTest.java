@@ -77,6 +77,32 @@ class AcceptanceDemoScenarioNusmvTest {
                     "door_1", "unlocked",
                     null,
                     2));
+
+    @Test
+    void documentedSceneTemplateSnapshots_matchBundledTemplates() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        Path examplesDir = Path.of("..", "docs", "examples");
+        Path bundledTemplatesDir = Path.of("src", "main", "resources", "deviceTemplate");
+
+        try (var scenePaths = Files.list(examplesDir)) {
+            for (Path scenePath : scenePaths
+                    .filter(path -> path.getFileName().toString().endsWith(".json"))
+                    .sorted()
+                    .toList()) {
+                JsonNode scene = objectMapper.readTree(Files.readString(scenePath));
+                for (JsonNode template : scene.path("templates")) {
+                    String templateName = template.path("name").asText();
+                    Path bundledTemplate = bundledTemplatesDir.resolve(templateName + ".json");
+                    assertTrue(Files.exists(bundledTemplate),
+                            () -> scenePath.getFileName() + " references a non-bundled template: " + templateName);
+                    JsonNode bundledManifest = objectMapper.readTree(Files.readString(bundledTemplate));
+                    assertEquals(bundledManifest, template.path("manifest"),
+                            () -> scenePath.getFileName() + " has a stale template snapshot: " + templateName);
+                }
+            }
+        }
+    }
+
     @Test
     void acceptanceScene_supportsVerificationSimulationAnimationAttackAndVerifiedRepair() throws Exception {
         String nusmvPath = resolveNusmvPath();

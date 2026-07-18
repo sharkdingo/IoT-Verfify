@@ -37,6 +37,10 @@ history into a technical spec. The spec content itself now lives under
   same atomic refresh authority as the Board UI while preserving custom templates.
 
 #### Fixed
+- Kept the in-flight assistant status compact even when it already contains execution
+  activity; completed execution records remain full-width for review.
+- Synchronized the climate-conflict example's Air Conditioner template snapshot with the
+  corrected bundled public privacy labels, so strict full-scene import no longer rejects it.
 - Added deterministic conjunction checks for AI-authored rules and specifications.
   Direct AI mutations, standalone recommendations, and full-scene recommendations now
   reject condition groups with no common legal state/value and rules whose target

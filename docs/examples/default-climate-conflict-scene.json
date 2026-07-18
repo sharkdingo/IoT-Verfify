@@ -42,7 +42,7 @@
             "Dynamics": [],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "cool",
@@ -54,7 +54,7 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "dry",
@@ -66,7 +66,7 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "coolClean",
@@ -78,7 +78,7 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "dryClean",
@@ -90,14 +90,14 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "fanOnly",
             "Dynamics": [],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "heat",
@@ -113,7 +113,7 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "heatClean",
@@ -125,14 +125,14 @@
             ],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           },
           {
             "Name": "off",
             "Dynamics": [],
             "Description": "",
             "Trust": "trusted",
-            "Privacy": "private"
+            "Privacy": "public"
           }
         ],
         "Transitions": [],

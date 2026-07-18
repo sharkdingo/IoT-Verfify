@@ -2231,6 +2231,12 @@ const scrollToBottom = (force = false) => {
   align-self: stretch;
 }
 
+.assistant-pending-body.has-execution-trace {
+  width: fit-content;
+  max-width: min(15rem, 100%);
+  align-self: flex-start;
+}
+
 .msg-actions {
   display: flex;
   gap: 0.35rem;
