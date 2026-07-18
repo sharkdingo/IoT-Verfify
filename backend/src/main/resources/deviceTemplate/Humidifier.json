@@ -28,14 +28,14 @@
 			],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "off",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

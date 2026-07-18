@@ -36,7 +36,7 @@ component/
     parser/       SmvTraceParser — counterexample parsing
     fixer/        fault localization + parameter/condition/disable fix strategies
   fuzz/           deterministic bounded path search + finite safety monitor
-  aitool/         the 33 AI tools
+  aitool/         the 35 AI tools
   ai/             LLM abstraction — LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, repositories
 security/         JWT + Spring Security

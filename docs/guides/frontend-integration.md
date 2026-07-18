@@ -744,12 +744,14 @@ instance and its interceptors are bypassed — the `Authorization` header must b
 manually here. Protocol detail: [../api/chat-sse.md](../api/chat-sse.md).
 
 `onProgress` appends verifiable execution events instead of replacing one generic
-loading label. `ChatView` renders context loading, every planning round, tool start,
-tool outcome, duplicate-loop protection, and final-answer generation inside the active
-assistant message. The trace remains attached to that message as a collapsible in-memory
-record after completion. It is operational telemetry, not private model chain-of-thought;
-server history reloads contain the persisted user-visible answer but not these transient
-progress frames.
+loading label. `ChatView` renders a full-width activity record with context loading,
+task resumption after confirmation, every planning round, localized tool actions, tool
+outcomes, cumulative success/failure/unconfirmed counts, duplicate-loop protection, and
+final-answer generation inside the active assistant message. A resumed-task event shows
+the bounded original user objective supplied by the backend; it does not expose model
+reasoning. The record remains attached to that message as a collapsible in-memory view
+after completion. Server history reloads contain the persisted user-visible answer but
+not these transient progress frames.
 
 The chat stop control aborts only the SSE response. It cannot undo a backend tool call
 that already started. `ChatView` therefore polls `getSessionActivity` until the server

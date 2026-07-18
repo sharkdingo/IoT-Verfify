@@ -154,5 +154,26 @@ export const validateScenarioRecommendationResponse = <T>(
   if (typeof result.scenarioName !== 'string' || typeof result.rationale !== 'string') {
     throw new RecommendationResponseContractError(context, 'scenarioName and rationale are required')
   }
+  if (typeof result.verificationReady !== 'boolean') {
+    throw new RecommendationResponseContractError(context, 'verificationReady must be boolean')
+  }
+  const readinessIssues = requireArray(result, 'readinessIssues', context)
+  const expectedCodes: string[] = []
+  if (devices.length === 0) expectedCodes.push('NO_DEVICES')
+  if (specs.length === 0) expectedCodes.push('NO_SPECIFICATIONS')
+  const actualCodes = readinessIssues.map((item, index) => {
+    const issue = requireRecord(item, context)
+    const code = requireNonBlankText(issue.code, `readinessIssues[${index}].code`, context)
+    requireNonBlankText(issue.message, `readinessIssues[${index}].message`, context)
+    return code
+  })
+  if (result.verificationReady !== (expectedCodes.length === 0)
+    || actualCodes.length !== expectedCodes.length
+    || actualCodes.some((code, index) => code !== expectedCodes[index])) {
+    throw new RecommendationResponseContractError(
+      context,
+      'verificationReady/readinessIssues must match the returned scene'
+    )
+  }
   return result as T
 }

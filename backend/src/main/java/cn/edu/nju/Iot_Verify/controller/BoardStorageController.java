@@ -42,6 +42,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RuleRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioReadinessIssueDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.SpecificationRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.DuplicateRuleCheckResultDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -645,7 +646,7 @@ public class BoardStorageController {
                 "message", "count", "requestedCount", "validatedCount",
                 "filteredCount", "filteredItems", "adjustedCount", "adjustedItems",
                 "rawCandidateCount", "inspectedCount", "truncatedCount",
-                "scenarioName", "rationale", "scene"), context);
+                "scenarioName", "rationale", "verificationReady", "readinessIssues", "scene"), context);
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
         PortableSceneDto scene = convertRecommendationItem(
                 result.get("scene"), PortableSceneDto.class, context, "scene");
@@ -680,8 +681,41 @@ public class BoardStorageController {
         response.setTruncatedCount(audit.truncatedCount());
         response.setScenarioName(requireRecommendationString(result, "scenarioName", context));
         response.setRationale(requireRecommendationString(result, "rationale", context));
+        boolean verificationReady = requireRecommendationBoolean(result, "verificationReady", context);
+        List<ScenarioReadinessIssueDto> readinessIssues = convertRecommendationItems(
+                requireRecommendationList(result, "readinessIssues", context),
+                ScenarioReadinessIssueDto.class, context);
+        validateScenarioReadiness(scene, verificationReady, readinessIssues, context);
+        response.setVerificationReady(verificationReady);
+        response.setReadinessIssues(readinessIssues);
         response.setScene(scene);
         return response;
+    }
+
+    private void validateScenarioReadiness(PortableSceneDto scene,
+                                           boolean verificationReady,
+                                           List<ScenarioReadinessIssueDto> readinessIssues,
+                                           String context) {
+        boolean hasDevices = scene.getDevices() != null && !scene.getDevices().isEmpty();
+        boolean hasSpecifications = scene.getSpecs() != null && !scene.getSpecs().isEmpty();
+        boolean expectedReady = hasDevices && hasSpecifications;
+        List<String> expectedCodes = new ArrayList<>();
+        if (!hasDevices) expectedCodes.add("NO_DEVICES");
+        if (!hasSpecifications) expectedCodes.add("NO_SPECIFICATIONS");
+
+        List<String> actualCodes = new ArrayList<>();
+        for (int index = 0; index < readinessIssues.size(); index++) {
+            ScenarioReadinessIssueDto issue = readinessIssues.get(index);
+            if (issue == null || isBlank(issue.getCode()) || isBlank(issue.getMessage())) {
+                throw invalidRecommendationResult(
+                        context, "readinessIssues[" + index + "] requires non-blank code and message");
+            }
+            actualCodes.add(issue.getCode());
+        }
+        if (verificationReady != expectedReady || !actualCodes.equals(expectedCodes)) {
+            throw invalidRecommendationResult(
+                    context, "verificationReady/readinessIssues must match the returned scene");
+        }
     }
 
     private RecommendationAudit parseRecommendationAudit(
@@ -796,6 +830,15 @@ public class BoardStorageController {
             }
         }
         throw invalidRecommendationResult(context, field + " must be a non-negative integer");
+    }
+
+    private boolean requireRecommendationBoolean(
+            Map<String, Object> result, String field, String context) {
+        Object value = result.get(field);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        throw invalidRecommendationResult(context, field + " must be boolean");
     }
 
     private String requireRecommendationText(

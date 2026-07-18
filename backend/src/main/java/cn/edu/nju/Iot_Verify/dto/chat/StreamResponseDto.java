@@ -21,7 +21,7 @@ public class StreamResponseDto {
     }
 
     public static StreamResponseDto progress(String stage, String toolName, Integer round) {
-        return progress(stage, toolName, round, null, null, null, null);
+        return progress(stage, toolName, round, null, null, null, null, null);
     }
 
     public static StreamResponseDto progress(String stage,
@@ -31,6 +31,17 @@ public class StreamResponseDto {
                                              Integer successfulSteps,
                                              Integer failedSteps,
                                              Integer unconfirmedSteps) {
+        return progress(stage, toolName, round, outcome, successfulSteps, failedSteps, unconfirmedSteps, null);
+    }
+
+    public static StreamResponseDto progress(String stage,
+                                             String toolName,
+                                             Integer round,
+                                             String outcome,
+                                             Integer successfulSteps,
+                                             Integer failedSteps,
+                                             Integer unconfirmedSteps,
+                                             String detail) {
         StreamResponseDto response = new StreamResponseDto();
         response.setProgress(new ProgressDto(
                 stage,
@@ -39,7 +50,8 @@ public class StreamResponseDto {
                 outcome,
                 successfulSteps,
                 failedSteps,
-                unconfirmedSteps
+                unconfirmedSteps,
+                detail
         ));
         return response;
     }
@@ -54,6 +66,7 @@ public class StreamResponseDto {
         private Integer successfulSteps;
         private Integer failedSteps;
         private Integer unconfirmedSteps;
+        private String detail;
 
         public ProgressDto(String stage,
                            String toolName,
@@ -61,7 +74,8 @@ public class StreamResponseDto {
                            String outcome,
                            Integer successfulSteps,
                            Integer failedSteps,
-                           Integer unconfirmedSteps) {
+                           Integer unconfirmedSteps,
+                           String detail) {
             this.stage = stage;
             this.toolName = toolName;
             this.round = round;
@@ -69,6 +83,7 @@ public class StreamResponseDto {
             this.successfulSteps = successfulSteps;
             this.failedSteps = failedSteps;
             this.unconfirmedSteps = unconfirmedSteps;
+            this.detail = detail;
         }
     }
 

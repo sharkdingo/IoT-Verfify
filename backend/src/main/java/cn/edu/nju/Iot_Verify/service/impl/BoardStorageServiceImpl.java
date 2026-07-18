@@ -973,20 +973,37 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return conditions.stream()
                 .filter(Objects::nonNull)
                 .map(condition -> {
+                    String targetType = canonicalSpecTargetTypeOrOriginal(condition.getTargetType());
+                    String relation = canonicalRelationOrOriginal(condition.getRelation());
                     SpecConditionDto copy = new SpecConditionDto();
                     copy.setId(condition.getId());
                     copy.setSide(condition.getSide());
                     copy.setDeviceId(condition.getDeviceId());
                     copy.setDeviceLabel(labelsById.getOrDefault(
                             condition.getDeviceId(), condition.getDeviceLabel()));
-                    copy.setTargetType(canonicalSpecTargetTypeOrOriginal(condition.getTargetType()));
+                    copy.setTargetType(targetType);
                     copy.setKey(condition.getKey());
-                    copy.setPropertyScope(condition.getPropertyScope());
-                    copy.setRelation(canonicalRelationOrOriginal(condition.getRelation()));
-                    copy.setValue(condition.getValue());
+                    copy.setPropertyScope(("trust".equals(targetType) || "privacy".equals(targetType))
+                            ? normalizePropertyScope(condition.getPropertyScope())
+                            : null);
+                    copy.setRelation(relation);
+                    copy.setValue(canonicalSpecLabelValue(
+                            targetType, relation, condition.getValue()));
                     return copy;
                 })
                 .toList();
+    }
+
+    private String canonicalSpecLabelValue(String targetType, String relation, String rawValue) {
+        if (!("trust".equals(targetType) || "privacy".equals(targetType)) || !hasText(rawValue)) {
+            return rawValue;
+        }
+        if ("in".equals(relation) || "not in".equals(relation)) {
+            return SmvRelationUtils.splitRuleValues(rawValue).stream()
+                    .map(value -> value.trim().toLowerCase(Locale.ROOT))
+                    .collect(Collectors.joining(", "));
+        }
+        return rawValue.trim().toLowerCase(Locale.ROOT);
     }
 
     private List<SpecificationDto.DeviceRefDto> buildSpecificationDeviceRefs(

@@ -37,11 +37,14 @@ class RecommendScenarioToolTest {
     private BoardStorageService boardStorageService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private AiScenarioDraftStore draftStore;
     private RecommendScenarioTool tool;
 
     @BeforeEach
     void setUp() {
-        tool = new RecommendScenarioTool(promptCompletionService, boardStorageService, objectMapper);
+        draftStore = new AiScenarioDraftStore();
+        tool = new RecommendScenarioTool(
+                promptCompletionService, boardStorageService, draftStore, objectMapper);
         UserContextHolder.setUserId(1L);
     }
 
@@ -97,11 +100,15 @@ class RecommendScenarioToolTest {
 
         assertEquals(0, json.path("rawCandidateCount").asInt());
         assertEquals(0, json.path("filteredCount").asInt());
+        assertFalse(json.path("verificationReady").asBoolean());
+        assertEquals("NO_DEVICES", json.path("readinessIssues").get(0).path("code").asText());
+        assertEquals("NO_SPECIFICATIONS", json.path("readinessIssues").get(1).path("code").asText());
         assertTrue(json.path("message").asText().contains("returned no scene-item candidates"));
     }
 
     @Test
     void execute_generatesCoupledSceneAndKeepsPrefixLikeNamesLiteral() throws Exception {
+        UserContextHolder.setChatSessionId("session-1");
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(sensorTemplate(), lightTemplate()));
         when(boardStorageService.getNodes(1L)).thenReturn(List.of());
         when(boardStorageService.getEnvironmentVariables(1L)).thenReturn(List.of());
@@ -162,6 +169,8 @@ class RecommendScenarioToolTest {
         assertFalse(scene.path("devices").get(0).has("state"));
         assertEquals(1, scene.path("rules").size());
         assertEquals(1, scene.path("specs").size());
+        assertTrue(json.path("verificationReady").asBoolean());
+        assertEquals(0, json.path("readinessIssues").size());
         assertEquals("a_noise", scene.path("environmentVariables").get(0).path("name").asText());
         assertEquals("a_noise", scene.path("rules").get(0).path("sources").get(0).path("fromApi").asText());
         assertEquals("device_1", scene.path("specs").get(0).path("ifConditions").get(0).path("deviceId").asText());
@@ -189,6 +198,11 @@ class RecommendScenarioToolTest {
                 anyInt());
         assertTrue(json.path("message").asText().contains("not been formally verified"));
         assertFalse(json.path("message").asText().contains("complete scenario"));
+        AiScenarioDraftStore.DraftSnapshot stored = draftStore
+                .latestDraft(1L, "session-1")
+                .orElseThrow();
+        assertEquals("Prefix-safe safety scene", stored.scenarioName());
+        assertEquals(2, stored.scene().path("devices").size());
     }
 
     @Test
@@ -733,9 +747,7 @@ class RecommendScenarioToolTest {
                               "aConditions":[{
                                 "deviceId":"Notifier response alias",
                                 "targetType":"api",
-                                "key":"notify",
-                                "relation":"=",
-                                "value":"TRUE"
+                                "key":"notify"
                               }],
                               "ifConditions":[],
                               "thenConditions":[]
@@ -749,6 +761,10 @@ class RecommendScenarioToolTest {
         assertEquals(1, json.path("scene").path("specs").size());
         assertEquals("device_1", json.path("scene").path("specs").get(0)
                 .path("aConditions").get(0).path("deviceId").asText());
+        assertEquals("=", json.path("scene").path("specs").get(0)
+                .path("aConditions").get(0).path("relation").asText());
+        assertEquals("TRUE", json.path("scene").path("specs").get(0)
+                .path("aConditions").get(0).path("value").asText());
         assertEquals(0, json.path("filteredCount").asInt());
     }
 
@@ -784,7 +800,7 @@ class RecommendScenarioToolTest {
                         .name("a_noise")
                         .description("Noise level")
                         .isInside(false)
-                        .values(List.of("low", "high"))
+                        .values(List.of("high", "low"))
                         .trust("trusted")
                         .privacy("public")
                         .build()))
@@ -809,6 +825,7 @@ class RecommendScenarioToolTest {
                         .isInside(true)
                         .lowerBound(0)
                         .upperBound(100)
+                        .naturalChangeRate("[-1, 1]")
                         .trust("trusted")
                         .privacy("public")
                         .build()))
@@ -821,6 +838,8 @@ class RecommendScenarioToolTest {
                         .description("Turn on")
                         .signal(false)
                         .acceptsContent(true)
+                        .startState("off")
+                        .endState("on")
                         .build()))
                 .build());
         return dto;

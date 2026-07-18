@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-16. Source:
+Verified against code on 2026-07-18. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -639,7 +639,7 @@ auto-fix parameterization identifiers active in that model.
   Raw `Invariant` strings are not accepted: the previous field was stored and displayed
   but never entered the generated model. Express device evolution through structured
   `Dynamics`/`Transitions`, and user requirements through structured specifications.
-- `Content`: `Name` and required `Privacy`. Content sensitivity has no safe implicit
+- `Content`: `Name`, optional explanatory `Description`, and required `Privacy`. Content sensitivity has no safe implicit
   default: omitting it is rejected rather than silently treating the item as public.
   Each Dynamic target must be either a device-local `InternalVariable` or a shared name
   listed in `ImpactedVariables`, and may appear once per WorkingState. Numeric targets use
@@ -676,7 +676,7 @@ auto-fix parameterization identifiers active in that model.
   source. It does not model payload bytes, an upload protocol, access control, encryption,
   or successful delivery. Rules cannot attach content labels to ordinary actions that do
   not declare this capability.
-- `Content`: `Name`, `Privacy`.
+- `Content`: `Name`, optional `Description`, `Privacy`.
 
 Only templates instantiated by current board devices contribute environment semantics.
 Installed but unused templates are irrelevant. Declarations for the same active shared
@@ -830,6 +830,12 @@ conflict freedom.
 > raw AI output, scenario `count` is not required to equal `validatedCount`; clients
 > verify `count` against `scene.devices + scene.environmentVariables + scene.rules +
 > scene.specs` instead. The raw-candidate identities still use `validatedCount`.
+> The response also carries authoritative `verificationReady` and ordered
+> `readinessIssues[]` (`{ code, message }`). The REST controller and frontend recompute
+> readiness from the canonical returned scene and reject a mismatch; currently
+> `NO_DEVICES` and `NO_SPECIFICATIONS` are the deterministic issue codes. A draft that
+> lacks specifications remains reviewable/applicable but is not presented as ready for
+> `verify_model`.
 > A rule API event source normally omits `relation` and `value`. If the AI emits the
 > semantically equivalent pair `relation = "="`, `value = "TRUE"`, the backend keeps the
 > rule, removes those redundant fields, and returns an `apiEventSyntaxNormalized`
@@ -848,6 +854,12 @@ conflict freedom.
 > instead of reporting a complete scenario. Prefix-like business names such as `a_noise`, `trust_score`,
 > `privacy_level`, or `variable_mode` stay literal in the returned scene; generated NuSMV
 > identifiers remain an internal modeling detail.
+> Candidate validation also intersects conditions within each rule and each A/IF/THEN
+> specification group. Individually legal predicates that have no common declared state
+> or variable value are rejected as a whole. Rule target-device predicates must also
+> intersect the command API's non-empty `StartState`. These stricter checks apply to
+> AI-authored candidates/mutations; ordinary user Board persistence keeps its existing
+> structural authoring contract.
 
 Standalone recommendations run in a bounded dedicated executor. Only one is admitted per user;
 pool saturation returns `503`. While a request is active, its status DTO is

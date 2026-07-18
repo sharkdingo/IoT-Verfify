@@ -43,7 +43,7 @@ component/
     parser/        SmvTraceParser — counterexample parsing
     fixer/         FaultLocalizer + parameter/condition/disable fix strategies
   fuzz/            deterministic bounded path search + finite safety monitor
-  aitool/          33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
+  aitool/          35 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/              LLM abstraction — domain model + LlmProvider (OpenAiLlmProvider) + facades
 dto/ po/ repository/   DTOs, JPA entities, data access
 security/          JWT + Spring Security
@@ -138,6 +138,8 @@ authored-formula/device-binding persistence; `verification_task` carries
 `disabled_rule_count` / `skipped_spec_count`
 mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
 rows also back verification run history for both synchronous and asynchronous checks;
+`chat_message` stores the exact user-visible assistant execution trace and elapsed time
+on the final assistant row, while older rows remain reconstructable from tool blocks;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

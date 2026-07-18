@@ -241,10 +241,11 @@ class BoardStorageServiceImplBatchTest {
         condition.setSide("a");
         condition.setDeviceId("sensor1");
         condition.setDeviceLabel("Stale internal label");
-        condition.setTargetType("VARIABLE");
+        condition.setTargetType("PRIVACY");
         condition.setKey("temperature");
+        condition.setPropertyScope("VARIABLE");
         condition.setRelation(" NOT_IN ");
-        condition.setValue("0,1");
+        condition.setValue("PUBLIC,PRIVATE");
 
         SpecificationDto spec = new SpecificationDto();
         spec.setId("spec1");
@@ -272,11 +273,12 @@ class BoardStorageServiceImplBatchTest {
                         && "variable".equals(savedRule.getConditions().get(0).getTargetType())), anyLong());
         verify(specificationMapper).toEntity(argThat(savedSpec ->
                 "not in".equals(savedSpec.getAConditions().get(0).getRelation())
-                        && "variable".equals(savedSpec.getAConditions().get(0).getTargetType())
+                        && "privacy".equals(savedSpec.getAConditions().get(0).getTargetType())
+                        && "variable".equals(savedSpec.getAConditions().get(0).getPropertyScope())
+                        && "public, private".equals(savedSpec.getAConditions().get(0).getValue())
                         && "Living Sensor".equals(savedSpec.getAConditions().get(0).getDeviceLabel())
                         && "Never".equals(savedSpec.getTemplateLabel())
-                        && savedSpec.getFormula().equals(
-                                "CTL AG NOT (Environment.\"temperature\" not in {0, 1})")
+                        && savedSpec.getFormula().contains("not in {public, private}")
                         && savedSpec.getDevices().size() == 1
                         && "sensor1".equals(savedSpec.getDevices().get(0).getDeviceId())
                         && savedSpec.getDevices().get(0).getSelectedApis().isEmpty()), anyLong());

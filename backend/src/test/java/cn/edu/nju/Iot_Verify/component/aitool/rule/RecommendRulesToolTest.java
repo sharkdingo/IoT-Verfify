@@ -1,6 +1,8 @@
 package cn.edu.nju.Iot_Verify.component.aitool.rule;
 
 import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -555,6 +557,31 @@ class RecommendRulesToolTest {
                 json.path("filteredItems").get(0).path("reasonCode").asText());
     }
 
+    @Test
+    void execute_filtersConditionsThatAreIndividuallyLegalButMutuallyContradictory() throws Exception {
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(lightTemplate()));
+        when(boardStorageService.getNodes(1L)).thenReturn(List.of(lightNode()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {"recommendations":[{
+                          "name":"Impossible motion rule",
+                          "conditions":[
+                            {"deviceId":"node-light","attribute":"motion","targetType":"variable","relation":"=","value":"yes"},
+                            {"deviceId":"node-light","attribute":"motion","targetType":"variable","relation":"=","value":"no"}
+                          ],
+                          "command":{"deviceId":"node-light","action":"turnOn"}
+                        }]}
+                        """);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+        assertEquals(0, json.path("count").asInt());
+        assertEquals("contradictoryConditionGroup",
+                json.path("filteredItems").get(0).path("reasonCode").asText());
+    }
+
     private DeviceInfoHelper.DeviceInfo lightDevice() {
         return new DeviceInfoHelper.DeviceInfo(
                 "node-light",
@@ -634,5 +661,48 @@ class RecommendRulesToolTest {
                 List.of("on"),
                 List.of(new DeviceInfoHelper.ContentInfo("photo", "private"))
         );
+    }
+
+    private DeviceNodeDto lightNode() {
+        DeviceNodeDto node = new DeviceNodeDto();
+        node.setId("node-light");
+        node.setLabel("Light");
+        node.setTemplateName("Light");
+        return node;
+    }
+
+    private DeviceTemplateDto lightTemplate() {
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setName("Light");
+        template.setManifest(DeviceTemplateDto.DeviceManifest.builder()
+                .name("Light")
+                .modes(List.of("State"))
+                .workingStates(List.of(
+                        state("off"),
+                        state("on")))
+                .internalVariables(List.of(DeviceTemplateDto.DeviceManifest.InternalVariable.builder()
+                        .name("motion")
+                        .isInside(true)
+                        .falsifiableWhenCompromised(true)
+                        .trust("untrusted")
+                        .privacy("public")
+                        .values(List.of("yes", "no"))
+                        .build()))
+                .apis(List.of(DeviceTemplateDto.DeviceManifest.API.builder()
+                        .name("turnOn")
+                        .signal(false)
+                        .startState("off")
+                        .endState("on")
+                        .build()))
+                .build());
+        return template;
+    }
+
+    private DeviceTemplateDto.DeviceManifest.WorkingState state(String name) {
+        return DeviceTemplateDto.DeviceManifest.WorkingState.builder()
+                .name(name)
+                .trust("trusted")
+                .privacy("public")
+                .build();
     }
 }

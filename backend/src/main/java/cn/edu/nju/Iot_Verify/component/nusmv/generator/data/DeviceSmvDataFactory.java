@@ -453,6 +453,11 @@ public class DeviceSmvDataFactory {
         return sanitizeSmvToken(cleaned);
     }
 
+    /** Empty and underscore tuple segments both mean that the mode is unconstrained. */
+    public static boolean isWildcardStateSegment(String raw) {
+        return raw == null || raw.trim().isEmpty() || "_".equals(raw.trim());
+    }
+
     /**
      * 清理 StartState：将空字符串和 "_" 视为通配符（任意状态）
      * 用于 API/Transition 的 StartState，表示"可从任意状态触发"

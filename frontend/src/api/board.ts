@@ -136,7 +136,14 @@ export interface ScenarioRecommendationResponse {
     truncatedCount: number
     scenarioName: string
     rationale: string
+    verificationReady: boolean
+    readinessIssues: ScenarioReadinessIssue[]
     scene: PortableSceneFile
+}
+
+export interface ScenarioReadinessIssue {
+    code: 'NO_DEVICES' | 'NO_SPECIFICATIONS'
+    message: string
 }
 
 export interface SpecificationRecommendation {

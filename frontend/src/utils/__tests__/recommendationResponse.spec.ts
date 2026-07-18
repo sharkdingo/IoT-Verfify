@@ -105,6 +105,8 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: '',
+      verificationReady: false,
+      readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
       scene: {
         templates: [],
         devices: [{}],
@@ -132,6 +134,31 @@ describe('recommendation candidate accounting', () => {
       truncatedCount: 0,
       scenarioName: 'Home',
       rationale: '',
+      verificationReady: false,
+      readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
+      scene: { templates: [], devices: [{}], environmentVariables: [], rules: [], specs: [] }
+    }, 'Scenario')).toThrow(expect.objectContaining({
+      code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
+    }))
+  })
+
+  it('rejects scenario readiness that contradicts the scene', () => {
+    expect(() => validateScenarioRecommendationResponse({
+      message: 'Scenario generated.',
+      count: 1,
+      requestedCount: 3,
+      validatedCount: 1,
+      filteredCount: 0,
+      filteredItems: [],
+      adjustedCount: 0,
+      adjustedItems: [],
+      rawCandidateCount: 1,
+      inspectedCount: 1,
+      truncatedCount: 0,
+      scenarioName: 'Home',
+      rationale: '',
+      verificationReady: true,
+      readinessIssues: [],
       scene: { templates: [], devices: [{}], environmentVariables: [], rules: [], specs: [] }
     }, 'Scenario')).toThrow(expect.objectContaining({
       code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE

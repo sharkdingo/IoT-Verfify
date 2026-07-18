@@ -8,7 +8,7 @@ import {
   UserOutlined, StopOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined,
   CopyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
-  CodeOutlined, ExperimentOutlined
+  CodeOutlined, ExperimentOutlined, DownOutlined
 } from '@ant-design/icons-vue';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -219,52 +219,150 @@ const isLoadingHistory = ref(false);
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || reconciliationRequired.value);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
-const readableToolName = (progress: StreamProgress) =>
-    (progress.toolName || t('app.chat.progressUnknownTool')).replace(/_/g, ' ');
-const formatStreamProgress = (progress: StreamProgress) => {
-  if (progress.stage === 'TOOL_EXECUTION') {
-    return t('app.chat.progressExecutingTool', {
-      round: progress.round || 1,
-      tool: readableToolName(progress)
-    });
-  }
-  if (progress.stage === 'TOOL_RESULT') {
-    const params = {
-      round: progress.round || 1,
-      tool: readableToolName(progress),
-      successful: progress.successfulSteps ?? 0,
-      failed: progress.failedSteps ?? 0,
-      unconfirmed: progress.unconfirmedSteps ?? 0
-    };
-    if (progress.outcome === 'FAILED') return t('app.chat.progressToolFailed', params);
-    if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressToolUnconfirmed', params);
-    if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressToolNeedsConfirmation', params);
-    return t('app.chat.progressToolSucceeded', params);
+const TOOL_LABEL_KEYS: Record<string, string> = {
+  add_device: 'app.chat.toolLabels.addDevice',
+  delete_device: 'app.chat.toolLabels.deleteDevice',
+  search_devices: 'app.chat.toolLabels.searchDevices',
+  recommend_related_devices: 'app.chat.toolLabels.recommendRelatedDevices',
+  manage_environment: 'app.chat.toolLabels.manageEnvironment',
+  list_rules: 'app.chat.toolLabels.listRules',
+  manage_rule: 'app.chat.toolLabels.manageRule',
+  check_duplicate_rule: 'app.chat.toolLabels.checkDuplicateRule',
+  check_rule_similarity: 'app.chat.toolLabels.checkRuleSimilarity',
+  recommend_rules: 'app.chat.toolLabels.recommendRules',
+  list_specs: 'app.chat.toolLabels.listSpecs',
+  manage_spec: 'app.chat.toolLabels.manageSpec',
+  recommend_specifications: 'app.chat.toolLabels.recommendSpecifications',
+  recommend_scenario: 'app.chat.toolLabels.recommendScenario',
+  apply_scenario: 'app.chat.toolLabels.applyScenario',
+  list_templates: 'app.chat.toolLabels.listTemplates',
+  add_template: 'app.chat.toolLabels.addTemplate',
+  delete_template: 'app.chat.toolLabels.deleteTemplate',
+  reset_default_templates: 'app.chat.toolLabels.resetDefaultTemplates',
+  verify_model: 'app.chat.toolLabels.verifyModel',
+  verify_model_async: 'app.chat.toolLabels.verifyModelAsync',
+  verify_task_status: 'app.chat.toolLabels.verifyTaskStatus',
+  cancel_verify_task: 'app.chat.toolLabels.cancelVerifyTask',
+  list_traces: 'app.chat.toolLabels.listTraces',
+  get_trace: 'app.chat.toolLabels.getTrace',
+  delete_trace: 'app.chat.toolLabels.deleteTrace',
+  fix_violation: 'app.chat.toolLabels.fixViolation',
+  simulate_model: 'app.chat.toolLabels.simulateModel',
+  simulate_model_async: 'app.chat.toolLabels.simulateModelAsync',
+  simulate_task_status: 'app.chat.toolLabels.simulateTaskStatus',
+  cancel_simulate_task: 'app.chat.toolLabels.cancelSimulateTask',
+  list_simulation_traces: 'app.chat.toolLabels.listSimulationTraces',
+  get_simulation_trace: 'app.chat.toolLabels.getSimulationTrace',
+  delete_simulation_trace: 'app.chat.toolLabels.deleteSimulationTrace',
+  board_overview: 'app.chat.toolLabels.boardOverview'
+};
+const readableToolName = (progress: StreamProgress) => {
+  const toolName = progress.toolName || '';
+  const translationKey = TOOL_LABEL_KEYS[toolName];
+  return translationKey ? t(translationKey) : (toolName || t('app.chat.progressUnknownTool')).replace(/_/g, ' ');
+};
+const progressEventTitle = (progress: StreamProgress) => {
+  if (progress.stage === 'CONTEXT_READY') return t('app.chat.progressContextTitle');
+  if (progress.stage === 'TASK_RESUMED') return t('app.chat.progressTaskResumedTitle');
+  if (progress.stage === 'PLANNING') return t('app.chat.progressPlanningTitle');
+  if (progress.stage === 'REASONING') return t('app.chat.progressReasoningTitle');
+  if (progress.stage === 'TOOL_EXECUTION' || progress.stage === 'TOOL_RESULT') {
+    return readableToolName(progress);
   }
   if (progress.stage === 'EXECUTION_GUARD') {
     return progress.outcome === 'NO_PROGRESS'
-        ? t('app.chat.progressNoProgressGuard')
-        : t('app.chat.progressEmergencyGuard');
+        ? t('app.chat.progressNoProgressTitle')
+        : t('app.chat.progressEmergencyTitle');
   }
-  if (progress.stage === 'PLANNING') {
-    return t('app.chat.progressPlanning', {
-      round: progress.round || 1,
-      successful: progress.successfulSteps ?? 0,
-      failed: progress.failedSteps ?? 0,
-      unconfirmed: progress.unconfirmedSteps ?? 0
+  return t('app.chat.progressWritingTitle');
+};
+const progressEventDetail = (progress: StreamProgress) => {
+  const round = progress.round || 1;
+  if (progress.stage === 'CONTEXT_READY') return t('app.chat.progressContextDetail');
+  if (progress.stage === 'TASK_RESUMED') {
+    return t('app.chat.progressTaskResumedDetail', {
+      objective: progress.detail || t('app.chat.progressTaskResumedFallback')
     });
   }
-  if (progress.stage === 'WRITING_RESPONSE') return t('app.chat.progressWritingResponse');
-  return t('app.chat.progressContextReady');
+  if (progress.stage === 'PLANNING') {
+    return t('app.chat.progressPlanningDetail', { round });
+  }
+  if (progress.stage === 'REASONING') {
+    return progress.detail || t('app.chat.progressReasoningFallback');
+  }
+  if (progress.stage === 'TOOL_EXECUTION') {
+    return t('app.chat.progressToolStartedDetail', {
+      round,
+      tool: progress.toolName || t('app.chat.progressUnknownTool')
+    });
+  }
+  if (progress.stage === 'TOOL_RESULT') {
+    if (progress.detail) return progress.detail;
+    if (progress.outcome === 'FAILED') return t('app.chat.progressToolFailedDetail', { round });
+    if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressToolUnconfirmedDetail', { round });
+    if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressToolNeedsConfirmationDetail', { round });
+    return t('app.chat.progressToolSucceededDetail', { round });
+  }
+  if (progress.stage === 'EXECUTION_GUARD') {
+    return progress.outcome === 'NO_PROGRESS'
+        ? t('app.chat.progressNoProgressDetail')
+        : t('app.chat.progressEmergencyDetail');
+  }
+  return t('app.chat.progressWritingDetail');
 };
-const progressEventClass = (progress: StreamProgress) => ({
+const progressEventStatus = (progress: StreamProgress) => {
+  if (progress.stage === 'TOOL_EXECUTION') return t('app.chat.progressStatusStarted');
+  if (progress.stage === 'TOOL_RESULT') {
+    if (progress.outcome === 'FAILED') return t('app.chat.progressStatusFailed');
+    if (progress.outcome === 'RESULT_UNAVAILABLE') return t('app.chat.progressStatusUnconfirmed');
+    if (progress.outcome === 'CONFIRMATION_REQUIRED') return t('app.chat.progressStatusConfirmation');
+    return t('app.chat.progressStatusSucceeded');
+  }
+  if (progress.stage === 'TASK_RESUMED') return t('app.chat.progressStatusResumed');
+  return null;
+};
+const executionTraceTotals = (trace: StreamProgress[]) => {
+  const latest = [...trace].reverse().find(progress =>
+      progress.successfulSteps != null
+      || progress.failedSteps != null
+      || progress.unconfirmedSteps != null);
+  return {
+    successful: latest?.successfulSteps ?? trace.filter(progress =>
+        progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE').length,
+    failed: latest?.failedSteps ?? trace.filter(progress =>
+        progress.stage === 'TOOL_RESULT' && progress.outcome === 'FAILED').length,
+    unconfirmed: latest?.unconfirmedSteps ?? trace.filter(progress =>
+        progress.stage === 'TOOL_RESULT'
+        && (progress.outcome === 'RESULT_UNAVAILABLE'
+            || progress.outcome === 'CONFIRMATION_REQUIRED')).length
+  };
+};
+const traceHasToolResults = (trace: StreamProgress[]) =>
+    trace.some(progress => progress.stage === 'TOOL_RESULT');
+const executionTraceStatus = (trace: StreamProgress[], active: boolean) => {
+  if (active) return t('app.chat.executionTraceRunning');
+  const guard = [...trace].reverse().find(progress => progress.stage === 'EXECUTION_GUARD');
+  if (guard) {
+    return guard.outcome === 'NO_PROGRESS'
+        ? t('app.chat.executionTraceStoppedNoProgress')
+        : t('app.chat.executionTraceStoppedLimit');
+  }
+  const lastResult = [...trace].reverse().find(progress => progress.stage === 'TOOL_RESULT');
+  return lastResult?.outcome === 'CONFIRMATION_REQUIRED'
+      ? t('app.chat.executionTraceWaiting')
+      : t('app.chat.executionTraceCompleted');
+};
+const progressEventClass = (progress: StreamProgress, active: boolean) => ({
   'is-success': progress.stage === 'TOOL_RESULT' && progress.outcome === 'USABLE',
   'is-warning': progress.stage === 'EXECUTION_GUARD'
       || progress.outcome === 'RESULT_UNAVAILABLE'
       || progress.outcome === 'CONFIRMATION_REQUIRED',
   'is-error': progress.stage === 'TOOL_RESULT' && progress.outcome === 'FAILED',
-  'is-current': progress === streamProgressEvents.value[streamProgressEvents.value.length - 1]
+  'is-reasoning': progress.stage === 'REASONING',
+  'is-current': active && progress === streamProgressEvents.value[streamProgressEvents.value.length - 1]
 });
+const isCurrentProgressEvent = (progress: StreamProgress, active: boolean) =>
+    active && progress === streamProgressEvents.value[streamProgressEvents.value.length - 1];
 const appendStreamProgress = (progress: StreamProgress) => {
   streamProgress.value = progress;
   const previous = streamProgressEvents.value[streamProgressEvents.value.length - 1];
@@ -275,7 +373,8 @@ const appendStreamProgress = (progress: StreamProgress) => {
       && (previous.outcome ?? null) === (progress.outcome ?? null)
       && (previous.successfulSteps ?? null) === (progress.successfulSteps ?? null)
       && (previous.failedSteps ?? null) === (progress.failedSteps ?? null)
-      && (previous.unconfirmedSteps ?? null) === (progress.unconfirmedSteps ?? null)) {
+      && (previous.unconfirmedSteps ?? null) === (progress.unconfirmedSteps ?? null)
+      && (previous.detail ?? null) === (progress.detail ?? null)) {
     return;
   }
   streamProgressEvents.value.push({ ...progress });
@@ -292,6 +391,14 @@ const messageExecutionTrace = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamProgressEvents.value : (message.executionTrace ?? []);
 const messageExecutionElapsed = (message: ChatMessage, index: number) =>
     isActiveAssistantMessage(index) ? streamElapsedSeconds.value : (message.executionElapsedSeconds ?? 0);
+const handleExecutionTraceToggle = (event: Event, active: boolean) => {
+  const details = event.currentTarget as HTMLDetailsElement | null;
+  if (!details?.open || active) return;
+  nextTick(() => {
+    const events = details.querySelector<HTMLElement>('.chat-execution-events');
+    if (events) events.scrollTop = 0;
+  });
+};
 watch(isAssistantBusy, busy => chatStore.setStreaming(busy), { immediate: true });
 const scrollRef = ref<HTMLElement | null>(null);
 const chatPanelRef = ref<HTMLElement | null>(null);
@@ -1362,7 +1469,10 @@ const scrollToBottom = (force = false) => {
                     :class="[
                       'msg-body',
                       'vue-markdown-wrapper',
-                      { 'assistant-pending-body': isStreaming && index === messages.length - 1 }
+                      {
+                        'assistant-pending-body': isStreaming && index === messages.length - 1,
+                        'has-execution-trace': messageExecutionTrace(msg, index).length > 0
+                      }
                     ]"
                     :aria-busy="isStreaming && index === messages.length - 1 ? 'true' : undefined"
                   >
@@ -1374,24 +1484,68 @@ const scrollToBottom = (force = false) => {
                       :role="isActiveAssistantMessage(index) ? 'status' : undefined"
                       :aria-live="isActiveAssistantMessage(index) ? 'polite' : undefined"
                       aria-atomic="false"
+                      @toggle="handleExecutionTraceToggle($event, isActiveAssistantMessage(index))"
                     >
                       <summary class="chat-execution-header">
-                        <div>
-                          <strong>{{ t('app.chat.executionTraceTitle') }}</strong>
-                          <p>{{ t('app.chat.progressElapsed', { seconds: messageExecutionElapsed(msg, index) }) }}</p>
+                        <span class="chat-execution-chevron" aria-hidden="true">
+                          <DownOutlined />
+                        </span>
+                        <div class="chat-execution-heading">
+                          <span class="chat-execution-icon" aria-hidden="true"><CodeOutlined /></span>
+                          <div>
+                            <strong>{{ t('app.chat.executionTraceTitle') }}</strong>
+                            <p>{{ t('app.chat.executionTraceSubtitle') }}</p>
+                          </div>
                         </div>
-                        <div v-if="isActiveAssistantMessage(index)" class="typing-indicator" aria-hidden="true">
-                          <span></span><span></span><span></span>
+                        <div class="chat-execution-meta">
+                          <span
+                            class="chat-execution-state"
+                            :class="{
+                              'is-running': isActiveAssistantMessage(index),
+                              'is-stopped': !isActiveAssistantMessage(index)
+                                && messageExecutionTrace(msg, index).some(progress => progress.stage === 'EXECUTION_GUARD')
+                            }"
+                          >
+                            {{ executionTraceStatus(messageExecutionTrace(msg, index), isActiveAssistantMessage(index)) }}
+                          </span>
+                          <span>{{ t('app.chat.progressElapsed', { seconds: messageExecutionElapsed(msg, index) }) }}</span>
                         </div>
                       </summary>
+                      <div
+                        v-if="traceHasToolResults(messageExecutionTrace(msg, index))"
+                        class="chat-execution-metrics"
+                      >
+                        <span class="is-success">
+                          <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).successful }}</strong>
+                          {{ t('app.chat.executionMetricSucceeded') }}
+                        </span>
+                        <span class="is-error">
+                          <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).failed }}</strong>
+                          {{ t('app.chat.executionMetricFailed') }}
+                        </span>
+                        <span class="is-warning">
+                          <strong>{{ executionTraceTotals(messageExecutionTrace(msg, index)).unconfirmed }}</strong>
+                          {{ t('app.chat.executionMetricUnconfirmed') }}
+                        </span>
+                      </div>
                       <ol class="chat-execution-events" data-testid="chat-execution-trace">
                         <li
                           v-for="(progress, progressIndex) in messageExecutionTrace(msg, index)"
                           :key="`${progress.stage}-${progress.round || 0}-${progress.toolName || ''}-${progressIndex}`"
-                          :class="progressEventClass(progress)"
+                          :class="progressEventClass(progress, isActiveAssistantMessage(index))"
+                          :aria-current="isCurrentProgressEvent(progress, isActiveAssistantMessage(index)) ? 'step' : undefined"
                         >
-                          <span class="chat-execution-dot" aria-hidden="true"></span>
-                          <span>{{ formatStreamProgress(progress) }}</span>
+                          <span class="chat-execution-step" aria-hidden="true">{{ progressIndex + 1 }}</span>
+                          <div class="chat-execution-event-copy">
+                            <strong>{{ progressEventTitle(progress) }}</strong>
+                            <p>{{ progressEventDetail(progress) }}</p>
+                          </div>
+                          <span
+                            v-if="progressEventStatus(progress)"
+                            class="chat-execution-outcome"
+                          >
+                            {{ progressEventStatus(progress) }}
+                          </span>
                         </li>
                       </ol>
                     </details>
@@ -2070,6 +2224,13 @@ const scrollToBottom = (force = false) => {
   background: var(--chat-ai-bg);
 }
 
+.msg-body.has-execution-trace,
+.assistant-pending-body.has-execution-trace {
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+}
+
 .msg-actions {
   display: flex;
   gap: 0.35rem;
@@ -2128,44 +2289,154 @@ const scrollToBottom = (force = false) => {
 }
 
 .chat-execution-trace {
-  width: min(14rem, 68vw);
+  width: 100%;
   min-width: 0;
-  max-width: 100%;
   color: var(--chat-text);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
 
 .chat-execution-header {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
   cursor: pointer;
-  padding-bottom: 0.45rem;
+  min-height: 3.15rem;
+  padding: 0.2rem 0 0.65rem;
+  list-style: none;
   border-bottom: 1px solid var(--chat-border);
 }
 
-.chat-execution-header::marker {
+.chat-execution-header::-webkit-details-marker {
+  display: none;
+}
+
+.chat-execution-chevron {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chat-border);
+  border-radius: 0.4rem;
+  color: var(--chat-muted);
+  transition: transform 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.chat-execution-trace[open] .chat-execution-chevron {
+  transform: rotate(180deg);
+  border-color: color-mix(in srgb, var(--chat-accent) 45%, var(--chat-border));
   color: var(--chat-accent);
 }
 
-.chat-execution-header > div:first-child {
-  display: inline-block;
-  margin-left: 0.25rem;
+.chat-execution-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
 }
 
-.chat-execution-header .typing-indicator {
-  float: right;
-  margin-top: 0.45rem;
+.chat-execution-heading > div {
+  min-width: 0;
 }
 
-.chat-execution-header p {
-  margin: 0.15rem 0 0;
+.chat-execution-icon {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--chat-accent) 11%, var(--chat-control-bg));
+  color: var(--chat-accent);
+}
+
+.chat-execution-heading strong {
+  display: block;
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.chat-execution-heading p,
+.chat-execution-event-copy p {
+  margin: 0.12rem 0 0;
   color: var(--chat-muted);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.chat-execution-meta {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--chat-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-execution-state {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--chat-border);
+  border-radius: 0.35rem;
+  background: var(--chat-control-bg);
+  color: var(--chat-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.chat-execution-state.is-running {
+  border-color: color-mix(in srgb, var(--chat-accent) 48%, var(--chat-border));
+  color: var(--chat-accent);
+}
+
+.chat-execution-state.is-stopped {
+  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
+  color: #b45309;
+}
+
+.chat-execution-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--chat-border);
+}
+
+.chat-execution-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 0.35rem;
+  background: var(--chat-control-bg);
+  color: var(--chat-muted);
+}
+
+.chat-execution-metrics strong {
+  color: var(--chat-text);
+  font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
 
+.chat-execution-metrics .is-success strong {
+  color: var(--chat-success);
+}
+
+.chat-execution-metrics .is-warning strong {
+  color: #d97706;
+}
+
+.chat-execution-metrics .is-error strong {
+  color: #dc2626;
+}
+
 .chat-execution-events {
-  max-height: 14rem;
-  margin: 0.55rem 0 0;
-  padding: 0 0 0 0.15rem;
+  max-height: min(22rem, 48vh);
+  margin: 0;
+  padding: 0;
   overflow-y: auto;
   list-style: none;
   scrollbar-width: thin;
@@ -2178,37 +2449,85 @@ const scrollToBottom = (force = false) => {
 
 .chat-execution-events li {
   display: grid;
-  grid-template-columns: 0.65rem minmax(0, 1fr);
-  align-items: start;
-  gap: 0.45rem;
-  padding: 0.2rem 0;
+  grid-template-columns: 1.55rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 3.2rem;
+  padding: 0.55rem 0.15rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-border) 65%, transparent);
   color: var(--chat-muted);
   line-height: 1.45;
 }
 
+.chat-execution-events li:last-child {
+  border-bottom: 0;
+}
+
 .chat-execution-events li.is-current {
   color: var(--chat-text);
-  font-weight: 600;
+  background: color-mix(in srgb, var(--chat-accent) 5%, transparent);
 }
 
-.chat-execution-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  margin-top: 0.35rem;
+.chat-execution-step {
+  width: 1.4rem;
+  height: 1.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--chat-border);
   border-radius: 50%;
-  background: var(--chat-muted);
+  background: var(--chat-control-bg);
+  color: var(--chat-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-.chat-execution-events li.is-success .chat-execution-dot {
-  background: var(--chat-success);
+.chat-execution-event-copy {
+  min-width: 0;
 }
 
-.chat-execution-events li.is-warning .chat-execution-dot {
-  background: #d97706;
+.chat-execution-event-copy strong {
+  display: block;
+  color: var(--chat-text);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
-.chat-execution-events li.is-error .chat-execution-dot {
-  background: #dc2626;
+.chat-execution-outcome {
+  justify-self: end;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid var(--chat-border);
+  border-radius: 0.35rem;
+  background: var(--chat-control-bg);
+  color: var(--chat-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chat-execution-events li.is-success .chat-execution-step,
+.chat-execution-events li.is-success .chat-execution-outcome {
+  border-color: color-mix(in srgb, var(--chat-success) 48%, var(--chat-border));
+  color: var(--chat-success);
+}
+
+.chat-execution-events li.is-warning .chat-execution-step,
+.chat-execution-events li.is-warning .chat-execution-outcome {
+  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
+  color: #b45309;
+}
+
+.chat-execution-events li.is-error .chat-execution-step,
+.chat-execution-events li.is-error .chat-execution-outcome {
+  border-color: color-mix(in srgb, #dc2626 48%, var(--chat-border));
+  color: #dc2626;
+}
+
+.chat-execution-events li.is-reasoning .chat-execution-step {
+  border-color: color-mix(in srgb, var(--chat-accent) 48%, var(--chat-border));
+  background: color-mix(in srgb, var(--chat-accent) 9%, var(--chat-control-bg));
+  color: var(--chat-accent);
 }
 
 .reconciliation-state p {
@@ -2488,6 +2807,37 @@ const scrollToBottom = (force = false) => {
   .msg-body {
     padding: 0.6rem 0.7rem;
     font-size: 0.84rem;
+  }
+
+  .chat-execution-header {
+    grid-template-columns: 1.55rem minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .chat-execution-icon {
+    display: none;
+  }
+
+  .chat-execution-meta {
+    grid-column: 2;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .chat-execution-events li {
+    grid-template-columns: 1.4rem minmax(0, 1fr);
+    align-items: start;
+    gap: 0.5rem;
+  }
+
+  .chat-execution-outcome {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .chat-execution-events {
+    max-height: min(12rem, 24vh);
   }
 
   .input-floating-area {

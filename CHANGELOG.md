@@ -15,14 +15,68 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-18
+
+#### Changed
+- Expanded the shared AI recommendation capability view with explicit per-mode values,
+  API triggers, and behavior-derived descriptions for otherwise blank manifests,
+  states, variables, transitions, APIs, and content. Each description now identifies
+  whether it was declared by the template or derived from modeled facts.
+- Made chat execution records durable across reloads. New assistant rows persist the exact
+  emitted activity trace and elapsed time, including task resumption and execution-guard
+  stops; legacy rows still reconstruct from tool-call/result blocks. Visible summaries are
+  operation-aware and omit raw internal identifiers and provider exception text.
+- Added ReAct-style user-visible reasoning summaries before tool actions. The summaries
+  explain the current goal, observed facts, next action, and remaining work, are sanitized
+  before streaming/persistence, retain enough context to explain multi-step decisions, and
+  do not expose private hidden chain-of-thought.
+
+#### Added
+- Added the `reset_default_templates` AI tool. It previews the exact bundled-template and
+  Environment Pool impact, requires a later action-specific confirmation, then uses the
+  same atomic refresh authority as the Board UI while preserving custom templates.
+
+#### Fixed
+- Added deterministic conjunction checks for AI-authored rules and specifications.
+  Direct AI mutations, standalone recommendations, and full-scene recommendations now
+  reject condition groups with no common legal state/value and rules whose target
+  conditions cannot satisfy an action API's declared `StartState`. Ordinary user Board
+  editing remains governed by the existing structural contract.
+- Filtered AI recommendation conditions and command prestates that are provably unreachable
+  from current runtime plus declared APIs, transitions, dynamics, and natural change, while
+  retaining uncertain/open candidates through conservative over-approximation.
+- Made deletion, default-template reset, and scene-replacement confirmations authorize only
+  their matching protected action, with semantic classification performed by the configured
+  model instead of fixed natural-language phrase matching.
+- Made the AI default-template reset preview enumerate each Environment Pool change with
+  its previous and current value, trust, and privacy instead of exposing only a count.
+- Interpreted `_` and empty segments consistently as per-mode wildcards in authored state
+  conditions across NuSMV generation, fault localization, and fix validation.
+- Kept relation-free API event input valid across scenario recommendation and confirmed
+  atomic Board replacement by canonicalizing omitted relation/value to explicit `= TRUE`
+  before the strict persistence contract, matching standalone specification authoring.
+- Completed scenario recommendation readiness propagation through the REST DTO and
+  frontend parser. The controller now rejects a payload whose `verificationReady` or
+  ordered `readinessIssues` disagree with the returned canonical scene.
+- Corrected remaining built-in privacy labels for social posting, phone photo/upload
+  activity, and door/window/garage contact or open-state facts, keeping routine idle and
+  ordinary appliance states public.
+
 ### 2026-07-17
 
 #### Changed
+- Enabled the chat assistant to apply its latest validated full-scene recommendation
+  through the same confirmed atomic Board replacement authority as UI scene import,
+  rather than decomposing replacement into per-device deletions and additions.
 - Replaced deterministic chat intent routing and keyword-selected tool subsets with
   model-driven planning over the complete AI tool catalog. The assistant can now answer
   current-scene count questions from `board_overview` and compose targeted device,
   environment, rule, and specification tools to complete an existing scene without
   turning it into a full-replacement draft.
+- Made chat planning objective-oriented across confirmation boundaries. A destructive
+  preview now pauses only its protected step; after explicit confirmation the assistant
+  resumes the original multi-step task and can continue composing deletion, creation,
+  rule, specification, simulation, and verification tools until another real boundary.
 - Replaced the assistant's normal five-round planning cutoff with progress-aware
   continuation, exact repeated-call/result stagnation detection, and a configurable
   high emergency runaway guard. Long requests now retain full tool capability and still
@@ -30,29 +84,64 @@ history into a technical spec. The spec content itself now lives under
 - Extended the default chat SSE lifetime to 60 minutes and added structured tool-result
   and execution-guard progress events with cumulative success, failure, and unconfirmed
   counts.
+- Reworked the assistant trace into a full-width activity record with localized action
+  names, visible confirmation points, per-step outcomes, cumulative result counts, and
+  responsive desktop/mobile layouts instead of a narrow abstract text column.
 - Defaulted Board verification and simulation to background execution while retaining
   the synchronous options, so users can leave the submit panel, observe progress, and
   cancel long work without reducing formal-analysis capability.
 
 #### Added
+- Added the `apply_scenario` AI tool and a server-side per-chat draft lifecycle. The
+  assistant now previews current/replacement counts, waits for explicit confirmation,
+  and then commits devices, shared environment values, rules, specifications, and
+  required template snapshots in one transaction.
 - Added an accumulating, bilingual execution trace inside the active assistant message.
   It shows context loading, planning rounds, tool starts and outcomes, retry decisions,
   and response generation, then remains available as a collapsible record after the
   response completes without presenting private model chain-of-thought.
+- Added a 15-minute per-user, per-session task-continuation store and `TASK_RESUMED` SSE
+  progress event carrying a bounded summary of the original user-authored objective.
 - Added server-observed phase reporting for standalone AI recommendations, automatic-fix
   searches, and persisted verification/simulation/exploration tasks. The frontend now
   displays these real phases instead of guessing from elapsed time or showing an
   indefinite generic spinner.
 
 #### Fixed
+- Unified recommendation capability context across scenario, rule, specification, and
+  related-device tools. Models now receive falsifiability, domains, natural change rates,
+  working-state dynamics, autonomous transitions, API content/state behavior, content
+  descriptions, and the current shared Environment Pool.
+- Corrected AI-facing specification semantics to use the formal `AG`/`AF`/`AX`/`GF`
+  definitions, including `AF` (not `EF`) for Eventually. Scenario recommendation results
+  now expose `verificationReady` and structured `readinessIssues`; empty-spec drafts remain
+  user-applicable but are clearly marked as not ready for verification.
+- Made specification persistence canonicalize `propertyScope` and trust/privacy literals,
+  including set-valued conditions, and stopped failed/empty scenario recommendations from
+  deleting the previous valid draft.
+- Added optional template content descriptions and aligned the built-in privacy defaults:
+  routine appliance/environment facts are public, while location, activity, access,
+  communication, financial, health, and personal-content facts remain private.
+- Made pending AI confirmations follow the user's latest instruction instead of requiring
+  an immediately adjacent one-word reply. Ordinary questions and task changes now preserve
+  the preview, action-specific confirmations may include follow-up work, and a generic
+  confirmation is rejected as ambiguous when several action kinds are pending.
+- Replaced fixed confirmation phrase matching with model-based semantic interpretation
+  scoped to the server-known pending action kinds; invalid or unavailable classification
+  fails closed without authorizing a protected mutation.
+- Preserved bounded user-authored task updates and sanitized pending tool output across a
+  confirmation pause, allowing the assistant to resume the revised objective without
+  exposing model reasoning or repeating a completed preview.
+- Kept destructive confirmation executable when detailed tool results exceed the chat
+  history character window by injecting the pending tool, target, and opaque token from
+  server-side confirmation state. Scene application likewise keeps its draft and Board
+  impact token outside model history, preventing repeated no-write preview loops.
 - Corrected `add_device` planning guidance to use the authoritative `list_templates`
   catalog instead of claiming that `board_overview` lists available device types. Scene
   completion now obtains an exact template name before targeted creation rather than
   guessing or silently degrading the requested composition.
-- Prevented ordinary continuation requests such as "go ahead and complete the scene" or
-  the equivalent Chinese wording from being treated as authorization for a pending
-  deletion. Longer confirmations must explicitly name deletion, while concise direct
-  confirmations remain supported.
+- Kept ordinary continuation requests distinct from protected-action authorization through
+  the model's pending-action semantic classification rather than keyword routing.
 - Repaired blank or repeated tool-call correlation ids returned by OpenAI-compatible
   providers before persistence and execution, keeping assistant calls and tool results
   protocol-complete instead of failing after a tool may already have run.
@@ -64,8 +153,8 @@ history into a technical spec. The spec content itself now lives under
 - Made terminal background tasks display their completed, failed, or cancelled status
   instead of a stale last active phase, and prevented a closing automatic-fix request
   from stopping progress updates for a newly opened request.
-- Kept assistant execution traces compact and retained completed interactive-operation
-  status briefly so final progress polling no longer produces a spurious 404.
+- Retained completed interactive-operation status briefly so final progress polling no
+  longer produces a spurious 404.
 
 ### 2026-07-16
 

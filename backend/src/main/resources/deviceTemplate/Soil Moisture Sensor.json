@@ -8,7 +8,7 @@
 			"IsInside": false,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"Values": ["dry", "wet"]
 		}
 	],

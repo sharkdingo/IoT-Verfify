@@ -30,6 +30,13 @@ public class ChatMessagePo {
     @Column(columnDefinition = "TEXT") // 支持长文本
     private String content;
 
+    @Lob
+    @Column(name = "execution_trace_json", columnDefinition = "LONGTEXT")
+    private String executionTraceJson;
+
+    @Column(name = "execution_elapsed_seconds")
+    private Integer executionElapsedSeconds;
+
     private LocalDateTime createdAt;
 
     @PrePersist

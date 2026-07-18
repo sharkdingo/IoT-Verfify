@@ -286,6 +286,9 @@ public class DeviceTemplateDto {
             @JsonProperty("Name")
             private String name;
 
+            @JsonProperty("Description")
+            private String description;
+
             @JsonProperty("Privacy")
             @NotBlank(message = "Content Privacy must be explicit")
             @Pattern(regexp = "public|private", message = "Content Privacy must be public or private")

@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": false,
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"Values": ["cooling", "delayWash", "drying", "finished", "none", "weightSensing", "wrinklePrevent"]
 		}
 	],
@@ -20,63 +20,63 @@
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "regular;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "regular;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;pause",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "lowHeat;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;pause",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "highHeat;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

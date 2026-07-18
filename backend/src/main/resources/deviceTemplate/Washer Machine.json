@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": false,
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"Values": ["airWash", "cooling", "delayWash", "drying", "finish", "none", "preWash", "rinse", "spin", "wash", "weightSensing", "wrinklePrevent"]
 		}
 	],
@@ -20,84 +20,84 @@
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "regular;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "regular;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;pause",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "heavy;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;pause",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "rinse;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;pause",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;run",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "spinDry;stop",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

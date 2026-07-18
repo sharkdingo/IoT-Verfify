@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "public",
+			"Privacy": "private",
 			"Values": ["home", "away", "garageDoor", "Shanghai"]
 		},
 		{
@@ -17,7 +17,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "public",
+			"Privacy": "private",
 			"LowerBound": 0,
 			"UpperBound": 100,
 			"NaturalChangeRate": "[0, 1]"
@@ -26,6 +26,7 @@
 	"Contents": [
 		{
 			"Name": "photo",
+			"Description": "Personal photo data available to content-capable actions",
 			"Privacy": "private"
 		}
 	],
@@ -44,14 +45,14 @@
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "public"
+			"Privacy": "private"
 		},
 		{
 			"Name": "uploading to cloud",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "public"
+			"Privacy": "private"
 		}
 	],
 	"Transitions": [

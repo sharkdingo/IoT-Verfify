@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"LowerBound": 0,
 			"UpperBound": 100,
 			"NaturalChangeRate": "[-1, 1]"
@@ -23,7 +23,7 @@
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "on",
@@ -35,7 +35,7 @@
 			],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

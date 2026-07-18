@@ -242,7 +242,7 @@ public class OpenAiLlmProvider implements LlmProvider {
                 .map(this::toDomainToolCalls)
                 .orElseGet(List::of);
         if (!toolCalls.isEmpty()) {
-            return LlmChatResponse.ofToolCalls(toolCalls);
+            return LlmChatResponse.ofTextAndToolCalls(message.content().orElse(""), toolCalls);
         }
         return LlmChatResponse.ofText(message.content().orElse(""));
     }

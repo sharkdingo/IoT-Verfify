@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -17,4 +18,6 @@ public class ChatMessageResponseDto {
     private String role;
     private String content;
     private LocalDateTime createdAt;
+    private List<StreamResponseDto.ProgressDto> executionTrace;
+    private Integer executionElapsedSeconds;
 }

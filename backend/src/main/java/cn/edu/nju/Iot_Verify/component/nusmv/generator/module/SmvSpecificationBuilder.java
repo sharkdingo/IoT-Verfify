@@ -547,6 +547,9 @@ public class SmvSpecificationBuilder {
             }
             Map<String, String> tuple = new LinkedHashMap<>();
             for (int i = 0; i < modes.size(); i++) {
+                if (DeviceSmvDataFactory.isWildcardStateSegment(segments[i])) {
+                    continue;
+                }
                 String cleanSeg = DeviceSmvDataFactory.cleanStateName(segments[i]);
                 if (cleanSeg == null || cleanSeg.isBlank()) {
                     continue;

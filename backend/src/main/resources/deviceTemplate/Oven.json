@@ -42,84 +42,84 @@
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "heating;running",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "heating;paused",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "grill;ready",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "grill;running",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "grill;paused",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "warming;ready",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "warming;running",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "warming;paused",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;ready",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;running",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "defrosting;paused",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

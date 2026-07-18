@@ -2,11 +2,15 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
+import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
+import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
@@ -26,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Method;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -55,6 +60,10 @@ class ChatServiceImplHistoryWindowTest {
     @Mock
     private AiDestructiveActionGuard destructiveActionGuard;
     @Mock
+    private AiScenarioDraftStore scenarioDraftStore;
+    @Mock
+    private AiTaskContinuationStore taskContinuationStore;
+    @Mock
     private ChatMapper chatMapper;
     @Mock
     private TransactionTemplate transactionTemplate;
@@ -73,9 +82,13 @@ class ChatServiceImplHistoryWindowTest {
                 userRepository,
                 llmChatService,
                 new LlmMessageCodec(new ObjectMapper()),
-                new ChatConfirmationDetector(),
+                new ChatConfirmationDetector(
+                        org.mockito.Mockito.mock(cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService.class),
+                        new ObjectMapper()),
                 aiToolManager,
                 destructiveActionGuard,
+                scenarioDraftStore,
+                taskContinuationStore,
                 new ObjectMapper(),
                 chatMapper,
                 transactionTemplate,
@@ -288,6 +301,97 @@ class ChatServiceImplHistoryWindowTest {
         assertEquals(3, visible.size());
         assertEquals("assistant", visible.get(1).getRole());
         assertEquals("Calling tool...", visible.get(1).getContent());
+    }
+
+    @Test
+    void getHistory_shouldAttachConcretePersistedExecutionTraceToAssistantReply() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("trace-history");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("trace-history", 1L)).thenReturn(Optional.of(session));
+
+        ObjectMapper mapper = new ObjectMapper();
+        LlmMessageCodec codec = new LlmMessageCodec(mapper);
+        LocalDateTime started = LocalDateTime.of(2026, 7, 18, 10, 0, 0);
+
+        ChatMessagePo userMsg = new ChatMessagePo();
+        userMsg.setRole("user");
+        userMsg.setContent("检查当前画布");
+        userMsg.setCreatedAt(started);
+
+        ChatMessagePo assistantToolCall = new ChatMessagePo();
+        assistantToolCall.setRole("assistant");
+        assistantToolCall.setContent(codec.serializeToolCalls(List.of(
+                new LlmToolCall("tc_1", "board_overview", "{}"))));
+
+        ChatMessagePo toolResult = new ChatMessagePo();
+        toolResult.setRole("tool");
+        toolResult.setContent(codec.serializeToolResult("tc_1", """
+                {"devices":[{},{}],"rules":[{}],"specs":[{}],"environmentVariables":[{}]}
+                """));
+
+        ChatMessagePo assistantReply = new ChatMessagePo();
+        assistantReply.setRole("assistant");
+        assistantReply.setContent("画布包含两个设备。");
+        assistantReply.setCreatedAt(started.plusSeconds(12));
+
+        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("trace-history"))
+                .thenReturn(List.of(userMsg, assistantToolCall, toolResult, assistantReply));
+        ChatMessageResponseDto userDto = new ChatMessageResponseDto();
+        userDto.setRole("user");
+        ChatMessageResponseDto assistantDto = new ChatMessageResponseDto();
+        assistantDto.setRole("assistant");
+        when(chatMapper.toChatMessageDtoList(anyList())).thenReturn(List.of(userDto, assistantDto));
+
+        List<ChatMessageResponseDto> history = service.getHistory(1L, "trace-history");
+
+        assertEquals(2, history.size());
+        assertEquals(12, assistantDto.getExecutionElapsedSeconds());
+        assertEquals(List.of("CONTEXT_READY", "PLANNING", "TOOL_EXECUTION", "TOOL_RESULT", "WRITING_RESPONSE"),
+                assistantDto.getExecutionTrace().stream().map(progress -> progress.getStage()).toList());
+        assertEquals("已读取画布：2 个设备、1 条规则、1 条规约、1 个共享环境变量。",
+                assistantDto.getExecutionTrace().get(3).getDetail());
+    }
+
+    @Test
+    void getHistory_shouldRestoreExactTraceMetadataWithoutToolCallReconstruction() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("exact-trace-history");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("exact-trace-history", 1L)).thenReturn(Optional.of(session));
+
+        ChatMessagePo userMsg = new ChatMessagePo();
+        userMsg.setRole("user");
+        userMsg.setContent("continue");
+
+        List<StreamResponseDto.ProgressDto> persisted = List.of(
+                new StreamResponseDto.ProgressDto(
+                        "CONTEXT_READY", null, null, null, null, null, null, null),
+                new StreamResponseDto.ProgressDto(
+                        "TASK_RESUMED", null, null, null, null, null, null, "resume objective"),
+                new StreamResponseDto.ProgressDto(
+                        "EXECUTION_GUARD", null, 2, "NO_PROGRESS", 1, 0, 0, null));
+        ChatMessagePo assistantReply = new ChatMessagePo();
+        assistantReply.setId(42L);
+        assistantReply.setRole("assistant");
+        assistantReply.setContent("Stopped after no progress.");
+        assistantReply.setExecutionTraceJson(new ObjectMapper().writeValueAsString(persisted));
+        assistantReply.setExecutionElapsedSeconds(43);
+
+        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("exact-trace-history"))
+                .thenReturn(List.of(userMsg, assistantReply));
+        ChatMessageResponseDto userDto = new ChatMessageResponseDto();
+        userDto.setRole("user");
+        ChatMessageResponseDto assistantDto = new ChatMessageResponseDto();
+        assistantDto.setRole("assistant");
+        when(chatMapper.toChatMessageDtoList(anyList())).thenReturn(List.of(userDto, assistantDto));
+
+        service.getHistory(1L, "exact-trace-history");
+
+        assertEquals(43, assistantDto.getExecutionElapsedSeconds());
+        assertEquals(List.of("CONTEXT_READY", "TASK_RESUMED", "EXECUTION_GUARD"),
+                assistantDto.getExecutionTrace().stream().map(StreamResponseDto.ProgressDto::getStage).toList());
+        assertEquals("NO_PROGRESS", assistantDto.getExecutionTrace().get(2).getOutcome());
     }
 
     @Test

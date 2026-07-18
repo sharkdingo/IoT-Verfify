@@ -6,7 +6,7 @@ scenario into NuSMV. Request and response field tables live in
 [spec-templates.md](spec-templates.md); identity rules live in
 [device-identity.md](device-identity.md).
 
-Verified against code on 2026-07-12. Primary sources:
+Verified against code on 2026-07-18. Primary sources:
 `SmvGenerator`, `DeviceSmvDataFactory`, `SmvModelValidator`,
 `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`, `SmvSpecificationBuilder`, and
 `SmvTraceParser`.
@@ -279,6 +279,17 @@ can still falsify any value whose template explicitly sets
 `untrusted`. Users may override initial labels when their deployment assumptions differ;
 the label is neither authentication nor an attack probability.
 
+Default privacy labels follow sensitivity of the fact itself, not device ownership or the
+mere existence of an API. Routine appliance modes and ordinary environmental readings
+start as `public`; location, activity/occupancy, security access, communications, financial,
+health, and personal-content facts start as `private`. These are reviewable template
+authoring defaults, not access-control decisions. Users may override them when the actual
+deployment has different privacy assumptions.
+
+Concrete built-in examples follow that classification: social-network `posting`, phone
+`taking photo` / `uploading to cloud`, and door/window/garage open/contact facts are
+private, while the same devices' idle or ordinary powered-on states remain public.
+
 | Dimension | Rule propagation policy | What it does not mean |
 | :--- | :--- | :--- |
 | Trust | MEDIC retained-control label: target is untrusted only if every resolved trigger source is untrusted; one trusted source keeps it trusted | Authentication, data-integrity taint, exploit probability, or device ownership |
@@ -323,6 +334,13 @@ predicates (one private source propagates sensitivity). A signal API that change
 modes combines every changed state in the same way. Template validation requires complete working-state tuples and
 rejects conflicting labels for a reused mode-state component rather than allowing JSON
 order to choose the generated label.
+
+Authored multi-mode state conditions may use either an empty tuple segment or `_` as an
+explicit per-mode wildcard. For example, `on;_` constrains the first mode to `on` and
+leaves the second mode unconstrained. Rule generation, specification generation, fault
+localization, and fix validation interpret both spellings identically. This does not relax
+template manifests: every declared `WorkingState.Name`, `InitState`, and concrete API
+state tuple must still be complete and valid.
 
 State overrides use literal `currentStateTrust` and `currentStatePrivacy` values.
 Variable overrides use literal template variable names. Generated keys such as

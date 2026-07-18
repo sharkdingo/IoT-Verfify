@@ -19,6 +19,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -28,7 +29,7 @@ import java.util.concurrent.ConcurrentMap;
  * <p>The model only receives an opaque token. The server binds that token to the authenticated
  * user, chat session, tool, target, and a canonical digest of the exact preview. A successful
  * consume removes the pending action atomically, so one user confirmation cannot authorize a
- * second deletion in the same tool-planning turn.
+ * second protected mutation in the same tool-planning turn.
  */
 @Component
 public class AiDestructiveActionGuard {
@@ -71,7 +72,10 @@ public class AiDestructiveActionGuard {
                                  String targetKey,
                                  String suppliedToken,
                                  Object currentPreviewSnapshot) {
-        if (!UserContextHolder.isDestructiveActionConfirmed()) {
+        boolean actionConfirmed = "reset_default_templates".equals(toolName)
+                ? UserContextHolder.isDefaultTemplateResetConfirmed()
+                : UserContextHolder.isDestructiveActionConfirmed();
+        if (!actionConfirmed) {
             return ConsumeResult.rejected(
                     "CONFIRMATION_REQUIRED",
                     "No changes were made. Confirm the exact preview in a later message before retrying.");
@@ -83,7 +87,7 @@ public class AiDestructiveActionGuard {
         } catch (IllegalStateException e) {
             return ConsumeResult.rejected(
                     "CONFIRMATION_CONTEXT_REQUIRED",
-                    "No changes were made because the deletion confirmation is not associated with an active chat session.");
+                    "No changes were made because the protected-action confirmation is not associated with an active chat session.");
         }
 
         PendingAction pending = pendingBySession.get(scope);
@@ -96,7 +100,7 @@ public class AiDestructiveActionGuard {
             pendingBySession.remove(scope, pending);
             return ConsumeResult.rejected(
                     "CONFIRMATION_EXPIRED",
-                    "No changes were made. The deletion preview expired; request and confirm a fresh preview.");
+                    "No changes were made. The protected-action preview expired; request and confirm a fresh preview.");
         }
 
         String expectedTool = requireText(toolName, "toolName");
@@ -114,13 +118,13 @@ public class AiDestructiveActionGuard {
             pendingBySession.remove(scope, pending);
             return ConsumeResult.rejected(
                     "CONFIRMATION_STALE",
-                    "No changes were made because the deletion impact changed after the preview; review and confirm the current preview.");
+                    "No changes were made because the protected-action impact changed after the preview; review and confirm the current preview.");
         }
 
         if (!pendingBySession.remove(scope, pending)) {
             return ConsumeResult.rejected(
                     "CONFIRMATION_CONSUMED",
-                    "No changes were made. This deletion confirmation was already used; request a fresh preview.");
+                    "No changes were made. This protected-action confirmation was already used; request a fresh preview.");
         }
         return ConsumeResult.approved(pending.domainImpactToken());
     }
@@ -133,6 +137,20 @@ public class AiDestructiveActionGuard {
     public void clearUser(Long userId) {
         if (userId == null) return;
         pendingBySession.keySet().removeIf(scope -> Objects.equals(scope.userId(), userId));
+    }
+
+    /** Returns compact confirmation context without depending on persisted tool-result history. */
+    public Optional<PendingActionContext> pendingContext(Long userId, String sessionId) {
+        if (userId == null || sessionId == null || sessionId.isBlank()) return Optional.empty();
+        SessionScope scope = new SessionScope(userId, sessionId);
+        PendingAction pending = pendingBySession.get(scope);
+        if (pending == null) return Optional.empty();
+        if (!pending.expiresAt().isAfter(Instant.now())) {
+            pendingBySession.remove(scope, pending);
+            return Optional.empty();
+        }
+        return Optional.of(new PendingActionContext(
+                pending.toolName(), pending.targetKey(), pending.token()));
     }
 
     private SessionScope currentScope(Long userId) {
@@ -155,7 +173,7 @@ public class AiDestructiveActionGuard {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
         } catch (Exception e) {
-            throw new IllegalStateException("Could not bind the deletion preview", e);
+            throw new IllegalStateException("Could not bind the protected-action preview", e);
         }
     }
 
@@ -207,6 +225,9 @@ public class AiDestructiveActionGuard {
                                  byte[] previewDigest,
                                  String domainImpactToken,
                                  Instant expiresAt) {
+    }
+
+    public record PendingActionContext(String toolName, String targetKey, String impactToken) {
     }
 
     public record ConsumeResult(boolean approved,

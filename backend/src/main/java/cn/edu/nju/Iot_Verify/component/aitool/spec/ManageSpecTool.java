@@ -177,6 +177,18 @@ public class ManageSpecTool extends AbstractAiTool {
             return errorJson(templateCheckError, "VALIDATION_ERROR", 400);
         }
 
+        for (ConditionGroup group : List.of(
+                new ConditionGroup("a", aConditions),
+                new ConditionGroup("if", ifConditions),
+                new ConditionGroup("then", thenConditions))) {
+            BoardSemanticValidator.GroupValidationIssue groupIssue =
+                    BoardSemanticValidator.validateSpecConditionGroup(
+                            deviceLookup.semanticContext(), group.conditions(), group.side());
+            if (groupIssue != null) {
+                return errorJson(groupIssue.message(), groupIssue.reasonCode(), 400);
+            }
+        }
+
         SpecificationDto spec = new SpecificationDto();
         spec.setId(UUID.randomUUID().toString());
         spec.setTemplateId(templateId);
@@ -412,7 +424,8 @@ public class ManageSpecTool extends AbstractAiTool {
         return new DeviceLookup(
                 idsByKey,
                 labelsById,
-                BoardSemanticValidator.context(nodes, templates),
+                BoardSemanticValidator.context(
+                        nodes, templates, safeList(boardStorageService.getEnvironmentVariables(userId))),
                 SpecificationToolPresenter.context(nodes, templates)
         );
     }
@@ -504,5 +517,8 @@ public class ManageSpecTool extends AbstractAiTool {
             }
         }
         return true;
+    }
+
+    private record ConditionGroup(String side, List<SpecConditionDto> conditions) {
     }
 }

@@ -205,6 +205,22 @@ class SmvSpecificationBuilderNegationTest {
     }
 
     @Test
+    void multiModeStateUnderscoreWildcardConstrainsOnlyConcreteMode() {
+        DeviceSmvData smv = new DeviceSmvData();
+        smv.setVarName("ac_1");
+        smv.setModes(List.of("Power", "Mode"));
+        smv.setModeStates(Map.of(
+                "Power", List.of("off", "on"),
+                "Mode", List.of("idle", "cool")));
+        SpecConditionDto condition = buildCondition("ac_1", "state", "state", "=", "on;_");
+        SpecificationDto spec = buildSpec("1", List.of(condition), null, null);
+
+        String generated = builder.generateSpecString(spec, false, 0, Map.of("ac_1", smv));
+
+        assertEquals("CTLSPEC AG(ac_1.Power=on)", generated);
+    }
+
+    @Test
     void template7_multipleConditionsAreTaintedByAnyUntrustedSource() {
         DeviceManifest.InternalVariable temperature = new DeviceManifest.InternalVariable();
         temperature.setName("temperature");

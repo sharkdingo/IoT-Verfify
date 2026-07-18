@@ -4,7 +4,9 @@ import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationAdjustmentItem;
+import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationLimits;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -38,8 +40,11 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
 从系统可用模板中推荐最合适的设备来完善整个物联网系统。
 
 ## 输入信息
-- 用户画布中现有的设备列表
-- 系统可用的设备模板列表
+- 用户画布中现有的设备列表和当前 Environment Pool
+- 系统可用的设备模板列表，每个模板包含完整 capabilities
+
+只能根据 capabilities 中声明的域、可伪造性、自然变化、动态、Transitions、API 状态/内容能力
+和内容描述判断设备是否真正能补齐场景；不要凭模板名称臆测行为。
 
 ## 输出要求
 请分析现有设备的功能和布局，推荐可以增强系统功能的设备，返回符合以下JSON格式的推荐：
@@ -176,7 +181,10 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             }
 
             // 构建当前画布设备信息
-            String currentDevicesInfo = buildCurrentDevicesJson(devices);
+            String currentDevicesInfo = buildCurrentDevicesJson(
+                    devices,
+                    templates,
+                    safeList(boardStorageService.getEnvironmentVariables(userId)));
 
             // 构建可用模板信息
             String availableTemplatesInfo = buildAvailableTemplatesJson(templates);
@@ -218,9 +226,13 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         }
     }
 
-    private String buildCurrentDevicesJson(List<DeviceInfoHelper.DeviceInfo> devices) {
+    private String buildCurrentDevicesJson(List<DeviceInfoHelper.DeviceInfo> devices,
+                                           List<DeviceTemplateDto> templates,
+                                           List<BoardEnvironmentVariableDto> environmentVariables) {
         try {
             List<Map<String, Object>> devicesList = new ArrayList<>();
+            Map<String, DeviceTemplateDto> templatesByName =
+                    RecommendationCapabilityView.indexTemplates(templates);
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 Map<String, Object> deviceMap = new LinkedHashMap<>();
                 deviceMap.put("deviceId", device.nodeId());
@@ -231,9 +243,16 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                 deviceMap.put("currentStatePrivacy", device.currentStatePrivacy());
                 deviceMap.put("initialVariables", device.instanceVariables() != null ? device.instanceVariables() : Collections.emptyList());
                 deviceMap.put("initialPrivacies", device.instancePrivacies() != null ? device.instancePrivacies() : Collections.emptyList());
+                DeviceTemplateDto template = RecommendationCapabilityView.resolveTemplate(
+                        templatesByName, device.templateName());
+                deviceMap.put("capabilities", RecommendationCapabilityView.fromManifest(
+                        template == null ? null : template.getManifest()));
                 devicesList.add(deviceMap);
             }
-            return objectMapper.writeValueAsString(devicesList);
+            return objectMapper.writeValueAsString(Map.of(
+                    "devices", devicesList,
+                    "environmentVariables", environmentVariables == null
+                            ? Collections.emptyList() : environmentVariables));
         } catch (Exception e) {
             log.error("Failed to build current devices JSON", e);
             throw new IllegalStateException("Could not serialize current devices for recommendation", e);
@@ -247,46 +266,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                 DeviceTemplateDto.DeviceManifest manifest = template.getManifest();
                 Map<String, Object> templateMap = new LinkedHashMap<>();
                 templateMap.put("name", template.getName());
-                templateMap.put("description", manifest != null ? manifest.getDescription() : "");
-
-                if (manifest != null && manifest.getInternalVariables() != null) {
-                    List<Map<String, Object>> vars = new ArrayList<>();
-                    for (DeviceTemplateDto.DeviceManifest.InternalVariable v : manifest.getInternalVariables()) {
-                        Map<String, Object> varMap = new LinkedHashMap<>();
-                        varMap.put("name", v.getName());
-                        varMap.put("description", v.getDescription());
-                        varMap.put("isInside", v.getIsInside());
-                        varMap.put("values", v.getValues());
-                        varMap.put("lowerBound", v.getLowerBound());
-                        varMap.put("upperBound", v.getUpperBound());
-                        varMap.put("trust", v.getTrust());
-                        varMap.put("privacy", v.getPrivacy());
-                        vars.add(varMap);
-                    }
-                    templateMap.put("variables", vars);
-                }
-
-                if (manifest != null && manifest.getApis() != null) {
-                    List<Map<String, Object>> apis = new ArrayList<>();
-                    for (DeviceTemplateDto.DeviceManifest.API api : manifest.getApis()) {
-                        Map<String, Object> apiMap = new LinkedHashMap<>();
-                        apiMap.put("name", api.getName());
-                        apiMap.put("description", api.getDescription());
-                        apiMap.put("signal", api.getSignal());
-                        apiMap.put("startState", api.getStartState());
-                        apiMap.put("endState", api.getEndState());
-                        apis.add(apiMap);
-                    }
-                    templateMap.put("apis", apis);
-                }
-
-                if (manifest != null && manifest.getWorkingStates() != null) {
-                    List<String> states = new ArrayList<>();
-                    for (DeviceTemplateDto.DeviceManifest.WorkingState s : manifest.getWorkingStates()) {
-                        states.add(s.getName());
-                    }
-                    templateMap.put("workingStates", states);
-                }
+                templateMap.put("capabilities", RecommendationCapabilityView.fromManifest(manifest));
 
                 templatesList.add(templateMap);
             }

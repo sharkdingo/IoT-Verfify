@@ -59,7 +59,7 @@ component/
     parser/          SmvTraceParser — counterexample parsing
     fixer/           FaultLocalizer + parameter/condition/permanent-removal fix strategies
   fuzz/              deterministic bounded path search + finite specification monitor
-  aitool/            the 33 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
+  aitool/            the 35 AI tools (board/node/rule/scenario/spec/template/simulation/verification)
   ai/                LLM abstraction: domain model + LlmProvider (OpenAiLlmProvider adapter)
                      + LlmChatService / PromptCompletionService / LlmMessageCodec facades
 dto/                 request/response DTOs

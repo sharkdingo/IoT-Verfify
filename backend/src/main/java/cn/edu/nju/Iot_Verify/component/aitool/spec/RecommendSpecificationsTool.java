@@ -3,8 +3,14 @@ package cn.edu.nju.Iot_Verify.component.aitool.spec;
 import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
+import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
+import cn.edu.nju.Iot_Verify.component.aitool.spec.SpecificationTemplateSemantics;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.DeviceInfoHelper;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
@@ -48,9 +54,14 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 从系统可用规约模板中推荐最合适的规约来完善整个物联网系统的安全性和可靠性验证。
 
 ## 输入信息
-- 用户画布中现有的设备列表（包含每个设备的变量、模式、signal API、trust/privacy 用户域目标和可用工作状态）
+- 用户画布中现有的设备列表（包含完整 capabilities、当前运行值和 trust/privacy 用户域目标）
 - 用户画布中现有的自动化规则
 - 用户画布中现有的规约列表
+
+`capabilities` 是模板行为的权威视图：必须使用其中的变量域、FalsifiableWhenCompromised、
+NaturalChangeRate、WorkingStates.Dynamics、Transitions、API Signal/AcceptsContent/StartState/EndState
+和 Contents 描述来判断条件是否有行为意义。输入还包含当前 Environment Pool，其中的
+value/trust/privacy 是用户当前覆盖后的共享值。
 
 ## 设备属性结构说明（非常重要！）
 每个设备的信息结构如下：
@@ -144,13 +155,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 注意：不要使用 "currentState" 作为 key。工作状态优先使用 targetType: "state" 且 key 固定为 "state"；具体模式值优先使用 targetType: "mode"，key 必须来自设备 modes 列表；内部变量使用 targetType: "variable"，key 必须来自设备 variables 列表；API 条件只能使用 apiSignals，relation/value 省略时按 "= TRUE" 处理；trust/privacy 条件必须使用 propertyTargets 的 propertyScope+key。不要对 state、mode、api、trust、privacy 使用 >、<、>=、<=。
 
 ## 规约模板类型
-1. **always (AG)**: 总是满足 - "如果条件A满足，则状态B必须始终保持"
-2. **eventually (EF)**: 最终满足 - "条件A满足后，最终状态B会达成"
-3. **never (AG !)**: 永不发生 - "状态A永远不应该发生"
-4. **immediate (A)**: 下一状态响应 - "当条件A满足时，下一状态必须满足B（AX，紧接其后）"
-5. **response (A->)**: 响应 - "当条件A满足后，动作B最终会执行"
-6. **persistence (GF)**: 持续满足 - "状态A最终会持续保持"
-7. **untrusted-source safety (AG)**: 不可信来源安全 - "受保护事件 A 不得在其来源标签为 untrusted 时发生"。这不是普通的“永不发生”；普通危险状态禁令必须使用模板 3。
+%s
 
 ## 推荐策略
 1. **安全类**: 燃气泄漏、烟雾检测、门窗异常等安全相关规约
@@ -162,6 +167,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 - 模板形状必须严格匹配：1/2/3/7 只使用 aConditions；4/5/6 只使用 ifConditions + thenConditions
 - 模板 7 会为 A 条件自动关联 MEDIC 控制来源标签：不得在 A 中直接写 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。它检查受保护事件是否带有不可信控制来源标签，不是认证或通用完整性检查。隐私泄露应使用模板 3，把“公开动作/状态发生”和对应 privacy=private 一起放入 aConditions
 - aConditions、ifConditions、thenConditions 中的 targetType、key/value 必须引用该设备实际存在的 states、modes、variables 或 APIs
+- 同一个 A、IF 或 THEN 数组内的全部条件是合取关系，必须在模板声明的合法状态和变量定义域中存在共同满足值
 - state、mode、api、trust、privacy 以及枚举变量只能使用 =、!=、in、not in；数值变量可使用 =、!=、in、not in，并额外支持 >、<、>=、<=
 - 禁止使用 "currentState" 作为 key，它不是有效的属性名
 - 每条推荐必须包含合法 templateId，且 templateId 必须严格枚举为 "1" 到 "7"
@@ -170,7 +176,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 - 如果没有找到合适的推荐，返回空的recommendations数组
 - 最多返回10个推荐，具体数量遵循用户请求的 maxRecommendations
 - 推荐中 deviceId 必须准确引用设备实例 id；deviceLabel 只用于展示
-""";
+""".formatted(SpecificationTemplateSemantics.chinesePromptReference());
 
     public RecommendSpecificationsTool(DeviceInfoHelper deviceInfoHelper,
                                        BoardStorageService boardStorageService,
@@ -244,6 +250,10 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
 
             // 获取当前面板上的所有设备信息（包含模板详情）
             List<DeviceInfoHelper.DeviceInfo> devices = deviceInfoHelper.getDevicesWithTemplateInfo(userId);
+            List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
+            List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+            List<BoardEnvironmentVariableDto> environmentVariables =
+                    safeList(boardStorageService.getEnvironmentVariables(userId));
 
             log.debug("Specification recommendation request: userId={}, devices={}, max={}, category={}",
                     userId, devices.size(), maxRecommendations, category);
@@ -282,6 +292,8 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             // 调用 LLM 生成智能推荐
             String aiResponse = generateRecommendationsWithAI(
                     devices,
+                    templates,
+                    environmentVariables,
                     existingRulesInfo,
                     existingSpecsInfo,
                     maxRecommendations,
@@ -293,7 +305,12 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             log.debug("Specification recommendation AI response length: {} chars", aiResponse.length());
 
             // 解析 AI 响应并进行验证
-            String result = parseAiResponse(aiResponse, devices, maxRecommendations, language);
+            String result = parseAiResponse(
+                    aiResponse,
+                    devices,
+                    BoardSemanticValidator.recommendationContext(nodes, templates, environmentVariables),
+                    maxRecommendations,
+                    language);
 
             log.debug("Specification recommendation result length: {} chars", result.length());
 
@@ -318,6 +335,8 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
      */
     private String generateRecommendationsWithAI(
             List<DeviceInfoHelper.DeviceInfo> devices,
+            List<DeviceTemplateDto> templates,
+            List<BoardEnvironmentVariableDto> environmentVariables,
             String existingRulesInfo,
             String existingSpecsInfo,
             int maxRecommendations,
@@ -325,7 +344,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             String language,
             String userRequirement) {
 
-        String deviceInfoJson = buildDeviceInfoJson(devices);
+        String deviceInfoJson = buildDeviceInfoJson(devices, templates, environmentVariables);
         String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, existingSpecsInfo, maxRecommendations, category, language, userRequirement);
 
         log.info("Calling LLM for specification recommendations...");
@@ -415,9 +434,13 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     /**
      * 构建设备详细信息 JSON，用于 AI 分析
      */
-    private String buildDeviceInfoJson(List<DeviceInfoHelper.DeviceInfo> devices) {
+    private String buildDeviceInfoJson(List<DeviceInfoHelper.DeviceInfo> devices,
+                                       List<DeviceTemplateDto> templates,
+                                       List<BoardEnvironmentVariableDto> environmentVariables) {
         try {
             List<Map<String, Object>> deviceList = new ArrayList<>();
+            Map<String, DeviceTemplateDto> templatesByName =
+                    RecommendationCapabilityView.indexTemplates(templates);
 
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 Map<String, Object> deviceMap = new LinkedHashMap<>();
@@ -429,6 +452,10 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                 deviceMap.put("currentStatePrivacy", device.currentStatePrivacy());
                 deviceMap.put("initialVariables", device.instanceVariables() != null ? device.instanceVariables() : Collections.emptyList());
                 deviceMap.put("initialPrivacies", device.instancePrivacies() != null ? device.instancePrivacies() : Collections.emptyList());
+                DeviceTemplateDto template = RecommendationCapabilityView.resolveTemplate(
+                        templatesByName, device.templateName());
+                deviceMap.put("capabilities", RecommendationCapabilityView.fromManifest(
+                        template == null ? null : template.getManifest()));
 
                 // 提取可用的变量
                 List<Map<String, Object>> variables = new ArrayList<>();
@@ -480,7 +507,11 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                 deviceList.add(deviceMap);
             }
 
-            return objectMapper.writeValueAsString(deviceList);
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put("devices", deviceList);
+            context.put("environmentVariables", environmentVariables == null
+                    ? Collections.emptyList() : environmentVariables);
+            return objectMapper.writeValueAsString(context);
         } catch (Exception e) {
             log.error("Failed to build device info JSON", e);
             throw new IllegalStateException("Could not serialize current device capabilities for recommendation", e);
@@ -596,8 +627,11 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
      * 解析 AI 响应并验证设备属性
      */
     @SuppressWarnings("unchecked")
-    private String parseAiResponse(String aiResponse, List<DeviceInfoHelper.DeviceInfo> devices,
-                                   int maxRecommendations, String language) {
+    private String parseAiResponse(String aiResponse,
+                                   List<DeviceInfoHelper.DeviceInfo> devices,
+                                   BoardSemanticValidator.BoardContext semanticContext,
+                                   int maxRecommendations,
+                                   String language) {
         try {
             // 清理 AI 返回的内容，去除 Markdown 代码块标记
             String cleanedResponse = aiResponse.trim();
@@ -643,7 +677,8 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
                     recommendation.remove("confidence");
 
                     // 验证并过滤推荐
-                    RecommendationValidation validation = validateRecommendation(recommendation, deviceMap, language);
+                    RecommendationValidation validation = validateRecommendation(
+                            recommendation, deviceMap, semanticContext, language);
                     if (validation.valid()) {
                         recommendation.remove("templateLabel");
                         recommendations.add(recommendation);
@@ -694,6 +729,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
     @SuppressWarnings("unchecked")
     private RecommendationValidation validateRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
+            BoardSemanticValidator.BoardContext semanticContext,
             String language) {
 
         if (!hasOnlyFields(recommendation, RECOMMENDATION_FIELDS)) {
@@ -819,7 +855,40 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             }
         }
 
+        for (String conditionType : conditionTypes) {
+            String side = conditionType.substring(0, conditionType.length() - "Conditions".length());
+            List<SpecConditionDto> semanticConditions = semanticConditions(
+                    (List<Map<String, Object>>) recommendation.get(conditionType), side);
+            BoardSemanticValidator.GroupValidationIssue groupIssue =
+                    BoardSemanticValidator.validateSpecConditionGroup(
+                            semanticContext, semanticConditions, side);
+            if (groupIssue != null) {
+                return invalid("UNREACHABLE_CONDITION_GROUP".equals(groupIssue.reasonCode())
+                        ? "unreachableConditionGroup" : "contradictoryConditionGroup", language);
+            }
+        }
+
         return RecommendationValidation.ok();
+    }
+
+    private List<SpecConditionDto> semanticConditions(List<Map<String, Object>> conditions, String side) {
+        if (conditions == null || conditions.isEmpty()) {
+            return List.of();
+        }
+        List<SpecConditionDto> result = new ArrayList<>();
+        for (Map<String, Object> condition : conditions) {
+            SpecConditionDto dto = new SpecConditionDto();
+            dto.setSide(side);
+            dto.setDeviceId(asTrimmedString(condition.get("deviceId")));
+            dto.setDeviceLabel(asTrimmedString(condition.get("deviceLabel")));
+            dto.setTargetType(asTrimmedString(condition.get("targetType")));
+            dto.setKey(asTrimmedString(condition.get("key")));
+            dto.setPropertyScope(asTrimmedString(condition.get("propertyScope")));
+            dto.setRelation(asTrimmedString(condition.get("relation")));
+            dto.setValue(asTrimmedString(condition.get("value")));
+            result.add(dto);
+        }
+        return result;
     }
 
     private Map<String, Object> filteredItem(String type, int index,
@@ -875,6 +944,12 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
             case "invalidUntrustedSourceSafetyCondition" -> zh
                     ? "模板 7 只表示“不可信来源不得导致受保护事件”：不要直接写 trust/privacy；state/mode 必须为 =；API 必须为 = TRUE 且模板必须声明可建模的 EndState。普通“永不发生”或隐私泄露请使用模板 3。"
                     : "Template 7 means an untrusted source must not cause the protected event: do not use explicit trust/privacy predicates; state/mode require '='; and an API requires '= TRUE' plus a modeled EndState. Use template 3 for an unconditional prohibition or privacy leakage.";
+            case "contradictoryConditionGroup" -> zh
+                    ? "同一 A、IF 或 THEN 条件组在设备声明的合法状态或变量定义域中没有共同可满足的取值。"
+                    : "One A, IF, or THEN condition group has no common satisfying value in the declared device state and variable domains.";
+            case "unreachableConditionGroup" -> zh
+                    ? "同一 A、IF 或 THEN 条件组虽然使用合法值，但从当前设备状态和值无法通过已声明行为到达。"
+                    : "One A, IF, or THEN condition group uses legal values that are unreachable from the current device state and values under the declared behavior.";
             case "parseFailed" -> zh
                     ? "该候选项不是可解析的规约推荐对象。"
                     : "The candidate is not a parseable specification recommendation object.";
@@ -1104,7 +1179,7 @@ public class RecommendSpecificationsTool extends AbstractAiTool {
         for (int i = 0; i < parts.length; i++) {
             String part = parts[i].trim();
             if (part.isEmpty() || "_".equals(part)) {
-                canonicalParts.add(part.isEmpty() ? "" : "_");
+                canonicalParts.add("");
                 continue;
             }
             String value = canonicalEnumValue(device.modes().get(i).values(), part);

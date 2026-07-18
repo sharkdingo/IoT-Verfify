@@ -7,7 +7,7 @@
 			"Name": "airQuality",
 			"Description": "Ambient air quality index",
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"LowerBound": 0,
 			"UpperBound": 100,
 			"NaturalChangeRate": "[-1, 1]"
@@ -16,7 +16,7 @@
 			"Name": "carbonDioxide",
 			"Description": "Ambient carbon dioxide level",
 			"Trust": "untrusted",
-			"Privacy": "private",
+			"Privacy": "public",
 			"LowerBound": 0,
 			"UpperBound": 100,
 			"NaturalChangeRate": "[-1, 1]"
@@ -40,14 +40,14 @@
 			],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		},
 		{
 			"Name": "off",
 			"Dynamics": [],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "private"
+			"Privacy": "public"
 		}
 	],
 	"Transitions": [

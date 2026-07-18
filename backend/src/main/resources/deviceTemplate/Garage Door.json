@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "public",
+			"Privacy": "private",
 			"Values": ["closed", "open"]
 		}
 
@@ -27,7 +27,7 @@
 			],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "public"
+			"Privacy": "private"
 		},
 		{
 			"Name": "open",
@@ -39,7 +39,7 @@
 			],
 			"Description": "",
 			"Trust": "trusted",
-			"Privacy": "public"
+			"Privacy": "private"
 		}
 	],
 	"Transitions": [

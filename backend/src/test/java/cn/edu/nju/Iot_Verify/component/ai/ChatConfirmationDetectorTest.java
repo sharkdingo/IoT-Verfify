@@ -1,36 +1,83 @@
 package cn.edu.nju.Iot_Verify.component.ai;
 
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.ConfirmationDecision;
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.ConfirmationKind;
+import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.DecisionType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.EnumSet;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
 class ChatConfirmationDetectorTest {
 
-    private final ChatConfirmationDetector detector = new ChatConfirmationDetector();
+    @Mock
+    private PromptCompletionService promptCompletionService;
 
-    @Test
-    void explicitConfirmation_acceptsDirectConfirmation() {
-        assertTrue(detector.isExplicitConfirmation("Yes, delete it."));
-        assertTrue(detector.isExplicitConfirmation("Yes, please proceed."));
-        assertTrue(detector.isExplicitConfirmation("I confirm deletion of the living-room light"));
-        assertTrue(detector.isExplicitConfirmation("\u786e\u8ba4\u5220\u9664\u5ba2\u5385\u706f"));
-        assertTrue(detector.isExplicitConfirmation("\u7ee7\u7eed\u5220\u9664\u5ba2\u5385\u706f"));
-        assertTrue(detector.isExplicitConfirmation("\u786e\u8ba4\u6267\u884c"));
+    private ChatConfirmationDetector detector;
+
+    @BeforeEach
+    void setUp() {
+        detector = new ChatConfirmationDetector(promptCompletionService, new ObjectMapper());
     }
 
     @Test
-    void explicitConfirmation_rejectsQuestionsNegationAndOrdinaryRequests() {
-        assertFalse(detector.isExplicitConfirmation("Do not delete it"));
-        assertFalse(detector.isExplicitConfirmation("Why do I need to confirm?"));
-        assertFalse(detector.isExplicitConfirmation("\u4e0d\u8981\u5220\u9664"));
-        assertFalse(detector.isExplicitConfirmation("\u6709\u51e0\u4e2a\u8bbe\u5907\u3001\u89c4\u5219\u548c\u89c4\u7ea6\uff1f"));
-        assertFalse(detector.isExplicitConfirmation("\u6839\u636e\u5f53\u524d\u573a\u666f\u8865\u5168\u591c\u95f4\u5b89\u5168\u573a\u666f"));
-        assertFalse(detector.isExplicitConfirmation("Go ahead and complete the current scene"));
-        assertFalse(detector.isExplicitConfirmation("Proceed with adding the recommended devices"));
-        assertFalse(detector.isExplicitConfirmation("Go ahead with adding Water Heater; delete nothing later"));
-        assertFalse(detector.isExplicitConfirmation("\u7ee7\u7eed\u8865\u5168\u5f53\u524d\u573a\u666f"));
-        assertFalse(detector.isExplicitConfirmation("\u786e\u8ba4\u65b0\u589e\u8bbe\u5907"));
-        assertFalse(detector.isExplicitConfirmation("\u7ee7\u7eed\u65b0\u589e\u70ed\u6c34\u5668\uff0c\u5220\u9664\u65e7\u8bbe\u5907\u4ee5\u540e\u518d\u8bf4"));
+    void detect_usesModelMeaningAndAcceptsOnlyAPendingKind() {
+        when(promptCompletionService.complete(
+                argThat(prompt -> prompt.contains("meaning, context, and the user's language")),
+                contains("latestUserMessage"), anyDouble(), anyInt()))
+                .thenReturn("{\"decision\":\"CONFIRMED\",\"kind\":\"DESTRUCTIVE\"}")
+                .thenReturn("{\"decision\":\"CONFIRMED\",\"kind\":\"SCENE_REPLACEMENT\"}");
+
+        ConfirmationDecision confirmed = detector.detect(
+                "Express this however the user naturally prefers.",
+                EnumSet.of(ConfirmationKind.DESTRUCTIVE));
+        ConfirmationDecision impossibleKind = detector.detect(
+                "Another natural-language reply.",
+                EnumSet.of(ConfirmationKind.DESTRUCTIVE));
+
+        assertEquals(DecisionType.CONFIRMED, confirmed.type());
+        assertEquals(ConfirmationKind.DESTRUCTIVE, confirmed.kind());
+        assertEquals(DecisionType.NONE, impossibleKind.type());
+    }
+
+    @Test
+    void detect_preservesAmbiguityAndCancelAllSemantics() {
+        when(promptCompletionService.complete(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                anyDouble(), anyInt()))
+                .thenReturn("```json\n{\"decision\":\"AMBIGUOUS\",\"kind\":null}\n```")
+                .thenReturn("{\"decision\":\"CANCELLED\",\"kind\":\"ALL\"}");
+        EnumSet<ConfirmationKind> pending = EnumSet.of(
+                ConfirmationKind.DESTRUCTIVE, ConfirmationKind.SCENE_REPLACEMENT);
+
+        assertEquals(DecisionType.AMBIGUOUS, detector.detect("Proceed.", pending).type());
+        ConfirmationDecision cancelled = detector.detect("Cancel the pending work.", pending);
+        assertEquals(DecisionType.CANCELLED, cancelled.type());
+        assertEquals(null, cancelled.kind());
+    }
+
+    @Test
+    void detect_failsClosedForMissingPendingContextOrInvalidModelOutput() {
+        assertEquals(DecisionType.NONE,
+                detector.detect("yes", EnumSet.noneOf(ConfirmationKind.class)).type());
+
+        when(promptCompletionService.complete(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                anyDouble(), anyInt())).thenReturn("not-json");
+
+        assertEquals(DecisionType.NONE,
+                detector.detect("Any reply", EnumSet.of(ConfirmationKind.CHOICE)).type());
     }
 }

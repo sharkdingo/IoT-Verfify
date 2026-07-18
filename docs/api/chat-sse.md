@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-17. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-18. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -25,7 +25,12 @@ updatedAt }`.
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
 `ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: String, content:
-String, createdAt }`.
+String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer }`.
+Each newly completed assistant response stores its exact bounded user-visible execution
+record and elapsed time on the final assistant row, including task-resumption and
+execution-guard events even when no tool ultimately runs. Older rows without this metadata
+are reconstructed from persisted internal tool-call/result blocks. Raw tool JSON, internal
+identifiers, provider exceptions, and private model reasoning remain hidden.
 
 Only one stream request may be active for a session on one running backend instance.
 A concurrent request or deletion returns `409` with
@@ -63,6 +68,13 @@ step while it runs. After planning completes, the final assistant reply is gener
 through the streaming LLM path so tool-backed answers also arrive as incremental text
 chunks.
 
+Planning is objective-oriented rather than a rigid domain workflow. A delegated task may
+combine targeted deletion, creation, environment, rule, specification, simulation, and
+verification tools in the order supported by current state and tool results. A successful
+tool call does not by itself end the task. Planning continues until the original objective
+is complete or a confirmation, unavailable-result, no-progress, or emergency boundary
+requires it to stop.
+
 Questions about the current scene, including device/rule/specification counts, are
 planned from `board_overview` rather than inferred from chat history. A request to extend
 or complete the current scene reads that overview first and may compose targeted device,
@@ -70,7 +82,12 @@ environment, rule, and specification recommendation/mutation tools while preserv
 existing scene. Before adding a device, the planner reads `list_templates` for the exact
 available template name instead of treating `board_overview` as a template catalog or
 inventing a name. `recommend_scenario` remains a complete replacement/import draft and
-is used only when the user explicitly asks for that workflow.
+is used only when the user explicitly asks for that workflow. When the user later asks
+to apply that chat-generated draft, the planner calls `apply_scenario` directly instead
+of reading the Board and deleting devices individually. The tool first returns a
+no-write impact preview; after a later explicit confirmation it uses the same atomic
+Board replacement authority as UI scene import. See [ai-tools.md](ai-tools.md) for the
+stored-draft and expiration contract.
 
 Tool execution is not one transaction across an entire user request. Each mutating tool
 commits or rejects independently. There is no five-round product budget: planning
@@ -87,6 +104,19 @@ alternatives such as an available replacement device name. The assistant must st
 nothing was changed and wait for the user's choice; it cannot accept its own suggestion
 in a later planning round of the same message.
 
+That boundary pauses only the protected step. The backend keeps the original user
+objective in a per-user, per-session server-side continuation entry for 15 minutes. On a
+later explicit confirmation it restores both the live confirmation authority and the
+original objective. The continuation also retains up to four recent user messages plus a
+bounded, sanitized summary of the pending tool result. The latest user message is
+authoritative when it changes or narrows the older objective. After the confirmed tool
+returns a usable result, the planner resumes the remaining work with the complete tool
+catalog. A targeted replacement can therefore preview and confirm a deletion, create the
+replacement, repair dependent rules/specs, and run requested verification without treating
+the confirmation as the end of the task. A second protected action still requires its own
+preview and confirmation. Ordinary questions and task updates preserve the pending preview;
+explicit cancellation, session/account cleanup, backend restart, and expiration clear it.
+
 If a model response contains several parallel tool calls and one call reaches this
 boundary, later calls in that same response are not executed. The backend records an
 explicit `skipped=true` tool result for each one so the provider conversation remains
@@ -102,22 +132,35 @@ sessions created before the same-round skip rule recover without repeating a pro
 protocol error. During the active request, blank or reused correlation ids returned by a
 compatible provider are replaced with unique internal ids before persistence or tool
 execution, and the same repaired ids are used for assistant calls and their results.
+Pending destructive confirmation data is not recovered from that bounded history. On an
+explicit confirmation turn, the backend injects compact server-authoritative context for
+the pending tool, target, and opaque token, so a large preview cannot force the assistant
+to request the same confirmation repeatedly. Full-scene application likewise keeps the
+draft and Board impact token server-side and injects only the instruction to call
+`apply_scenario` with `confirmed=true`. The separate continuation entry supplies only
+user-authored objectives/updates and sanitized tool output, not model reasoning, so
+successful confirmation can be followed by the remaining requested tools even when older
+chat detail fell outside the history window.
 
-Destructive deletion previews additionally return an opaque `impactToken`. The backend
-keeps one pending deletion per authenticated user and chat session, bound to the tool,
-target, and canonical digest of the visible preview. The immediately following explicit
-confirmation must return that token. A short confirmation such as `yes`, `confirm`, or
-an equivalent concise Chinese confirmation is accepted. A longer message beginning with
-`proceed`, `go ahead`, or the Chinese equivalent of "continue" counts only when it
-explicitly refers to deletion. Requests such as `go ahead and complete the scene`, or
-the equivalent Chinese scene-completion request, do not authorize a pending deletion.
+Protected destructive previews (deletions and bundled-default reset) additionally return
+an opaque `impactToken`. The backend
+keeps one pending protected action per authenticated user and chat session, bound to the tool,
+target, and canonical digest of the visible preview. Confirmation is target-aware rather
+than position-aware: ordinary questions or changed instructions may intervene without
+discarding the preview. When one or more action kinds are pending, the configured model
+classifies the latest message semantically as confirmed, cancelled, ambiguous, or unrelated,
+without a keyword/regex phrase table. The classifier receives only the server-known live
+kinds plus the latest message; it cannot create a new pending action or change its target.
+Invalid or unavailable classifier output authorizes nothing. A message may confirm one
+specific action and add remaining work, while a generic reply across several plausible
+pending kinds remains ambiguous.
 The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
 expired, cross-session, cross-user, changed-preview, and replayed tokens return a no-write
-`409` with `requiresUserConfirmation=true` and a fresh preview where available. A normal
-intervening user message clears the pending deletion, as do session/account deletion and
-backend restart. This binding applies uniformly to device, template, rule, specification,
-verification-trace, and simulation-trace deletion.
+`409` with `requiresUserConfirmation=true` and a fresh preview where available. Explicit
+cancellation clears the relevant pending action; session/account deletion, expiration, and
+backend restart also clear it. This binding applies uniformly to device, template, rule,
+specification, verification-trace, and simulation-trace deletion.
 
 `RESULT_UNAVAILABLE` is distinct from both success and failure. It means response details
 could not be serialized after the tool reached its response stage. The loop stops so it
@@ -150,14 +193,16 @@ Each SSE `data:` frame carries a JSON-serialized `StreamResponseDto`:
 | :--- | :--- | :--- |
 | `content` | `String` | A chunk of assistant text (streamed incrementally) |
 | `command` | `CommandDto` | Optional front-end command: `{ type, payload }` where `type` is e.g. `REFRESH_DATA` / `SHOW_TOAST` / `NAVIGATE` and `payload` is a `Map<String, Object>` (e.g. `{"target":"device_list"}`) |
-| `progress` | `ProgressDto` | Optional non-persisted status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps? }` |
+| `progress` | `ProgressDto` | Optional live status `{ stage, toolName?, round?, outcome?, successfulSteps?, failedSteps?, unconfirmedSteps?, detail? }`; `detail` is a bounded task-resumption summary, model-authored reasoning summary, or operation-aware tool-result summary |
 
 Progress stages and outcomes:
 
 | Stage | Meaning | Outcome when present |
 | :--- | :--- | :--- |
 | `CONTEXT_READY` | Request accepted; conversation and Board context are available | — |
+| `TASK_RESUMED` | A confirmed step is resuming the stored original objective; `detail` contains its bounded user-authored summary | — |
 | `PLANNING` | The model is choosing the next tool step for `round` | — |
+| `REASONING` | Before tool execution, `detail` carries the model's bounded, sanitized user-visible summary of the current goal, observed facts, next action, and remaining work | — |
 | `TOOL_EXECUTION` | `toolName` has started | — |
 | `TOOL_RESULT` | The tool returned and cumulative counters were updated | `USABLE`, `FAILED`, `RESULT_UNAVAILABLE`, or `CONFIRMATION_REQUIRED` |
 | `EXECUTION_GUARD` | Duplicate no-progress execution or the emergency runaway ceiling stopped further calls | `NO_PROGRESS` or `EMERGENCY_LIMIT` |
@@ -173,13 +218,19 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   throws, pending refresh commands are sent before the SSE error when the connection is
   still usable.
 - Progress frames arrive before and between potentially slow model/tool calls. They let the UI
-  show an accumulating execution trace and elapsed time without presenting private model
-  chain-of-thought. The frontend retains the trace with the current in-memory assistant message
-  so it remains expandable after completion; frames are not saved in server chat history.
+  show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
+  observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is an
+  audit-oriented summary requested from the model, not the provider's private hidden chain-of-thought.
+  Live frames are not stored as separate rows. After completion, the exact emitted event list
+  and elapsed time are serialized on the final assistant message, so reloads preserve task
+  resumption, confirmation, and execution-guard boundaries. Legacy assistant rows fall back to
+  reconstruction from internal tool-call/result rows; that fallback omits same-round calls
+  explicitly recorded as skipped and never executed.
 - Every planning round receives the complete registered tool catalog. The model can use
   conversation context and tool schemas to select zero or more tools across domains;
-  explicit destructive confirmation remains a separate deterministic authorization
-  check and is not delegated to the model.
+  pending-message semantics are classified by the configured model, while the actual
+  authorization remains server-scoped to an existing pending kind, exact target/digest,
+  authenticated user/session, 15-minute lifetime, and single-use token.
 - Board refresh targets are `device_list`, `environment_list`, `rule_list`, `spec_list`,
   `template_list`, and `run_history`. A tool emits every target it may have changed;
   device mutations therefore also refresh the shared Environment Pool, while async task

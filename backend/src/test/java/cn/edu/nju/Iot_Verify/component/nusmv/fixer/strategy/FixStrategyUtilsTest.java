@@ -740,6 +740,16 @@ class FixStrategyUtilsTest {
     }
 
     @Test
+    void validateCandidateCondition_underscoreWildcardTuple_acceptedWhenAnotherSegmentIsConcrete() {
+        Map<String, DeviceSmvData> deviceMap = buildMultiModeDeviceMap("hvac");
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("hvac").targetType("state").attribute("state")
+                .relation("=").value("cool;_").build();
+
+        assertTrue(FixStrategyUtils.validateCandidateCondition(candidate, deviceMap));
+    }
+
+    @Test
     void validateCandidateCondition_noModes_rejected() {
         // Device with no modes → state condition invalid (SmvMainModuleBuilder:591)
         Map<String, DeviceSmvData> map = new LinkedHashMap<>();

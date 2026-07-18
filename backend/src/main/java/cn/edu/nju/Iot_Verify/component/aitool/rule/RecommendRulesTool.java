@@ -3,10 +3,16 @@ package cn.edu.nju.Iot_Verify.component.aitool.rule;
 import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
+import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationAdjustmentItem;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
+import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationLimits;
+import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -47,8 +53,13 @@ public class RecommendRulesTool extends AbstractAiTool {
 分析设备之间的联动可能性，并生成有价值的自动化规则建议。
 
 ## 输入信息
-- 用户面板上的所有设备列表（包括设备名称、模板类型、可用变量、模式、状态和可用API等）
+- 用户面板上的所有设备列表（包括设备名称、模板类型、当前运行值和完整 capabilities）
 - 现有的自动化规则（用于避免重复推荐）
+
+`capabilities` 是模板行为的权威视图：必须使用其中的变量域、FalsifiableWhenCompromised、
+NaturalChangeRate、WorkingStates.Dynamics、Transitions、API Signal/AcceptsContent/StartState/EndState
+和 Contents 描述来判断可达性、攻击面和内容动作；不得只凭名称猜测。输入还包含当前
+Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共享值。
 
 ## 输出要求
 请分析设备之间的联动场景，生成符合以下JSON格式的规则推荐：
@@ -95,6 +106,7 @@ public class RecommendRulesTool extends AbstractAiTool {
 - conditions 中 targetType="mode" 或 "state" 只能使用 =、!=、in、not in；枚举变量也只能使用 =、!=、in、not in；数值变量可使用 =、!=、in、not in，并额外支持 >、<、>=、<=
 - conditions中的attribute必须是该设备实际存在的 signal API 名、变量名、模式名，或固定的 state；模式值必须来自该模式 values，state 值必须来自工作状态
 - command中的action必须是该设备实际存在的API名称
+- 同一条规则的所有 conditions 必须能在模板声明的状态/变量定义域中同时成立；如果 command API 声明了非空 StartState，目标设备条件还必须与该前置状态兼容
 - contentDevice 与 content 必须同时为 null，或同时填写；content 必须来自该内容设备的 contents 列表，且目标 API 必须声明 acceptsContent=true。只在动作确实携带该内容并需要分析隐私标签传播时填写
 - 按与用户目标和设备能力的匹配程度从高到低排列；name 是应用后实际保存的规则名称，不要输出不存在于规则模型中的 priority
 - 不要推荐与现有规则重复的规则
@@ -174,6 +186,10 @@ public class RecommendRulesTool extends AbstractAiTool {
 
             // 获取当前面板上的所有设备信息（包含模板详情）
             List<DeviceInfoHelper.DeviceInfo> devices = deviceInfoHelper.getDevicesWithTemplateInfo(userId);
+            List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
+            List<DeviceNodeDto> nodes = safeList(boardStorageService.getNodes(userId));
+            List<BoardEnvironmentVariableDto> environmentVariables =
+                    safeList(boardStorageService.getEnvironmentVariables(userId));
 
             log.debug("Rule recommendation request: userId={}, devices={}, max={}, category={}",
                     userId, devices.size(), maxRecommendations, category);
@@ -209,6 +225,8 @@ public class RecommendRulesTool extends AbstractAiTool {
             // 调用配置的 LLM 生成智能推荐
             String aiResponse = generateRecommendationsWithAI(
                     devices,
+                    templates,
+                    environmentVariables,
                     existingRulesInfo,
                     maxRecommendations,
                     category,
@@ -219,7 +237,12 @@ public class RecommendRulesTool extends AbstractAiTool {
             log.debug("Rule recommendation AI response length: {} chars", aiResponse.length());
 
             // 解析 AI 响应并进行验证
-            String result = parseAiResponse(aiResponse, devices, maxRecommendations, language);
+            String result = parseAiResponse(
+                    aiResponse,
+                    devices,
+                    BoardSemanticValidator.recommendationContext(nodes, templates, environmentVariables),
+                    maxRecommendations,
+                    language);
 
             log.debug("Rule recommendation result length: {} chars", result.length());
 
@@ -244,13 +267,15 @@ public class RecommendRulesTool extends AbstractAiTool {
      */
     private String generateRecommendationsWithAI(
             List<DeviceInfoHelper.DeviceInfo> devices,
+            List<DeviceTemplateDto> templates,
+            List<BoardEnvironmentVariableDto> environmentVariables,
             String existingRulesInfo,
             int maxRecommendations,
             String category,
             String language,
             String userRequirement) {
 
-        String deviceInfoJson = buildDeviceInfoJson(devices);
+        String deviceInfoJson = buildDeviceInfoJson(devices, templates, environmentVariables);
         String userPrompt = buildUserPrompt(deviceInfoJson, existingRulesInfo, maxRecommendations, category, language, userRequirement);
 
         log.info("Calling LLM for rule recommendations...");
@@ -333,9 +358,13 @@ public class RecommendRulesTool extends AbstractAiTool {
     /**
      * 构建设备详细信息 JSON，用于 AI 分析
      */
-    private String buildDeviceInfoJson(List<DeviceInfoHelper.DeviceInfo> devices) {
+    private String buildDeviceInfoJson(List<DeviceInfoHelper.DeviceInfo> devices,
+                                       List<DeviceTemplateDto> templates,
+                                       List<BoardEnvironmentVariableDto> environmentVariables) {
         try {
             List<Map<String, Object>> deviceList = new ArrayList<>();
+            Map<String, DeviceTemplateDto> templatesByName =
+                    RecommendationCapabilityView.indexTemplates(templates);
 
             for (DeviceInfoHelper.DeviceInfo device : devices) {
                 Map<String, Object> deviceMap = new LinkedHashMap<>();
@@ -347,6 +376,10 @@ public class RecommendRulesTool extends AbstractAiTool {
                 deviceMap.put("currentStatePrivacy", device.currentStatePrivacy());
                 deviceMap.put("initialVariables", device.instanceVariables() != null ? device.instanceVariables() : Collections.emptyList());
                 deviceMap.put("initialPrivacies", device.instancePrivacies() != null ? device.instancePrivacies() : Collections.emptyList());
+                DeviceTemplateDto template = RecommendationCapabilityView.resolveTemplate(
+                        templatesByName, device.templateName());
+                deviceMap.put("capabilities", RecommendationCapabilityView.fromManifest(
+                        template == null ? null : template.getManifest()));
 
                 // 提取可用的触发属性（内部变量）
                 List<String> triggerableAttributes = new ArrayList<>();
@@ -394,6 +427,9 @@ public class RecommendRulesTool extends AbstractAiTool {
                         apiMap.put("name", api.name());
                         apiMap.put("description", api.description());
                         apiMap.put("signal", Boolean.TRUE.equals(api.signal()));
+                        apiMap.put("acceptsContent", Boolean.TRUE.equals(api.acceptsContent()));
+                        apiMap.put("startState", api.startState());
+                        apiMap.put("endState", api.endState());
                         actionableApis.add(apiMap);
                     }
                 }
@@ -406,7 +442,11 @@ public class RecommendRulesTool extends AbstractAiTool {
                 deviceList.add(deviceMap);
             }
 
-            return objectMapper.writeValueAsString(deviceList);
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put("devices", deviceList);
+            context.put("environmentVariables", environmentVariables == null
+                    ? Collections.emptyList() : environmentVariables);
+            return objectMapper.writeValueAsString(context);
         } catch (Exception e) {
             log.error("Failed to build device info JSON", e);
             throw new IllegalStateException("Could not serialize current device capabilities for recommendation", e);
@@ -456,8 +496,11 @@ public class RecommendRulesTool extends AbstractAiTool {
      * 解析 AI 响应并验证设备变量和API
      */
     @SuppressWarnings("unchecked")
-    private String parseAiResponse(String aiResponse, List<DeviceInfoHelper.DeviceInfo> devices,
-                                   int maxRecommendations, String language) {
+    private String parseAiResponse(String aiResponse,
+                                   List<DeviceInfoHelper.DeviceInfo> devices,
+                                   BoardSemanticValidator.BoardContext semanticContext,
+                                   int maxRecommendations,
+                                   String language) {
         try {
             // 清理 AI 返回的内容，去除 Markdown 代码块标记
             String cleanedResponse = aiResponse.trim();
@@ -506,7 +549,7 @@ public class RecommendRulesTool extends AbstractAiTool {
 
                     // 验证并过滤推荐
                     RecommendationValidation validation = validateRecommendation(
-                            recommendation, deviceMap, language, inspected);
+                            recommendation, deviceMap, semanticContext, language, inspected);
                     if (validation.valid()) {
                         recommendation.remove("requiresUserInput");
                         recommendations.add(recommendation);
@@ -560,6 +603,7 @@ public class RecommendRulesTool extends AbstractAiTool {
     @SuppressWarnings("unchecked")
     private RecommendationValidation validateRecommendation(Map<String, Object> recommendation,
             Map<String, DeviceInfoHelper.DeviceInfo> deviceMap,
+            BoardSemanticValidator.BoardContext semanticContext,
             String language,
             int recommendationIndex) {
 
@@ -726,6 +770,35 @@ public class RecommendRulesTool extends AbstractAiTool {
             command.put("contentPrivacy", resolvedContent.privacy());
         }
 
+        List<RuleDto.Condition> semanticConditions = new ArrayList<>();
+        for (Map<String, Object> condition : conditions) {
+            semanticConditions.add(RuleDto.Condition.builder()
+                    .deviceName(asTrimmedString(condition.get("deviceId")))
+                    .attribute(asTrimmedString(condition.get("attribute")))
+                    .targetType(asTrimmedString(condition.get("targetType")))
+                    .relation(asTrimmedString(condition.get("relation")))
+                    .value(asTrimmedString(condition.get("value")))
+                    .build());
+        }
+        RuleDto.Command semanticCommand = RuleDto.Command.builder()
+                .deviceName(asTrimmedString(command.get("deviceId")))
+                .action(asTrimmedString(command.get("action")))
+                .contentDevice(asTrimmedString(command.get("contentDevice")))
+                .content(asTrimmedString(command.get("content")))
+                .build();
+        BoardSemanticValidator.GroupValidationIssue groupIssue =
+                BoardSemanticValidator.validateRuleConditionGroup(
+                        semanticContext, semanticConditions, semanticCommand);
+        if (groupIssue != null) {
+            String reasonCode = switch (groupIssue.reasonCode()) {
+                case "COMMAND_PRESTATE_INCOMPATIBLE" -> "commandPrestateIncompatible";
+                case "COMMAND_PRESTATE_UNREACHABLE" -> "commandPrestateUnreachable";
+                case "UNREACHABLE_CONDITION_GROUP" -> "unreachableConditionGroup";
+                default -> "contradictoryConditionGroup";
+            };
+            return invalid(reasonCode, language);
+        }
+
         return RecommendationValidation.ok(adjustments);
     }
 
@@ -799,6 +872,18 @@ public class RecommendRulesTool extends AbstractAiTool {
             case "actionDoesNotAcceptContent" -> zh
                     ? "目标动作没有声明可接收内容敏感度标签；该内容流不会被附着到普通设备命令。"
                     : "The target action does not declare a content-sensitivity input, so the content flow cannot be attached to that ordinary device command.";
+            case "contradictoryConditionGroup" -> zh
+                    ? "这些触发条件在设备声明的合法状态或变量定义域中没有共同可满足的取值。"
+                    : "The trigger conditions have no common satisfying value in the declared device state and variable domains.";
+            case "commandPrestateIncompatible" -> zh
+                    ? "触发条件与目标动作声明的 StartState 前置状态不兼容，因此动作无法在该条件下执行。"
+                    : "The trigger conditions are incompatible with the action's declared StartState, so the command cannot execute under those conditions.";
+            case "commandPrestateUnreachable" -> zh
+                    ? "目标动作要求的 StartState 从设备当前状态无法通过已声明的 API 或转换到达，因此规则不会执行。"
+                    : "The action's required StartState is unreachable from the device's current state through its declared APIs and transitions, so the rule cannot execute.";
+            case "unreachableConditionGroup" -> zh
+                    ? "这些触发条件虽然位于合法定义域内，但从当前设备状态和值无法通过已声明行为到达。"
+                    : "The trigger conditions are legal but unreachable from the current device state and values under the declared behavior.";
             case "parseFailed" -> zh
                     ? "该候选项不是可解析的推荐对象。"
                     : "The candidate is not a parseable recommendation object.";
@@ -1060,7 +1145,7 @@ public class RecommendRulesTool extends AbstractAiTool {
         for (int i = 0; i < parts.length; i++) {
             String part = parts[i].trim();
             if (part.isEmpty() || "_".equals(part)) {
-                canonicalParts.add(part.isEmpty() ? "" : "_");
+                canonicalParts.add("");
                 continue;
             }
             String value = canonicalEnumValue(device.modes().get(i).values(), part);

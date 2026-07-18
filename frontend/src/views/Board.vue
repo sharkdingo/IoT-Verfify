@@ -170,6 +170,7 @@ import boardApi, {
   type EnvironmentVariableChange,
   type RecommendationAdjustmentItem,
   type RecommendationFilteredItem,
+  type ScenarioRecommendationResponse,
   type SpecificationRecommendation
 } from '@/api/board'
 import simulationApi from '@/api/simulation'
@@ -423,6 +424,8 @@ type ScenarioRecommendationResult = {
   truncatedCount: number
   scenarioName: string
   rationale: string
+  verificationReady: boolean
+  readinessIssues: ScenarioRecommendationResponse['readinessIssues']
   scene: BoardSceneModel | null
 }
 
@@ -5850,6 +5853,8 @@ const fetchScenarioRecommendation = async () => {
       truncatedCount: response.truncatedCount,
       scenarioName: response.scenarioName,
       rationale: response.rationale,
+      verificationReady: response.verificationReady,
+      readinessIssues: response.readinessIssues,
       scene
     }
     scenarioRecommendationMessage.value = localizedRecommendationText(
@@ -11957,6 +11962,29 @@ const closeResultDialog = () => {
               <div class="rounded-lg bg-slate-50 px-2 py-2">
                 <div class="text-base font-bold text-slate-800">{{ recommendedScenarioScene.specs.length }}</div>
                 <div class="text-[10px] text-slate-500">{{ t('app.specificationsTool') }}</div>
+              </div>
+            </div>
+
+            <div
+              class="mt-3 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs"
+              :class="scenarioRecommendationResult?.verificationReady
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : 'border-amber-200 bg-amber-50 text-amber-900'"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">
+                {{ scenarioRecommendationResult?.verificationReady ? 'verified' : 'info' }}
+              </span>
+              <div>
+                <div class="font-semibold">
+                  {{ scenarioRecommendationResult?.verificationReady
+                    ? t('app.scenarioVerificationReady')
+                    : t('app.scenarioVerificationNotReady') }}
+                </div>
+                <ul v-if="scenarioRecommendationResult?.readinessIssues.length" class="mt-1 list-disc pl-4">
+                  <li v-for="issue in scenarioRecommendationResult.readinessIssues" :key="issue.code">
+                    {{ t(`app.scenarioReadiness.${issue.code}`) }}
+                  </li>
+                </ul>
               </div>
             </div>
           </div>

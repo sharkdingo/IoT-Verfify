@@ -312,6 +312,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "label":"temperature","appliedValues":{"value":"20"}}],
                  "rawCandidateCount":2,"inspectedCount":2,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Exercise a shared reading",
+                 "verificationReady":true,"readinessIssues":[],
                  "scene":{"schema":"iot-verify.board-scene","version":4,
                  "templates":[{"name":"Sensor","manifest":{"Name":"Sensor"}}],
                  "devices":[{"id":"device_1","templateName":"Sensor","label":"Hall sensor",
@@ -337,6 +338,28 @@ class BoardStorageControllerThrowIfToolErrorTest {
         JsonNode condition = scene.path("specs").get(0).path("aConditions").get(0);
         assertEquals(List.of("deviceId", "key", "relation", "targetType", "value"),
                 iterableFieldNames(condition));
+        assertTrue(response.getVerificationReady());
+        assertTrue(response.getReadinessIssues().isEmpty());
+    }
+
+    @Test
+    void scenarioReadinessMustMatchScene() {
+        when(recommendScenarioTool.execute(anyString())).thenReturn("""
+                {"message":"Scenario generated.","count":1,"requestedCount":3,
+                 "validatedCount":1,"filteredCount":0,"filteredItems":[],
+                 "adjustedCount":0,"adjustedItems":[],
+                 "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
+                 "scenarioName":"Home","rationale":"Missing a specification",
+                 "verificationReady":true,"readinessIssues":[],
+                 "scene":{"schema":"iot-verify.board-scene","version":4,
+                 "templates":[],"devices":[{"id":"device_1","templateName":"Sensor",
+                 "label":"Hall sensor","position":{"x":0,"y":0},"width":176,"height":128}],
+                 "environmentVariables":[],"rules":[],"specs":[]}}
+                """);
+
+        assertThrows(BadGatewayException.class,
+                () -> controller.recommendScenario(
+                        1L, "request-123", new ScenarioRecommendationRequestDto()));
     }
 
     private static List<String> iterableFieldNames(JsonNode node) {

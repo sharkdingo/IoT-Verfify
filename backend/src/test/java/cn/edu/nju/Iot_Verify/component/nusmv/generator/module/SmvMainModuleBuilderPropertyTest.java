@@ -184,6 +184,23 @@ class SmvMainModuleBuilderPropertyTest {
     }
 
     @Test
+    @DisplayName("An underscore tuple wildcard is compiled like an empty tuple segment")
+    void underscoreWildcardStateCondition_usesOnlyConcreteMode() throws Exception {
+        DeviceSmvData device = buildMultiModeDevice();
+        RuleDto rule = RuleDto.builder().conditions(List.of(
+                RuleDto.Condition.builder()
+                        .deviceName("aircon_1").targetType("state")
+                        .attribute("state").relation("=").value("on;_").build()
+        )).build();
+
+        String result = invokeRulePropertyConditions(
+                rule, Map.of("aircon_1", device), PropertyDimension.TRUST);
+
+        assertTrue(result.contains("trust_Power_on=trusted"));
+        assertFalse(result.contains("trust_Fan_"));
+    }
+
+    @Test
     @DisplayName("A compound state condition combines trust and privacy with MEDIC semantics")
     void compoundStateCondition_combinesLabelsByDimension() throws Exception {
         DeviceSmvData device = buildMultiModeDevice();

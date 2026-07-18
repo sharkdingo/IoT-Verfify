@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
+import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
@@ -9,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
+import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -33,6 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -75,6 +78,10 @@ class ChatServiceImplToolLoopControlTest {
     @Mock
     private AiDestructiveActionGuard destructiveActionGuard;
     @Mock
+    private AiScenarioDraftStore scenarioDraftStore;
+    @Mock
+    private AiTaskContinuationStore taskContinuationStore;
+    @Mock
     private ChatMapper chatMapper;
     private LlmMessageCodec messageCodec;
     private TransactionTemplate transactionTemplate;
@@ -82,7 +89,9 @@ class ChatServiceImplToolLoopControlTest {
 
     private ChatServiceImpl service;
     private Method executeToolLoopMethod;
+    private Method executeToolLoopWithTraceMethod;
     private Method jsonErrorMethod;
+    private Method toolProgressDetailMethod;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -108,9 +117,13 @@ class ChatServiceImplToolLoopControlTest {
                 userRepository,
                 llmChatService,
                 messageCodec,
-                new ChatConfirmationDetector(),
+                new ChatConfirmationDetector(
+                        org.mockito.Mockito.mock(cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService.class),
+                        new ObjectMapper()),
                 aiToolManager,
                 destructiveActionGuard,
+                scenarioDraftStore,
+                taskContinuationStore,
                 new ObjectMapper(),
                 chatMapper,
                 transactionTemplate,
@@ -127,6 +140,19 @@ class ChatServiceImplToolLoopControlTest {
                 AtomicBoolean.class
         );
         executeToolLoopMethod.setAccessible(true);
+        executeToolLoopWithTraceMethod = ChatServiceImpl.class.getDeclaredMethod(
+                "executeToolLoop",
+                Long.class,
+                String.class,
+                List.class,
+                List.class,
+                Set.class,
+                SseEmitter.class,
+                AtomicBoolean.class,
+                boolean.class,
+                List.class
+        );
+        executeToolLoopWithTraceMethod.setAccessible(true);
 
         jsonErrorMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "jsonError",
@@ -135,6 +161,9 @@ class ChatServiceImplToolLoopControlTest {
                 int.class
         );
         jsonErrorMethod.setAccessible(true);
+        toolProgressDetailMethod = ChatServiceImpl.class.getDeclaredMethod(
+                "toolProgressDetail", String.class, String.class, boolean.class);
+        toolProgressDetailMethod.setAccessible(true);
     }
 
     @Test
@@ -143,6 +172,128 @@ class ChatServiceImplToolLoopControlTest {
 
         verify(llmChatService, never()).chatWithTools(anyList(), anyList());
         verify(aiToolManager, never()).execute(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void toolProgressDetail_shouldNotExposeRawInternalIdentifiersFromErrors() throws Exception {
+        String detail = (String) toolProgressDetailMethod.invoke(
+                service,
+                "manage_rule",
+                "{\"error\":\"Rule rule-17 for user id 42 was not found\",\"errorCode\":\"NOT_FOUND\"}",
+                false);
+
+        assertTrue(detail.contains("NOT_FOUND"));
+        assertFalse(detail.contains("rule-17"));
+        assertFalse(detail.contains("42"));
+    }
+
+    @Test
+    void toolProgressDetail_shouldSummarizeCommonMutationFromStructuredFields() throws Exception {
+        String detail = (String) toolProgressDetailMethod.invoke(
+                service,
+                "add_device",
+                "{\"operation\":\"created\",\"device\":{\"id\":\"device-17\",\"label\":\"Hall Light\",\"state\":\"off\"},\"environmentChanges\":[{}]}",
+                false);
+
+        assertTrue(detail.contains("Hall Light"));
+        assertTrue(detail.contains("initial state off"));
+        assertTrue(detail.contains("1 Environment Pool change"));
+        assertFalse(detail.contains("device-17"));
+    }
+
+    @Test
+    void executeToolLoop_shouldEmitSanitizedReactReasoningBeforeTheToolAction() throws Exception {
+        LlmToolCall call = new LlmToolCall("tc_1", "board_overview", "{}");
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofTextAndToolCalls(
+                        "Inspect device_17 and impactToken=secret before choosing the next action.",
+                        List.of(call)))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("board_overview", "{}"))
+                .thenReturn("{\"devices\":[],\"rules\":[],\"specs\":[],\"environmentVariables\":[]}");
+        List<StreamResponseDto.ProgressDto> trace = new ArrayList<>();
+
+        executeToolLoopWithTraceMethod.invoke(
+                service,
+                1L,
+                "s1",
+                new ArrayList<LlmMessage>(),
+                new ArrayList<LlmToolSpec>(),
+                new LinkedHashSet<StreamResponseDto.CommandDto>(),
+                mock(SseEmitter.class),
+                new AtomicBoolean(false),
+                false,
+                trace);
+
+        int reasoningIndex = java.util.stream.IntStream.range(0, trace.size())
+                .filter(index -> "REASONING".equals(trace.get(index).getStage()))
+                .findFirst()
+                .orElseThrow();
+        int executionIndex = java.util.stream.IntStream.range(0, trace.size())
+                .filter(index -> "TOOL_EXECUTION".equals(trace.get(index).getStage()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(reasoningIndex < executionIndex);
+        assertTrue(trace.get(reasoningIndex).getDetail().contains("[internal reference]"));
+        assertTrue(trace.get(reasoningIndex).getDetail().contains("impactToken=[hidden]"));
+        assertFalse(trace.get(reasoningIndex).getDetail().contains("device_17"));
+        assertFalse(trace.get(reasoningIndex).getDetail().contains("secret"));
+    }
+
+    @Test
+    void reactReasoning_shouldKeepMoreContextThanCompactToolResults() throws Exception {
+        String reasoning = "Goal and evidence. " + "remaining context ".repeat(30);
+        LlmToolCall call = new LlmToolCall("tc_long", "board_overview", "{}");
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofTextAndToolCalls(reasoning, List.of(call)))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("board_overview", "{}"))
+                .thenReturn("{\"devices\":[],\"rules\":[],\"specs\":[],\"environmentVariables\":[]}");
+        List<StreamResponseDto.ProgressDto> trace = new ArrayList<>();
+
+        executeToolLoopWithTraceMethod.invoke(
+                service,
+                1L,
+                "s1",
+                new ArrayList<LlmMessage>(),
+                new ArrayList<LlmToolSpec>(),
+                new LinkedHashSet<StreamResponseDto.CommandDto>(),
+                mock(SseEmitter.class),
+                new AtomicBoolean(false),
+                false,
+                trace);
+
+        String detail = trace.stream()
+                .filter(progress -> "REASONING".equals(progress.getStage()))
+                .findFirst()
+                .orElseThrow()
+                .getDetail();
+        assertTrue(detail.length() > 240);
+        assertTrue(detail.length() <= 800);
+    }
+
+    @Test
+    void taskContinuation_shouldRemoveNestedConfirmationTokens() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "sanitizePendingResultForContinuation", String.class);
+        method.setAccessible(true);
+
+        String sanitized = (String) method.invoke(service, """
+                {
+                  "requiresUserConfirmation": true,
+                  "preview": {
+                    "impactToken": "nested-secret",
+                    "items": [{"confirmationToken": "array-secret", "name": "Light"}]
+                  },
+                  "domainImpactToken": "root-secret"
+                }
+                """);
+
+        JsonNode json = new ObjectMapper().readTree(sanitized);
+        assertFalse(json.has("domainImpactToken"));
+        assertFalse(json.path("preview").has("impactToken"));
+        assertFalse(json.path("preview").path("items").get(0).has("confirmationToken"));
+        assertEquals("Light", json.path("preview").path("items").get(0).path("name").asText());
     }
 
     @Test
@@ -158,15 +309,84 @@ class ChatServiceImplToolLoopControlTest {
 
         assertTrue(planning.contains("truncated candidates were never inspected"));
         assertTrue(planning.contains("complete tool catalog"));
-        assertTrue(planning.contains("call board_overview first"));
-        assertTrue(planning.contains("use list_templates"));
+        assertTrue(planning.contains("inspect current Board state only when"));
+        assertTrue(planning.contains("use list_templates only when"));
+        assertTrue(planning.contains("use manage_rule directly"));
+        assertTrue(planning.contains("ReAct activity summary"));
+        assertTrue(planning.contains("audit-friendly summary, not private hidden chain-of-thought"));
         assertTrue(planning.contains("Use recommend_scenario only"));
+        assertTrue(planning.contains("call apply_scenario with confirmed=false"));
+        assertTrue(planning.contains("do not delete or recreate devices individually"));
         assertTrue(planning.contains("Do not call"));
         assertTrue(planning.contains("add_device, manage_rule, or manage_spec"));
-        assertTrue(visible.contains("report rawCandidateCount"));
+        assertTrue(visible.contains("Match the level of detail to the user's request"));
         assertTrue(visible.contains("SATISFIED with modelComplete=false"));
         assertTrue(visible.contains("one possible formal-model trajectory"));
         assertTrue(visible.contains("A verified suggestion still is not applied"));
+        assertTrue(visible.contains("Never expose impactToken"));
+    }
+
+    @Test
+    void pendingConfirmationPrompt_restoresDestructiveTokenOutsideHistoryWindow() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "buildPendingTaskSystemPrompt",
+                AiDestructiveActionGuard.PendingActionContext.class,
+                AiScenarioDraftStore.PendingApplication.class,
+                AiTaskContinuationStore.ContinuationContext.class,
+                ChatConfirmationDetector.ConfirmationDecision.class,
+                String.class);
+        method.setAccessible(true);
+
+        LlmMessage context = (LlmMessage) method.invoke(
+                service,
+                new AiDestructiveActionGuard.PendingActionContext(
+                        "delete_device", "alarm_1", "server-token"),
+                null,
+                new AiTaskContinuationStore.ContinuationContext(
+                        "Replace the hall alarm and verify the repaired scene",
+                        List.of("Keep the existing rules"),
+                        "delete_device",
+                        "{\"operation\":\"preview\"}",
+                        Instant.parse("2026-07-17T12:00:00Z")),
+                ChatConfirmationDetector.ConfirmationDecision.confirmed(
+                        ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE),
+                "Confirm deletion, but do not create another alarm");
+
+        assertTrue(context.content().contains("delete_device"));
+        assertTrue(context.content().contains("alarm_1"));
+        assertTrue(context.content().contains("server-token"));
+        assertTrue(context.content().contains("Do not request another preview"));
+        assertTrue(context.content().contains("Replace the hall alarm"));
+        assertTrue(context.content().contains("latest user message is authoritative"));
+        assertTrue(context.content().contains("do not create another alarm"));
+    }
+
+    @Test
+    void pendingConfirmationPrompt_usesResetSchemaWithoutInventingTargetArgument() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "buildPendingTaskSystemPrompt",
+                AiDestructiveActionGuard.PendingActionContext.class,
+                AiScenarioDraftStore.PendingApplication.class,
+                AiTaskContinuationStore.ContinuationContext.class,
+                ChatConfirmationDetector.ConfirmationDecision.class,
+                String.class);
+        method.setAccessible(true);
+
+        LlmMessage context = (LlmMessage) method.invoke(
+                service,
+                new AiDestructiveActionGuard.PendingActionContext(
+                        "reset_default_templates", "bundled-default-template-catalog", "reset-token"),
+                null,
+                null,
+                ChatConfirmationDetector.ConfirmationDecision.confirmed(
+                        ChatConfirmationDetector.ConfirmationKind.DEFAULT_TEMPLATE_RESET),
+                "Confirm refreshing the bundled default templates");
+
+        assertTrue(context.content().contains("reset_default_templates exactly once"));
+        assertTrue(context.content().contains("confirmed=true"));
+        assertTrue(context.content().contains("reset-token"));
+        assertTrue(context.content().contains("Do not add a target field"));
+        assertFalse(context.content().contains("bundled-default-template-catalog"));
     }
 
     @Test
@@ -198,6 +418,21 @@ class ChatServiceImplToolLoopControlTest {
         StreamResponseDto.CommandDto cmd = commandSet.iterator().next();
         assertEquals("REFRESH_DATA", cmd.getType());
         assertEquals("rule_list", cmd.getPayload().get("target"));
+    }
+
+    @Test
+    void executeToolLoop_whenScenarioApplySucceeds_shouldRefreshWholeBoard() throws Exception {
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("apply_scenario", "{\"confirmed\":true}"))
+                .thenReturn(textResult("done"));
+        when(aiToolManager.execute("apply_scenario", "{\"confirmed\":true}"))
+                .thenReturn("{\"operation\":\"replaced\",\"message\":\"ok\"}");
+
+        Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
+        invokeToolLoop(new AtomicBoolean(false), commandSet);
+
+        assertEquals(1, commandSet.size());
+        assertEquals("board_state", commandSet.iterator().next().getPayload().get("target"));
     }
 
     @Test
@@ -722,7 +957,7 @@ class ChatServiceImplToolLoopControlTest {
 
         service.processStreamChat(1L, "s1", "hello", emitter);
 
-        verify(destructiveActionGuard).clearSession(1L, "s1");
+        verify(destructiveActionGuard, never()).clearSession(1L, "s1");
         assertEquals(completeCatalog, plannedTools.get());
         verify(aiToolManager).getAllToolDefinitions();
         verify(llmChatService).chatWithTools(anyList(), eq(completeCatalog));

@@ -114,4 +114,46 @@ class AiDestructiveActionGuardTest {
         assertFalse(result.approved());
         assertEquals("CONFIRMATION_REQUIRED", result.errorCode());
     }
+
+    @Test
+    void consume_shouldNotTreatSceneReplacementConfirmationAsDeletionAuthorization() {
+        Map<String, Object> preview = Map.of("rule", Map.of("id", 7, "label", "Alarm"));
+        String token = guard.issue(1L, "manage_rule", "7", preview, "domain-token");
+        UserContextHolder.setSceneReplacementConfirmed(true);
+
+        AiDestructiveActionGuard.ConsumeResult result =
+                guard.consume(1L, "manage_rule", "7", token, preview);
+
+        assertFalse(result.approved());
+        assertEquals("CONFIRMATION_REQUIRED", result.errorCode());
+        UserContextHolder.setDestructiveActionConfirmed(true);
+        assertTrue(guard.consume(1L, "manage_rule", "7", token, preview).approved());
+    }
+
+    @Test
+    void consume_shouldKeepDefaultTemplateResetConfirmationScopedToResetTool() {
+        Map<String, Object> preview = Map.of("rule", Map.of("id", 7, "label", "Alarm"));
+        String token = guard.issue(1L, "manage_rule", "7", preview, "domain-token");
+        UserContextHolder.setDefaultTemplateResetConfirmed(true);
+
+        AiDestructiveActionGuard.ConsumeResult result =
+                guard.consume(1L, "manage_rule", "7", token, preview);
+
+        assertFalse(result.approved());
+        assertEquals("CONFIRMATION_REQUIRED", result.errorCode());
+    }
+
+    @Test
+    void pendingContext_shouldExposeCompactServerSideConfirmationData() {
+        String token = guard.issue(
+                1L, "delete_device", "alarm_1", Map.of("id", "alarm_1"), "domain-token");
+
+        AiDestructiveActionGuard.PendingActionContext context = guard
+                .pendingContext(1L, "session-1")
+                .orElseThrow();
+
+        assertEquals("delete_device", context.toolName());
+        assertEquals("alarm_1", context.targetKey());
+        assertEquals(token, context.impactToken());
+    }
 }

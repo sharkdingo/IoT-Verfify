@@ -88,7 +88,7 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
-  it('renders the pending response inside one compact assistant bubble', async () => {
+  it('renders the pending response inside one full-width assistant activity bubble', async () => {
     let finishStream!: () => void
     chatApi.createSession.mockResolvedValue(session)
     chatApi.sendStreamChat.mockImplementation(() => new Promise<void>(resolve => {
@@ -105,8 +105,9 @@ describe('ChatView', () => {
     const pending = wrapper.get('[data-testid="chat-assistant-pending"]')
     const pendingBubble = wrapper.get('article.assistant-pending-body')
     expect(pendingBubble.element.contains(pending.element)).toBe(true)
-    expect(pendingBubble.text()).toContain('执行轨迹')
-    expect(pendingBubble.text()).toContain('已接收请求')
+    expect(pendingBubble.classes()).toContain('has-execution-trace')
+    expect(pendingBubble.text()).toContain('思考与执行')
+    expect(pendingBubble.text()).toContain('接收任务')
     expect(wrapper.find('.msg-content-wrapper > .thinking-state').exists()).toBe(false)
 
     finishStream()
@@ -134,6 +135,11 @@ describe('ChatView', () => {
         failedSteps: 0,
         unconfirmedSteps: 0
       })
+      callbacks.onProgress({
+        stage: 'REASONING',
+        round: 1,
+        detail: '当前目标是补齐客厅照明；模板已经确认可用，下一步先创建设备，再检查是否还需要规则。'
+      })
       callbacks.onProgress({ stage: 'TOOL_EXECUTION', round: 1, toolName: 'add_device' })
       callbacks.onProgress({
         stage: 'TOOL_RESULT',
@@ -142,7 +148,8 @@ describe('ChatView', () => {
         outcome: 'USABLE',
         successfulSteps: 1,
         failedSteps: 0,
-        unconfirmedSteps: 0
+        unconfirmedSteps: 0,
+        detail: '已创建设备“客厅灯”。'
       })
       callbacks.onProgress({
         stage: 'WRITING_RESPONSE',
@@ -162,12 +169,78 @@ describe('ChatView', () => {
     await flushPromises()
 
     const trace = wrapper.get('[data-testid="chat-execution-trace"]')
-    expect(trace.findAll('li')).toHaveLength(5)
-    expect(trace.text()).toContain('第 1 轮：正在执行 add device')
-    expect(trace.text()).toContain('add device 已返回可用结果')
-    expect(trace.text()).toContain('正在根据实际结果组织答复')
+    expect(trace.findAll('li')).toHaveLength(6)
+    expect(trace.text()).toContain('思考摘要')
+    expect(trace.text()).toContain('当前目标是补齐客厅照明')
+    expect(trace.text()).toContain('创建设备')
+    expect(trace.text()).toContain('已启动工具 add_device')
+    expect(trace.text()).toContain('已创建设备“客厅灯”。')
+    expect(trace.text()).toContain('整理最终答复')
+    expect(wrapper.text()).toContain('1 成功')
     expect(wrapper.text()).toContain('设备已创建。')
-    expect(wrapper.get('details.chat-execution-trace').attributes('open')).toBeUndefined()
+    const completedDetails = wrapper.get('details.chat-execution-trace')
+    expect(completedDetails.attributes('open')).toBeUndefined()
+
+    const completedEvents = completedDetails.get('.chat-execution-events').element as HTMLElement
+    completedEvents.scrollTop = 80
+    const completedDetailsElement = completedDetails.element as HTMLDetailsElement
+    completedDetailsElement.open = true
+    await completedDetails.trigger('toggle')
+    await flushPromises()
+    expect(completedEvents.scrollTop).toBe(0)
+
+    wrapper.unmount()
+  })
+
+  it('labels an execution guard as stopped instead of completed', async () => {
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onProgress({ stage: 'CONTEXT_READY' })
+      callbacks.onProgress({ stage: 'PLANNING', round: 1 })
+      callbacks.onProgress({ stage: 'EXECUTION_GUARD', round: 3, outcome: 'NO_PROGRESS' })
+      callbacks.onMessage('重复调用已停止。')
+      callbacks.onFinish?.()
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('检查规则')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    const state = wrapper.get('.chat-execution-state')
+    expect(state.text()).toBe('无进展，已停止')
+    expect(state.classes()).toContain('is-stopped')
+    expect(state.text()).not.toContain('已完成')
+
+    wrapper.unmount()
+  })
+
+  it('shows the original objective when work resumes after confirmation', async () => {
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.sendStreamChat.mockImplementation(async (...args: any[]) => {
+      const callbacks = args[2]
+      callbacks.onProgress({ stage: 'CONTEXT_READY' })
+      callbacks.onProgress({
+        stage: 'TASK_RESUMED',
+        detail: '删除旧传感器，创建替代设备，然后运行正式验证'
+      })
+      callbacks.onProgress({ stage: 'WRITING_RESPONSE' })
+      callbacks.onMessage('正在继续。')
+      callbacks.onFinish?.()
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('确认删除')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('继续原始任务')
+    expect(wrapper.text()).toContain('删除旧传感器，创建替代设备，然后运行正式验证')
 
     wrapper.unmount()
   })

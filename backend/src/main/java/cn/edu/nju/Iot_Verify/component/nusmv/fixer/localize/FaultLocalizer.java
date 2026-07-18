@@ -356,7 +356,7 @@ public class FaultLocalizer {
             boolean anyNonWildcard = false;
             for (int i = 0; i < modes.size(); i++) {
                 String seg = segments[i].trim();
-                if (seg.isEmpty()) continue; // wildcard
+                if (DeviceSmvDataFactory.isWildcardStateSegment(seg)) continue;
                 anyNonWildcard = true;
                 String cleanSeg = DeviceSmvDataFactory.cleanStateName(seg);
                 String mode = modes.get(i);
@@ -458,7 +458,7 @@ public class FaultLocalizer {
             boolean anyNonWildcard = false;
             for (int i = 0; i < modes.size(); i++) {
                 String seg = segments[i].trim();
-                if (seg.isEmpty()) continue; // wildcard
+                if (DeviceSmvDataFactory.isWildcardStateSegment(seg)) continue;
                 anyNonWildcard = true;
                 String cleanSeg = DeviceSmvDataFactory.cleanStateName(seg);
                 List<String> legalStates = modeStates.get(modes.get(i));
@@ -502,7 +502,7 @@ public class FaultLocalizer {
         boolean anyNonWildcard = false;
         for (int i = 0; i < modes.size(); i++) {
             String candidateSeg = segments[i].trim();
-            if (candidateSeg.isEmpty()) continue; // wildcard segment
+            if (DeviceSmvDataFactory.isWildcardStateSegment(candidateSeg)) continue;
             anyNonWildcard = true;
 
             String mode = modes.get(i);

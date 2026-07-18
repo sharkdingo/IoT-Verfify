@@ -6,6 +6,7 @@
 	"Contents": [
 		{
 			"Name": "content",
+			"Description": "Private respiratory support data available to content-capable actions",
 			"Privacy": "private"
 		}
 	],

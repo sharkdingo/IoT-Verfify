@@ -3,19 +3,24 @@ package cn.edu.nju.Iot_Verify.component.aitool.scenario;
 import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
+import cn.edu.nju.Iot_Verify.component.aitool.BoardSemanticValidator;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationAdjustmentItem;
+import cn.edu.nju.Iot_Verify.component.aitool.RecommendationCapabilityView;
 import cn.edu.nju.Iot_Verify.component.aitool.RecommendationFilterItem;
+import cn.edu.nju.Iot_Verify.component.aitool.spec.SpecificationTemplateSemantics;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceLayoutDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
+import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.RecommendationLimits;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import cn.edu.nju.Iot_Verify.util.EnvironmentDomainUtils;
@@ -58,7 +63,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private static final Set<String> SPEC_TARGET_TYPES = Set.of("state", "mode", "variable", "api", "trust", "privacy");
     private static final Set<String> RULE_TARGET_TYPES = Set.of("api", "variable", "mode", "state");
 
-    private static final String SYSTEM_PROMPT = """
+    private static final String SYSTEM_PROMPT = ("""
 你是智能家居 IoT 形式化验证场景设计助手。你的任务不是分别推荐设备、规则、规约，而是一次设计一个自包含的全量场景草案。
 草案只需满足结构、引用和设备能力约束；不要声称它安全、完整、已验证或已应用。
 
@@ -68,6 +73,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - environmentVariables 必须列出保留设备模板声明或影响的每个共享变量，并显式给出非空 value、trust、privacy。
 - trust 是 MEDIC 控制来源标签：多条件规则只要至少一个实际触发来源可信，目标仍可信；只有全部来源不可信才失去可信控制。不要把它解释成认证或通用数据完整性。
 - 规则和规约必须引用同一个 devices 列表里的设备实例 id。
+- 每条规则的触发条件必须可同时满足，并与目标 API 的非空 StartState 兼容；每个规约的 A、IF、THEN 条件数组也必须各自可同时满足。
 - 规则只能调用模板里真实存在的 API；规则触发条件只能使用 signal API、变量、模式或 state。
 - 规则 sources 有两种互斥结构：itemType=api 时 fromApi 必须是 Signal=true 的可观察 API，并且必须省略 relation 和 value；itemType=variable|mode|state 时必须给出 relation 和 value。不要把规约中 API 条件的 = TRUE 写法套到规则 API 事件源。
 - 规约条件只能使用 state、mode、variable、api、trust、privacy。trust/privacy 必须带 propertyScope=state|variable；state 范围的 key 是模式名，variable 范围的 key 是变量名。
@@ -131,24 +137,27 @@ public class RecommendScenarioTool extends AbstractAiTool {
   }
 }
 
-规约模板形状约束：
+规约模板语义（必须按公式选择，不能只匹配 JSON 形状）：
+%s
+附加约束：
 - contentDevice 与 content 必须同时为 null，或同时填写。content 必须来自对应设备模板的 Contents，且目标 API 必须声明 AcceptsContent=true；仅在动作携带该内容且需要分析敏感度标签传播时使用。该标签不表示系统复制了真实数据或实施了访问控制。
-- templateId 1/2/3/7 只使用 aConditions。
-- templateId 4/5/6 只使用 ifConditions 和 thenConditions。
-- templateId 3 表示所有建模路径中的“永不发生”，也用于隐私泄露：把公开动作/状态与对应 privacy=private 一起放进 aConditions。
-- templateId 7 只表示“不可信来源不得导致受保护事件”，不是普通危险状态禁令。其 aConditions 不得直接使用 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。
-- 每个 condition: {deviceId, targetType, key, propertyScope?, relation, value}。propertyScope 仅 trust/privacy 必填；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
-""";
+- templateId 3 也用于隐私泄露：把公开动作/状态与对应 privacy=private 一起放进 aConditions。
+- templateId 7 的 aConditions 不得直接使用 trust/privacy；state/mode 必须使用 =；api 必须使用 = TRUE。
+- 每个 condition: {deviceId, targetType, key, propertyScope?, relation?, value?}。propertyScope 仅 trust/privacy 必填；非 API 条件必须给出 relation/value，API 条件可省略二者并按 = TRUE 处理；不要输出内部 id、side、deviceLabel、templateLabel、formula、Mode_state 生成键或 devices 缓存。
+""").formatted(SpecificationTemplateSemantics.chinesePromptReference());
 
     private final PromptCompletionService promptCompletionService;
     private final BoardStorageService boardStorageService;
+    private final AiScenarioDraftStore draftStore;
 
     public RecommendScenarioTool(PromptCompletionService promptCompletionService,
                                  BoardStorageService boardStorageService,
+                                 AiScenarioDraftStore draftStore,
                                  ObjectMapper objectMapper) {
         super(objectMapper);
         this.promptCompletionService = promptCompletionService;
         this.boardStorageService = boardStorageService;
+        this.draftStore = draftStore;
     }
 
     @Override
@@ -206,6 +215,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
             String language = languageArg(args, "language");
             String userRequirement = optionalTextArg(
                     args, "userRequirement", "", RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH);
+            String chatSessionId = UserContextHolder.getChatSessionId();
 
             List<DeviceTemplateDto> templates = safeList(boardStorageService.getDeviceTemplates(userId));
             if (templates.isEmpty()) {
@@ -223,7 +233,9 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 result.put("truncatedCount", 0);
                 result.put("scenarioName", "");
                 result.put("rationale", "");
-                result.put("scene", emptyScene());
+                Map<String, Object> scene = emptyScene();
+                result.put("scene", scene);
+                putVerificationReadiness(result, objectMapper.valueToTree(scene));
                 return objectMapper.writeValueAsString(result);
             }
 
@@ -241,6 +253,16 @@ public class RecommendScenarioTool extends AbstractAiTool {
                         : "The AI response was not a parseable scene-draft JSON object. Please try again.";
                 return errorJson(message, "AI_RESPONSE_INVALID", 502,
                         Map.of("phase", "response_parse"));
+            }
+            if (chatSessionId != null && !chatSessionId.isBlank()) {
+                JsonNode scene = objectMapper.valueToTree(result.get("scene"));
+                String serializedResult = objectMapper.writeValueAsString(result);
+                draftStore.saveDraft(
+                        userId,
+                        chatSessionId,
+                        String.valueOf(result.getOrDefault("scenarioName", "AI Scenario")),
+                        scene);
+                return serializedResult;
             }
             return objectMapper.writeValueAsString(result);
         } catch (ArgValidationException e) {
@@ -302,61 +324,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
     }
 
     private Map<String, Object> compactManifest(DeviceTemplateDto.DeviceManifest manifest) {
-        if (manifest == null) return Map.of();
-        Map<String, Object> capabilities = new LinkedHashMap<>();
-        capabilities.put("modes", safeList(manifest.getModes()));
-        capabilities.put("initState", manifest.getInitState());
-        capabilities.put("workingStates", safeList(manifest.getWorkingStates()).stream()
-                .map(state -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", state.getName());
-                    item.put("trust", state.getTrust());
-                    item.put("privacy", state.getPrivacy());
-                    return item;
-                })
-                .toList());
-        capabilities.put("variables", safeList(manifest.getInternalVariables()).stream()
-                .map(variable -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", variable.getName());
-                    item.put("deviceLocal", variable.getIsInside());
-                    item.put("trust", variable.getTrust());
-                    item.put("privacy", variable.getPrivacy());
-                    item.put("values", variable.getValues());
-                    item.put("lowerBound", variable.getLowerBound());
-                    item.put("upperBound", variable.getUpperBound());
-                    return item;
-                }).toList());
-        capabilities.put("environmentDomains", safeList(manifest.getEnvironmentDomains()).stream()
-                .map(domain -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", domain.getName());
-                    item.put("trust", domain.getTrust());
-                    item.put("privacy", domain.getPrivacy());
-                    item.put("values", domain.getValues());
-                    item.put("lowerBound", domain.getLowerBound());
-                    item.put("upperBound", domain.getUpperBound());
-                    return item;
-                }).toList());
-        capabilities.put("apis", safeList(manifest.getApis()).stream()
-                .map(api -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", api.getName());
-                    item.put("signal", api.getSignal());
-                    item.put("acceptsContent", api.getAcceptsContent());
-                    item.put("startState", api.getStartState());
-                    item.put("endState", api.getEndState());
-                    return item;
-                }).toList());
-        capabilities.put("contents", safeList(manifest.getContents()).stream()
-                .map(content -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", content.getName());
-                    item.put("privacy", content.getPrivacy());
-                    return item;
-                })
-                .toList());
-        return capabilities;
+        return RecommendationCapabilityView.fromManifest(manifest);
     }
 
     @SuppressWarnings("unchecked")
@@ -392,10 +360,13 @@ public class RecommendScenarioTool extends AbstractAiTool {
         List<Map<String, Object>> environmentVariables = normalizeEnvironmentVariables(
                 sceneNode.path("environmentVariables"), devices, catalog,
                 filteredItems, adjustedItems, language, stats);
+        BoardSemanticValidator.BoardContext semanticContext = scenarioSemanticContext(
+                deviceById, devices, environmentVariables);
         List<Map<String, Object>> rules = normalizeRules(
                 sceneNode.path("rules"), deviceById, maxRules,
-                filteredItems, adjustedItems, language, stats);
-        List<Map<String, Object>> specs = normalizeSpecs(specsNode, deviceById, maxSpecs, filteredItems, language, stats);
+                filteredItems, adjustedItems, semanticContext, language, stats);
+        List<Map<String, Object>> specs = normalizeSpecs(
+                specsNode, deviceById, maxSpecs, filteredItems, semanticContext, language, stats);
 
         Map<String, Object> scene = new LinkedHashMap<>();
         scene.put("schema", SCENE_SCHEMA);
@@ -425,7 +396,14 @@ public class RecommendScenarioTool extends AbstractAiTool {
         result.put("scenarioName", text(root.path("scenarioName"), language.equals("zh-CN") ? "AI 推荐场景" : "AI Scenario"));
         result.put("rationale", text(root.path("rationale"), ""));
         result.put("scene", scene);
+        putVerificationReadiness(result, objectMapper.valueToTree(scene));
         return result;
+    }
+
+    private void putVerificationReadiness(Map<String, Object> result, JsonNode scene) {
+        ScenarioVerificationReadiness.Status readiness = ScenarioVerificationReadiness.assess(scene);
+        result.put("verificationReady", readiness.verificationReady());
+        result.put("readinessIssues", readiness.readinessIssues());
     }
 
     private List<Map<String, Object>> normalizeDevices(JsonNode devicesNode,
@@ -761,6 +739,74 @@ public class RecommendScenarioTool extends AbstractAiTool {
         return contexts;
     }
 
+    @SuppressWarnings("unchecked")
+    private BoardSemanticValidator.BoardContext scenarioSemanticContext(
+            Map<String, DeviceContext> deviceById,
+            List<Map<String, Object>> devices,
+            List<Map<String, Object>> environmentVariables) {
+        Map<String, DeviceContext> uniqueDevices = new LinkedHashMap<>();
+        for (DeviceContext context : deviceById.values()) {
+            uniqueDevices.putIfAbsent(context.id(), context);
+        }
+        List<DeviceNodeDto> nodes = new ArrayList<>();
+        List<DeviceTemplateDto> templates = new ArrayList<>();
+        Map<String, Map<String, Object>> deviceRowsById = new LinkedHashMap<>();
+        for (Map<String, Object> device : devices) {
+            if (device != null && device.get("id") != null) {
+                deviceRowsById.put(String.valueOf(device.get("id")), device);
+            }
+        }
+        Set<String> templateNames = new HashSet<>();
+        for (DeviceContext context : uniqueDevices.values()) {
+            DeviceNodeDto node = new DeviceNodeDto();
+            node.setId(context.id());
+            node.setLabel(context.label());
+            node.setTemplateName(templateName(context.template()));
+            Map<String, Object> deviceRow = deviceRowsById.get(context.id());
+            if (deviceRow != null) {
+                Object state = deviceRow.get("state");
+                if (state instanceof String text && !text.isBlank()) {
+                    node.setState(text);
+                }
+                Object variables = deviceRow.get("variables");
+                if (variables instanceof List<?> list) {
+                    List<VariableStateDto> values = new ArrayList<>();
+                    for (Object item : list) {
+                        if (!(item instanceof Map<?, ?> row)) continue;
+                        Object name = row.get("name");
+                        Object value = row.get("value");
+                        if (name instanceof String variableName && value instanceof String variableValue) {
+                            VariableStateDto dto = new VariableStateDto();
+                            dto.setName(variableName);
+                            dto.setValue(variableValue);
+                            Object trust = row.get("trust");
+                            if (trust instanceof String trustValue) dto.setTrust(trustValue);
+                            values.add(dto);
+                        }
+                    }
+                    node.setVariables(values);
+                }
+            }
+            nodes.add(node);
+            if (templateNames.add(templateName(context.template()))) {
+                templates.add(context.template());
+            }
+        }
+        List<BoardEnvironmentVariableDto> environment = new ArrayList<>();
+        for (Map<String, Object> row : environmentVariables) {
+            if (row == null || !(row.get("name") instanceof String name)
+                    || !(row.get("value") instanceof String value)) {
+                continue;
+            }
+            environment.add(new BoardEnvironmentVariableDto(
+                    name,
+                    value,
+                    row.get("trust") instanceof String trust ? trust : null,
+                    row.get("privacy") instanceof String privacy ? privacy : null));
+        }
+        return BoardSemanticValidator.recommendationContext(nodes, templates, environment);
+    }
+
     private String environmentDomainMismatch(DeviceTemplateDto template,
                                              Map<String, EnvironmentDomainSource> activeDomains) {
         for (Map.Entry<String, DeviceTemplateDto.DeviceManifest.InternalVariable> entry :
@@ -941,6 +987,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                                                      int maxRules,
                                                      List<Map<String, Object>> filteredItems,
                                                      List<Map<String, Object>> adjustedItems,
+                                                     BoardSemanticValidator.BoardContext semanticContext,
                                                      String language,
                                                      CandidateStats stats) {
         List<Map<String, Object>> rules = new ArrayList<>();
@@ -1011,11 +1058,49 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 rule.put("contentDevice", contentContext.id);
                 rule.put("content", content);
             }
+            BoardSemanticValidator.GroupValidationIssue groupIssue =
+                    BoardSemanticValidator.validateRuleConditionGroup(
+                            semanticContext, ruleConditions(sources), ruleCommand(rule));
+            if (groupIssue != null) {
+                String reasonCode = switch (groupIssue.reasonCode()) {
+                    case "COMMAND_PRESTATE_INCOMPATIBLE" -> "ruleCommandPrestateIncompatible";
+                    case "COMMAND_PRESTATE_UNREACHABLE" -> "ruleCommandPrestateUnreachable";
+                    case "UNREACHABLE_CONDITION_GROUP" -> "unreachableRuleConditions";
+                    default -> "contradictoryRuleConditions";
+                };
+                filteredItems.add(filteredItem("rule", index, reasonCode, language,
+                        text(row.path("name"), actionApi.getName())));
+                continue;
+            }
             rules.add(rule);
             adjustedItems.addAll(sourceAdjustments);
             stats.validatedCount++;
         }
         return rules;
+    }
+
+    private List<RuleDto.Condition> ruleConditions(List<Map<String, Object>> sources) {
+        List<RuleDto.Condition> result = new ArrayList<>();
+        for (Map<String, Object> source : sources) {
+            result.add(RuleDto.Condition.builder()
+                    .deviceName(String.valueOf(source.get("fromId")))
+                    .attribute(String.valueOf(source.get("fromApi")))
+                    .targetType(String.valueOf(source.get("itemType")))
+                    .relation(source.get("relation") == null ? null : String.valueOf(source.get("relation")))
+                    .value(source.get("value") == null ? null : String.valueOf(source.get("value")))
+                    .build());
+        }
+        return result;
+    }
+
+    private RuleDto.Command ruleCommand(Map<String, Object> rule) {
+        return RuleDto.Command.builder()
+                .deviceName(String.valueOf(rule.get("toId")))
+                .action(String.valueOf(rule.get("toApi")))
+                .contentDevice(rule.get("contentDevice") == null
+                        ? null : String.valueOf(rule.get("contentDevice")))
+                .content(rule.get("content") == null ? null : String.valueOf(rule.get("content")))
+                .build();
     }
 
     private List<Map<String, Object>> normalizeRuleSources(
@@ -1081,6 +1166,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                                                      Map<String, DeviceContext> deviceById,
                                                      int maxSpecs,
                                                      List<Map<String, Object>> filteredItems,
+                                                     BoardSemanticValidator.BoardContext semanticContext,
                                                      String language,
                                                      CandidateStats stats) {
         List<Map<String, Object>> specs = new ArrayList<>();
@@ -1127,6 +1213,26 @@ public class RecommendScenarioTool extends AbstractAiTool {
                         text(row.path("templateLabel"), templateId)));
                 continue;
             }
+            String rejectedGroupReason = null;
+            for (SpecConditionGroup group : List.of(
+                    new SpecConditionGroup("a", aConditions),
+                    new SpecConditionGroup("if", ifConditions),
+                    new SpecConditionGroup("then", thenConditions))) {
+                BoardSemanticValidator.GroupValidationIssue groupIssue =
+                        BoardSemanticValidator.validateSpecConditionGroup(
+                                semanticContext, specConditions(group.conditions(), group.side()), group.side());
+                if (groupIssue != null) {
+                    rejectedGroupReason = "UNREACHABLE_CONDITION_GROUP".equals(groupIssue.reasonCode())
+                            ? "unreachableSpecConditionGroup" : "contradictorySpecConditionGroup";
+                    break;
+                }
+            }
+            if (rejectedGroupReason != null) {
+                filteredItems.add(filteredItem("specification", candidateIndex,
+                        rejectedGroupReason, language,
+                        text(row.path("templateLabel"), templateId)));
+                continue;
+            }
             Map<String, Object> spec = new LinkedHashMap<>();
             spec.put("templateId", templateId);
             spec.put("aConditions", aConditions);
@@ -1137,6 +1243,23 @@ public class RecommendScenarioTool extends AbstractAiTool {
             specIndex++;
         }
         return specs;
+    }
+
+    private List<SpecConditionDto> specConditions(List<Map<String, Object>> conditions, String side) {
+        List<SpecConditionDto> result = new ArrayList<>();
+        for (Map<String, Object> condition : conditions) {
+            SpecConditionDto dto = new SpecConditionDto();
+            dto.setSide(side);
+            dto.setDeviceId(String.valueOf(condition.get("deviceId")));
+            dto.setTargetType(String.valueOf(condition.get("targetType")));
+            dto.setKey(String.valueOf(condition.get("key")));
+            dto.setPropertyScope(condition.get("propertyScope") == null
+                    ? null : String.valueOf(condition.get("propertyScope")));
+            dto.setRelation(String.valueOf(condition.get("relation")));
+            dto.setValue(String.valueOf(condition.get("value")));
+            result.add(dto);
+        }
+        return result;
     }
 
     private List<Map<String, Object>> normalizeSpecConditions(JsonNode conditionsNode,
@@ -1155,10 +1278,14 @@ public class RecommendScenarioTool extends AbstractAiTool {
             boolean propertyCondition = "trust".equals(targetType) || "privacy".equals(targetType);
             if (propertyCondition && !Set.of("state", "variable").contains(propertyScope)) continue;
             if (!propertyCondition && !propertyScope.isBlank()) continue;
-            if (!isProvided(row.path("relation")) || !isProvided(row.path("value"))) continue;
-            String relation = normalizeRelation(text(row.path("relation"), ""));
+            boolean relationProvided = isProvided(row.path("relation"));
+            boolean valueProvided = isProvided(row.path("value"));
+            if (!"api".equals(targetType) && (!relationProvided || !valueProvided)) continue;
+            String relation = relationProvided
+                    ? normalizeRelation(text(row.path("relation"), ""))
+                    : "=";
             if (relation == null) continue;
-            String value = row.path("value").asText();
+            String value = valueProvided ? row.path("value").asText() : "TRUE";
             CapabilityValue cap = canonicalCapability(device.template, targetType, key, relation, value, propertyScope);
             if (cap == null) continue;
             Map<String, Object> condition = new LinkedHashMap<>();
@@ -1282,6 +1409,18 @@ public class RecommendScenarioTool extends AbstractAiTool {
             case "ruleActionDoesNotAcceptContent" -> zh
                     ? "场景规则把内容敏感度附着到了未声明 AcceptsContent 的普通动作；整条规则已过滤。"
                     : "A scenario rule attaches content sensitivity to an ordinary action that does not declare AcceptsContent; the whole rule was filtered.";
+            case "contradictoryRuleConditions" -> zh
+                    ? "场景规则的触发条件在设备声明的合法状态或变量定义域中无法同时成立。"
+                    : "The scenario rule trigger conditions cannot hold together in the declared device state and variable domains.";
+            case "ruleCommandPrestateIncompatible" -> zh
+                    ? "场景规则的触发条件与目标动作声明的 StartState 前置状态不兼容。"
+                    : "The scenario rule trigger conditions are incompatible with the target action's declared StartState.";
+            case "ruleCommandPrestateUnreachable" -> zh
+                    ? "场景规则的目标动作要求了从当前状态无法到达的 StartState。"
+                    : "The scenario rule target action requires a StartState that is unreachable from the current state.";
+            case "unreachableRuleConditions" -> zh
+                    ? "场景规则使用了合法但从当前设备状态和值无法到达的触发条件。"
+                    : "The scenario rule uses legal trigger conditions that are unreachable from the current device state and values.";
             case "invalidSpecTemplateId" -> zh
                     ? "场景规约缺少合法 templateId；必须使用 1 到 7 的规约模板。"
                     : "A scenario specification is missing a valid templateId; it must use specification template 1 through 7.";
@@ -1291,6 +1430,12 @@ public class RecommendScenarioTool extends AbstractAiTool {
             case "invalidSpecShape" -> zh
                     ? "场景规约的模板形状或条件能力未通过校验。"
                     : "A scenario specification has an invalid template shape or invalid condition capabilities.";
+            case "contradictorySpecConditionGroup" -> zh
+                    ? "场景规约的某个 A、IF 或 THEN 条件组在设备声明的合法定义域中无法同时成立。"
+                    : "One A, IF, or THEN group in the scenario specification cannot hold together in the declared device domains.";
+            case "unreachableSpecConditionGroup" -> zh
+                    ? "场景规约的某个 A、IF 或 THEN 条件组使用了合法但从当前状态和值无法到达的条件。"
+                    : "One A, IF, or THEN group in the scenario specification uses legal conditions that are unreachable from the current state and values.";
             case "invalidUntrustedSourceSafetyCondition" -> zh
                     ? "模板 7 只表示“不可信来源不得导致受保护事件”：不得直接写 trust/privacy，state/mode 必须为 =，API 必须为 = TRUE 且模板必须声明可建模的 EndState；普通禁令或隐私泄露请使用模板 3。"
                     : "Template 7 means an untrusted source must not cause the protected event: no explicit trust/privacy predicates, state/mode require '=', and an API requires '= TRUE' plus a modeled EndState. Use template 3 for an unconditional prohibition or privacy leakage.";
@@ -1780,6 +1925,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
     private record DeviceContext(String id, String label, DeviceTemplateDto template) {}
 
     private record CapabilityValue(String key, String relation, String value) {}
+
+    private record SpecConditionGroup(String side, List<Map<String, Object>> conditions) {}
 
     private final class TemplateCatalog {
         private final Map<String, DeviceTemplateDto> byName = new HashMap<>();

@@ -84,9 +84,10 @@ export interface DeviceTransition {
     Description?: string
 }
 
-// Matches backend DeviceTemplateDto.DeviceManifest.Content { Name, Privacy }.
+// Matches backend DeviceTemplateDto.DeviceManifest.Content { Name, Description, Privacy }.
 export interface DeviceContent {
     Name: string
+    Description?: string
     Privacy: string        // "public" | "private"
 }
 

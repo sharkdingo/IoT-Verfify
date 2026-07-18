@@ -54,7 +54,7 @@ Backend DTO: `DeviceTemplateDto`. Frontend type: `DeviceTemplate`.
 | `manifest.WorkingStates` | Template authoring | Legal states and state dynamics | Node state UI, rule/spec validation, NuSMV transitions |
 | `manifest.Transitions` | Template authoring | Autonomous single-effect behavior: one concrete mode update or one internal/shared-variable assignment. Triggers read only declared modes/readable variables and values must fit their domains. Multi-effect declarations are rejected rather than partially modeled | NuSMV state/variable transitions |
 | `manifest.APIs` | Template authoring | Stateful device commands/actions, not network endpoints. They have no Trigger or variable assignments; `Signal=true` exposes a one-step actual state-route event | Rule commands may target any API; rule/spec source conditions may use only `Signal=true` APIs |
-| `manifest.Contents` | Template authoring | Privacy content names | Privacy rule actions and content privacy variables |
+| `manifest.Contents` | Template authoring | Privacy content names and optional descriptions | Privacy rule actions and content privacy variables |
 
 Portable scene snapshots require the outer template `name` and `manifest.Name` to be
 exactly equal. They are one canonical identity, not aliases; scene import rejects a

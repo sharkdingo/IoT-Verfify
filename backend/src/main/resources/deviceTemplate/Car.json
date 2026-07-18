@@ -8,7 +8,7 @@
 			"IsInside": true,
 			"FalsifiableWhenCompromised": true,
 			"Trust": "untrusted",
-			"Privacy": "public",
+			"Privacy": "private",
 			"Values": ["garage", "away"]
 		}
 	],

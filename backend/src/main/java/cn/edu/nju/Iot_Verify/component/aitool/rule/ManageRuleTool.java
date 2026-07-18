@@ -160,7 +160,8 @@ public class ManageRuleTool extends AbstractAiTool {
         Map<String, String> labelsById = labelsById(nodes);
         BoardSemanticValidator.BoardContext semanticContext = BoardSemanticValidator.context(
                 nodes,
-                safeList(boardStorageService.getDeviceTemplates(userId))
+                safeList(boardStorageService.getDeviceTemplates(userId)),
+                safeList(boardStorageService.getEnvironmentVariables(userId))
         );
 
         if (conditionsNode.isMissingNode() || !conditionsNode.isArray() || conditionsNode.isEmpty()) {
@@ -282,6 +283,11 @@ public class ManageRuleTool extends AbstractAiTool {
         String commandSemanticError = BoardSemanticValidator.validateRuleCommand(semanticContext, command);
         if (commandSemanticError != null) {
             return errorJson(commandSemanticError, "VALIDATION_ERROR", 400);
+        }
+        BoardSemanticValidator.GroupValidationIssue groupIssue =
+                BoardSemanticValidator.validateRuleConditionGroup(semanticContext, conditions, command);
+        if (groupIssue != null) {
+            return errorJson(groupIssue.message(), groupIssue.reasonCode(), 400);
         }
 
         String ruleString = nullableTextField(args, "label", "arguments");
