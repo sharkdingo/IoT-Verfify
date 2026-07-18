@@ -1113,12 +1113,6 @@ watch(() => templateInstanceDialogData.template, template => {
   resetTemplateInstanceRuntime(template)
 })
 
-watch(() => templateInstanceRuntime.state, () => {
-  if (!templateInstanceHasModes.value) return
-  templateInstanceRuntime.currentStateTrust = ''
-  templateInstanceRuntime.currentStatePrivacy = ''
-})
-
 const templateVariableInputPlaceholder = (variable: InternalVariable) => {
   if (templateVariableUsesNumericBounds(variable)) {
     const lower = variable.LowerBound ?? '-∞'

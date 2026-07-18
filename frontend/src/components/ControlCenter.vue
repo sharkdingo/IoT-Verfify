@@ -239,12 +239,6 @@ const resetSingleDeviceRuntime = () => {
 
 watch(() => deviceForm.type, resetSingleDeviceRuntime)
 
-watch(() => singleDeviceRuntime.state, () => {
-  if (!selectedTemplateHasModes.value) return
-  singleDeviceRuntime.currentStateTrust = ''
-  singleDeviceRuntime.currentStatePrivacy = ''
-})
-
 const variableInputPlaceholder = (variable: InternalVariable) => {
   if (templateVariableUsesNumericBounds(variable)) {
     const lower = variable.LowerBound ?? '-∞'

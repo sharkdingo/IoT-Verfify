@@ -209,13 +209,6 @@ watch(
   { immediate: true }
 )
 
-watch(() => runtimeDraft.value.state, () => {
-  if (syncingRuntimeDraft.value) return
-  if (!runtimeHasModes.value) return
-  runtimeDraft.value.currentStateTrust = ''
-  runtimeDraft.value.currentStatePrivacy = ''
-})
-
 const saveRuntime = () => {
   const template = currentTemplate.value
   const node = currentNode.value
