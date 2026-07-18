@@ -508,19 +508,19 @@ class SimulationServiceImplTest {
                 () -> service.submitSimulation(
                         1L, simRequest(singleDevice(), List.of(), 10, false, -1, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be between 0 and 50"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
     @Test
-    void submitSimulation_attackBudgetAboveModeledPointCount_rejectsBeforeCreatingTask() throws Exception {
+    void submitSimulation_budgetSelection_rejectsBeforeCreatingTask() throws Exception {
         ValidationException ex = assertThrows(ValidationException.class,
                 () -> service.submitSimulation(
                         1L, simRequest(singleDevice(), List.of(makeRule()), 10, true, 2, false)));
 
         assertTrue(ex.getMessage().contains(
-                "Attack budget cannot exceed the behavior-changing device and automation-link points (1)"));
+                "Simulation requires explicit attack points; budget-based exhaustive selection is verification-only"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -531,7 +531,8 @@ class SimulationServiceImplTest {
                 () -> service.submitSimulation(
                         1L, simRequest(singleDevice(), List.of(), 10, true, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be at least 1 when attack modeling is enabled"));
+        assertTrue(ex.getMessage().contains(
+                "Simulation requires explicit attack points; budget-based exhaustive selection is verification-only"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -542,7 +543,7 @@ class SimulationServiceImplTest {
                 () -> service.submitSimulation(
                         1L, simRequest(singleDevice(), List.of(), 10, false, 3, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be 0 when attack modeling is disabled"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
         verify(smvGenerator, never()).generate(
                 any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
@@ -684,10 +685,10 @@ class SimulationServiceImplTest {
                 () -> service.simulateAsync(
                         1L, 16L, simRequest(singleDevice(), List.of(), 10, false, 51, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be between 0 and 50"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(simulationTaskRepository).failTaskIfActive(
                 eq(16L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
-                eq("attackBudget: Attack budget must be between 0 and 50"), anyString(), any(),
+                eq("attackScenario.budget: Attack budget must be omitted or 0 when no attack scenario is selected"), anyString(), any(),
                 eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());

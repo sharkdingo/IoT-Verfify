@@ -1,3 +1,5 @@
+import type { SelectedAttackPoint } from './attackScenario'
+
 export type AttackPointUnit = 'BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK'
 
 export type AttackEffect =
@@ -7,6 +9,7 @@ export type AttackEffect =
 
 export type AttackSelectionPolicy =
   | 'NOT_MODELED'
+  | 'EXACT_ATTACK_POINTS'
   | 'UP_TO_ATTACK_BUDGET_NONDETERMINISTIC'
 
 export type TrustPropagationPolicy =
@@ -28,6 +31,7 @@ export type LocalVariableFallbackPolicy =
 export interface ModelSemantics {
   attackPointUnit: AttackPointUnit
   attackSelectionPolicy: AttackSelectionPolicy
+  selectedAttackPoints?: SelectedAttackPoint[]
   attackEffects: AttackEffect[]
   modeledDeviceAttackPointCount: number
   modeledFalsifiableReadingDeviceCount: number

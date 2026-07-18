@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixStrategyAttemptDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -98,6 +99,31 @@ public class RuleFixer {
                             List<String> strategies,
                             int maxAttempts,
                             Map<String, PreferredRange> preferredRanges) {
+        return fix(traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
+                deviceSmvMap, userId,
+                isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none(),
+                enablePrivacy, strategies, maxAttempts, preferredRanges);
+    }
+
+    public FixResultDto fix(Long traceId,
+                            String violatedSpecId,
+                            List<TraceStateDto> states,
+                            List<RuleDto> rules,
+                            List<DeviceVerificationDto> devices,
+                            List<BoardEnvironmentVariableDto> environmentVariables,
+                            List<SpecificationDto> specs,
+                            Map<String, DeviceSmvData> deviceSmvMap,
+                            Long userId,
+                            AttackScenarioDto attackScenario,
+                            boolean enablePrivacy,
+                            List<String> strategies,
+                            int maxAttempts,
+                            Map<String, PreferredRange> preferredRanges) {
+
+        AttackScenarioDto safeAttackScenario = attackScenario != null
+                ? attackScenario : AttackScenarioDto.none();
+        boolean isAttack = safeAttackScenario.isEnabled();
+        int attackBudget = safeAttackScenario.effectiveBudget();
 
         // Step 1: Fault localization
         List<FaultRuleDto> faultRules = faultLocalizer.localize(states, rules, deviceSmvMap);
@@ -146,6 +172,7 @@ public class RuleFixer {
                 .userId(userId)
                 .isAttack(isAttack)
                 .attackBudget(attackBudget)
+                .attackScenario(safeAttackScenario)
                 .enablePrivacy(enablePrivacy)
                 .maxAttempts(maxAttempts)
                 .preferredRanges(preferredRanges)

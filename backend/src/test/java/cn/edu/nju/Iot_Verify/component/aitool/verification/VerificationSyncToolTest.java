@@ -188,7 +188,7 @@ class VerificationSyncToolTest {
     void verifyModel_attackEnabledWithZeroBudget_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
         VerifyModelTool tool = new VerifyModelTool(boardDataConverter, verificationService, objectMapper);
 
-        String response = tool.execute("{\"isAttack\":true,\"attackBudget\":0}");
+        String response = tool.execute("{\"attackMode\":\"exhaustive\",\"attackBudget\":0}");
         JsonNode json = objectMapper.readTree(response);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
@@ -203,14 +203,14 @@ class VerificationSyncToolTest {
         VerifyModelTool tool = new VerifyModelTool(boardDataConverter, verificationService, objectMapper);
 
         JsonNode positiveDisabledBudget = objectMapper.readTree(
-                tool.execute("{\"isAttack\":false,\"attackBudget\":3}"));
+                tool.execute("{\"attackMode\":\"none\",\"attackBudget\":3}"));
         JsonNode unknownField = objectMapper.readTree(
-                tool.execute("{\"isAttack\":false,\"attackMode\":true}"));
+                tool.execute("{\"attackMode\":\"none\",\"isAttack\":false}"));
 
         assertEquals("VALIDATION_ERROR", positiveDisabledBudget.path("errorCode").asText());
-        assertTrue(positiveDisabledBudget.path("error").asText().contains("Set isAttack=true"));
+        assertTrue(positiveDisabledBudget.path("error").asText().contains("attackMode is none"));
         assertEquals("VALIDATION_ERROR", unknownField.path("errorCode").asText());
-        assertTrue(unknownField.path("error").asText().contains("attackMode"));
+        assertTrue(unknownField.path("error").asText().contains("isAttack"));
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(verificationService, never()).verifyWithTemplateSnapshot(anyLong(), any(), any());
     }

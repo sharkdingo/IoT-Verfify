@@ -32,6 +32,7 @@ import type {
   VerificationTaskSummary
 } from '@/types/verify'
 import type { SimulationRequest, SimulationState, SimulationTask, SimulationTaskSummary, SimulationTraceSummary } from '@/types/simulation'
+import type { AttackScenario, AttackScenarioMode } from '@/types/attackScenario'
 import type {
   AvailableFuzzingRunSummary,
   FuzzingExplorationMode,
@@ -47,7 +48,7 @@ import type {
   FuzzingTaskSummary
 } from '@/types/fuzzing'
 import { isValidFuzzPaperDomainFingerprint } from '@/types/fuzzing'
-import type { RunBoardComparison } from '@/types/modelSemantics'
+import type { ModelSemantics, RunBoardComparison } from '@/types/modelSemantics'
 import type { ModelEnvironmentVariable } from '@/types/model'
 import type { InteractiveOperationStage, TaskCancellationResult, TaskProgressStage } from '@/types/task'
 import type { FixApplyResult } from '@/types/fix'
@@ -97,7 +98,12 @@ import {
   normalizeNuSmvDeviceName
 } from '@/utils/modelRequest'
 import { isModelSemanticsConsistent } from '@/utils/modelSemantics'
-import { analyzeBoardAttackSurface, getAttackSelectionIssue } from '@/utils/attackSurface'
+import {
+  analyzeBoardAttackSurface,
+  getAttackScenarioIssue,
+  getAttackSelectionIssue,
+  selectedAttackPoints
+} from '@/utils/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
 import {
@@ -1107,10 +1113,10 @@ watch(() => templateInstanceDialogData.template, template => {
   resetTemplateInstanceRuntime(template)
 })
 
-watch(() => templateInstanceRuntime.state, state => {
+watch(() => templateInstanceRuntime.state, () => {
   if (!templateInstanceHasModes.value) return
-  templateInstanceRuntime.currentStateTrust = findTemplateStateTrust(templateInstanceDialogData.template, state)
-  templateInstanceRuntime.currentStatePrivacy = findTemplateStatePrivacy(templateInstanceDialogData.template, state)
+  templateInstanceRuntime.currentStateTrust = ''
+  templateInstanceRuntime.currentStatePrivacy = ''
 })
 
 const templateVariableInputPlaceholder = (variable: InternalVariable) => {
@@ -5050,8 +5056,7 @@ const compareRunToCurrentBoard = (result: any, kind: 'verification' | 'simulatio
           environmentVariables: environmentVariables.value,
           rules: rules.value,
           specifications: specifications.value,
-          isAttack: submission.request.isAttack,
-          attackBudget: submission.request.attackBudget,
+          attackScenario: submission.request.attackScenario,
           enablePrivacy: submission.request.enablePrivacy
         })
       : buildSimulationRequestPayload({
@@ -5060,8 +5065,7 @@ const compareRunToCurrentBoard = (result: any, kind: 'verification' | 'simulatio
           environmentVariables: environmentVariables.value,
           rules: rules.value,
           steps: (submission.request as SimulationRequest).steps,
-          isAttack: submission.request.isAttack,
-          attackBudget: submission.request.attackBudget,
+          attackScenario: submission.request.attackScenario,
           enablePrivacy: submission.request.enablePrivacy
         })
     return buildModelRunSignature(request, deviceTemplates.value) === submission.signature
@@ -5928,13 +5932,34 @@ const formatScenarioDeviceLabel = (deviceId: string): string => {
   return device?.label || t('app.unknownModelItem')
 }
 
-const scenarioDeviceHasStateMachine = (device: DeviceNode): boolean => {
-  const template = recommendedScenarioScene.value?.templates.find(candidate => {
+const scenarioDeviceTemplate = (device: DeviceNode): DeviceTemplate | undefined =>
+  recommendedScenarioScene.value?.templates.find(candidate => {
     const candidateName = candidate.manifest?.Name || candidate.name
     return candidateName?.trim().toLocaleLowerCase() === device.templateName.trim().toLocaleLowerCase()
   })
+
+const scenarioDeviceHasStateMachine = (device: DeviceNode): boolean => {
+  const template = scenarioDeviceTemplate(device)
   return Boolean(template?.manifest?.Modes?.length && template.manifest.WorkingStates?.length)
 }
+
+const scenarioDeviceStateTrust = (device: DeviceNode): string =>
+  device.currentStateTrust
+  || findTemplateStateTrust(scenarioDeviceTemplate(device), device.state || '')
+  || 'trusted'
+
+const scenarioDeviceStatePrivacy = (device: DeviceNode): string =>
+  device.currentStatePrivacy
+  || findTemplateStatePrivacy(scenarioDeviceTemplate(device), device.state || '')
+  || 'public'
+
+const scenarioDeviceVariableTrust = (
+  device: DeviceNode,
+  variable: NonNullable<DeviceNode['variables']>[number]
+): string => variable.trust
+  || getTemplateLocalVariables(scenarioDeviceTemplate(device))
+    .find(candidate => candidate.Name === variable.name)?.Trust
+  || 'trusted'
 
 const formatScenarioRuleSource = (source: RuleForm['sources'][number]): string => {
   const device = formatScenarioDeviceLabel(source.fromId)
@@ -6260,10 +6285,24 @@ const simulationError = ref<string | null>(null)
 const lastSimulationResult = ref<any>(null)
 
 // Simulation form state (moved from ControlCenter)
-const simulationForm = reactive({
+interface AttackRunForm {
+  isAttack: boolean
+  attackMode: AttackScenarioMode
+  attackBudget: number
+  selectedAttackPointKeys: string[]
+}
+
+const simulationForm = reactive<AttackRunForm & {
+  steps: number
+  enablePrivacy: boolean
+  isAsync: boolean
+  saveToHistory: boolean
+}>({
   steps: 10,
   isAttack: false,
+  attackMode: 'NONE',
   attackBudget: 1,
+  selectedAttackPointKeys: [],
   enablePrivacy: false,
   isAsync: true,
   saveToHistory: true
@@ -6293,9 +6332,14 @@ const commitSimulationStepsInput = (event: Event) => {
 }
 
 // Verification form state (similar to simulation)
-const verificationForm = reactive({
+const verificationForm = reactive<AttackRunForm & {
+  enablePrivacy: boolean
+  isAsync: boolean
+}>({
   isAttack: false,
+  attackMode: 'NONE',
   attackBudget: 1,
+  selectedAttackPointKeys: [],
   enablePrivacy: false,
   isAsync: true
 })
@@ -6396,22 +6440,77 @@ const attackBudgetIsCapped = computed(() => attackSurfacePointCount.value > ATTA
 
 const hasModeledAttackEffect = computed(() => boardAttackSurface.value.totalPointCount > 0)
 
-const attackConfigurationError = (enabled: boolean, budget: unknown): string => {
-  const issue = getAttackSelectionIssue(enabled, budget, attackBudgetMax.value)
+const attackConfigurationError = (
+  form: AttackRunForm,
+  allowExhaustive: boolean
+): string => {
+  const issue = getAttackScenarioIssue(
+    form.attackMode,
+    form.attackBudget,
+    form.selectedAttackPointKeys,
+    boardAttackSurface.value,
+    allowExhaustive
+  )
   if (issue === 'NO_MODELED_EFFECT') return t('app.attackNoModeledEffect')
   if (issue === 'INVALID_BUDGET') {
     return t('app.attackBudgetSelectionInvalid', {
-      selected: String(budget),
+      selected: String(form.attackBudget),
       limit: attackBudgetMax.value
     })
   }
+  if (issue === 'EXPLICIT_POINTS_REQUIRED') return t('app.attackExplicitPointsRequired')
+  if (issue === 'UNAVAILABLE_EXPLICIT_POINT') return t('app.attackExplicitPointUnavailable')
+  if (issue === 'EXHAUSTIVE_NOT_ALLOWED') return t('app.simulationAttackMustBeExplicit')
   return ''
 }
 
 const verificationAttackConfigurationError = computed(() =>
-  attackConfigurationError(verificationForm.isAttack, verificationForm.attackBudget))
+  attackConfigurationError(verificationForm, true))
 const simulationAttackConfigurationError = computed(() =>
-  attackConfigurationError(simulationForm.isAttack, simulationForm.attackBudget))
+  attackConfigurationError(simulationForm, false))
+
+const setVerificationAttackEnabled = (enabled: boolean) => {
+  verificationForm.isAttack = enabled
+  verificationForm.attackMode = enabled ? 'ANY_UP_TO_BUDGET' : 'NONE'
+}
+
+const setSimulationAttackEnabled = (enabled: boolean) => {
+  simulationForm.isAttack = enabled
+  simulationForm.attackMode = enabled ? 'EXACT_POINTS' : 'NONE'
+}
+
+const setAttackMode = (form: AttackRunForm, mode: AttackScenarioMode) => {
+  form.attackMode = mode
+  form.isAttack = mode !== 'NONE'
+}
+
+const toggleAttackPoint = (form: AttackRunForm, key: string) => {
+  const selected = new Set(form.selectedAttackPointKeys)
+  if (selected.has(key)) selected.delete(key)
+  else selected.add(key)
+  form.selectedAttackPointKeys = Array.from(selected)
+}
+
+const buildRunAttackScenario = (form: AttackRunForm): AttackScenario => {
+  if (form.attackMode === 'NONE') {
+    return { mode: 'NONE', budget: 0, points: [] }
+  }
+  if (form.attackMode === 'ANY_UP_TO_BUDGET') {
+    return { mode: 'ANY_UP_TO_BUDGET', budget: form.attackBudget, points: [] }
+  }
+  return {
+    mode: 'EXACT_POINTS',
+    points: selectedAttackPoints(boardAttackSurface.value, form.selectedAttackPointKeys)
+  }
+}
+
+watch(boardAttackSurface, surface => {
+  const availableKeys = new Set(surface.points.filter(point => point.selectable).map(point => point.key))
+  verificationForm.selectedAttackPointKeys = verificationForm.selectedAttackPointKeys
+    .filter(key => availableKeys.has(key))
+  simulationForm.selectedAttackPointKeys = simulationForm.selectedAttackPointKeys
+    .filter(key => availableKeys.has(key))
+})
 
 const boardRunBlockedReason = computed(() => {
   if (isSceneReplacementInProgress.value) return t('app.sceneReplacementInProgress')
@@ -9421,12 +9520,12 @@ const handleVerify = async (): Promise<boolean> => {
   if (!assertRulesHaveTriggers(rules.value)) {
     return false
   }
-  let requestAttackBudget = 0
-  try {
-    requestAttackBudget = verificationForm.isAttack ? validateAttackBudget(verificationForm.attackBudget) : 0
-  } catch (error: any) {
-    ElMessage.error(error?.message || t('app.verificationFailed'))
+  if (verificationAttackConfigurationError.value) {
+    ElMessage.error(verificationAttackConfigurationError.value)
     return false
+  }
+  if (verificationForm.attackMode === 'ANY_UP_TO_BUDGET') {
+    validateAttackBudget(verificationForm.attackBudget)
   }
 
   isVerifying.value = true
@@ -9443,8 +9542,7 @@ const handleVerify = async (): Promise<boolean> => {
       environmentVariables: environmentVariables.value,
       rules: rules.value,
       specifications: specifications.value,
-      isAttack: verificationForm.isAttack,
-      attackBudget: requestAttackBudget,
+      attackScenario: buildRunAttackScenario(verificationForm),
       enablePrivacy: verificationForm.enablePrivacy
     })
     const submission: RunSubmission<VerificationRequest> = {
@@ -9721,7 +9819,9 @@ const runSimulation = async () => {
 const handleSimulate = async (simConfig: {
   steps: number
   isAttack: boolean
+  attackMode: AttackScenarioMode
   attackBudget: number
+  selectedAttackPointKeys: string[]
   enablePrivacy: boolean
   isAsync: boolean
   saveToHistory?: boolean
@@ -9743,12 +9843,15 @@ const handleSimulate = async (simConfig: {
   }
   const normalizedSimConfig = { ...simConfig }
   let requestSteps = 10
-  let requestAttackBudget = 0
   try {
     requestSteps = validateSimulationSteps(normalizedSimConfig.steps)
-    requestAttackBudget = normalizedSimConfig.isAttack ? validateAttackBudget(normalizedSimConfig.attackBudget) : 0
   } catch (error: any) {
     ElMessage.error(error?.message || t('app.simulationFailed'))
+    return false
+  }
+  const simulationScenarioError = attackConfigurationError(normalizedSimConfig, false)
+  if (simulationScenarioError) {
+    ElMessage.error(simulationScenarioError)
     return false
   }
 
@@ -9772,8 +9875,7 @@ const handleSimulate = async (simConfig: {
       environmentVariables: environmentVariables.value,
       rules: rules.value,
       steps: requestSteps,
-      isAttack: normalizedSimConfig.isAttack,
-      attackBudget: requestAttackBudget,
+      attackScenario: buildRunAttackScenario(normalizedSimConfig),
       enablePrivacy: normalizedSimConfig.enablePrivacy
     })
     const submission: RunSubmission<SimulationRequest> = {
@@ -10311,6 +10413,37 @@ const traceModelSemanticsConsistent = computed(() => isModelSemanticsConsistent(
   activeTraceContext.value
 ))
 
+const attackPointDisplay = (semantics: ModelSemantics | null | undefined): string =>
+  (semantics?.selectedAttackPoints || [])
+    .map(point => point.displayLabel?.trim() || (point.kind === 'DEVICE'
+      ? t('app.attackDevicePoint', { id: point.deviceId })
+      : t('app.attackAutomationLinkPoint', { id: point.ruleId })))
+    .join(', ')
+
+const attackSelectionSummary = (
+  semantics: ModelSemantics | null | undefined,
+  attackBudget: number | null | undefined,
+  detailed = false
+): string => {
+  if (semantics?.attackSelectionPolicy === 'EXACT_ATTACK_POINTS') {
+    const points = attackPointDisplay(semantics)
+    return detailed
+      ? t('app.attackExactSelectionDetail', {
+          count: semantics.selectedAttackPoints?.length ?? 0,
+          points
+        })
+      : t('app.attackExactSelectionShort', {
+          count: semantics.selectedAttackPoints?.length ?? 0
+        })
+  }
+  return detailed
+    ? t('app.attackExhaustiveSelectionDetail', {
+        count: attackBudget ?? 0,
+        total: semantics?.modeledAttackPointCount ?? 0
+      })
+    : t('app.attackExhaustiveSelectionShort', { count: attackBudget ?? 0 })
+}
+
 const counterexampleTraceHelpText = computed(() => {
   if (activeFuzzingFinding.value) {
     return [
@@ -10330,13 +10463,7 @@ const counterexampleTraceHelpText = computed(() => {
   }
 
   details.push(context.isAttack
-    ? t('app.traceVisualization.simulationAttackContext', {
-        count: context.attackBudget,
-        total: currentTrace.value?.modelSemantics?.modeledAttackPointCount ?? 0,
-        devices: currentTrace.value?.modelSemantics?.modeledDeviceAttackPointCount ?? 0,
-        falsifiable: currentTrace.value?.modelSemantics?.modeledFalsifiableReadingDeviceCount ?? 0,
-        links: currentTrace.value?.modelSemantics?.modeledAutomationLinkAttackPointCount ?? 0
-      })
+    ? attackSelectionSummary(currentTrace.value?.modelSemantics, context.attackBudget, true)
     : t('app.traceVisualization.simulationNoAttackContext'))
   details.push(context.enablePrivacy
     ? t('app.traceVisualization.privacyPropagationEnabled')
@@ -10608,7 +10735,7 @@ const closeResultDialog = () => {
           >
             <span class="inline-flex min-w-0 items-center gap-1.5">
               <span class="material-symbols-outlined text-sm text-orange-500" aria-hidden="true">tune</span>
-              {{ t('app.initialValues') }}
+              {{ t('app.advancedInitialValuesOverrides') }}
             </span>
             <span class="material-symbols-outlined text-sm text-slate-400" aria-hidden="true">expand_more</span>
           </summary>
@@ -10636,6 +10763,7 @@ const closeResultDialog = () => {
                 data-testid="template-instance-state-trust"
                 class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
               >
+                <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStateTrust(templateInstanceDialogData.template, templateInstanceRuntime.state) || 'trusted'}`) }) }}</option>
                 <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
               </select>
             </label>
@@ -10647,6 +10775,7 @@ const closeResultDialog = () => {
                 data-testid="template-instance-state-privacy"
                 class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-orange-500/20"
               >
+                <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStatePrivacy(templateInstanceDialogData.template, templateInstanceRuntime.state) || 'public'}`) }) }}</option>
                 <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
               </select>
             </label>
@@ -10694,6 +10823,7 @@ const closeResultDialog = () => {
                     :data-testid="`template-instance-variable-trust-${variable.Name}`"
                     class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Trust || 'trusted'}`) }) }}</option>
                     <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
                   </select>
                 </label>
@@ -10705,6 +10835,7 @@ const closeResultDialog = () => {
                     :data-testid="`template-instance-privacy-${variable.Name}`"
                     class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   >
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Privacy || 'public'}`) }) }}</option>
                     <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
                   </select>
                 </label>
@@ -11549,7 +11680,7 @@ const closeResultDialog = () => {
             data-testid="verification-attack-toggle"
             :disabled="isVerifying || (!verificationForm.isAttack && !hasModeledAttackEffect)"
             :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
-            @click="verificationForm.isAttack = !verificationForm.isAttack"
+            @click="setVerificationAttackEnabled(!verificationForm.isAttack)"
             class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             :class="verificationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
           >
@@ -11571,8 +11702,66 @@ const closeResultDialog = () => {
           </p>
         </div>
 
-        <!-- Attack budget (visible when attack is enabled) -->
-        <div v-if="verificationForm.isAttack && hasModeledAttackEffect" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
+        <div v-if="verificationForm.isAttack && hasModeledAttackEffect" class="space-y-3 border-y border-red-200/70 bg-red-50 px-3 py-3">
+          <div class="grid grid-cols-2 gap-2" role="group" :aria-label="t('app.attackSelectionMode')">
+            <button
+              type="button"
+              data-testid="verification-attack-mode-exhaustive"
+              class="min-h-9 border px-2 py-1.5 text-xs font-semibold transition"
+              :class="verificationForm.attackMode === 'ANY_UP_TO_BUDGET'
+                ? 'border-red-500 bg-red-500 text-white'
+                : 'border-red-200 bg-white text-red-700 hover:bg-red-100'"
+              :disabled="isVerifying"
+              @click="setAttackMode(verificationForm, 'ANY_UP_TO_BUDGET')"
+            >
+              {{ t('app.attackModeExhaustive') }}
+            </button>
+            <button
+              type="button"
+              data-testid="verification-attack-mode-exact"
+              class="min-h-9 border px-2 py-1.5 text-xs font-semibold transition"
+              :class="verificationForm.attackMode === 'EXACT_POINTS'
+                ? 'border-red-500 bg-red-500 text-white'
+                : 'border-red-200 bg-white text-red-700 hover:bg-red-100'"
+              :disabled="isVerifying"
+              @click="setAttackMode(verificationForm, 'EXACT_POINTS')"
+            >
+              {{ t('app.attackModeExact') }}
+            </button>
+          </div>
+
+          <p class="text-[11px] leading-4 text-red-800">
+            {{ verificationForm.attackMode === 'ANY_UP_TO_BUDGET'
+              ? t('app.verificationAttackExhaustiveHint')
+              : t('app.verificationAttackExactHint') }}
+          </p>
+
+          <div v-if="verificationForm.attackMode === 'EXACT_POINTS'" class="space-y-1.5" data-testid="verification-attack-points">
+            <label
+              v-for="point in boardAttackSurface.points"
+              :key="point.key"
+              class="flex min-h-8 items-center gap-2 border border-red-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+              :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
+            >
+              <input
+                type="checkbox"
+                :checked="verificationForm.selectedAttackPointKeys.includes(point.key)"
+                :disabled="isVerifying || !point.selectable"
+                :data-testid="`verification-attack-point-${point.key}`"
+                @change="toggleAttackPoint(verificationForm, point.key)"
+              />
+              <span class="material-symbols-outlined text-base text-red-500" aria-hidden="true">
+                {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
+              </span>
+              <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
+              <span class="shrink-0 text-[10px] font-semibold uppercase text-slate-400">
+                {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
+              </span>
+            </label>
+          </div>
+
+          <!-- Attack budget (exhaustive verification only) -->
+          <div v-if="verificationForm.attackMode === 'ANY_UP_TO_BUDGET'">
           <div class="mb-2 flex items-center justify-between gap-2">
             <label for="verification-attack-budget" class="min-w-0 text-[10px] font-bold text-red-700 uppercase tracking-wide">
               {{ t('app.attackBudgetLabel') }}:
@@ -11605,6 +11794,10 @@ const closeResultDialog = () => {
             {{ t('app.attackBudgetCappedHint', { surface: attackSurfacePointCount, limit: attackBudgetMax }) }}
           </p>
           <p v-if="verificationAttackConfigurationError" class="mt-1 text-[10px] font-semibold leading-4 text-red-700" data-testid="verification-attack-budget-invalid">
+            {{ verificationAttackConfigurationError }}
+          </p>
+          </div>
+          <p v-else-if="verificationAttackConfigurationError" class="text-[10px] font-semibold leading-4 text-red-700" data-testid="verification-attack-points-invalid">
             {{ verificationAttackConfigurationError }}
           </p>
         </div>
@@ -12007,8 +12200,8 @@ const closeResultDialog = () => {
                     <div v-if="scenarioDeviceHasStateMachine(device)" class="mt-0.5 text-[11px] text-slate-500">
                       {{ t('app.scenarioDeviceRuntime', {
                         state: device.state,
-                        trust: device.currentStateTrust ? t(`app.${device.currentStateTrust}`) : t('app.unknown'),
-                        privacy: device.currentStatePrivacy ? t(`app.${device.currentStatePrivacy}`) : t('app.unknown')
+                        trust: t(`app.${scenarioDeviceStateTrust(device)}`),
+                        privacy: t(`app.${scenarioDeviceStatePrivacy(device)}`)
                       }) }}
                     </div>
                     <div v-else class="mt-0.5 text-[11px] text-slate-500">
@@ -12016,7 +12209,7 @@ const closeResultDialog = () => {
                     </div>
                     <div v-if="device.variables?.length" class="mt-0.5 text-[11px] text-slate-500">
                       {{ t('app.scenarioLocalVariables', {
-                        values: device.variables.map(variable => `${variable.name}=${variable.value} (${variable.trust ? t(`app.${variable.trust}`) : t('app.unknown')})`).join('，')
+                        values: device.variables.map(variable => `${variable.name}=${variable.value} (${t(`app.${scenarioDeviceVariableTrust(device, variable)}`)})`).join('，')
                       }) }}
                     </div>
                     <div v-if="device.privacies?.length" class="mt-0.5 text-[11px] text-slate-500">
@@ -13110,7 +13303,7 @@ const closeResultDialog = () => {
               data-testid="simulation-attack-toggle"
               :disabled="isSimulating || (!simulationForm.isAttack && !hasModeledAttackEffect)"
               :title="!hasModeledAttackEffect ? t('app.attackNoModeledEffect') : undefined"
-              @click="simulationForm.isAttack = !simulationForm.isAttack"
+              @click="setSimulationAttackEnabled(!simulationForm.isAttack)"
               class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60"
               :class="simulationForm.isAttack ? 'bg-red-500' : 'bg-slate-300'"
             >
@@ -13132,40 +13325,32 @@ const closeResultDialog = () => {
           </p>
         </div>
 
-        <!-- Attack budget (visible when attack is enabled) -->
-        <div v-if="simulationForm.isAttack && hasModeledAttackEffect" class="p-3 bg-red-50 rounded-xl border border-red-200/60">
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <label for="simulation-attack-budget" class="min-w-0 text-[10px] font-bold text-red-700 uppercase tracking-wide">
-              {{ t('app.attackBudgetLabel') }}:
-              <span class="text-red-500">{{ simulationForm.attackBudget }} / {{ attackBudgetMax }}</span>
+        <div v-if="simulationForm.isAttack && hasModeledAttackEffect" class="space-y-2 border-y border-red-200/70 bg-red-50 px-3 py-3">
+          <p class="text-[11px] leading-4 text-red-800">{{ t('app.simulationAttackExactHint') }}</p>
+          <div class="space-y-1.5" data-testid="simulation-attack-points">
+            <label
+              v-for="point in boardAttackSurface.points"
+              :key="point.key"
+              class="flex min-h-8 items-center gap-2 border border-red-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+              :class="!point.selectable ? 'opacity-55' : 'cursor-pointer'"
+            >
+              <input
+                type="checkbox"
+                :checked="simulationForm.selectedAttackPointKeys.includes(point.key)"
+                :disabled="isSimulating || !point.selectable"
+                :data-testid="`simulation-attack-point-${point.key}`"
+                @change="toggleAttackPoint(simulationForm, point.key)"
+              />
+              <span class="material-symbols-outlined text-base text-red-500" aria-hidden="true">
+                {{ point.kind === 'DEVICE' ? 'memory' : 'conversion_path' }}
+              </span>
+              <span class="min-w-0 flex-1 break-words">{{ point.label }}</span>
+              <span class="shrink-0 text-[10px] font-semibold uppercase text-slate-400">
+                {{ point.kind === 'DEVICE' ? t('app.device') : t('app.automationLink') }}
+              </span>
             </label>
-            <InfoTooltip
-              :text="t('app.simulationAttackBudgetHint', { limit: attackBudgetMax, surface: attackSurfacePointCount })"
-              :label="t('app.showHelpFor', { topic: t('app.attackBudgetLabel') })"
-              placement="left"
-              tone="danger"
-              test-id="simulation-attack-budget-help"
-            />
           </div>
-          <input
-            id="simulation-attack-budget"
-            v-model.number="simulationForm.attackBudget"
-            data-testid="simulation-attack-budget"
-            :disabled="isSimulating"
-            type="range"
-            min="1"
-            :max="attackBudgetMax"
-            :aria-invalid="Boolean(simulationAttackConfigurationError)"
-            class="w-full h-2 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <div class="flex justify-between text-[10px] text-red-400 mt-1">
-            <span>1</span>
-            <span>{{ attackBudgetMax }}</span>
-          </div>
-          <p v-if="attackBudgetIsCapped" class="mt-1 text-[10px] font-semibold leading-4 text-amber-700" data-testid="simulation-attack-budget-cap">
-            {{ t('app.attackBudgetCappedHint', { surface: attackSurfacePointCount, limit: attackBudgetMax }) }}
-          </p>
-          <p v-if="simulationAttackConfigurationError" class="mt-1 text-[10px] font-semibold leading-4 text-red-700" data-testid="simulation-attack-budget-invalid">
+          <p v-if="simulationAttackConfigurationError" class="text-[10px] font-semibold leading-4 text-red-700" data-testid="simulation-attack-points-invalid">
             {{ simulationAttackConfigurationError }}
           </p>
         </div>
@@ -13656,7 +13841,7 @@ const closeResultDialog = () => {
             <h4 id="simulation-run-summary-title" class="text-sm font-bold text-slate-800">{{ t('app.runSummary') }}</h4>
             <div class="flex flex-wrap justify-end gap-1.5">
               <span v-if="simulationResult.isAttack" class="rounded-full bg-orange-100 px-2 py-1 text-[11px] font-semibold text-orange-700">
-                {{ t('app.traceVisualization.attackBudget') }} {{ simulationResult.attackBudget ?? 0 }}
+                {{ attackSelectionSummary(simulationResult.modelSemantics, simulationResult.attackBudget) }}
               </span>
               <span v-else class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
                 {{ t('app.traceVisualization.noAttackModelShort') }}
@@ -13911,13 +14096,10 @@ const closeResultDialog = () => {
                 <span class="material-symbols-outlined text-base" :class="verificationResult.isAttack ? 'text-red-500' : 'text-slate-400'">security</span>
                 <span>
                   {{ verificationResult.isAttack
-                    ? t('app.verificationAttackCoverage', {
-                        count: verificationResult.attackBudget ?? 0,
-                        total: verificationResult.modelSemantics?.modeledAttackPointCount ?? 0,
-                        devices: verificationResult.modelSemantics?.modeledDeviceAttackPointCount ?? 0,
-                        falsifiable: verificationResult.modelSemantics?.modeledFalsifiableReadingDeviceCount ?? 0,
-                        links: verificationResult.modelSemantics?.modeledAutomationLinkAttackPointCount ?? 0
-                      })
+                    ? attackSelectionSummary(
+                        verificationResult.modelSemantics,
+                        verificationResult.attackBudget,
+                        true)
                     : t('app.verificationNoAttackCoverage') }}
                 </span>
               </div>
@@ -14195,7 +14377,7 @@ const closeResultDialog = () => {
               {{ t('app.traceVisualization.attack') }}
             </span>
             <span v-if="!activeFuzzingFinding && activeTraceContext.isAttack" class="px-2 py-0.5 bg-orange-100 text-orange-600 text-xs rounded-full">
-              {{ t('app.traceVisualization.attackBudget') }}: {{ activeTraceContext.attackBudget }}
+              {{ attackSelectionSummary(currentTrace?.modelSemantics, activeTraceContext.attackBudget) }}
             </span>
             <span v-if="currentTraceCompromisedPointCount !== null" class="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">
               {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ currentTraceCompromisedPointCount }}

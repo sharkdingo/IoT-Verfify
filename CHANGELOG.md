@@ -18,6 +18,17 @@ history into a technical spec. The spec content itself now lives under
 ### 2026-07-18
 
 #### Changed
+- Separated persistent trust labels from per-run attack selection. Device templates now
+  remain the default trust/privacy authority, ordinary device creation omits instance
+  label overrides, and users can override or restore template defaults only from
+  advanced device settings.
+- Replaced the verification/simulation attack switch with structured run scenarios.
+  Verification can either fix explicit device/rule-link points or exhaust every
+  combination up to a budget; simulation requires explicit points and no longer chooses
+  compromised points randomly. Results and histories persist and display the exact
+  selection policy and selected points.
+- Updated `verify_model*` and `simulate_model*` AI tools to use `attackMode`,
+  `attackPoints`, and verification-only `attackBudget`, matching the Board workflow.
 - Expanded the shared AI recommendation capability view with explicit per-mode values,
   API triggers, and behavior-derived descriptions for otherwise blank manifests,
   states, variables, transitions, APIs, and content. Each description now identifies

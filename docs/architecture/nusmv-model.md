@@ -32,19 +32,19 @@ VerificationRequestDto / SimulationRequestDto
   -> DeviceSmvDataFactory (rebuild normalized runtime data from the same manifests)
   -> SmvModelValidator (template/model invariants)
   -> SmvDeviceModuleBuilder (one module per distinct device-module shape)
-  -> SmvMainModuleBuilder (instances, environment, rules, labels, attack budget)
+  -> SmvMainModuleBuilder (instances, environment, rules, labels, attack scenario)
   -> SmvSpecificationBuilder (CTL/LTL generated from structured conditions)
   -> model.smv
   -> NuSMV 2.6-2.7
   -> structured result, generation issues, and optional trace
 ```
 
-Every generator entry treats `attackBudget` as exact rather than clamping it. Values
-outside `0..50` fail; attack modeling requires `1..50`, while a non-attack run requires
-`0`. User-facing services additionally validate non-empty devices and
-`attackBudget <= behavior-changing device points + submitted rule links` when attack
-modeling is enabled. The value `50` is a per-run checker input cap, not an attack-surface
-count. For larger scenes, clients must show both the full
+Every generator entry receives a structured per-run attack scenario. `NONE` disables
+attack choices. `EXACT_POINTS` fixes each modeled device/link flag to `TRUE` or `FALSE`.
+`ANY_UP_TO_BUDGET` keeps flags nondeterministic and constrains their total to a validated
+`1..50` upper bound. The budget is never clamped and cannot exceed the behavior-changing
+device points plus submitted rule links. The value `50` is a per-run checker input cap,
+not an attack-surface count. For larger scenes, clients must show both the full
 `modelSemantics.modeledAttackPointCount` and the 50-point run cap; a run at the cap does
 not cover branches with more than 50 simultaneous compromises.
 
@@ -156,7 +156,8 @@ Sections 3.3, 3.4, and 4.3:
 - a target becomes untrusted only when all trigger sources are untrusted; one trusted
   source means the user retains a trusted control path under MEDIC Definition 3.3;
 - private data propagates when any trigger source is private;
-- the attack threshold is an upper bound, not an exact number of compromised points.
+- exhaustive verification uses an upper-bound threshold; exact runs use only their
+  explicitly selected points.
 
 A device instance is one budget point only when compromise can change this generated
 model: it has a template-declared falsifiable reading and/or is the target of at least
@@ -171,8 +172,9 @@ attack-budget points.
 
 ### Attack selection and budget
 
-When `isAttack=true`, every behavior-changing device point receives an internal frozen
-`is_attack` choice and every submitted rule receives a frozen automation-link choice.
+When attack modeling is enabled, every behavior-changing device point receives an
+internal frozen `is_attack` flag and every submitted rule receives a frozen
+automation-link flag.
 Device modules with no modeled compromise effect receive no attack flag. The main module
 derives the total selected in that branch and constrains it:
 
@@ -183,18 +185,19 @@ FROZENVAR
 INVAR iot_verify_compromised_point_count <= ATTACK_BUDGET;
 
 ASSIGN
-    init(iot_verify_automation_link_compromised_0) := {TRUE, FALSE};
+    init(iot_verify_automation_link_compromised_0) := {TRUE, FALSE}; -- exhaustive mode
     init(iot_verify_compromised_point_count) :=
         0 + toint(device_1.is_attack) + toint(device_2.is_attack)
           + toint(iot_verify_automation_link_compromised_0);
 ```
 
-These names are diagnostics, not API input. Because each `is_attack` is
-nondeterministic and the invariant uses `<=`, a budget of `N` represents every modeled
-selection from zero through `N` compromised points. Service, AI, and direct generator
-requests all require `N >= 1` when attack modeling is enabled; the contradictory
-`isAttack=true, attackBudget=0` combination is rejected instead of generating inert
-attack machinery.
+These names are diagnostics, not API input. In `ANY_UP_TO_BUDGET`, each flag is
+nondeterministic and the invariant uses `<=`, so budget `N` represents every modeled
+selection from zero through `N` compromised points. In `EXACT_POINTS`, selected flags
+initialize to `TRUE`, all other modeled flags initialize to `FALSE`, and no budget
+invariant changes that fixed selection. Automation-link exact selection uses the
+persisted submitted `ruleId`, so automatic-fix reverification reuses the same link even
+if generated list positions change.
 One verification call does not search for or report the smallest budget that can cause
 a violation. Users comparing minimum compromise resistance must rerun verification with
 different upper bounds and compare the first violating complete result.
@@ -203,7 +206,8 @@ The response makes this machine-readable:
 
 ```text
 attackPointUnit = BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK
-attackSelectionPolicy = UP_TO_ATTACK_BUDGET_NONDETERMINISTIC
+attackSelectionPolicy = EXACT_ATTACK_POINTS | UP_TO_ATTACK_BUDGET_NONDETERMINISTIC
+selectedAttackPoints = [...stable ids plus frozen display labels, only for exact mode...]
 attackEffects = [
   ...only effects present in this scene...
 ]
@@ -223,11 +227,11 @@ The four counts are computed from canonical device instance semantics, then pers
 asynchronous task context and saved verification/simulation traces. Historical results
 therefore remain interpretable after the board changes and are not reconstructed from raw
 request collection lengths or template aliases. With
-`isAttack=false`, `attackSelectionPolicy=NOT_MODELED` and `attackEffects=[]`; the snapshot
+attack mode `NONE`, `attackSelectionPolicy=NOT_MODELED` and `attackEffects=[]`; the snapshot
 counts still describe the run's potential behavior-changing attack surface while the
 effective budget is zero.
 
-The service rejects `isAttack=true` when the scene has no automation rule and none of its
+The service rejects an enabled attack scenario when the scene has no automation rule and none of its
 template variables is marked `FalsifiableWhenCompromised=true`. Every attack flag would
 otherwise be behaviorally inert, so accepting the request would present a no-op run as
 attack analysis. In a larger valid run, those inert device instances are likewise
@@ -266,6 +270,14 @@ Trust is always modeled. Privacy propagation is modeled only when
 `enablePrivacy=true`; a privacy specification forces the effective flag on at both the
 UI and service boundaries. Results return that effective value, so a caller that submits
 `false` cannot mistake the run for one that omitted privacy propagation.
+
+Template declarations are the default label authority. A state's initial trust/privacy
+comes from its matching `WorkingStates[]` entry, and a variable's label comes from its
+`InternalVariables[]` entry. Device runtime fields override only the current state or
+named variable when explicitly supplied; omitted fields do not materialize a copied
+instance value. Shared Environment Pool entries similarly fall back to their active
+template domain labels when an override is absent. Trust labels describe provenance and
+propagation; `untrusted` does not mean the device is selected as compromised.
 
 Default source labels follow MEDIC's origin semantics rather than a generic sensor
 reliability score. Built-in schedule/date values, inbound email, car/mobile location,

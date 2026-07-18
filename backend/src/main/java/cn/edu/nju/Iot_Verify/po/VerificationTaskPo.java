@@ -80,6 +80,10 @@ public class VerificationTaskPo implements TaskView {
     @JsonIgnore
     private String modelSnapshotJson;
 
+    @Column(name = "model_semantics_json", columnDefinition = "TEXT")
+    @JsonIgnore
+    private String modelSemanticsJson;
+
     @Enumerated(EnumType.STRING)
     private VerificationOutcome outcome;
 

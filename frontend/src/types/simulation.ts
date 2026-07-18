@@ -5,6 +5,7 @@ import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { ModelGenerationIssue, TraceTriggeredRule } from './verify'
 import type { RunPersistence } from './runPersistence'
+import type { AttackScenario } from './attackScenario'
 
 // 模拟请求 DTO
 export interface SimulationRequest {
@@ -12,8 +13,7 @@ export interface SimulationRequest {
   environmentVariables: ModelEnvironmentVariable[]
   rules: ModelRule[]
   steps: number
-  isAttack: boolean
-  attackBudget: number
+  attackScenario: AttackScenario
   enablePrivacy: boolean
 }
 

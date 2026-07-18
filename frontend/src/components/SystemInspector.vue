@@ -801,7 +801,10 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                     @change="updateEnvironmentVariable(variable.name, { value: eventValue($event) })"
                   />
                 </label>
-                <div class="grid grid-cols-2 gap-1.5">
+                <details class="rounded-md border border-slate-200 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/60">
+                  <summary class="cursor-pointer text-[10px] font-bold text-slate-500">{{ t('app.advancedTrustPrivacyOverrides') }}</summary>
+                  <p class="mt-1 text-[10px] leading-4 text-slate-400">{{ t('app.environmentTrustOverrideHint') }}</p>
+                  <div class="mt-1.5 grid grid-cols-2 gap-1.5">
                   <label class="min-w-0 rounded-md bg-slate-50 p-1.5 dark:bg-slate-800">
                     <span class="block font-bold uppercase text-slate-400">{{ t('app.trust') }}</span>
                     <select
@@ -828,7 +831,8 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
                       <option value="private">{{ t('app.private') }}</option>
                     </select>
                   </label>
-                </div>
+                  </div>
+                </details>
               </div>
 
               <div class="flex flex-wrap gap-1">

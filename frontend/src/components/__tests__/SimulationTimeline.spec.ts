@@ -23,6 +23,12 @@ const i18n = createI18n({
         modelSemanticsUnavailable: 'Model semantics unavailable',
         environmentEvolutionIncluded: 'Shared environment evolution and local stutter semantics',
         labelPropagationScopeSummary: 'Labels propagate only on automation commands',
+        attackExactSelectionShort: '{count} explicit points',
+        attackExhaustiveSelectionShort: 'Exhaustive up to {count} points',
+        attackExactSelectionDetail: 'Explicit points ({count}): {points}',
+        attackExhaustiveSelectionDetail: 'Exhaustive up to {count} of {total} points',
+        attackDevicePoint: 'device {id}',
+        attackAutomationLinkPoint: 'rule link #{id}',
         modelRunSnapshotTitle: 'Frozen Submission Snapshot',
         modelRunSnapshotSummary: 'Captured {time}: {devices} devices, {rules} rules, {specs} specs, {variables} variables, {templates} templates',
         runBoardInputUnchanged: 'Current input matches',
@@ -250,7 +256,7 @@ describe('SimulationTimeline', () => {
       global: { plugins: [i18n] }
     })
 
-    expect(wrapper.text()).toContain('Attack budget 2 of 5 (3 devices + 2 links)')
+    expect(wrapper.text()).toContain('Exhaustive up to 2 of 5 points')
     expect(wrapper.text()).toContain('Labels propagate only on automation commands')
     expect(wrapper.text()).not.toContain('Model semantics unavailable')
   })

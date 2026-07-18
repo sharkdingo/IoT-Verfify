@@ -8,7 +8,6 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceMutationResultDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceRuntimeConfigDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
-import cn.edu.nju.Iot_Verify.dto.device.PrivacyStateDto;
 import cn.edu.nju.Iot_Verify.dto.device.VariableStateDto;
 import cn.edu.nju.Iot_Verify.po.DeviceTemplatePo;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
@@ -255,30 +254,16 @@ public class NodeServiceImpl implements NodeService {
                 && manifest.getModes() != null && !manifest.getModes().isEmpty()
                 && manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
         if (hasStateMachine) {
-            DeviceManifest.WorkingState workingState = manifest.getWorkingStates().stream()
-                    .filter(item -> item != null && item.getName() != null
-                            && item.getName().trim().equalsIgnoreCase(state))
-                    .findFirst()
-                    .orElse(null);
-            String defaultTrust = workingState != null ? normalizeTrust(workingState.getTrust()) : "trusted";
-            String defaultPrivacy = workingState != null ? normalizePrivacy(workingState.getPrivacy()) : "public";
             result.setCurrentStateTrust(requested != null && normalizeOptionalValue(requested.getCurrentStateTrust()) != null
-                    ? requested.getCurrentStateTrust().trim().toLowerCase(Locale.ROOT) : defaultTrust);
+                    ? requested.getCurrentStateTrust().trim().toLowerCase(Locale.ROOT) : null);
             result.setCurrentStatePrivacy(requested != null && normalizeOptionalValue(requested.getCurrentStatePrivacy()) != null
-                    ? requested.getCurrentStatePrivacy().trim().toLowerCase(Locale.ROOT) : defaultPrivacy);
-            if (requested == null || normalizeOptionalValue(requested.getCurrentStateTrust()) == null) {
-                defaultsApplied.add("currentStateTrust");
-            }
-            if (requested == null || normalizeOptionalValue(requested.getCurrentStatePrivacy()) == null) {
-                defaultsApplied.add("currentStatePrivacy");
-            }
+                    ? requested.getCurrentStatePrivacy().trim().toLowerCase(Locale.ROOT) : null);
         } else {
             result.setCurrentStateTrust(requested != null ? requested.getCurrentStateTrust() : null);
             result.setCurrentStatePrivacy(requested != null ? requested.getCurrentStatePrivacy() : null);
         }
 
         List<VariableStateDto> defaultVariables = defaultLocalVariables(manifest);
-        List<PrivacyStateDto> defaultPrivacies = defaultLocalPrivacies(manifest);
         if (requested != null && requested.getVariables() != null) {
             result.setVariables(mergeLocalVariables(
                     requested.getVariables(), defaultVariables, defaultsApplied));
@@ -286,13 +271,8 @@ public class NodeServiceImpl implements NodeService {
             result.setVariables(defaultVariables);
             defaultsApplied.add("variables");
         }
-        if (requested != null && requested.getPrivacies() != null) {
-            result.setPrivacies(mergeLocalPrivacies(
-                    requested.getPrivacies(), defaultPrivacies, defaultsApplied));
-        } else if (!defaultPrivacies.isEmpty()) {
-            result.setPrivacies(defaultPrivacies);
-            defaultsApplied.add("privacies");
-        }
+        result.setPrivacies(requested != null && requested.getPrivacies() != null
+                ? new ArrayList<>(requested.getPrivacies()) : null);
         return result;
     }
 
@@ -316,55 +296,14 @@ public class NodeServiceImpl implements NodeService {
             supplied.add(key);
             VariableStateDto fallback = defaultsByName.get(key);
             String trust = normalizeOptionalValue(value.getTrust()) != null
-                    ? value.getTrust().trim().toLowerCase(Locale.ROOT)
-                    : fallback == null ? value.getTrust() : fallback.getTrust();
+                    ? value.getTrust().trim().toLowerCase(Locale.ROOT) : null;
             String name = fallback == null ? value.getName() : fallback.getName();
             result.add(new VariableStateDto(name, value.getValue(), trust));
-            if (fallback != null && normalizeOptionalValue(value.getTrust()) == null) {
-                defaultsApplied.add("variables." + fallback.getName() + ".trust");
-            }
         }
         for (Map.Entry<String, VariableStateDto> entry : defaultsByName.entrySet()) {
             if (!supplied.contains(entry.getKey())) {
                 result.add(entry.getValue());
                 defaultsApplied.add("variables." + entry.getValue().getName());
-            }
-        }
-        return result;
-    }
-
-    private List<PrivacyStateDto> mergeLocalPrivacies(List<PrivacyStateDto> requested,
-                                                      List<PrivacyStateDto> defaults,
-                                                      List<String> defaultsApplied) {
-        Map<String, PrivacyStateDto> defaultsByName = new LinkedHashMap<>();
-        for (PrivacyStateDto value : defaults) {
-            if (value != null && value.getName() != null) {
-                defaultsByName.put(value.getName().toLowerCase(Locale.ROOT), value);
-            }
-        }
-        Set<String> supplied = new HashSet<>();
-        List<PrivacyStateDto> result = new ArrayList<>();
-        for (PrivacyStateDto value : requested) {
-            if (value == null || value.getName() == null) {
-                result.add(value);
-                continue;
-            }
-            String key = value.getName().toLowerCase(Locale.ROOT);
-            supplied.add(key);
-            PrivacyStateDto fallback = defaultsByName.get(key);
-            String privacy = normalizeOptionalValue(value.getPrivacy()) != null
-                    ? value.getPrivacy().trim().toLowerCase(Locale.ROOT)
-                    : fallback == null ? value.getPrivacy() : fallback.getPrivacy();
-            String name = fallback == null ? value.getName() : fallback.getName();
-            result.add(new PrivacyStateDto(name, privacy));
-            if (fallback != null && normalizeOptionalValue(value.getPrivacy()) == null) {
-                defaultsApplied.add("privacies." + fallback.getName() + ".privacy");
-            }
-        }
-        for (Map.Entry<String, PrivacyStateDto> entry : defaultsByName.entrySet()) {
-            if (!supplied.contains(entry.getKey())) {
-                result.add(entry.getValue());
-                defaultsApplied.add("privacies." + entry.getValue().getName());
             }
         }
         return result;
@@ -383,31 +322,10 @@ public class NodeServiceImpl implements NodeService {
                 value = String.valueOf(variable.getLowerBound());
             }
             if (value != null) {
-                result.add(new VariableStateDto(variable.getName(), value, normalizeTrust(variable.getTrust())));
+                result.add(new VariableStateDto(variable.getName(), value, null));
             }
         }
         return result;
-    }
-
-    private List<PrivacyStateDto> defaultLocalPrivacies(DeviceManifest manifest) {
-        if (manifest == null || manifest.getInternalVariables() == null) return List.of();
-        LinkedHashMap<String, PrivacyStateDto> result = new LinkedHashMap<>();
-        for (DeviceManifest.InternalVariable variable : manifest.getInternalVariables()) {
-            if (variable != null && Boolean.TRUE.equals(variable.getIsInside())
-                    && variable.getName() != null && !variable.getName().isBlank()) {
-                result.put(variable.getName(),
-                        new PrivacyStateDto(variable.getName(), normalizePrivacy(variable.getPrivacy())));
-            }
-        }
-        return new ArrayList<>(result.values());
-    }
-
-    private String normalizeTrust(String value) {
-        return "untrusted".equalsIgnoreCase(normalizeOptionalValue(value)) ? "untrusted" : "trusted";
-    }
-
-    private String normalizePrivacy(String value) {
-        return "private".equalsIgnoreCase(normalizeOptionalValue(value)) ? "private" : "public";
     }
 
     private InitialStateResolution fallbackState(String templateName) {

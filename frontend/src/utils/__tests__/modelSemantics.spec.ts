@@ -66,6 +66,36 @@ describe('isModelSemanticsConsistent', () => {
     }, { isAttack: true, attackBudget: 1, enablePrivacy: false })).toBe(false)
   })
 
+  it('validates exact selected point identities', () => {
+    const exact: ModelSemantics = {
+      ...semantics('NOT_MODELED'),
+      attackSelectionPolicy: 'EXACT_ATTACK_POINTS',
+      selectedAttackPoints: [
+        { kind: 'DEVICE', deviceId: 'sensor_1', displayLabel: 'Hall sensor' },
+        { kind: 'AUTOMATION_LINK', ruleId: 7, displayLabel: 'Turn on hall light' }
+      ]
+    }
+    expect(isModelSemanticsConsistent(
+      exact,
+      { isAttack: true, attackBudget: 2, enablePrivacy: false }
+    )).toBe(true)
+    expect(isModelSemanticsConsistent({
+      ...exact,
+      selectedAttackPoints: [
+        { kind: 'DEVICE', deviceId: 'sensor_1' },
+        { kind: 'DEVICE', deviceId: 'sensor_1' }
+      ]
+    }, { isAttack: true, attackBudget: 2, enablePrivacy: false })).toBe(false)
+    expect(isModelSemanticsConsistent({
+      ...exact,
+      selectedAttackPoints: [{ kind: 'AUTOMATION_LINK', ruleId: 0 }]
+    }, { isAttack: true, attackBudget: 1, enablePrivacy: false })).toBe(false)
+    expect(isModelSemanticsConsistent({
+      ...exact,
+      selectedAttackPoints: [{ kind: 'DEVICE', deviceId: 'sensor_1', displayLabel: ' ' }]
+    }, { isAttack: true, attackBudget: 1, enablePrivacy: false })).toBe(false)
+  })
+
   it('rejects missing or contradictory model semantics', () => {
     expect(isModelSemanticsConsistent(undefined, { isAttack: true, enablePrivacy: true })).toBe(false)
     expect(isModelSemanticsConsistent(

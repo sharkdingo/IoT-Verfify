@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
@@ -47,8 +48,9 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
     @Override
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
-        props.put("isAttack", Map.of("type", "boolean", "description", "Include compromised device-instance and automation-link behavior. A device instance is a budget point only when it has a declared falsifiable reading or is a TAP command target; each submitted TAP rule's command-delivery link is another point. Inert devices are excluded. Declared falsifiable readings may vary within their domains; once a target or automation link is selected as compromised, that command is dropped. Other device-internal transitions are not frozen. Default false."));
-        props.put("attackBudget", Map.of("type", "integer", "description", "Maximum compromised behavior-changing device-instance or automation-link points (1-50 when attack modeling is enabled, and no more than the effective attack surface returned by the model). Verification checks every modeled branch within this upper bound. Omit it or use 0 when attack modeling is disabled; a positive disabled budget is rejected. Default 1 when enabled."));
+        props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact", "exhaustive"), "description", "Per-run attack selection. Default none."));
+        props.put("attackBudget", Map.of("type", "integer", "description", "Upper bound from 1 to 50 for attackMode exhaustive."));
+        props.put("attackPoints", attackPointsSchema());
         props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track private-data labels through automation chains. Privacy conditions force this on even when false. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
@@ -65,9 +67,9 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            requireOnlyFields(args, "arguments", Set.of("isAttack", "attackBudget", "enablePrivacy"));
-            boolean isAttack = booleanArg(args, "isAttack", false);
-            int attackBudget = attackBudgetArg(args, isAttack);
+            requireOnlyFields(args, "arguments", Set.of(
+                    "attackMode", "attackBudget", "attackPoints", "enablePrivacy"));
+            AttackScenarioDto attackScenario = attackScenarioArg(args, true);
             boolean enablePrivacy = booleanArg(args, "enablePrivacy", false);
 
             ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
@@ -89,8 +91,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSpecs(specs);
-            request.setAttack(isAttack);
-            request.setAttackBudget(attackBudget);
+            request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);
 
             Long taskId = verificationService.submitVerificationWithTemplateSnapshot(
@@ -104,6 +105,7 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
             response.put("progress", task.getProgress());
             response.put("isAttack", task.getIsAttack());
             response.put("attackBudget", task.getAttackBudget());
+            response.put("attackScenario", attackScenario);
             response.put("enablePrivacy", task.getEnablePrivacy());
             response.put("modelSnapshot", task.getModelSnapshot());
             response.put("modelSemantics", task.getModelSemantics());
@@ -127,5 +129,19 @@ public class VerifyModelAsyncTool extends AbstractAiTool {
             return errorJson("Failed to start verification task.",
                     "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> attackPointsSchema() {
+        return Map.of(
+                "type", "array",
+                "description", "Required for attackMode exact. Device ids use canonical board_overview ids and are normalized at the model boundary; automation links use persisted rule ids.",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
+                                "deviceId", Map.of("type", "string"),
+                                "ruleId", Map.of("type", "integer")),
+                        "required", List.of("kind"),
+                        "additionalProperties", false));
     }
 }

@@ -131,7 +131,8 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
          + "t.modeledDeviceAttackPointCount = :devicePointCount, "
          + "t.modeledFalsifiableReadingDeviceCount = :falsifiableReadingDeviceCount, "
          + "t.modeledAutomationLinkAttackPointCount = :linkPointCount, "
-         + "t.modelSnapshotJson = :modelSnapshotJson "
+         + "t.modelSnapshotJson = :modelSnapshotJson, "
+         + "t.modelSemanticsJson = :modelSemanticsJson "
          + "WHERE t.id = :taskId")
     int updateModelContext(@Param("taskId") Long taskId,
                            @Param("isAttack") boolean isAttack,
@@ -140,5 +141,6 @@ public interface SimulationTaskRepository extends JpaRepository<SimulationTaskPo
                            @Param("devicePointCount") int devicePointCount,
                            @Param("falsifiableReadingDeviceCount") int falsifiableReadingDeviceCount,
                            @Param("linkPointCount") int linkPointCount,
-                           @Param("modelSnapshotJson") String modelSnapshotJson);
+                           @Param("modelSnapshotJson") String modelSnapshotJson,
+                           @Param("modelSemanticsJson") String modelSemanticsJson);
 }

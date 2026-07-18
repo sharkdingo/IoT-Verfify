@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeBoardAttackSurface, getAttackSelectionIssue } from '@/utils/attackSurface'
+import { analyzeBoardAttackSurface, getAttackSelectionIssue, selectedAttackPoints } from '@/utils/attackSurface'
 import type { DeviceTemplate } from '@/types/device'
 import type { DeviceNode } from '@/types/node'
 import type { RuleForm } from '@/types/rule'
@@ -50,6 +50,22 @@ describe('analyzeBoardAttackSurface', () => {
 
     expect(surface.devicePointCount).toBe(1)
     expect(surface.totalPointCount).toBe(2)
+  })
+
+  it('keeps the canvas key but sends the normalized model device id', () => {
+    const surface = analyzeBoardAttackSurface(
+      [node('device-a1b2', 'Sensor')],
+      [],
+      () => template('Sensor', true)
+    )
+
+    expect(surface.points[0]).toMatchObject({
+      key: 'DEVICE:device-a1b2',
+      deviceId: 'device_a1b2'
+    })
+    expect(selectedAttackPoints(surface, ['DEVICE:device-a1b2'])).toEqual([
+      { kind: 'DEVICE', deviceId: 'device_a1b2' }
+    ])
   })
 })
 

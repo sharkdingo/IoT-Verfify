@@ -48,6 +48,9 @@ public class TracePo {
     @Column(name = "model_snapshot_json", columnDefinition = "TEXT")
     private String modelSnapshotJson;
 
+    @Column(name = "model_semantics_json", columnDefinition = "TEXT")
+    private String modelSemanticsJson;
+
     @Column(name = "is_attack")
     private Boolean isAttack;
 

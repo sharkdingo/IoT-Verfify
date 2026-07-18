@@ -34,8 +34,8 @@ export const normalizeRuntimeValue = (value: unknown) => String(value ?? '').tri
 
 export const createDeviceRuntimeDraft = (): DeviceRuntimeDraft => ({
   state: '',
-  currentStateTrust: 'trusted',
-  currentStatePrivacy: 'public',
+  currentStateTrust: '',
+  currentStatePrivacy: '',
   variables: {},
   variableTrusts: {},
   privacies: {}
@@ -109,8 +109,8 @@ export const resetDeviceRuntimeDraft = (
 ) => {
   const states = getTemplateWorkingStates(template)
   draft.state = template?.manifest?.InitState || states[0]?.Name || ''
-  draft.currentStateTrust = findTemplateStateTrust(template, draft.state)
-  draft.currentStatePrivacy = findTemplateStatePrivacy(template, draft.state)
+  draft.currentStateTrust = ''
+  draft.currentStatePrivacy = ''
   draft.variables = {}
   draft.variableTrusts = {}
   draft.privacies = {}
@@ -118,8 +118,8 @@ export const resetDeviceRuntimeDraft = (
   getTemplateInternalVariables(template).forEach(variable => {
     const name = variable.Name
     draft.variables[name] = getTemplateVariableDefaultValue(variable)
-    draft.variableTrusts[name] = variable.Trust
-    draft.privacies[name] = variable.Privacy
+    draft.variableTrusts[name] = ''
+    draft.privacies[name] = ''
   })
 }
 
@@ -137,8 +137,8 @@ export const buildDeviceRuntimeConfig = (
     config.state = normalizeRuntimeValue(runtime.state)
     const requestedTrust = normalizeRuntimeValue(runtime.currentStateTrust).toLowerCase()
     const requestedPrivacy = normalizeRuntimeValue(runtime.currentStatePrivacy).toLowerCase()
-    config.currentStateTrust = requestedTrust || findTemplateStateTrust(template, config.state)
-    config.currentStatePrivacy = requestedPrivacy || findTemplateStatePrivacy(template, config.state)
+    if (requestedTrust) config.currentStateTrust = requestedTrust
+    if (requestedPrivacy) config.currentStatePrivacy = requestedPrivacy
   }
 
   const scopedVariables = getScopedTemplateVariables(template, options.variableScope)
@@ -149,10 +149,9 @@ export const buildDeviceRuntimeConfig = (
       const value = normalizeRuntimeValue(runtime.variables[name])
       if (!value) return null
       const requestedTrust = normalizeRuntimeValue(runtime.variableTrusts[name]).toLowerCase()
-      const trust = requestedTrust || variable.Trust
-      return { name, value, trust }
+      return { name, value, ...(requestedTrust ? { trust: requestedTrust } : {}) }
     })
-    .filter((item): item is { name: string, value: string, trust: string } => Boolean(item))
+    .filter((item): item is { name: string, value: string, trust?: string } => Boolean(item))
 
   if (variables.length > 0 || (options.includeEmptyCollections && scopedVariables.length > 0)) {
     config.variables = variables
@@ -162,9 +161,9 @@ export const buildDeviceRuntimeConfig = (
     .map(variable => {
       const name = variable.Name
       const requestedPrivacy = normalizeRuntimeValue(runtime.privacies[name]).toLowerCase()
-      const privacy = requestedPrivacy || variable.Privacy
-      return { name, privacy }
+      return requestedPrivacy ? { name, privacy: requestedPrivacy } : null
     })
+    .filter((item): item is { name: string, privacy: string } => Boolean(item))
 
   if (privacies.length > 0 || (options.includeEmptyCollections && scopedVariables.length > 0)) {
     config.privacies = privacies

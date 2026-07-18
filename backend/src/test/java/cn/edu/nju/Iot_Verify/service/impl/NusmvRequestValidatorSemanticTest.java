@@ -403,8 +403,8 @@ class NusmvRequestValidatorSemanticTest {
         NusmvRequestValidator.validateAttackHasModeledEffect(
                 true, List.of(), Map.of("sensor_1", smv()), errors);
 
-        assertTrue(errors.get("isAttack").contains("would not change this model"));
-        assertTrue(errors.get("isAttack").contains("FalsifiableWhenCompromised"));
+        assertTrue(errors.get("attackScenario").contains("would not change this model"));
+        assertTrue(errors.get("attackScenario").contains("FalsifiableWhenCompromised"));
     }
 
     @Test

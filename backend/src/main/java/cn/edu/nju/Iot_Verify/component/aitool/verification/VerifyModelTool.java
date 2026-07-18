@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -55,14 +56,14 @@ public class VerifyModelTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new HashMap<>();
 
-        props.put("isAttack", Map.of(
-                "type", "boolean",
-                "description", "Include compromised device-instance and automation-link behavior. A device instance is a budget point only when it has a declared falsifiable reading or is a TAP command target; each submitted TAP rule's command-delivery link is another point. Inert devices are excluded. Declared falsifiable readings may vary within their domains; once a target or automation link is selected as compromised, that command is dropped. Other device-internal transitions are not frozen. Default false."
-        ));
+        props.put("attackMode", Map.of(
+                "type", "string", "enum", List.of("none", "exact", "exhaustive"),
+                "description", "Per-run attack selection: none, exact user-selected points, or exhaustive verification of every combination up to attackBudget. Default none."));
         props.put("attackBudget", Map.of(
                 "type", "integer",
-                "description", "Maximum compromised behavior-changing device-instance or automation-link points (1-50 when attack modeling is enabled, and no more than the effective attack surface returned by the model). Verification checks every modeled branch within this upper bound. Omit it or use 0 when attack modeling is disabled; a positive disabled budget is rejected. Default 1 when enabled."
+                "description", "Upper bound from 1 to 50 for attackMode exhaustive. Omit it for none or exact."
         ));
+        props.put("attackPoints", attackPointsSchema());
         props.put("enablePrivacy", Map.of(
                 "type", "boolean",
                 "description", "Track private-data labels through automation chains. Privacy conditions force this on even when false. This models label propagation, not access control or encryption. Default false."
@@ -88,9 +89,9 @@ public class VerifyModelTool extends AbstractAiTool {
             } catch (ArgParseException e) {
                 return e.getErrorResponse();
             }
-            requireOnlyFields(args, "arguments", Set.of("isAttack", "attackBudget", "enablePrivacy"));
-            boolean isAttack = booleanArg(args, "isAttack", false);
-            int attackBudget = attackBudgetArg(args, isAttack);
+            requireOnlyFields(args, "arguments", Set.of(
+                    "attackMode", "attackBudget", "attackPoints", "enablePrivacy"));
+            AttackScenarioDto attackScenario = attackScenarioArg(args, true);
             boolean enablePrivacy = booleanArg(args, "enablePrivacy", false);
 
             ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
@@ -107,16 +108,16 @@ public class VerifyModelTool extends AbstractAiTool {
                         "VALIDATION_ERROR", 400);
             }
 
-            log.info("Executing verify_model: {} devices, {} rules, {} specs, attack={}, attackBudget={}, privacy={}",
-                    devices.size(), rules.size(), specs.size(), isAttack, attackBudget, enablePrivacy);
+            log.info("Executing verify_model: {} devices, {} rules, {} specs, attackMode={}, attackBudget={}, privacy={}",
+                    devices.size(), rules.size(), specs.size(), attackScenario.getMode(),
+                    attackScenario.effectiveBudget(), enablePrivacy);
 
             VerificationRequestDto request = new VerificationRequestDto();
             request.setDevices(devices);
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSpecs(specs);
-            request.setAttack(isAttack);
-            request.setAttackBudget(attackBudget);
+            request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);
 
             VerificationResultDto result = verificationService.verifyWithTemplateSnapshot(
@@ -134,6 +135,7 @@ public class VerifyModelTool extends AbstractAiTool {
             summary.put("generationIssues", result.getGenerationIssues());
             summary.put("isAttack", Boolean.TRUE.equals(result.getIsAttack()));
             summary.put("attackBudget", result.getAttackBudget());
+            summary.put("attackScenario", attackScenario);
             summary.put("enablePrivacy", result.isEnablePrivacy());
             summary.put("modelSemantics", result.getModelSemantics());
             summary.put("modelSnapshot", result.getModelSnapshot());
@@ -189,6 +191,20 @@ public class VerifyModelTool extends AbstractAiTool {
             log.error("verify_model failed", e);
             return errorJson("Verification failed.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> attackPointsSchema() {
+        return Map.of(
+                "type", "array",
+                "description", "Required only for attackMode exact. Device ids use the canonical ids returned by board_overview and are normalized at the model boundary; automation links use persisted rule ids.",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
+                                "deviceId", Map.of("type", "string"),
+                                "ruleId", Map.of("type", "integer")),
+                        "required", List.of("kind"),
+                        "additionalProperties", false));
     }
 
     private int countFailedSpecs(VerificationResultDto result) {

@@ -13,6 +13,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
@@ -214,7 +215,13 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         if (request == null) {
             throw new ValidationException("request", "Simulation request cannot be null");
         }
-        SimulationRequestDto snapshot = snapshotRequest(request);
+        if (request.getAttackScenario() != null && request.hasLegacyAttackFields()) {
+            throw new ValidationException("attackScenario",
+                    "Use attackScenario only; it cannot be combined with legacy isAttack/attackBudget fields");
+        }
+        AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForSimulation(
+                request.resolvedAttackScenario());
+        SimulationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
                 snapshot.getDevices(), "devices", "Devices list cannot be empty");
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
@@ -224,25 +231,13 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         if (steps < 1 || steps > 100) {
             throw new ValidationException("steps", "Steps must be between 1 and 100");
         }
-        int attackBudget = snapshot.getAttackBudget();
-        if (attackBudget < 0 || attackBudget > 50) {
-            throw new ValidationException("attackBudget", "Attack budget must be between 0 and 50");
-        }
-        if (snapshot.isAttack() && attackBudget < 1) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget must be at least 1 when attack modeling is enabled");
-        }
-        if (!snapshot.isAttack() && attackBudget != 0) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget must be 0 when attack modeling is disabled");
-        }
-        int effectiveAttackBudget = snapshot.isAttack() ? attackBudget : 0;
+        int effectiveAttackBudget = attackScenario.effectiveBudget();
 
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
         snapshot.setEnvironmentVariables(environmentVariables);
         snapshot.setSteps(steps);
-        snapshot.setAttackBudget(effectiveAttackBudget);
+        snapshot.setAttackScenario(attackScenario);
 
         Map<String, String> errors = NusmvRequestValidator.newErrors();
         NusmvRequestValidator.validateDevices(devices, errors);
@@ -254,16 +249,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         NusmvRequestValidator.throwIfErrors(errors);
 
         AttackSurface attackSurface = modelInput.attackSurface();
-        if (snapshot.isAttack() && attackBudget > attackSurface.totalCount()) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget cannot exceed the behavior-changing device and automation-link points ("
-                            + attackSurface.totalCount() + ")");
-        }
+        AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
         return new SimulationInput(modelInput.devices(), rules, steps, snapshot.isAttack(), effectiveAttackBudget,
                 snapshot.isEnablePrivacy(), attackSurface.deviceCount(), attackSurface.automationLinkCount(),
-                attackSurface.falsifiableReadingDeviceCount(), snapshot, modelInput.deviceSmvMap(),
-                modelInput.templateManifests(), modelInput.modelSnapshot());
+                attackSurface.falsifiableReadingDeviceCount(), attackScenario, snapshot, modelInput.deviceSmvMap(),
+                modelInput.templateManifests(), modelInput.modelSnapshot(), attackSurface);
     }
 
     private ModelBoundaryInput validateModelSemantics(Long userId,
@@ -319,9 +310,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         }
     }
 
-    private SimulationRequestDto snapshotRequest(SimulationRequestDto request) {
+    private SimulationRequestDto snapshotRequest(SimulationRequestDto request,
+                                                 AttackScenarioDto attackScenario) {
         try {
-            return objectMapper.convertValue(request, SimulationRequestDto.class);
+            SimulationRequestDto snapshot = objectMapper.convertValue(request, SimulationRequestDto.class);
+            snapshot.setAttackScenario(attackScenario);
+            return snapshot;
         } catch (IllegalArgumentException e) {
             throw new ValidationException("request", "Simulation request cannot be snapshotted");
         }
@@ -359,6 +353,19 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     int devicePointCount, int linkPointCount,
                     int falsifiableReadingDeviceCount,
                     ModelRunSnapshotDto modelSnapshot) {
+        return createTask(userId, requestedSteps, isAttack, attackBudget, enablePrivacy,
+                devicePointCount, linkPointCount, falsifiableReadingDeviceCount, modelSnapshot,
+                JsonUtils.toJson(ModelSemanticsDto.forRun(
+                        isAttack, enablePrivacy, devicePointCount, linkPointCount,
+                        falsifiableReadingDeviceCount)));
+    }
+
+    private Long createTask(Long userId, int requestedSteps,
+                            boolean isAttack, int attackBudget, boolean enablePrivacy,
+                            int devicePointCount, int linkPointCount,
+                            int falsifiableReadingDeviceCount,
+                            ModelRunSnapshotDto modelSnapshot,
+                            String modelSemanticsJson) {
         return transactionTemplate.execute(status -> {
             requireActiveUserForPersistence(userId);
             long storedTaskCount = simulationTaskRepository.countByUserId(userId);
@@ -385,6 +392,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     .modeledAutomationLinkAttackPointCount(linkPointCount)
                     .enablePrivacy(enablePrivacy)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
+                    .modelSemanticsJson(modelSemanticsJson)
                     .createdAt(LocalDateTime.now())
                     .progress(0)
                     .progressStage(TaskProgressStage.QUEUED)
@@ -417,7 +425,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         try {
             persistTaskModelContext(requiredTaskId, input.attack(), input.attackBudget(), input.enablePrivacy(),
                     input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
+                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                    JsonUtils.toJson(ModelSemanticsDto.forRun(
+                            input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
             enqueueSimulationTask(userId, requiredTaskId, input);
         } catch (TaskRejectedException e) {
             failTaskById(requiredTaskId, "Server busy, please try again later");
@@ -442,7 +452,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         Long taskId = createTask(userId, input.steps(),
                 input.attack(), input.attackBudget(), input.enablePrivacy(),
                 input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
+                input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                JsonUtils.toJson(ModelSemanticsDto.forRun(
+                        input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
         try {
             enqueueSimulationTask(userId, taskId, input);
         } catch (TaskRejectedException e) {
@@ -466,11 +478,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                          int devicePointCount,
                                          int linkPointCount,
                                          int falsifiableReadingDeviceCount,
-                                         ModelRunSnapshotDto modelSnapshot) {
+                                         ModelRunSnapshotDto modelSnapshot,
+                                         String modelSemanticsJson) {
         simulationTaskRepository.updateModelContext(
                 taskId, isAttack, isAttack ? attackBudget : 0, enablePrivacy,
                 devicePointCount, falsifiableReadingDeviceCount, linkPointCount,
-                JsonUtils.toJson(modelSnapshot));
+                JsonUtils.toJson(modelSnapshot), modelSemanticsJson);
     }
 
     private Long requireTaskId(Long taskId) {
@@ -563,10 +576,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                    int modeledDeviceAttackPointCount,
                                    int modeledAutomationLinkAttackPointCount,
                                    int modeledFalsifiableReadingDeviceCount,
+                                   AttackScenarioDto attackScenario,
                                    SimulationRequestDto request,
                                    Map<String, DeviceSmvData> deviceSmvMap,
                                    Map<String, DeviceManifest> templateManifests,
-                                   ModelRunSnapshotDto modelSnapshot) {}
+                                   ModelRunSnapshotDto modelSnapshot,
+                                   AttackSurface attackSurface) {}
 
     private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
                                        List<BoardEnvironmentVariableDto> environmentVariables,
@@ -729,9 +744,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
         try {
             logs.add("Generating NuSMV model (simulation mode)...");
-            SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
+            SmvGenerator.GenerateResult genResult = generateResolvedModel(
                     userId, devices, request.getEnvironmentVariables(), rules, List.of(),
-                    isAttack, attackBudget, enablePrivacy, SmvGenerator.GeneratePurpose.SIMULATION,
+                    request.resolvedAttackScenario(), enablePrivacy, SmvGenerator.GeneratePurpose.SIMULATION,
                     tempModelContext, resolvedDeviceSmvMap);
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
@@ -831,9 +846,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 finalResult.setAttackBudget(isAttack ? attackBudget : 0);
                 finalResult.setEnablePrivacy(enablePrivacy);
                 finalResult.setModelSemantics(ModelSemanticsDto.forRun(
-                        isAttack, enablePrivacy,
-                        attackSurface.deviceCount(), attackSurface.automationLinkCount(),
-                        attackSurface.falsifiableReadingDeviceCount()));
+                        request.resolvedAttackScenario(), enablePrivacy, attackSurface));
                 finalResult.setModelSnapshot(modelSnapshot);
                 finalResult.setDisabledRuleCount(disabledRuleCount);
                 finalResult.setModelComplete(generationCompleted && disabledRuleCount == 0);
@@ -907,6 +920,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 .requestJson(requestJson)
                 .templateSnapshotsJson(templateSnapshotsJson)
                 .modelSnapshotJson(JsonUtils.toJson(result.getModelSnapshot()))
+                .modelSemanticsJson(JsonUtils.toJson(result.getModelSemantics()))
                 .isAttack(result.getIsAttack())
                 .attackBudget(Boolean.TRUE.equals(result.getIsAttack()) ? result.getAttackBudget() : 0)
                 .enablePrivacy(result.isEnablePrivacy())
@@ -1072,6 +1086,29 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             }
         }
         return "simulation failed";
+    }
+
+    private SmvGenerator.GenerateResult generateResolvedModel(
+            Long userId,
+            List<DeviceVerificationDto> devices,
+            List<BoardEnvironmentVariableDto> environmentVariables,
+            List<RuleDto> rules,
+            List<cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto> specs,
+            AttackScenarioDto attackScenario,
+            boolean enablePrivacy,
+            SmvGenerator.GeneratePurpose purpose,
+            SmvGenerator.TempModelContext tempModelContext,
+            Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
+        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            return smvGenerator.generateWithResolvedDeviceModel(
+                    userId, devices, environmentVariables, rules, specs, scenario,
+                    enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
+        }
+        return smvGenerator.generateWithResolvedDeviceModel(
+                userId, devices, environmentVariables, rules, specs,
+                scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
+                purpose, tempModelContext, resolvedDeviceSmvMap);
     }
 
     private void cleanupTempFile(File file) {

@@ -268,9 +268,10 @@ if a candidate includes an invalid initial state, malformed runtime arrays, unkn
 variables, invalid local variable values, or invalid trust/privacy values, the whole
 candidate is filtered rather than returned with those runtime settings silently removed.
 An explicit blank runtime value is invalid rather than another spelling of "use default".
-Omitted display labels, state labels, local values, source labels, and sensitivity labels
-are materialized from location/template defaults so the returned preview is the value that
-application will create. `adjustedCount` and `adjustedItems` identify those deterministic
+Omitted display labels, states, and local values are materialized from location/template
+defaults. Omitted trust/privacy labels remain absent instance overrides so the active
+template stays authoritative; only explicit AI values create advanced label overrides.
+`adjustedCount` and `adjustedItems` identify the deterministic value/layout
 changes as `{ type, index?, reasonCode, reason, label?, appliedValues }`; they are not
 validation failures or hidden mutations.
 Rule recommendation responses use the same `adjustedCount`/`adjustedItems` shape for
@@ -311,11 +312,12 @@ automation set is conflict-free.
 Device recommendations are instance suggestions, not only template names. Returned items
 include `templateName`, an effective `suggestedLabel`, optional advisory
 `intendedUse`/`suggestedPlacement`, and,
-when the template has the corresponding runtime concepts, `initialState`,
-`currentStateTrust`, `currentStatePrivacy`, `initialVariables`, and `initialPrivacies`.
-The two current-state fields are source and sensitivity labels for
-the selected initial state; they are not authentication, attack probability, or access
-control.
+when the template has the corresponding runtime concepts, `initialState` and
+`initialVariables`; explicit advanced overrides may additionally supply
+`currentStateTrust`, `currentStatePrivacy`, per-variable trust, and `initialPrivacies`.
+Omitted labels use the template and are not copied into the recommendation. The two
+current-state fields are source and sensitivity labels for the selected initial state;
+they are not authentication, attack probability, or access control.
 Runtime values are normalized against the selected template and local variables only.
 Display labels are unique across all board instances ignoring case, including across
 different templates; the same template can still be recommended more than once when the
@@ -429,27 +431,33 @@ does not infer this behavior, and attack modeling never widens the declared doma
 | `get_simulation_trace` | Get a saved simulation trace by simulationId, including its state sequence. |
 | `delete_simulation_trace` | Preview a saved run and receive an opaque `impactToken`, then delete it only after explicit confirmation with that token in a later user turn. |
 
-`simulate_model` and `simulate_model_async` capture the persisted devices, Environment
+`simulate_model` and `simulate_model_async` accept `attackMode=none|exact`. Exact mode
+requires `attackPoints`, whose items are `{kind:"device",deviceId}` or
+`{kind:"automation_link",ruleId}`. Device points accept the canonical id returned by
+`board_overview` and normalize it at the model boundary; link points use the persisted
+rule id. Simulation does not accept an attack budget and never
+chooses compromised points randomly. Unknown, empty, duplicate, or inapplicable points
+are rejected before execution.
+
+Both tools capture the persisted devices, Environment
 Pool, rules, specifications, and device-template definitions in one per-user locked
 transaction. Simulation uses the devices, Environment Pool, rules, and exact referenced
 manifests from that snapshot; it never combines collections or template versions read at
 different times. The captured manifests are passed unchanged through service validation
 and, for async runs, task acceptance. Both tools then use the same NuSMV runtime
-validation as the REST services. Tool-argument range/type errors, such as non-integer `steps`,
-`steps` outside `1..100`, non-integer `attackBudget`, or `attackBudget` outside `0..50`
-when attack modeling is off / `1..50` when it is on, return `VALIDATION_ERROR` with
-status `400` before the board is loaded. Service-layer
-semantic validation errors, including attack budgets larger than the current device
-and submitted-rule-link point count, return a structured `BUSINESS_ERROR` with status
+validation as the REST services. Tool-argument shape/type errors, such as non-integer
+`steps`, `steps` outside `1..100`, exhaustive mode, or exact mode without points, return
+`VALIDATION_ERROR` with status `400` before the board is loaded. Service-layer semantic
+validation errors, including a point outside the current attack surface, return a
+structured `BUSINESS_ERROR` with status
 `422` instead of a
 success-shaped simulation result.
-When `isAttack=false`, `attackBudget` must be omitted, `null`, or `0`; a positive value
-is rejected instead of being normalized away. Unknown run-option fields are also
-rejected before the board is loaded.
+Unknown run-option fields are rejected before the board is loaded.
 Async task creation happens only after validation passes; queue saturation is returned
 as `SERVICE_UNAVAILABLE` (`503`). A successful response includes the authoritative
-accepted task's `taskId`, `taskStatus`, `progress`, `requestedSteps`, effective
-`isAttack` / `attackBudget` / `enablePrivacy`, `modelSnapshot`, and `modelSemantics`. It
+accepted task's `taskId`, `taskStatus`, `progress`, `requestedSteps`, effective derived
+`isAttack` / `attackBudget`, the submitted `attackScenario`, `enablePrivacy`,
+`modelSnapshot`, and `modelSemantics`. It
 says the task was accepted, not that simulation completed.
 
 `simulate_model` returns `modelComplete`, `disabledRuleCount`, and item-level
@@ -482,7 +490,12 @@ from damaged persistence.
 | `delete_trace` | Preview a saved verification trace and receive an opaque `impactToken`, then delete it only after explicit confirmation with that token in a later user turn. |
 | `fix_violation` | Analyze a violation trace to localize fault rules and suggest fixes via parameter, condition, or permanent rule-removal strategies (needs a traceId). |
 
-`verify_model` and `verify_model_async` capture devices, the Environment Pool, rules,
+`verify_model` and `verify_model_async` accept `attackMode=none|exact|exhaustive`.
+Exact mode uses the same explicit `attackPoints` objects as simulation. Exhaustive mode
+uses `attackBudget` in `1..50` and checks every modeled selection up to that bound.
+Persistent trust labels are not attack-point selections.
+
+Both tools capture devices, the Environment Pool, rules,
 specifications, and device-template definitions in one per-user locked transaction. The
 request and exact referenced manifests therefore describe one persisted Board state,
 not a mixture of separately timed reads. Those manifests are passed unchanged through
@@ -490,20 +503,16 @@ service validation and, for async runs, task acceptance. The tools otherwise use
 same NuSMV runtime validation as the REST verification services. `verify_model_async` creates
 a task only after validation passes; queue saturation is reported as a structured
 `SERVICE_UNAVAILABLE` error. A successful response returns the authoritative accepted
-task's `taskId`, `taskStatus`, `progress`, effective `isAttack` / `attackBudget` /
-`enablePrivacy`, `modelSnapshot`, and `modelSemantics`; it does not claim that
-verification completed. Tool-argument range/type errors, such as non-integer `attackBudget`, a value
-outside `0..50` while attack modeling is off, or a value outside `1..50` while it is on,
-return `VALIDATION_ERROR` with status `400` before the board is loaded.
-Service-layer semantic validation errors, including attack budgets larger than the
-device-instance plus submitted-rule-link point count, are returned as `BUSINESS_ERROR`
-with status `422`.
-When `isAttack=false`, `attackBudget` must be omitted, `null`, or `0`; a positive value
-is rejected rather than silently discarded. Unknown run-option fields are rejected
-before the board is loaded.
+task's `taskId`, `taskStatus`, `progress`, effective derived `isAttack` / `attackBudget`,
+the submitted `attackScenario`, `enablePrivacy`, `modelSnapshot`, and `modelSemantics`;
+it does not claim that verification completed. Tool-argument mode/shape/range errors
+return `VALIDATION_ERROR` with status `400` before the board is loaded. Service-layer
+semantic validation errors, including an exhaustive budget larger than the effective
+surface or an exact point outside it, are returned as `BUSINESS_ERROR` with status `422`.
+Unknown run-option fields are rejected before the board is loaded.
 
 `verify_model` returns `outcome`, `modelComplete`, `requestedSpecCount`,
-`emittedSpecCount`, run context (`isAttack`, `attackBudget`, `enablePrivacy`,
+`emittedSpecCount`, run context (`isAttack`, `attackBudget`, `attackScenario`, `enablePrivacy`,
 `modelSemantics`), `historyPersistence`, and structured
 chat-facing `specResults` entries shaped as `{ specificationLabel, formulaPreview,
 formulaKind, outcome, checkedExpression }`, plus item-level

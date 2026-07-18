@@ -16,8 +16,6 @@ import {
   TRUST_OPTIONS,
   buildDeviceRuntimeConfig,
   createDeviceRuntimeDraft,
-  findTemplateStatePrivacy,
-  findTemplateStateTrust,
   getTemplateLocalVariables,
   getTemplateWorkingStates,
   resetDeviceRuntimeDraft,
@@ -143,6 +141,14 @@ const runtimeInternalVariables = computed(() =>
   getTemplateLocalVariables(currentTemplate.value)
 )
 
+const runtimeStateTemplateDefaults = computed(() => {
+  const state = runtimeWorkingStates.value.find(item => item.Name === runtimeDraft.value.state)
+  return {
+    trust: state?.Trust || 'trusted',
+    privacy: state?.Privacy || 'public'
+  }
+})
+
 const runtimeHasModes = computed(() => {
   const m = currentTemplate.value?.manifest
   return Array.isArray(m?.Modes)
@@ -172,19 +178,19 @@ const syncRuntimeDraftFromNode = () => {
   if (node) {
     if (runtimeHasModes.value && node.state) {
       draft.state = node.state
-      draft.currentStateTrust = node.currentStateTrust || findTemplateStateTrust(template, node.state)
-      draft.currentStatePrivacy = node.currentStatePrivacy || findTemplateStatePrivacy(template, node.state)
+      draft.currentStateTrust = node.currentStateTrust || ''
+      draft.currentStatePrivacy = node.currentStatePrivacy || ''
     }
 
     for (const variable of node.variables || []) {
       if (!variable?.name) continue
       draft.variables[variable.name] = variable.value ?? ''
-      draft.variableTrusts[variable.name] = variable.trust || draft.variableTrusts[variable.name] || ''
+      draft.variableTrusts[variable.name] = variable.trust || ''
     }
 
     for (const privacy of node.privacies || []) {
       if (!privacy?.name) continue
-      draft.privacies[privacy.name] = privacy.privacy || draft.privacies[privacy.name] || ''
+      draft.privacies[privacy.name] = privacy.privacy || ''
     }
   }
 
@@ -203,11 +209,11 @@ watch(
   { immediate: true }
 )
 
-watch(() => runtimeDraft.value.state, state => {
+watch(() => runtimeDraft.value.state, () => {
   if (syncingRuntimeDraft.value) return
   if (!runtimeHasModes.value) return
-  runtimeDraft.value.currentStateTrust = findTemplateStateTrust(currentTemplate.value, state)
-  runtimeDraft.value.currentStatePrivacy = findTemplateStatePrivacy(currentTemplate.value, state)
+  runtimeDraft.value.currentStateTrust = ''
+  runtimeDraft.value.currentStatePrivacy = ''
 })
 
 const saveRuntime = () => {
@@ -710,7 +716,7 @@ const deviceSpecs = computed(() => {
                 </div>
 
                 <div class="space-y-3 rounded-xl border border-purple-100 bg-purple-50/40 p-4">
-                  <div v-if="runtimeHasModes" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div v-if="runtimeHasModes" class="grid grid-cols-1 gap-3">
                     <label class="min-w-0">
                       <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.initialState') }}</span>
                       <select
@@ -724,27 +730,6 @@ const deviceSpecs = computed(() => {
                       </select>
                     </label>
 
-                    <label class="min-w-0">
-                      <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.stateTrust') }}</span>
-                      <select
-                        v-model="runtimeDraft.currentStateTrust"
-                        data-testid="device-runtime-state-trust"
-                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-100/60"
-                      >
-                        <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
-                      </select>
-                    </label>
-
-                    <label class="min-w-0">
-                      <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.statePrivacy') }}</span>
-                      <select
-                        v-model="runtimeDraft.currentStatePrivacy"
-                        data-testid="device-runtime-state-privacy"
-                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-100/60"
-                      >
-                        <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
-                      </select>
-                    </label>
                   </div>
 
                   <div v-if="runtimeInternalVariables.length > 0" class="space-y-2">
@@ -765,7 +750,7 @@ const deviceSpecs = computed(() => {
                         </span>
                       </div>
 
-                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_8rem]">
+                      <div class="grid grid-cols-1 gap-2">
                         <label class="min-w-0">
                           <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableValue') }}</span>
                           <select
@@ -787,6 +772,53 @@ const deviceSpecs = computed(() => {
                           />
                         </label>
 
+                      </div>
+                    </div>
+                  </div>
+
+                  <details class="border-t border-purple-100 pt-3" data-testid="device-runtime-advanced-security">
+                    <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-purple-700">
+                      <span class="inline-flex items-center gap-2">
+                        <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
+                        {{ t('app.advancedTrustPrivacyOverrides') }}
+                      </span>
+                      <span class="material-symbols-outlined text-base" aria-hidden="true">expand_more</span>
+                    </summary>
+                    <p class="mt-2 text-[11px] leading-4 text-slate-500">{{ t('app.advancedTrustPrivacyOverridesHint') }}</p>
+
+                    <div v-if="runtimeHasModes" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label class="min-w-0">
+                        <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.stateTrust') }}</span>
+                        <select
+                          v-model="runtimeDraft.currentStateTrust"
+                          data-testid="device-runtime-state-trust"
+                          class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${runtimeStateTemplateDefaults.trust}`) }) }}</option>
+                          <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
+                        </select>
+                      </label>
+
+                      <label class="min-w-0">
+                        <span class="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">{{ t('app.statePrivacy') }}</span>
+                        <select
+                          v-model="runtimeDraft.currentStatePrivacy"
+                          data-testid="device-runtime-state-privacy"
+                          class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${runtimeStateTemplateDefaults.privacy}`) }) }}</option>
+                          <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div v-if="runtimeInternalVariables.length > 0" class="mt-3 space-y-2">
+                      <div
+                        v-for="variable in runtimeInternalVariables"
+                        :key="`security-${variable.Name}`"
+                        class="grid grid-cols-1 gap-2 border-t border-slate-200 pt-2 sm:grid-cols-[minmax(0,1fr)_8rem_8rem]"
+                      >
+                        <span class="self-center break-words text-xs font-semibold text-slate-600">{{ variable.Name }}</span>
                         <label class="min-w-0">
                           <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.variableTrust') }}</span>
                           <select
@@ -794,10 +826,10 @@ const deviceSpecs = computed(() => {
                             :data-testid="`device-runtime-variable-trust-${variable.Name}`"
                             class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
                           >
+                            <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Trust}`) }) }}</option>
                             <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
                           </select>
                         </label>
-
                         <label class="min-w-0">
                           <span class="mb-1 block text-[10px] font-bold uppercase text-slate-400">{{ t('app.privacy') }}</span>
                           <select
@@ -805,12 +837,13 @@ const deviceSpecs = computed(() => {
                             :data-testid="`device-runtime-privacy-${variable.Name}`"
                             class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
                           >
+                            <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Privacy}`) }) }}</option>
                             <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
                           </select>
                         </label>
                       </div>
                     </div>
-                  </div>
+                  </details>
                 </div>
               </section>
 

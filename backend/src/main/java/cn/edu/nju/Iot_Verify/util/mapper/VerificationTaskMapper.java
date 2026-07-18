@@ -45,11 +45,7 @@ public class VerificationTaskMapper {
                 .isAttack(Boolean.TRUE.equals(po.getIsAttack()))
                 .attackBudget(po.getAttackBudget() != null ? po.getAttackBudget() : 0)
                 .enablePrivacy(Boolean.TRUE.equals(po.getEnablePrivacy()))
-                .modelSemantics(ModelSemanticsDto.forRun(
-                        Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
-                        pointCount(po.getModeledDeviceAttackPointCount()),
-                        pointCount(po.getModeledAutomationLinkAttackPointCount()),
-                        pointCount(po.getModeledFalsifiableReadingDeviceCount())))
+                .modelSemantics(modelSemantics(po, "verification task"))
                 .modelSnapshot(JsonUtils.readPersistedRequired("verification task", po.getId(),
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
                                 po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
@@ -101,11 +97,7 @@ public class VerificationTaskMapper {
                 .isAttack(Boolean.TRUE.equals(po.getIsAttack()))
                 .attackBudget(po.getAttackBudget() != null ? po.getAttackBudget() : 0)
                 .enablePrivacy(Boolean.TRUE.equals(po.getEnablePrivacy()))
-                .modelSemantics(ModelSemanticsDto.forRun(
-                        Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
-                        pointCount(po.getModeledDeviceAttackPointCount()),
-                        pointCount(po.getModeledAutomationLinkAttackPointCount()),
-                        pointCount(po.getModeledFalsifiableReadingDeviceCount())))
+                .modelSemantics(modelSemantics(po, "verification task"))
                 .modelSnapshot(JsonUtils.readPersistedRequired("verification task", po.getId(),
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
                                 po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
@@ -135,11 +127,7 @@ public class VerificationTaskMapper {
                 .isAttack(Boolean.TRUE.equals(po.getIsAttack()))
                 .attackBudget(po.getAttackBudget() != null ? po.getAttackBudget() : 0)
                 .enablePrivacy(Boolean.TRUE.equals(po.getEnablePrivacy()))
-                .modelSemantics(ModelSemanticsDto.forRun(
-                        Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
-                        pointCount(po.getModeledDeviceAttackPointCount()),
-                        pointCount(po.getModeledAutomationLinkAttackPointCount()),
-                        pointCount(po.getModeledFalsifiableReadingDeviceCount())))
+                .modelSemantics(modelSemantics(po, "verification run"))
                 .modelSnapshot(JsonUtils.readPersistedRequired("verification run", po.getId(),
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
                                 po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
@@ -172,11 +160,7 @@ public class VerificationTaskMapper {
                 .isAttack(Boolean.TRUE.equals(po.getIsAttack()))
                 .attackBudget(po.getAttackBudget() != null ? po.getAttackBudget() : 0)
                 .enablePrivacy(Boolean.TRUE.equals(po.getEnablePrivacy()))
-                .modelSemantics(ModelSemanticsDto.forRun(
-                        Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
-                        pointCount(po.getModeledDeviceAttackPointCount()),
-                        pointCount(po.getModeledAutomationLinkAttackPointCount()),
-                        pointCount(po.getModeledFalsifiableReadingDeviceCount())))
+                .modelSemantics(modelSemantics(po, "verification run"))
                 .modelSnapshot(JsonUtils.readPersistedRequired("verification run", po.getId(),
                         "modelSnapshotJson", () -> JsonUtils.fromJson(
                                 po.getModelSnapshotJson(), ModelRunSnapshotDto.class)))
@@ -234,5 +218,17 @@ public class VerificationTaskMapper {
 
     private int pointCount(Integer value) {
         return value != null ? Math.max(0, value) : 0;
+    }
+
+    private ModelSemanticsDto modelSemantics(VerificationTaskPo po, String recordType) {
+        if (po.getModelSemanticsJson() != null && !po.getModelSemanticsJson().isBlank()) {
+            return JsonUtils.readPersistedRequired(recordType, po.getId(), "modelSemanticsJson",
+                    () -> JsonUtils.fromJson(po.getModelSemanticsJson(), ModelSemanticsDto.class));
+        }
+        return ModelSemanticsDto.forRun(
+                Boolean.TRUE.equals(po.getIsAttack()), Boolean.TRUE.equals(po.getEnablePrivacy()),
+                pointCount(po.getModeledDeviceAttackPointCount()),
+                pointCount(po.getModeledAutomationLinkAttackPointCount()),
+                pointCount(po.getModeledFalsifiableReadingDeviceCount()));
     }
 }

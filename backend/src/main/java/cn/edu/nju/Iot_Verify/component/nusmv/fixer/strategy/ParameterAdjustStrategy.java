@@ -169,11 +169,8 @@ public class ParameterAdjustStrategy implements FixStrategy {
             File smvFile = null;
             try {
                 SmvGenerator.GenerateResult genResult =
-                        smvGenerator.generateParameterizedWithResolvedDeviceModel(
-                                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
-                                allRules, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
-                                ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
-                                ctx.getDeviceSmvMap());
+                        FixStrategyUtils.generateParameterizedResolved(
+                                smvGenerator, ctx, allRules, config);
                 if (genResult == null) {
                     log.warn("ParameterAdjust attempt {}: SMV generation returned null", attempt + 1);
                     continue;
@@ -507,11 +504,8 @@ public class ParameterAdjustStrategy implements FixStrategy {
         File smvFile = null;
         try {
             SmvGenerator.GenerateResult genResult =
-                    smvGenerator.generateParameterizedWithResolvedDeviceModel(
-                            ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
-                            rulesWithOtherParamsApplied, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
-                            ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
-                            ctx.getDeviceSmvMap());
+                    FixStrategyUtils.generateParameterizedResolved(
+                            smvGenerator, ctx, rulesWithOtherParamsApplied, config);
             if (genResult == null) return RefineResult.error();
             smvFile = genResult.smvFile();
 

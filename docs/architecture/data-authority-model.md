@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-16. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-18. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -347,8 +347,7 @@ Frontend builder: `frontend/src/utils/modelRequest.ts`. Backend converter:
 | `rules` | Normalized board rules | Automation behavior | NuSMV main module |
 | `specs` | Normalized board specs | Properties to check | NuSMV specs |
 | `steps` | User | Simulation length | Simulation executor |
-| `isAttack` | User | Attack mode toggle | Attack variables/constraints |
-| `attackBudget` | User; `1..50` and no more than device count plus submitted rule count when attack modeling is enabled, effective `0` otherwise | Upper bound on nondeterministically selected compromised device instances and logical automation command-delivery links; never widens variable domains | NuSMV count invariant and result context |
+| `attackScenario` | User; `NONE`, exact points, or verification-only exhaustive budget | Per-run attack selection. Exact points identify normalized device ids or persisted rule ids; exhaustive mode uses a validated `1..50` upper bound. Persistent trust labels never select points | Attack flag initialization, optional count invariant, and result context |
 | `enablePrivacy` | User plus specification requirement | Privacy dimension toggle; any privacy specification forces the effective value on and the result reports that effective value | Privacy variables/specs |
 
 Model requests reject non-normalized `varName`, unknown rule/spec references,
@@ -386,7 +385,7 @@ Backend DTOs: `TraceDto`, `TraceStateDto`, `TraceDeviceDto`,
 | `states` | NuSMV parser | Counterexample/simulation states | Visualization/fix |
 | `requestJson` | Verification request snapshot | Internal fix context | Not serialized to API |
 | `isAttack` / `attackBudget` / `enablePrivacy` | Derived from request snapshot | Historical run context | History UI |
-| `modelSemantics` | Derived from the immutable request snapshot | Machine-readable attack/trust/privacy assumptions plus distinct device, falsifiable-reading subset, link, and total countable attack points for that run. `attackEffects` lists only mechanisms present in the scene. Historical clients must not recompute these values from the current board | Result interpretation guard |
+| `modelSemantics` | Persisted from the immutable request snapshot | Machine-readable attack selection policy, exact selected points when applicable, trust/privacy assumptions, and distinct device, falsifiable-reading subset, link, and total countable attack points for that run. `attackEffects` lists only mechanisms present in the scene. Historical clients must not recompute these values from the current board | Result interpretation guard |
 | `createdAt` | DB | Trace creation time | History sorting |
 | `TraceStateDto.stateIndex` | NuSMV parser | Step index | Timeline |
 | `TraceStateDto.devices` | NuSMV parser | Per-device state in this step | Visualization |

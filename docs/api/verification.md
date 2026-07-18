@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-16. Source:
+Verified against code on 2026-07-18. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -29,7 +29,7 @@ backend `BoardDataConverter` perform the boundary conversion before verification
 simulation.
 
 The request is strict at every nesting level. Unknown fields and scalar type coercions
-return HTTP `400`; a misspelled `isAttack`, `enablePrivacy`, device label, rule field, or
+return HTTP `400`; a misspelled `attackScenario`, `enablePrivacy`, device label, rule field, or
 environment override is never ignored and cannot silently weaken the model. DTO shape
 constraints (for example empty `devices`/`specs`) also return structured HTTP `400`
 errors; model/template semantic mismatches discovered after parsing return `422`.
@@ -40,8 +40,7 @@ errors; model/template semantic mismatches discovered after parsing return `422`
 | `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | Board-level environment pool overrides. Names must be unique. A missing item or a `null` value/trust/privacy field uses the referenced template default; an explicit blank or invalid field is rejected before defaults are merged |
 | `rules` | `RuleDto[]` | no | `[]` | Automation rules. A persisted positive `id` is optional correlation identity for user-facing triggered-rule/link snapshots; it does not change model behavior |
 | `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | Specifications to check |
-| `isAttack` | `boolean` | no | `false` | Serialized as `isAttack` (`@JsonProperty`). `true` is rejected when the scene has neither an automation command-delivery link nor a template reading marked `FalsifiableWhenCompromised=true`, because attack selection would not change model behavior |
-| `attackBudget` | `int` | no | `0` | Maximum compromised points in one model branch, not an exact count. It must be exactly `0` when `isAttack=false`; a positive value is rejected rather than silently discarded. When attack modeling is enabled the caller must explicitly provide `1..50`, no greater than the behavior-changing attack surface: one point for each device with a declared falsifiable reading or at least one incoming rule command, plus one logical command-delivery point per submitted rule. That rule-derived point is counted once regardless of how many source/trigger edges the canvas renders for the rule; it is not a discovered physical network segment. Inert device instances are excluded. `50` is the current per-run input cap, not the scene's attack-surface size: if `modelSemantics.modeledAttackPointCount > 50`, one run does not cover branches with more than 50 simultaneous compromises. The budget never widens a variable domain, and one call does not compute the minimum violating budget. |
+| `attackScenario` | `AttackScenarioDto` | no | `{ mode: "NONE", budget: 0, points: [] }` | Per-run attack selection, independent from persistent trust labels. Verification accepts `NONE`, `EXACT_POINTS`, or `ANY_UP_TO_BUDGET`. Exact mode requires `1..50` explicit points and no budget. Exhaustive mode requires budget `1..50`, no explicit points, and a budget no greater than the current behavior-changing attack surface. |
 | `enablePrivacy` | `boolean` | no | `false` | Adds privacy-label variables and enlarges state space. Any privacy condition in a submitted specification makes the effective value `true`, even if the caller omitted or set this field to `false`; responses return the effective value |
 
 > Note: there is **no** `saveTrace` field. Traces are saved automatically when a
@@ -49,12 +48,33 @@ errors; model/template semantic mismatches discovered after parsing return `422`
 > Verification requires at least one specification for both synchronous and asynchronous
 > requests. Use the simulation endpoint for no-spec state exploration.
 
+`AttackScenarioDto.points` contains either `{ kind: "DEVICE", deviceId }`, where
+`deviceId` is the normalized model-boundary device id, or
+`{ kind: "AUTOMATION_LINK", ruleId }`, where `ruleId` is the submitted persisted rule
+identity. Exact points must belong to the current effective attack surface and are fixed
+for the entire run. `ANY_UP_TO_BUDGET` is verification-only and asks NuSMV to explore
+every modeled selection from zero through the selected upper bound. Persistent
+`trusted`/`untrusted` labels remain model inputs and never implicitly select attack
+points.
+
+Completed run semantics expose exact selections as `{ kind, deviceId?, ruleId?,
+displayLabel? }`. `deviceId`/`ruleId` remain the stable identities; `displayLabel` is a
+display-only name captured from the submitted device or rule so history does not depend
+on the mutable current Board.
+
+For compatibility, the REST DTO can still read legacy top-level `isAttack` and
+`attackBudget` fields as `NONE` or `ANY_UP_TO_BUDGET`. Verification continues to accept
+that exhaustive legacy meaning. Simulation accepts a legacy non-attack request, but an
+attack-enabled legacy simulation is rejected because simulation now requires explicit
+points. New and legacy fields cannot be combined, and responses/request snapshots
+serialize the structured `attackScenario`.
+
 **Response**: `VerificationResultDto`
 
 | Field | Type | Notes |
 | :--- | :--- | :--- |
 | `isAttack` | `Boolean` | Whether compromised device-instance and automation-link behavior was included |
-| `attackBudget` | `int` | Maximum compromised points allowed in any checked branch; a branch may contain any count from zero through this value |
+| `attackBudget` | `int` | Derived run size: exhaustive mode returns its upper bound; exact mode returns the fixed selected-point count; no-attack mode returns `0` |
 | `enablePrivacy` | `boolean` | Whether privacy-label propagation was modeled |
 | `modelSemantics` | `ModelSemanticsDto` | Machine-readable environment-evolution, local-variable, attack, trust, and privacy assumptions required to interpret the conclusion |
 | `modelSnapshot` | `ModelRunSnapshotDto` | User-facing scope captured at the model boundary, including item counts and confirmation that referenced template manifests were frozen for this run |
@@ -307,7 +327,8 @@ clients do not combine a percentage from one phase with a label from another pha
 | Field | Values / meaning |
 | :--- | :--- |
 | `attackPointUnit` | `BEHAVIOR_CHANGING_DEVICE_INSTANCE_OR_AUTOMATION_LINK`; a device contributes a point only when it has a declared falsifiable reading or is a rule-command target, and each submitted rule contributes one logical command-delivery link point |
-| `attackSelectionPolicy` | `NOT_MODELED` or `UP_TO_ATTACK_BUDGET_NONDETERMINISTIC`; an enabled budget is an upper bound and NuSMV explores every modeled selection within it |
+| `attackSelectionPolicy` | `NOT_MODELED`, `EXACT_ATTACK_POINTS`, or `UP_TO_ATTACK_BUDGET_NONDETERMINISTIC` |
+| `selectedAttackPoints` | Exact device/rule-link snapshots for `EXACT_ATTACK_POINTS`, each with stable `kind` plus `deviceId` or `ruleId` and an optional frozen display-only `displayLabel`; empty for the other policies |
 | `attackEffects` | Empty when attack modeling is off. When enabled, contains only effects that this scene can exercise: `DECLARED_FALSIFIABLE_READING_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN` when at least one device has such a declaration, and the two deterministic command-drop effects when at least one submitted automation link/target exists. It is not a fixed capability list. |
 | `modeledDeviceAttackPointCount` | Distinct device instances whose compromise can change this model: the union of devices with a falsifiable reading and devices that receive a rule command |
 | `modeledFalsifiableReadingDeviceCount` | Subset of the preceding count whose declared readings may be replaced nondeterministically within their domains; this is not added again to the total |
@@ -581,9 +602,9 @@ recorded as skipped generation warnings rather than being silently accepted.
 | `disabledRuleCount` / `skippedSpecCount` | `Integer` | Generation omissions inherited from the source verification |
 | `generationIssues` | `ModelGenerationIssueDto[]` | Item-level names and reasons for those inherited omissions |
 | `isAttack` | `Boolean` | Attack mode persisted with this trace |
-| `attackBudget` | `Integer` | Maximum compromised behavior-changing device-instance or automation-link point count persisted with this trace |
+| `attackBudget` | `Integer` | Persisted derived run size: exhaustive upper bound, exact selected-point count, or `0` |
 | `enablePrivacy` | `Boolean` | Privacy-modeling flag persisted with this trace |
-| `modelSemantics` | `ModelSemanticsDto` | Structured assumptions rebuilt from the persisted effective attack-surface counts and run flags, not from raw request collection lengths |
+| `modelSemantics` | `ModelSemanticsDto` | Persisted structured policy, exact selected points/display labels, effects, and effective attack-surface counts. Legacy rows without the JSON snapshot are reconstructed from dedicated counts/flags when possible, never from raw request collection lengths |
 | `modelSnapshot` | `ModelRunSnapshotDto` | Frozen verification-time item/template counts; this does not assert equality with the current Board |
 | `createdAt` | `LocalDateTime` | |
 
@@ -650,8 +671,7 @@ with that option silently disabled.
 | `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | Same unique-name, omitted/null-default, and explicit-blank rejection contract as verification |
 | `rules` | `RuleDto[]` | no | `[]` | |
 | `steps` | `int` (1–100) | no | `10` | Number of simulation steps |
-| `isAttack` | `boolean` | no | `false` | Same no-applicable-attack-surface rejection as verification |
-| `attackBudget` | `int` | no | `0` | Maximum compromised behavior-changing device-instance or automation-link points in the generated trajectory branch. It must be `0` when disabled; a positive disabled value is rejected. When enabled it must be explicitly supplied as `1..50` and no greater than the effective attack-surface count described above. |
+| `attackScenario` | `AttackScenarioDto` | no | `NONE` | Simulation accepts only `NONE` or `EXACT_POINTS`. It never chooses compromised devices or links randomly, and rejects budget-based exhaustive selection. |
 | `enablePrivacy` | `boolean` | no | `false` | |
 
 **Response**: `SimulationResultDto` — `{ isAttack, attackBudget, enablePrivacy,
@@ -694,7 +714,7 @@ the backend snapshots and validates the request and captures referenced template
 manifests before task creation. The queued worker reuses those manifests rather than
 reloading mutable templates. REST calls first
 run full DTO Bean Validation; service and AI-tool callers run NuSMV runtime validation
-for required devices, null list items, device identity, `steps`, `attackBudget`, and
+for required devices, null list items, device identity, `steps`, `attackScenario`, and
 current-template rule semantics.
 Structurally invalid rules are rejected at the boundary: null rule elements, null
 commands, and blank `command.deviceName` / `command.action` all return validation

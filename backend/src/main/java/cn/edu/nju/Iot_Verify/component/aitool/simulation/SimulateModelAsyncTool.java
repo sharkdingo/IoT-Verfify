@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AbstractAiTool;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationRequestDto;
 import cn.edu.nju.Iot_Verify.exception.BaseException;
@@ -47,8 +48,8 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
     public LlmToolSpec getDefinition() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("steps", Map.of("type", "integer", "description", "Number of simulation steps (1-100, rejected if outside range). Default 10."));
-        props.put("isAttack", Map.of("type", "boolean", "description", "Include compromised device-instance and automation-link behavior. A device instance is a budget point only when it has a declared falsifiable reading or is a TAP command target; each submitted TAP rule's command-delivery link is another point. Inert devices are excluded. Declared falsifiable readings may vary within their domains; once a target or automation link is selected as compromised, that command is dropped. Other device-internal transitions are not frozen. Default false."));
-        props.put("attackBudget", Map.of("type", "integer", "description", "Maximum compromised behavior-changing device-instance or automation-link points (1-50 when attack modeling is enabled, and no more than the effective attack surface returned by the model). Simulation returns one possible trajectory within this upper bound, not coverage of every combination. Omit it or use 0 when attack modeling is disabled; a positive disabled budget is rejected. Default 1 when enabled."));
+        props.put("attackMode", Map.of("type", "string", "enum", List.of("none", "exact"), "description", "Per-run attack selection. Simulation never chooses attack points randomly. Default none."));
+        props.put("attackPoints", attackPointsSchema());
         props.put("enablePrivacy", Map.of("type", "boolean", "description", "Track private-data labels through automation chains. This is not access control or encryption. Default false."));
 
         FunctionParameterSchema schema = new FunctionParameterSchema("object", props, Collections.emptyList());
@@ -66,10 +67,9 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
                 return e.getErrorResponse();
             }
             requireOnlyFields(args, "arguments", Set.of(
-                    "steps", "isAttack", "attackBudget", "enablePrivacy"));
+                    "steps", "attackMode", "attackPoints", "enablePrivacy"));
             int steps = intArgInRange(args, "steps", 10, 1, 100);
-            boolean isAttack = booleanArg(args, "isAttack", false);
-            int attackBudget = attackBudgetArg(args, isAttack);
+            AttackScenarioDto attackScenario = attackScenarioArg(args, false);
             boolean enablePrivacy = booleanArg(args, "enablePrivacy", false);
 
             ModelInputSnapshot board = boardDataConverter.getModelInputSnapshot(userId);
@@ -86,8 +86,7 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
             request.setEnvironmentVariables(board.environmentVariables());
             request.setRules(rules);
             request.setSteps(steps);
-            request.setAttack(isAttack);
-            request.setAttackBudget(attackBudget);
+            request.setAttackScenario(attackScenario);
             request.setEnablePrivacy(enablePrivacy);
             Long taskId = simulationService.submitSimulationWithTemplateSnapshot(
                     userId, request, board.templateManifests());
@@ -101,6 +100,7 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
             response.put("requestedSteps", task.getRequestedSteps());
             response.put("isAttack", task.getIsAttack());
             response.put("attackBudget", task.getAttackBudget());
+            response.put("attackScenario", attackScenario);
             response.put("enablePrivacy", task.getEnablePrivacy());
             response.put("modelSnapshot", task.getModelSnapshot());
             response.put("modelSemantics", task.getModelSemantics());
@@ -124,5 +124,19 @@ public class SimulateModelAsyncTool extends AbstractAiTool {
             return errorJson("Failed to start simulation task.",
                     "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> attackPointsSchema() {
+        return Map.of(
+                "type", "array",
+                "description", "Required for attackMode exact. Device ids use canonical board_overview ids and are normalized at the model boundary; automation links use persisted rule ids.",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "kind", Map.of("type", "string", "enum", List.of("device", "automation_link")),
+                                "deviceId", Map.of("type", "string"),
+                                "ruleId", Map.of("type", "integer")),
+                        "required", List.of("kind"),
+                        "additionalProperties", false));
     }
 }

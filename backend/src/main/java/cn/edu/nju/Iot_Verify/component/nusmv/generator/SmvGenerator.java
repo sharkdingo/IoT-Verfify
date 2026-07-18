@@ -14,6 +14,8 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -190,18 +192,32 @@ public class SmvGenerator {
                                                   boolean enablePrivacy,
                                                   GeneratePurpose purpose,
                                                   TempModelContext tempModelContext) throws IOException {
-        validateAttackBudget(isAttack, attackBudget);
+        return generateWithEnvironment(userId, devices, environmentVariables, rules, specs,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, purpose, tempModelContext);
+    }
+
+    public GenerateResult generateWithEnvironment(Long userId,
+                                                  List<DeviceVerificationDto> devices,
+                                                  List<BoardEnvironmentVariableDto> environmentVariables,
+                                                  List<RuleDto> rules,
+                                                  List<SpecificationDto> specs,
+                                                  AttackScenarioDto attackScenario,
+                                                  boolean enablePrivacy,
+                                                  GeneratePurpose purpose,
+                                                  TempModelContext tempModelContext) throws IOException {
+        AttackScenarioDto safeAttackScenario = validateAttackScenario(attackScenario);
         if (devices == null || devices.isEmpty()) {
             throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
         }
         List<SpecificationDto> safeSpecs = (specs != null) ? specs : List.of();
         List<RuleDto> safeRules = (rules != null) ? rules : List.of();
         log.info("Generating NuSMV model: userId={}, devices={}, rules={}, specs={}, attack={}, attackBudget={}, privacy={}",
-                userId, devices.size(), safeRules.size(), safeSpecs.size(), isAttack, attackBudget, enablePrivacy);
+                userId, devices.size(), safeRules.size(), safeSpecs.size(), safeAttackScenario.isEnabled(),
+                safeAttackScenario.effectiveBudget(), enablePrivacy);
 
         Map<String, DeviceSmvData> deviceSmvMap = deviceSmvDataFactory.buildDeviceSmvMap(userId, devices);
         return generateWithResolvedDeviceModel(userId, devices, environmentVariables, safeRules, safeSpecs,
-                isAttack, attackBudget, enablePrivacy, purpose, tempModelContext, deviceSmvMap);
+                safeAttackScenario, enablePrivacy, purpose, tempModelContext, deviceSmvMap);
     }
 
     /**
@@ -220,7 +236,23 @@ public class SmvGenerator {
                                                            TempModelContext tempModelContext,
                                                            Map<String, DeviceSmvData> resolvedDeviceSmvMap)
             throws IOException {
-        validateAttackBudget(isAttack, attackBudget);
+        return generateWithResolvedDeviceModel(userId, devices, environmentVariables, rules, specs,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, purpose, tempModelContext,
+                resolvedDeviceSmvMap);
+    }
+
+    public GenerateResult generateWithResolvedDeviceModel(Long userId,
+                                                           List<DeviceVerificationDto> devices,
+                                                           List<BoardEnvironmentVariableDto> environmentVariables,
+                                                           List<RuleDto> rules,
+                                                           List<SpecificationDto> specs,
+                                                           AttackScenarioDto attackScenario,
+                                                           boolean enablePrivacy,
+                                                           GeneratePurpose purpose,
+                                                           TempModelContext tempModelContext,
+                                                           Map<String, DeviceSmvData> resolvedDeviceSmvMap)
+            throws IOException {
+        AttackScenarioDto safeAttackScenario = validateAttackScenario(attackScenario);
         if (devices == null || devices.isEmpty()) {
             throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
         }
@@ -230,7 +262,7 @@ public class SmvGenerator {
         applyEnvironmentPoolLabels(deviceSmvMap, environmentVariables);
         SmvGenerationContext context = SmvGenerationContext.collecting();
         String smvContent = buildSmvContent(deviceSmvMap, userId, devices, environmentVariables, safeRules, safeSpecs,
-                isAttack, attackBudget, enablePrivacy, context);
+                safeAttackScenario, enablePrivacy, context);
 
         Path tempDir = Files.createTempDirectory(resolveTempDirPrefix(purpose, userId, tempModelContext));
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -334,7 +366,20 @@ public class SmvGenerator {
                                                                boolean enablePrivacy,
                                                                ParameterizationConfig config,
                                                                TempModelContext tempModelContext) throws IOException {
-        validateAttackBudget(isAttack, attackBudget);
+        return generateParameterizedWithEnvironment(userId, devices, environmentVariables, rules, specs,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, config, tempModelContext);
+    }
+
+    public GenerateResult generateParameterizedWithEnvironment(Long userId,
+                                                               List<DeviceVerificationDto> devices,
+                                                               List<BoardEnvironmentVariableDto> environmentVariables,
+                                                               List<RuleDto> rules,
+                                                               List<SpecificationDto> specs,
+                                                               AttackScenarioDto attackScenario,
+                                                               boolean enablePrivacy,
+                                                               ParameterizationConfig config,
+                                                               TempModelContext tempModelContext) throws IOException {
+        AttackScenarioDto safeAttackScenario = validateAttackScenario(attackScenario);
         if (devices == null || devices.isEmpty()) {
             throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
         }
@@ -345,7 +390,7 @@ public class SmvGenerator {
         applyEnvironmentPoolLabels(deviceSmvMap, environmentVariables);
         SmvGenerationContext context = SmvGenerationContext.collecting();
         String smvContent = buildParameterizedSmvContent(deviceSmvMap, userId, devices, environmentVariables, safeRules, safeSpecs,
-                isAttack, attackBudget, enablePrivacy, config, context);
+                safeAttackScenario, enablePrivacy, config, context);
 
         Path tempDir = Files.createTempDirectory(resolveFixTempDirPrefix(userId, tempModelContext));
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -371,7 +416,23 @@ public class SmvGenerator {
             ParameterizationConfig config,
             TempModelContext tempModelContext,
             Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
-        validateAttackBudget(isAttack, attackBudget);
+        return generateParameterizedWithResolvedDeviceModel(userId, devices, environmentVariables, rules, specs,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, config, tempModelContext,
+                resolvedDeviceSmvMap);
+    }
+
+    public GenerateResult generateParameterizedWithResolvedDeviceModel(
+            Long userId,
+            List<DeviceVerificationDto> devices,
+            List<BoardEnvironmentVariableDto> environmentVariables,
+            List<RuleDto> rules,
+            List<SpecificationDto> specs,
+            AttackScenarioDto attackScenario,
+            boolean enablePrivacy,
+            ParameterizationConfig config,
+            TempModelContext tempModelContext,
+            Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
+        AttackScenarioDto safeAttackScenario = validateAttackScenario(attackScenario);
         if (devices == null || devices.isEmpty()) {
             throw SmvGenerationException.invalidBuilderInput("SmvGenerator", "devices", "must not be null or empty");
         }
@@ -382,7 +443,7 @@ public class SmvGenerator {
         SmvGenerationContext context = SmvGenerationContext.collecting();
         String smvContent = buildParameterizedSmvContent(
                 deviceSmvMap, userId, devices, environmentVariables, safeRules, safeSpecs,
-                isAttack, attackBudget, enablePrivacy, config, context);
+                safeAttackScenario, enablePrivacy, config, context);
 
         Path tempDir = Files.createTempDirectory(resolveFixTempDirPrefix(userId, tempModelContext));
         File smvFile = tempDir.resolve("model.smv").toFile();
@@ -395,6 +456,57 @@ public class SmvGenerator {
     }
 
     // ==================== 内部方法 ====================
+
+    private AttackScenarioDto legacyAttackScenario(boolean isAttack, int attackBudget) {
+        validateAttackBudget(isAttack, attackBudget);
+        return isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none();
+    }
+
+    private AttackScenarioDto validateAttackScenario(AttackScenarioDto attackScenario) {
+        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        if (scenario.getMode() == null) {
+            throw SmvGenerationException.invalidBuilderInput(
+                    "SmvGenerator", "attackScenario.mode", "must not be null");
+        }
+        List<AttackPointDto> points = scenario.getPoints() != null ? scenario.getPoints() : List.of();
+        if (scenario.getMode() == AttackScenarioDto.Mode.NONE) {
+            if ((scenario.getBudget() != null && scenario.getBudget() != 0) || !points.isEmpty()) {
+                throw SmvGenerationException.invalidBuilderInput(
+                        "SmvGenerator", "attackScenario", "NONE must not contain a budget or attack points");
+            }
+            return scenario;
+        }
+        if (scenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET) {
+            int budget = scenario.getBudget() != null ? scenario.getBudget() : 0;
+            if (budget < 1 || budget > 50 || !points.isEmpty()) {
+                throw SmvGenerationException.invalidBuilderInput(
+                        "SmvGenerator", "attackScenario",
+                        "ANY_UP_TO_BUDGET requires a 1..50 budget and no explicit points");
+            }
+            return scenario;
+        }
+        if ((scenario.getBudget() != null && scenario.getBudget() != 0)
+                || points.isEmpty() || points.size() > 50) {
+            throw SmvGenerationException.invalidBuilderInput(
+                    "SmvGenerator", "attackScenario",
+                    "EXACT_POINTS requires 1..50 explicit points and no budget");
+        }
+        Set<String> identities = new HashSet<>();
+        for (AttackPointDto point : points) {
+            boolean validDevice = point != null && point.getKind() == AttackPointDto.Kind.DEVICE
+                    && point.getDeviceId() != null && !point.getDeviceId().isBlank()
+                    && point.getRuleId() == null;
+            boolean validLink = point != null && point.getKind() == AttackPointDto.Kind.AUTOMATION_LINK
+                    && point.getRuleId() != null && point.getRuleId() > 0
+                    && (point.getDeviceId() == null || point.getDeviceId().isBlank());
+            if ((!validDevice && !validLink) || !identities.add(point.identityKey())) {
+                throw SmvGenerationException.invalidBuilderInput(
+                        "SmvGenerator", "attackScenario.points",
+                        "must contain distinct well-formed device or automation-link points");
+            }
+        }
+        return scenario;
+    }
 
     private void validateAttackBudget(boolean isAttack, int attackBudget) {
         if (attackBudget < 0 || attackBudget > 50) {
@@ -471,12 +583,11 @@ public class SmvGenerator {
                                    List<BoardEnvironmentVariableDto> environmentVariables,
                                    List<RuleDto> rules,
                                    List<SpecificationDto> specs,
-                                   boolean isAttack,
-                                   int attackBudget,
+                                   AttackScenarioDto attackScenario,
                                    boolean enablePrivacy,
                                    SmvGenerationContext context) {
         return buildSmvContentInternal(deviceSmvMap, userId, devices, environmentVariables, rules, specs,
-                isAttack, attackBudget, enablePrivacy, null, context);
+                attackScenario, enablePrivacy, null, context);
     }
 
     private String buildParameterizedSmvContent(Map<String, DeviceSmvData> deviceSmvMap,
@@ -485,13 +596,12 @@ public class SmvGenerator {
                                                 List<BoardEnvironmentVariableDto> environmentVariables,
                                                 List<RuleDto> rules,
                                                 List<SpecificationDto> specs,
-                                                boolean isAttack,
-                                                int attackBudget,
+                                                AttackScenarioDto attackScenario,
                                                 boolean enablePrivacy,
                                                 ParameterizationConfig config,
                                                 SmvGenerationContext context) {
         return buildSmvContentInternal(deviceSmvMap, userId, devices, environmentVariables, rules, specs,
-                isAttack, attackBudget, enablePrivacy, config, context);
+                attackScenario, enablePrivacy, config, context);
     }
 
     private String buildSmvContentInternal(Map<String, DeviceSmvData> deviceSmvMap,
@@ -500,11 +610,15 @@ public class SmvGenerator {
                                            List<BoardEnvironmentVariableDto> environmentVariables,
                                            List<RuleDto> rules,
                                            List<SpecificationDto> specs,
-                                           boolean isAttack,
-                                           int attackBudget,
+                                           AttackScenarioDto attackScenario,
                                            boolean enablePrivacy,
                                            ParameterizationConfig config,
                                            SmvGenerationContext context) {
+
+        AttackScenarioDto safeAttackScenario = attackScenario != null
+                ? attackScenario : AttackScenarioDto.none();
+        boolean isAttack = safeAttackScenario.isEnabled();
+        int attackBudget = safeAttackScenario.effectiveBudget();
 
         log.debug("Building SMV content: {} devices, {} rules, {} specs, attack={}, attackBudget={}, privacy={}",
             devices.size(), rules != null ? rules.size() : 0, specs != null ? specs.size() : 0, isAttack, attackBudget, enablePrivacy);
@@ -527,13 +641,16 @@ public class SmvGenerator {
             DeviceSmvData smv = deviceSmvMap.get(device.getVarName());
             if (smv != null && generatedModules.add(smv.getModuleName())) {
                 content.append(deviceModuleBuilder.build(
-                        smv, isAttack && attackSurface.includesDevice(smv.getVarName()), enablePrivacy));
+                        smv, deviceAttackActivation(safeAttackScenario, attackSurface, smv.getVarName()),
+                        enablePrivacy));
             }
         }
 
         content.append(config != null
-                ? mainModuleBuilder.buildParameterized(userId, devices, environmentVariables, rules, deviceSmvMap, isAttack, attackBudget, enablePrivacy, config, context)
-                : mainModuleBuilder.build(userId, devices, environmentVariables, rules, deviceSmvMap, isAttack, attackBudget, enablePrivacy, context));
+                ? mainModuleBuilder.buildParameterized(userId, devices, environmentVariables, rules,
+                        deviceSmvMap, safeAttackScenario, enablePrivacy, config, context)
+                : mainModuleBuilder.build(userId, devices, environmentVariables, rules, deviceSmvMap,
+                        safeAttackScenario, enablePrivacy, context));
 
         if (config != null) {
             // Only emit the negated spec (¬ρ)
@@ -544,6 +661,20 @@ public class SmvGenerator {
         }
 
         return content.toString();
+    }
+
+    private AttackActivation deviceAttackActivation(AttackScenarioDto attackScenario,
+                                                      AttackSurface attackSurface,
+                                                      String deviceId) {
+        if (!attackScenario.isEnabled() || !attackSurface.includesDevice(deviceId)) {
+            return AttackActivation.DISABLED;
+        }
+        if (attackScenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET) {
+            return AttackActivation.NONDETERMINISTIC;
+        }
+        return attackScenario.selectedDeviceIds().contains(deviceId)
+                ? AttackActivation.FIXED_COMPROMISED
+                : AttackActivation.FIXED_SAFE;
     }
 
     private String resolveTempDirPrefix(GeneratePurpose purpose, Long userId, TempModelContext tempModelContext) {

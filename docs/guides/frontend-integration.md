@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-17. Source: `frontend/src/api/`,
+Verified against code on 2026-07-18. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/router/index.ts`.
 
 ---
@@ -255,7 +255,8 @@ Its methods return already-unwrapped values. Non-exhaustive:
   path as file import so template checks, environment-pool validation, atomic batch
   saves, and user-visible template creation stay identical. Device recommendations return
   instance proposals with an effective `suggestedLabel`, optional advisory
-  `intendedUse`/`suggestedPlacement`, and materialized local runtime values. The two
+  `intendedUse`/`suggestedPlacement`, and materialized local runtime values. Omitted
+  trust/privacy fields remain template fallbacks rather than copied instance overrides. The two
   advisory fields explain recommendation context but are not persisted device fields or
   formal-model inputs. Omitted template defaults are listed in
   `adjustedItems` and must be shown before application; explicitly invalid runtime values
@@ -279,11 +280,12 @@ Its methods return already-unwrapped values. Non-exhaustive:
   AI rule to be filtered.
 - Device creation: manual creation, device-list JSON import, standalone AI device
   recommendation, and assistant `add_device` all materialize the same template-local
-  starting values. The shared `materializeDeviceRuntimeConfig` helper overlays explicit
-  values onto enum-first/numeric-lower-bound and trust/privacy defaults. In device-list
+  starting state/variable values. The shared `materializeDeviceRuntimeConfig` helper
+  overlays explicit values and label overrides while leaving omitted trust/privacy
+  labels template-owned. In device-list
   JSON, omitted or `null` scalar fields select defaults; blank strings are validation
-  errors. Standard scene files carry the effective persisted values rather than requests
-  to recalculate them.
+  errors. Standard scene files carry explicit persisted overrides; omitted labels continue
+  to resolve from the imported template.
   Device display names are case-insensitively unique in every entry path. Manual creation
   blocks a conflict; batch/JSON import shows the exact suffix in its preview; an AI
   recommendation asks the user to confirm the exact available name before writing. If
@@ -612,6 +614,22 @@ user's value and mark the run configuration invalid. Do not silently clamp the b
 turn attack modeling off; require the user to choose the new limit (or disable the mode)
 before submission so the request still expresses their deliberate intent.
 
+Treat attack configuration as run-local, not as a property of the canvas. Verification
+offers `ANY_UP_TO_BUDGET` (all modeled combinations up to the chosen limit) and
+`EXACT_POINTS` (only the checked device/rule-link points). Simulation offers only
+`EXACT_POINTS`; it must never randomly choose compromised points behind the user's back.
+Automation-link selections use persisted rule ids, so unsaved rules remain visible but
+unavailable for exact selection. Result/history UI reads
+`modelSemantics.attackSelectionPolicy` and `selectedAttackPoints`: exact runs name the
+chosen device ids/rule ids, while only exhaustive runs are described as a budget.
+
+Device trust/privacy labels use template declarations by default. Ordinary device
+creation sends no label override; advanced settings may explicitly override the current
+state or a local variable. Choosing "use template default" removes that override instead
+of copying the current template value into the device instance. Existing imported or
+persisted explicit overrides remain authoritative. Shared Environment Pool labels follow
+the same backend template fallback and are edited in the inspector's advanced details.
+
 Verification results and completed async verification tasks include `outcome`,
 `modelComplete`, `disabledRuleCount`, `skippedSpecCount`, and item-level
 `generationIssues`; technical warnings also appear in `checkLogs` with
@@ -695,7 +713,7 @@ returning a success-shaped empty result. Timeout, interruption, failed execution
 zero parsed states use the same submit error path. Successful results, async tasks, and
 saved traces carry `modelComplete`, `disabledRuleCount`, and `generationIssues`; show
 reduced-model traces as incomplete and list every omitted automation with its reason.
-Saved trace context is returned as `isAttack`, `attackBudget`, `enablePrivacy`, and
+Saved trace context is returned as derived `isAttack`, `attackBudget`, `enablePrivacy`, and
 `modelSemantics`, not as a
 raw request JSON blob. Describe every simulation as generated-model behavior, not a
 physical-home prediction.
@@ -714,9 +732,9 @@ user's current work.
 The `1..100` simulation-step control exposes synchronized decrement/increment buttons,
 direct integer entry, and a range slider. Normalize direct input at the control boundary;
 all three surfaces must submit the same validated step count.
-Compact run-setting panels keep long attack-budget and trust/privacy model explanations
+Compact run-setting panels keep long attack-selection and trust/privacy model explanations
 behind accessible hover/focus/click info tooltips. Keep state-specific limitations and
-errors visible inline: no modeled attack effect, the 50-point run cap, invalid budget,
+errors visible inline: no modeled attack effect, the 50-point run cap, invalid budget or explicit point,
 forced privacy propagation, disabled rules, and incomplete-model outcomes must never be
 hidden as optional help.
 

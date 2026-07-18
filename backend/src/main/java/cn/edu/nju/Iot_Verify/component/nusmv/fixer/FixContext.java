@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -37,6 +38,7 @@ public class FixContext {
     private final Long userId;
     private final boolean isAttack;
     private final int attackBudget;
+    private final AttackScenarioDto attackScenario;
     private final boolean enablePrivacy;
     private final int maxAttempts;
     private final Map<String, PreferredRange> preferredRanges;
@@ -69,5 +71,12 @@ public class FixContext {
 
     public synchronized List<String> diagnosticsSnapshot() {
         return new ArrayList<>(diagnostics);
+    }
+
+    public AttackScenarioDto resolvedAttackScenario() {
+        if (attackScenario != null) {
+            return attackScenario;
+        }
+        return isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none();
     }
 }

@@ -1,8 +1,11 @@
 package cn.edu.nju.Iot_Verify.dto.model;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -74,5 +77,23 @@ class ModelSemanticsDtoTest {
                 ModelSemanticsDto.AttackEffect
                         .DECLARED_FALSIFIABLE_READING_NONDETERMINISTIC_WITHIN_DECLARED_DOMAIN),
                 semantics.getAttackEffects());
+    }
+
+    @Test
+    void exactRunCapturesDisplayLabelsWithoutChangingStablePointIdentity() {
+        AttackScenarioDto scenario = AttackScenarioDto.exactPoints(List.of(
+                AttackPointDto.device("sensor_1"),
+                AttackPointDto.automationLink(7L)));
+        AttackSurface surface = new AttackSurface(
+                Set.of("sensor_1"), 1, Set.of("sensor_1"), Set.of(),
+                Map.of("sensor_1", "Hall sensor"), Map.of(7L, "Turn on hall light"));
+
+        ModelSemanticsDto semantics = ModelSemanticsDto.forRun(scenario, false, surface);
+
+        assertEquals("sensor_1", semantics.getSelectedAttackPoints().get(0).getDeviceId());
+        assertEquals(7L, semantics.getSelectedAttackPoints().get(1).getRuleId());
+        assertEquals(List.of("Hall sensor", "Turn on hall light"),
+                semantics.getSelectedAttackPoints().stream()
+                        .map(SelectedAttackPointDto::getDisplayLabel).toList());
     }
 }

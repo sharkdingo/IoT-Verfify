@@ -8,6 +8,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerationContext;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueReasonCode;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
@@ -46,7 +47,8 @@ public class SmvMainModuleBuilder {
                                      int attackBudget,
                                      boolean enablePrivacy,
                                      ParameterizationConfig config) {
-        return buildParameterized(userId, devices, null, rules, deviceSmvMap, isAttack, attackBudget,
+        return buildParameterized(userId, devices, null, rules, deviceSmvMap,
+                legacyAttackScenario(isAttack, attackBudget),
                 enablePrivacy, config, null);
     }
 
@@ -60,6 +62,19 @@ public class SmvMainModuleBuilder {
                                      boolean enablePrivacy,
                                      ParameterizationConfig config,
                                      SmvGenerationContext context) {
+        return buildParameterized(userId, devices, environmentVariables, rules, deviceSmvMap,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, config, context);
+    }
+
+    public String buildParameterized(Long userId,
+                                     List<DeviceVerificationDto> devices,
+                                     List<BoardEnvironmentVariableDto> environmentVariables,
+                                     List<RuleDto> rules,
+                                     Map<String, DeviceSmvData> deviceSmvMap,
+                                     AttackScenarioDto attackScenario,
+                                     boolean enablePrivacy,
+                                     ParameterizationConfig config,
+                                     SmvGenerationContext context) {
         Map<RuleDto, Integer> ruleIndexMap = new IdentityHashMap<>();
         if (rules != null) {
             for (int i = 0; i < rules.size(); i++) {
@@ -68,7 +83,7 @@ public class SmvMainModuleBuilder {
         }
         ParamCtx ctx = new ParamCtx(config, ruleIndexMap);
         return buildInternal(userId, devices, environmentVariables, rules, deviceSmvMap,
-                isAttack, attackBudget, enablePrivacy, ctx, context);
+                attackScenario, enablePrivacy, ctx, context);
     }
 
     private static boolean hasParameterizationFrozenVars(ParamCtx ctx) {
@@ -102,6 +117,19 @@ public class SmvMainModuleBuilder {
         }
     }
 
+    private static AttackScenarioDto legacyAttackScenario(boolean isAttack, int attackBudget) {
+        return isAttack ? AttackScenarioDto.anyUpToBudget(attackBudget) : AttackScenarioDto.none();
+    }
+
+    private static String automationLinkAttackInitializer(AttackScenarioDto attackScenario, RuleDto rule) {
+        if (attackScenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET) {
+            return "{TRUE, FALSE}";
+        }
+        Long ruleId = rule != null ? rule.getId() : null;
+        return ruleId != null && attackScenario.selectedAutomationLinkRuleIds().contains(ruleId)
+                ? "TRUE" : "FALSE";
+    }
+
     public String build(Long userId,
                        List<DeviceVerificationDto> devices,
                        List<RuleDto> rules,
@@ -109,7 +137,8 @@ public class SmvMainModuleBuilder {
                        boolean isAttack,
                        int attackBudget,
                        boolean enablePrivacy) {
-        return build(userId, devices, null, rules, deviceSmvMap, isAttack, attackBudget, enablePrivacy, SmvGenerationContext.noop());
+        return build(userId, devices, null, rules, deviceSmvMap,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, SmvGenerationContext.noop());
     }
 
     public String build(Long userId,
@@ -121,8 +150,20 @@ public class SmvMainModuleBuilder {
                        int attackBudget,
                        boolean enablePrivacy,
                        SmvGenerationContext context) {
+        return build(userId, devices, environmentVariables, rules, deviceSmvMap,
+                legacyAttackScenario(isAttack, attackBudget), enablePrivacy, context);
+    }
+
+    public String build(Long userId,
+                       List<DeviceVerificationDto> devices,
+                       List<BoardEnvironmentVariableDto> environmentVariables,
+                       List<RuleDto> rules,
+                       Map<String, DeviceSmvData> deviceSmvMap,
+                       AttackScenarioDto attackScenario,
+                       boolean enablePrivacy,
+                       SmvGenerationContext context) {
         return buildInternal(userId, devices, environmentVariables, rules, deviceSmvMap,
-                isAttack, attackBudget, enablePrivacy, null, context);
+                attackScenario, enablePrivacy, null, context);
     }
 
     private String buildInternal(Long userId,
@@ -130,11 +171,15 @@ public class SmvMainModuleBuilder {
                                   List<BoardEnvironmentVariableDto> environmentVariables,
                                   List<RuleDto> rules,
                                   Map<String, DeviceSmvData> deviceSmvMap,
-                                  boolean isAttack,
-                                  int attackBudget,
+                                  AttackScenarioDto attackScenario,
                                   boolean enablePrivacy,
                                   ParamCtx paramCtx,
                                   SmvGenerationContext context) {
+
+        AttackScenarioDto safeAttackScenario = attackScenario != null
+                ? attackScenario : AttackScenarioDto.none();
+        boolean isAttack = safeAttackScenario.isEnabled();
+        int attackBudget = safeAttackScenario.effectiveBudget();
 
         // Parameter validation
         if (devices == null) {
@@ -180,7 +225,7 @@ public class SmvMainModuleBuilder {
             }
             appendParameterizationFrozenVars(content, paramCtx);
         }
-        if (isAttack) {
+        if (safeAttackScenario.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET) {
             content.append("\nINVAR ").append(SmvConstants.NUSMV_COMPROMISED_POINT_COUNT)
                     .append(" <= ").append(attackBudget).append(";");
         }
@@ -244,7 +289,9 @@ public class SmvMainModuleBuilder {
             if (rules != null) {
                 for (int ruleIndex = 0; ruleIndex < rules.size(); ruleIndex++) {
                     content.append("\n\tinit(").append(SmvConstants.AUTOMATION_LINK_ATTACK_PREFIX)
-                            .append(ruleIndex).append(") := {TRUE, FALSE};");
+                            .append(ruleIndex).append(") := ")
+                            .append(automationLinkAttackInitializer(safeAttackScenario, rules.get(ruleIndex)))
+                            .append(";");
                 }
             }
             content.append("\n\tinit(").append(SmvConstants.NUSMV_COMPROMISED_POINT_COUNT)

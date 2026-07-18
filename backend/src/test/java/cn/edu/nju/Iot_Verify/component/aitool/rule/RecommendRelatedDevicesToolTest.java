@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -287,7 +288,7 @@ class RecommendRelatedDevicesToolTest {
     }
 
     @Test
-    void executeBoardRecommendations_materializesOmittedRuntimeAndReportsAppliedDefaults() throws Exception {
+    void executeBoardRecommendations_materializesValuesButLeavesTemplateLabelsAsFallback() throws Exception {
         when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
         when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(runtimeTemplate("Sensor")));
         when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
@@ -310,18 +311,19 @@ class RecommendRelatedDevicesToolTest {
         assertEquals("Kitchen", recommendation.path("suggestedPlacement").asText());
         assertEquals("Kitchen monitoring", recommendation.path("intendedUse").asText());
         assertEquals("idle", recommendation.path("initialState").asText());
-        assertEquals("trusted", recommendation.path("currentStateTrust").asText());
-        assertEquals("public", recommendation.path("currentStatePrivacy").asText());
+        assertFalse(recommendation.has("currentStateTrust"));
+        assertFalse(recommendation.has("currentStatePrivacy"));
         assertEquals("battery", recommendation.path("initialVariables").get(0).path("name").asText());
         assertEquals("low", recommendation.path("initialVariables").get(0).path("value").asText());
-        assertEquals("trusted", recommendation.path("initialVariables").get(0).path("trust").asText());
-        assertEquals("public", recommendation.path("initialPrivacies").get(0).path("privacy").asText());
+        assertFalse(recommendation.path("initialVariables").get(0).has("trust"));
+        assertFalse(recommendation.has("initialPrivacies"));
         assertEquals(1, json.path("adjustedCount").asInt());
         JsonNode defaults = json.path("adjustedItems").get(0).path("appliedValues");
         assertEquals("Kitchen Sensor", defaults.path("suggestedLabel").asText());
         assertEquals("idle", defaults.path("state").asText());
         assertEquals("low", defaults.path("variables.battery.value").asText());
-        assertEquals("public", defaults.path("privacies.battery.privacy").asText());
+        assertFalse(defaults.has("variables.battery.trust"));
+        assertFalse(defaults.has("privacies.battery.privacy"));
     }
 
     @Test

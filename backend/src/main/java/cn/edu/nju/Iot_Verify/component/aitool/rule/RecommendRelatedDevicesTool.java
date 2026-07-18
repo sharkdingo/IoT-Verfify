@@ -80,6 +80,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
 - 不要推荐与现有设备完全相同建议部署区域/用途的重复实例
 - intendedUse 和 suggestedPlacement 只解释推荐上下文；应用时只保存模板、suggestedLabel 和有效初始运行值，不要暗示它们会成为设备字段或形式模型输入
 - initialVariables/initialPrivacies 只能使用模板中 IsInside=true 的本地变量；共享环境变量不要放进设备实例
+- currentStateTrust/currentStatePrivacy 和变量 trust/privacy 仅表示实例级高级覆盖；采用模板默认标签时必须省略。
 - trust 是 MEDIC 控制来源标签：多条件规则只要至少一个实际触发来源可信，目标仍可信；只有全部来源不可信时目标才不可信。它不是认证或通用数据完整性。privacy 是数据敏感性标签，不代表现实访问控制或加密
 - 基于现有设备的功能缺口进行推荐
 - 如果没有找到合适的推荐，返回空的recommendations数组
@@ -416,24 +417,14 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                             filteredItems.add(filteredItem(inspected, "invalidInitialRuntime", language, suggestedLabel));
                             continue;
                         }
-                        String effectiveTrust = trust != null
-                                ? trust : defaultStateTrust(template, initialState);
-                        recommendation.put("currentStateTrust", effectiveTrust);
-                        if (!isPresentNode(trustNode)) {
-                            appliedDefaults.put("currentStateTrust", effectiveTrust);
-                        }
+                        if (trust != null) recommendation.put("currentStateTrust", trust);
                         JsonNode privacyNode = rec.path("currentStatePrivacy");
                         String privacy = normalizePrivacy(privacyNode.asText(""));
                         if (isPresentNode(privacyNode) && privacy == null) {
                             filteredItems.add(filteredItem(inspected, "invalidInitialRuntime", language, suggestedLabel));
                             continue;
                         }
-                        String effectivePrivacy = privacy != null
-                                ? privacy : defaultStatePrivacy(template, initialState);
-                        recommendation.put("currentStatePrivacy", effectivePrivacy);
-                        if (!isPresentNode(privacyNode)) {
-                            appliedDefaults.put("currentStatePrivacy", effectivePrivacy);
-                        }
+                        if (privacy != null) recommendation.put("currentStatePrivacy", privacy);
                     } else if (isPresentNode(rec.path("currentStateTrust"))
                             || isPresentNode(rec.path("currentStatePrivacy"))) {
                         filteredItems.add(filteredItem(inspected, "invalidInitialRuntime", language, suggestedLabel));
@@ -631,29 +622,22 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             JsonNode trustNode = row.path("trust");
             String trust = normalizeTrust(trustNode.asText(""));
             if (isPresentNode(trustNode) && trust == null) return null;
-            String effectiveTrust = Optional.ofNullable(trust).orElse(defaultTrust(variable.getTrust()));
             Map<String, Object> normalized = new LinkedHashMap<>();
             normalized.put("name", variable.getName());
             normalized.put("value", value);
-            normalized.put("trust", effectiveTrust);
+            if (trust != null) normalized.put("trust", trust);
             variables.add(normalized);
-            if (!isPresentNode(trustNode)) {
-                appliedDefaults.put("variables." + variable.getName() + ".trust", effectiveTrust);
-            }
         }
         for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
             String key = variable.getName().toLowerCase(Locale.ROOT);
             if (seen.contains(key)) continue;
             String value = defaultVariableValue(variable);
             if (value == null) continue;
-            String trust = defaultTrust(variable.getTrust());
             Map<String, Object> normalized = new LinkedHashMap<>();
             normalized.put("name", variable.getName());
             normalized.put("value", value);
-            normalized.put("trust", trust);
             variables.add(normalized);
             appliedDefaults.put("variables." + variable.getName() + ".value", value);
-            appliedDefaults.put("variables." + variable.getName() + ".trust", trust);
         }
         return variables;
     }
@@ -684,24 +668,12 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             JsonNode privacyNode = row.path("privacy");
             String normalizedPrivacy = normalizePrivacy(privacyNode.asText(""));
             if (isPresentNode(privacyNode) && normalizedPrivacy == null) return null;
-            String privacy = Optional.ofNullable(normalizedPrivacy).orElse(defaultPrivacy(variable.getPrivacy()));
-            Map<String, Object> normalized = new LinkedHashMap<>();
-            normalized.put("name", variable.getName());
-            normalized.put("privacy", privacy);
-            privacies.add(normalized);
-            if (!isPresentNode(privacyNode)) {
-                appliedDefaults.put("privacies." + variable.getName() + ".privacy", privacy);
+            if (normalizedPrivacy != null) {
+                Map<String, Object> normalized = new LinkedHashMap<>();
+                normalized.put("name", variable.getName());
+                normalized.put("privacy", normalizedPrivacy);
+                privacies.add(normalized);
             }
-        }
-        for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
-            String key = variable.getName().toLowerCase(Locale.ROOT);
-            if (seen.contains(key)) continue;
-            String privacy = defaultPrivacy(variable.getPrivacy());
-            Map<String, Object> normalized = new LinkedHashMap<>();
-            normalized.put("name", variable.getName());
-            normalized.put("privacy", privacy);
-            privacies.add(normalized);
-            appliedDefaults.put("privacies." + variable.getName() + ".privacy", privacy);
         }
         return privacies;
     }
@@ -729,28 +701,6 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             return String.valueOf(variable.getLowerBound());
         }
         return null;
-    }
-
-    private String defaultStateTrust(DeviceTemplateDto template, String stateName) {
-        DeviceTemplateDto.DeviceManifest.WorkingState state = findWorkingState(template, stateName);
-        return defaultTrust(state == null ? null : state.getTrust());
-    }
-
-    private String defaultStatePrivacy(DeviceTemplateDto template, String stateName) {
-        DeviceTemplateDto.DeviceManifest.WorkingState state = findWorkingState(template, stateName);
-        return defaultPrivacy(state == null ? null : state.getPrivacy());
-    }
-
-    private DeviceTemplateDto.DeviceManifest.WorkingState findWorkingState(
-            DeviceTemplateDto template,
-            String stateName) {
-        if (template == null || template.getManifest() == null || stateName == null
-                || template.getManifest().getWorkingStates() == null) return null;
-        return template.getManifest().getWorkingStates().stream()
-                .filter(Objects::nonNull)
-                .filter(state -> state.getName() != null && state.getName().equalsIgnoreCase(stateName))
-                .findFirst()
-                .orElse(null);
     }
 
     private String canonicalVariableValue(DeviceTemplateDto.DeviceManifest.InternalVariable variable, String rawValue) {
@@ -802,20 +752,12 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
         return "trusted".equals(normalized) || "untrusted".equals(normalized) ? normalized : null;
     }
 
-    private String defaultTrust(String value) {
-        return Optional.ofNullable(normalizeTrust(value)).orElse("trusted");
-    }
-
     private String normalizePrivacy(String value) {
         if (value == null) {
             return null;
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         return "public".equals(normalized) || "private".equals(normalized) ? normalized : null;
-    }
-
-    private String defaultPrivacy(String value) {
-        return Optional.ofNullable(normalizePrivacy(value)).orElse("public");
     }
 
     private String languageInstruction(String language) {

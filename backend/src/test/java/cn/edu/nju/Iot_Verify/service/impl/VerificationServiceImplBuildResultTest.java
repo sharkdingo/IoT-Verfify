@@ -593,7 +593,7 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.submitVerification(
                         1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 51, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be between 0 and 50"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -617,7 +617,7 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.submitVerification(
                         1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), true, 0, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be at least 1 when attack modeling is enabled"));
+        assertTrue(ex.getMessage().contains("Attack budget must be between 1 and 50 for exhaustive verification"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -629,7 +629,7 @@ class VerificationServiceImplBuildResultTest {
                         1L, makeRequest(singleDevice(), List.of(),
                                 List.of(makeEffectiveSpec("s1")), false, 3, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be 0 when attack modeling is disabled"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(taskRepository, never()).save(any(VerificationTaskPo.class));
         verify(smvGenerator, never()).generate(
                 anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
@@ -641,7 +641,7 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.verify(
                         1L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, -1, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be between 0 and 50"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -656,11 +656,11 @@ class VerificationServiceImplBuildResultTest {
                 () -> service.verifyAsync(
                         1L, 16L, makeRequest(singleDevice(), List.of(), List.of(makeEffectiveSpec("s1")), false, 51, false)));
 
-        assertTrue(ex.getMessage().contains("Attack budget must be between 0 and 50"));
+        assertTrue(ex.getMessage().contains("Attack budget must be omitted or 0 when no attack scenario is selected"));
         verify(taskRepository).failTaskIfActive(
                 eq(16L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE),
-                eq("attackBudget: Attack budget must be between 0 and 50"), anyString(), any(),
+                eq("attackScenario.budget: Attack budget must be omitted or 0 when no attack scenario is selected"), anyString(), any(),
                 eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
         verify(taskRepository, never()).startTaskIfStillPending(
                 anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());

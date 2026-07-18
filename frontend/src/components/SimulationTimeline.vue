@@ -139,6 +139,35 @@ const modelSemanticsConsistent = computed(() => isModelSemanticsConsistent(
   { isAttack: props.isAttack, attackBudget: props.attackBudget, enablePrivacy: props.enablePrivacy }
 ))
 
+const attackSelectionText = computed(() => {
+  if (props.modelSemantics?.attackSelectionPolicy === 'EXACT_ATTACK_POINTS') {
+    const points = (props.modelSemantics.selectedAttackPoints || [])
+      .map(point => point.displayLabel?.trim() || (point.kind === 'DEVICE'
+        ? t('app.attackDevicePoint', { id: point.deviceId })
+        : t('app.attackAutomationLinkPoint', { id: point.ruleId })))
+      .join(', ')
+    return t('app.attackExactSelectionDetail', {
+      count: props.modelSemantics.selectedAttackPoints?.length ?? 0,
+      points
+    })
+  }
+  return t('app.attackExhaustiveSelectionDetail', {
+    count: props.attackBudget ?? 0,
+    total: props.modelSemantics?.modeledAttackPointCount ?? 0
+  })
+})
+
+const attackSelectionShortText = computed(() => {
+  if (!modelSemanticsConsistent.value) {
+    return t('app.traceVisualization.attackScenario')
+  }
+  return props.modelSemantics?.attackSelectionPolicy === 'EXACT_ATTACK_POINTS'
+    ? t('app.attackExactSelectionShort', {
+        count: props.modelSemantics.selectedAttackPoints?.length ?? 0
+      })
+    : t('app.attackExhaustiveSelectionShort', { count: props.attackBudget ?? 0 })
+})
+
 const deviceSecurityFacts = (device: SimulationState['devices'][number]) =>
   playbackDeviceSecurityFacts(device)
 
@@ -360,7 +389,7 @@ watch(selectedStateIndex, () => {
               {{ t('app.traceVisualization.runtimeCompromisedPoints') }}: {{ runtimeCompromisedPointCount }}
             </span>
             <span v-if="isAttack" class="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
-              {{ t('app.traceVisualization.attackScenario') }} · {{ t('app.traceVisualization.attackBudget') }} {{ attackBudget ?? 0 }}
+              {{ attackSelectionShortText }}
             </span>
             <span v-if="enablePrivacy && modelSemanticsConsistent" class="rounded-full bg-fuchsia-100 px-2 py-0.5 text-xs font-semibold text-fuchsia-700">
               {{ t('app.traceVisualization.privacyPropagationEnabled') }}
@@ -705,13 +734,7 @@ watch(selectedStateIndex, () => {
           <p>{{ t('app.traceVisualization.playbackSnapshotReadOnly') }}</p>
           <p v-if="modelSemanticsConsistent">
             {{ isAttack
-              ? t('app.traceVisualization.simulationAttackContext', {
-                  count: attackBudget ?? 0,
-                  total: modelSemantics?.modeledAttackPointCount ?? 0,
-                  devices: modelSemantics?.modeledDeviceAttackPointCount ?? 0,
-                  falsifiable: modelSemantics?.modeledFalsifiableReadingDeviceCount ?? 0,
-                  links: modelSemantics?.modeledAutomationLinkAttackPointCount ?? 0
-                })
+              ? attackSelectionText
               : t('app.traceVisualization.simulationNoAttackContext') }}
           </p>
           <p v-if="modelSemanticsConsistent">

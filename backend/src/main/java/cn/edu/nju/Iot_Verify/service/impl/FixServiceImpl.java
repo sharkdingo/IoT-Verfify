@@ -21,6 +21,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.fix.TemplateSnapshotComparison;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
@@ -127,7 +128,7 @@ public class FixServiceImpl implements FixService {
         }
 
         progress.accept(InteractiveOperationStage.SEARCHING_AND_VERIFYING);
-        FixResultDto result = ruleFixer.fix(
+        FixResultDto result = runFixer(
                 traceId,
                 ctx.trace.getViolatedSpecId(),
                 ctx.trace.getStates(),
@@ -137,8 +138,7 @@ public class FixServiceImpl implements FixService {
                 req.getSpecs(),
                 deviceSmvMap,
                 userId,
-                req.isAttack(),
-                req.getAttackBudget(),
+                req.resolvedAttackScenario(),
                 req.isEnablePrivacy(),
                 strategies,
                 fixConfig.getMaxAttempts(),
@@ -297,7 +297,7 @@ public class FixServiceImpl implements FixService {
                                                          Map<String, PreferredRange> preferredRanges) {
         VerificationRequestDto req = ctx.request;
         Map<String, DeviceSmvData> deviceSmvMap = modelInput.deviceSmvMap();
-        FixResultDto recomputed = ruleFixer.fix(
+        FixResultDto recomputed = runFixer(
                 ctx.trace.getId(),
                 ctx.trace.getViolatedSpecId(),
                 ctx.trace.getStates(),
@@ -307,8 +307,7 @@ public class FixServiceImpl implements FixService {
                 req.getSpecs(),
                 deviceSmvMap,
                 userId,
-                req.isAttack(),
-                req.getAttackBudget(),
+                req.resolvedAttackScenario(),
                 req.isEnablePrivacy(),
                 List.of(strategy),
                 fixConfig.getMaxAttempts(),
@@ -857,6 +856,33 @@ public class FixServiceImpl implements FixService {
                         + "': lower(" + pr.getLower() + ") > upper(" + pr.getUpper() + ")");
             }
         }
+    }
+
+    private FixResultDto runFixer(
+            Long traceId,
+            String violatedSpecId,
+            List<cn.edu.nju.Iot_Verify.dto.trace.TraceStateDto> states,
+            List<RuleDto> rules,
+            List<DeviceVerificationDto> devices,
+            List<BoardEnvironmentVariableDto> environmentVariables,
+            List<SpecificationDto> specs,
+            Map<String, DeviceSmvData> deviceSmvMap,
+            Long userId,
+            AttackScenarioDto attackScenario,
+            boolean enablePrivacy,
+            List<String> strategies,
+            int maxAttempts,
+            Map<String, PreferredRange> preferredRanges) {
+        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            return ruleFixer.fix(
+                    traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
+                    deviceSmvMap, userId, scenario, enablePrivacy, strategies, maxAttempts, preferredRanges);
+        }
+        return ruleFixer.fix(
+                traceId, violatedSpecId, states, rules, devices, environmentVariables, specs,
+                deviceSmvMap, userId, scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
+                strategies, maxAttempts, preferredRanges);
     }
 
     private VerificationContext loadContext(Long userId, Long traceId) {

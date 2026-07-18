@@ -4,11 +4,10 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -18,8 +17,6 @@ import java.util.List;
 
 /**
  * 验证请求
- *
- * 参考 MEDIC-test 中的攻击模式支持，添加 isAttack 和 attackBudget 参数
  *
  * 注意：Trace 会自动保存（当检测到违规时），无需前端传入 saveTrace 参数
  */
@@ -53,25 +50,15 @@ public class VerificationRequestDto {
     @NotEmpty(message = "Specs list cannot be empty")
     private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
     
-    /**
-     * 是否启用攻击模式
-     * 参考 MEDIC-test SMVGeneration.java 中的 isAttack 标志
-     */
-    @JsonProperty("isAttack")
-    private boolean isAttack = false;
-    
-    /**
-     * 攻击预算（启用攻击建模时必须显式提供 1-50；关闭时必须为 0）
-     * Limits how many modeled device-instance or automation-link points may be compromised
-     * in one verification branch.
-     * It never changes a device variable's declared domain. A compromised instance's
-     * template-declared falsifiable readings may produce any value within their domains,
-     * while a TAP-rule command sent to that target is dropped. A compromised automation
-     * link independently drops that rule's command. Other device-internal transitions
-     * are not frozen. Each submitted rule is one modeled automation-link point.
-     */
-    @Min(0) @Max(50)
-    private int attackBudget = 0;
+    /** Per-run attack selection. Trust labels remain independent board/model inputs. */
+    @Valid
+    private AttackScenarioDto attackScenario;
+
+    @JsonIgnore
+    private Boolean legacyIsAttack;
+
+    @JsonIgnore
+    private Integer legacyAttackBudget;
 
     /**
      * 是否启用隐私维度建模
@@ -83,14 +70,70 @@ public class VerificationRequestDto {
      */
     private boolean enablePrivacy = false;
 
-    // 阻止 Lombok 生成的 isAttack()/setAttack() 被 Jackson 序列化
     @JsonIgnore
     public boolean isAttack() {
-        return isAttack;
+        return resolvedAttackScenario().isEnabled();
     }
 
     @JsonIgnore
     public void setAttack(boolean attack) {
-        this.isAttack = attack;
+        int budget = attackScenario != null && attackScenario.getBudget() != null
+                ? attackScenario.getBudget() : getAttackBudget();
+        this.attackScenario = attack
+                ? AttackScenarioDto.anyUpToBudget(Math.max(1, budget))
+                : AttackScenarioDto.none();
+    }
+
+    @JsonIgnore
+    public int getAttackBudget() {
+        return resolvedAttackScenario().effectiveBudget();
+    }
+
+    @JsonIgnore
+    public void setAttackBudget(int attackBudget) {
+        AttackScenarioDto current = resolvedAttackScenario();
+        if (current.getMode() == AttackScenarioDto.Mode.ANY_UP_TO_BUDGET) {
+            this.attackScenario = AttackScenarioDto.anyUpToBudget(attackBudget);
+        } else if (current.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            this.attackScenario = current;
+        } else {
+            this.attackScenario = AttackScenarioDto.builder()
+                    .mode(AttackScenarioDto.Mode.NONE)
+                    .budget(attackBudget)
+                    .points(List.of())
+                    .build();
+        }
+    }
+
+    @JsonSetter("isAttack")
+    public void readLegacyIsAttack(Boolean isAttack) {
+        this.legacyIsAttack = isAttack;
+    }
+
+    @JsonSetter("attackBudget")
+    public void readLegacyAttackBudget(Integer attackBudget) {
+        this.legacyAttackBudget = attackBudget;
+    }
+
+    @JsonIgnore
+    public boolean hasLegacyAttackFields() {
+        return legacyIsAttack != null || legacyAttackBudget != null;
+    }
+
+    @JsonIgnore
+    public AttackScenarioDto resolvedAttackScenario() {
+        if (attackScenario != null) {
+            return attackScenario;
+        }
+        boolean enabled = Boolean.TRUE.equals(legacyIsAttack);
+        int budget = legacyAttackBudget != null ? legacyAttackBudget : 0;
+        if (enabled) {
+            return AttackScenarioDto.anyUpToBudget(budget);
+        }
+        return AttackScenarioDto.builder()
+                .mode(AttackScenarioDto.Mode.NONE)
+                .budget(budget)
+                .points(List.of())
+                .build();
     }
 }

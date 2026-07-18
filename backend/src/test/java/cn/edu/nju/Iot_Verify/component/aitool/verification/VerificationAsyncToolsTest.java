@@ -89,7 +89,8 @@ class VerificationAsyncToolsTest {
 
     @Test
     void verifyModelAsync_attackEnabledWithZeroBudget_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
-        String result = verifyModelAsyncTool.execute("{\"isAttack\":true,\"attackBudget\":0}");
+        String result = verifyModelAsyncTool.execute(
+                "{\"attackMode\":\"exhaustive\",\"attackBudget\":0}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());

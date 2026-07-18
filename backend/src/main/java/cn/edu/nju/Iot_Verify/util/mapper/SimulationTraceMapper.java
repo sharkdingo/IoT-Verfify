@@ -134,7 +134,11 @@ public class SimulationTraceMapper {
         dto.setAttack(po.getIsAttack());
         dto.setAttackBudget(Boolean.TRUE.equals(po.getIsAttack()) ? po.getAttackBudget() : 0);
         dto.setEnablePrivacy(po.getEnablePrivacy());
-        if (po.getModeledDeviceAttackPointCount() != null
+        if (po.getModelSemanticsJson() != null && !po.getModelSemanticsJson().isBlank()) {
+            dto.setModelSemantics(JsonUtils.readPersistedRequired(
+                    "simulation trace", po.getId(), "modelSemanticsJson",
+                    () -> JsonUtils.fromJson(po.getModelSemanticsJson(), ModelSemanticsDto.class)));
+        } else if (po.getModeledDeviceAttackPointCount() != null
                 && po.getModeledAutomationLinkAttackPointCount() != null
                 && po.getModeledFalsifiableReadingDeviceCount() != null) {
             dto.setModelSemantics(ModelSemanticsDto.forRun(

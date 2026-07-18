@@ -77,6 +77,10 @@ public class SimulationTaskPo implements TaskView {
     @JsonIgnore
     private String modelSnapshotJson;
 
+    @Column(name = "model_semantics_json", columnDefinition = "TEXT")
+    @JsonIgnore
+    private String modelSemanticsJson;
+
     private Integer requestedSteps;
 
     private Integer steps;
@@ -136,4 +140,3 @@ public class SimulationTaskPo implements TaskView {
         if (enablePrivacy == null) enablePrivacy = false;
     }
 }
-

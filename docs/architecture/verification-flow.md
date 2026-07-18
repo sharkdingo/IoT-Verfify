@@ -5,7 +5,7 @@ counterexample, and optional fix attempt. Field-level contracts live in
 [../api/verification.md](../api/verification.md); model construction lives in
 [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-13. Primary sources:
+Verified against code on 2026-07-18. Primary sources:
 `VerificationController`, `SimulationController`, `VerificationServiceImpl`,
 `SimulationServiceImpl`, `SmvGenerator`, `NusmvExecutor`, and `SmvTraceParser`.
 
@@ -13,7 +13,7 @@ Verified against code on 2026-07-13. Primary sources:
 
 ```text
 devices + environmentVariables + rules + specs
-  + isAttack + attackBudget + enablePrivacy
+  + attackScenario + enablePrivacy
         |
         | POST /api/verify or /api/verify/async
         v
@@ -79,12 +79,12 @@ part of the claim.
 Every sync result, async task/detail, and full saved trace returns the run context rather
 than relying on the current form:
 
-- `isAttack` says whether compromised device-instance and automation-link behavior was modeled;
-- `attackBudget` is the maximum, not exact, compromised-point count;
+- derived `isAttack` says whether compromised device-instance and automation-link behavior was modeled;
+- `attackBudget` is the exhaustive upper bound or exact selected-point count;
 - `enablePrivacy` says whether sensitivity propagation was modeled;
-- `modelSemantics` defines attack point, nondeterministic selection policy, attack
-  effects actually present in this scene, the falsifiable-reading device subset, and
-  trust/privacy propagation policies.
+- `modelSemantics` distinguishes exact selection from budget-based exhaustive selection,
+  records exact points when applicable, and defines attack effects actually present in
+  this scene, the falsifiable-reading device subset, and trust/privacy propagation policies.
 - `modelSnapshot` reports capture time and effective device/rule/spec/environment/template
   counts, with `templatesFrozen=true` proving that generation reused the manifests
   captured at acceptance rather than mutable current definitions.
@@ -221,7 +221,7 @@ read-only historical model snapshot:
   transition remounts a finite flow animation, including consecutive transitions driven
   by the same rule; initial states and steps driven only by environment evolution or a
   device-internal transition deliberately keep rule edges still;
-- the configured attack budget and actual `compromisedPointCount` are shown separately;
+- the configured exact/exhaustive selection and actual `compromisedPointCount` are shown separately;
 - compromised automation links are named by their rule labels and highlighted as broken
   links on the canvas;
 - trust/privacy badges describe model labels, not authentication or access control.

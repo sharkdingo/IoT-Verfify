@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelGenerationIssueDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelRunSnapshotDto;
 import cn.edu.nju.Iot_Verify.dto.model.ModelSemanticsDto;
 import cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto;
@@ -205,9 +206,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             purgeCancelledSyncTasks();
             log.warn("Sync verification timed out after {}ms", timeoutMs);
             result = applyRunContext(buildErrorResult("", List.of("Verification timed out")),
-                    input.attack(), input.attackBudget(), input.enablePrivacy(),
-                    input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                    input.attackScenario(), input.enablePrivacy(), input.attackSurface(), input.modelSnapshot(),
                     JsonUtils.toJson(input.templateManifests()));
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
@@ -219,9 +218,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             result = applyRunContext(buildErrorResult("", List.of("Verification interrupted")),
-                    input.attack(), input.attackBudget(), input.enablePrivacy(),
-                    input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                    input.attackScenario(), input.enablePrivacy(), input.attackSurface(), input.modelSnapshot(),
                     JsonUtils.toJson(input.templateManifests()));
         }
         try {
@@ -259,9 +256,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
         try {
             checkLogs.add("Generating NuSMV model...");
-            SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
+            SmvGenerator.GenerateResult genResult = generateResolvedModel(
                     userId, devices, request.getEnvironmentVariables(), rules, specs,
-                    isAttack, attackBudget, enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION,
+                    request.resolvedAttackScenario(), enablePrivacy, SmvGenerator.GeneratePurpose.VERIFICATION,
                     tempModelContext, resolvedDeviceSmvMap);
             smvFile = genResult.smvFile();
             deviceSmvMap = genResult.deviceSmvMap();
@@ -295,9 +292,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     templateManifests,
                     requestJson, genResult.emittedSpecs(), genResult.generationIssues(),
                     genResult.disabledRuleCount(), genResult.skippedSpecCount());
-            applyRunContext(finalResult, isAttack, attackBudget, enablePrivacy,
-                    attackSurface.deviceCount(), attackSurface.automationLinkCount(),
-                    attackSurface.falsifiableReadingDeviceCount(), modelSnapshot, templateSnapshotsJson);
+            applyRunContext(finalResult, request.resolvedAttackScenario(), enablePrivacy,
+                    attackSurface, modelSnapshot, templateSnapshotsJson);
             return finalResult;
 
         } catch (IOException | InterruptedException e) {
@@ -321,9 +317,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         } finally {
             // Persist result.json when tempDir exists (both success and failure) for debugging.
             if (finalResult != null) {
-                applyRunContext(finalResult, isAttack, attackBudget, enablePrivacy,
-                        attackSurface.deviceCount(), attackSurface.automationLinkCount(),
-                        attackSurface.falsifiableReadingDeviceCount(), modelSnapshot, templateSnapshotsJson);
+                applyRunContext(finalResult, request.resolvedAttackScenario(), enablePrivacy,
+                        attackSurface, modelSnapshot, templateSnapshotsJson);
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
@@ -378,7 +373,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         if (request == null) {
             throw new ValidationException("request", "Verification request cannot be null");
         }
-        VerificationRequestDto snapshot = snapshotRequest(request);
+        if (request.getAttackScenario() != null && request.hasLegacyAttackFields()) {
+            throw new ValidationException("attackScenario",
+                    "Use attackScenario only; it cannot be combined with legacy isAttack/attackBudget fields");
+        }
+        AttackScenarioDto attackScenario = AttackScenarioValidator.canonicalizeForVerification(
+                request.resolvedAttackScenario());
+        VerificationRequestDto snapshot = snapshotRequest(request, attackScenario);
         List<DeviceVerificationDto> devices = copyRequiredList(
                 snapshot.getDevices(), "devices", "Devices list cannot be empty");
         List<SpecificationDto> specs = copyRequiredList(
@@ -386,24 +387,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         List<RuleDto> rules = copyOptionalList(snapshot.getRules(), "rules");
         List<BoardEnvironmentVariableDto> environmentVariables = copyOptionalList(
                 snapshot.getEnvironmentVariables(), "environmentVariables");
-        int attackBudget = snapshot.getAttackBudget();
-        if (attackBudget < 0 || attackBudget > 50) {
-            throw new ValidationException("attackBudget", "Attack budget must be between 0 and 50");
-        }
-        if (snapshot.isAttack() && attackBudget < 1) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget must be at least 1 when attack modeling is enabled");
-        }
-        if (!snapshot.isAttack() && attackBudget != 0) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget must be 0 when attack modeling is disabled");
-        }
-        int effectiveAttackBudget = snapshot.isAttack() ? attackBudget : 0;
+        int effectiveAttackBudget = attackScenario.effectiveBudget();
         snapshot.setDevices(devices);
         snapshot.setRules(rules);
         snapshot.setSpecs(specs);
         snapshot.setEnvironmentVariables(environmentVariables);
-        snapshot.setAttackBudget(effectiveAttackBudget);
+        snapshot.setAttackScenario(attackScenario);
         snapshot.setEnablePrivacy(snapshot.isEnablePrivacy() || specificationsRequirePrivacy(specs));
 
         Map<String, String> errors = NusmvRequestValidator.newErrors();
@@ -417,16 +406,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         NusmvRequestValidator.throwIfErrors(errors);
 
         AttackSurface attackSurface = modelInput.attackSurface();
-        if (snapshot.isAttack() && attackBudget > attackSurface.totalCount()) {
-            throw new ValidationException("attackBudget",
-                    "Attack budget cannot exceed the behavior-changing device and automation-link points ("
-                            + attackSurface.totalCount() + ")");
-        }
+        AttackScenarioValidator.validateAgainstSurface(attackScenario, attackSurface, rules);
 
         return new VerificationInput(modelInput.devices(), rules, specs, snapshot.isAttack(), effectiveAttackBudget,
                 snapshot.isEnablePrivacy(), attackSurface.deviceCount(), attackSurface.automationLinkCount(),
-                attackSurface.falsifiableReadingDeviceCount(), snapshot, modelInput.deviceSmvMap(),
-                modelInput.templateManifests(), modelInput.modelSnapshot());
+                attackSurface.falsifiableReadingDeviceCount(), attackScenario, snapshot, modelInput.deviceSmvMap(),
+                modelInput.templateManifests(), modelInput.modelSnapshot(), attackSurface);
     }
 
     private boolean specificationsRequirePrivacy(List<SpecificationDto> specs) {
@@ -445,21 +430,21 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private VerificationResultDto applyModelContext(VerificationResultDto result,
-                                                     boolean isAttack,
-                                                     int attackBudget,
+                                                     AttackScenarioDto attackScenario,
                                                      boolean enablePrivacy,
-                                                     int deviceCount,
-                                                     int automationLinkCount,
-                                                     int falsifiableReadingDeviceCount) {
+                                                     AttackSurface attackSurface) {
         if (result == null) {
             return null;
         }
+        AttackScenarioDto safeAttackScenario = attackScenario != null
+                ? attackScenario : AttackScenarioDto.none();
+        boolean isAttack = safeAttackScenario.isEnabled();
+        int attackBudget = safeAttackScenario.effectiveBudget();
         result.setIsAttack(isAttack);
         result.setAttackBudget(isAttack ? attackBudget : 0);
         result.setEnablePrivacy(enablePrivacy);
         ModelSemanticsDto semantics = ModelSemanticsDto.forRun(
-                isAttack, enablePrivacy, deviceCount, automationLinkCount,
-                falsifiableReadingDeviceCount);
+                safeAttackScenario, enablePrivacy, attackSurface);
         result.setModelSemantics(semantics);
         if (result.getTraces() != null) {
             for (TraceDto trace : result.getTraces()) {
@@ -473,16 +458,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private VerificationResultDto applyRunContext(VerificationResultDto result,
-                                                   boolean isAttack,
-                                                   int attackBudget,
+                                                   AttackScenarioDto attackScenario,
                                                    boolean enablePrivacy,
-                                                   int deviceCount,
-                                                   int automationLinkCount,
-                                                   int falsifiableReadingDeviceCount,
+                                                   AttackSurface attackSurface,
                                                    ModelRunSnapshotDto modelSnapshot,
                                                    String templateSnapshotsJson) {
-        applyModelContext(result, isAttack, attackBudget, enablePrivacy,
-                deviceCount, automationLinkCount, falsifiableReadingDeviceCount);
+        applyModelContext(result, attackScenario, enablePrivacy, attackSurface);
         if (result == null) {
             return null;
         }
@@ -551,9 +532,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         }
     }
 
-    private VerificationRequestDto snapshotRequest(VerificationRequestDto request) {
+    private VerificationRequestDto snapshotRequest(VerificationRequestDto request,
+                                                   AttackScenarioDto attackScenario) {
         try {
-            return objectMapper.convertValue(request, VerificationRequestDto.class);
+            VerificationRequestDto snapshot = objectMapper.convertValue(request, VerificationRequestDto.class);
+            snapshot.setAttackScenario(attackScenario);
+            return snapshot;
         } catch (IllegalArgumentException e) {
             throw new ValidationException("request", "Verification request cannot be snapshotted");
         }
@@ -647,7 +631,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private Long submitVerificationInput(Long userId, VerificationInput input) {
         Long taskId = createTask(userId, input.attack(), input.attackBudget(), input.enablePrivacy(),
                 input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
+                input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                JsonUtils.toJson(ModelSemanticsDto.forRun(
+                        input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
         try {
             enqueueVerificationTask(userId, taskId, input);
         } catch (TaskRejectedException e) {
@@ -669,6 +655,22 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     int linkPointCount,
                     int falsifiableReadingDeviceCount,
                     ModelRunSnapshotDto modelSnapshot) {
+        return createTask(userId, isAttack, attackBudget, enablePrivacy,
+                devicePointCount, linkPointCount, falsifiableReadingDeviceCount, modelSnapshot,
+                JsonUtils.toJson(ModelSemanticsDto.forRun(
+                        isAttack, enablePrivacy, devicePointCount, linkPointCount,
+                        falsifiableReadingDeviceCount)));
+    }
+
+    private Long createTask(Long userId,
+                            boolean isAttack,
+                            int attackBudget,
+                            boolean enablePrivacy,
+                            int devicePointCount,
+                            int linkPointCount,
+                            int falsifiableReadingDeviceCount,
+                            ModelRunSnapshotDto modelSnapshot,
+                            String modelSemanticsJson) {
         return transactionTemplate.execute(status -> {
             requireActiveUserForTracePersistence(userId);
             long storedTaskCount = taskRepository.countByUserId(userId);
@@ -694,6 +696,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .modeledAutomationLinkAttackPointCount(linkPointCount)
                     .enablePrivacy(enablePrivacy)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
+                    .modelSemanticsJson(modelSemanticsJson)
                     .createdAt(LocalDateTime.now())
                     .progress(0)
                     .progressStage(TaskProgressStage.QUEUED)
@@ -726,7 +729,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         try {
             persistTaskModelContext(requiredTaskId, input.attack(), input.attackBudget(), input.enablePrivacy(),
                     input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot());
+                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(),
+                    JsonUtils.toJson(ModelSemanticsDto.forRun(
+                            input.attackScenario(), input.enablePrivacy(), input.attackSurface())));
             enqueueVerificationTask(userId, requiredTaskId, input);
         } catch (TaskRejectedException e) {
             failTaskById(requiredTaskId, "Server busy, please try again later");
@@ -787,9 +792,9 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
 
             updateTaskProgress(taskId, 20, TaskProgressStage.GENERATING_MODEL);
-            SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
+            SmvGenerator.GenerateResult genResult = generateResolvedModel(
                     userId, input.devices(), input.request().getEnvironmentVariables(), input.rules(), input.specs(),
-                    input.attack(), input.attackBudget(), input.enablePrivacy(), SmvGenerator.GeneratePurpose.VERIFICATION,
+                    input.attackScenario(), input.enablePrivacy(), SmvGenerator.GeneratePurpose.VERIFICATION,
                     SmvGenerator.TempModelContext.task(taskId), input.deviceSmvMap());
             smvFile = genResult.smvFile();
             Map<String, DeviceSmvData> deviceSmvMap = genResult.deviceSmvMap();
@@ -831,9 +836,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     input.templateManifests(), requestJson,
                     genResult.emittedSpecs(), genResult.generationIssues(),
                     genResult.disabledRuleCount(), genResult.skippedSpecCount());
-            applyRunContext(finalResult, input.attack(), input.attackBudget(), input.enablePrivacy(),
-                    input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                    input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(), templateSnapshotsJson);
+            applyRunContext(finalResult, input.attackScenario(), input.enablePrivacy(),
+                    input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson);
 
             if (isTaskCancelled(taskId) || Thread.currentThread().isInterrupted()) {
                 return;
@@ -860,9 +864,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             }
         } finally {
             if (finalResult != null) {
-                applyRunContext(finalResult, input.attack(), input.attackBudget(), input.enablePrivacy(),
-                        input.modeledDeviceAttackPointCount(), input.modeledAutomationLinkAttackPointCount(),
-                        input.modeledFalsifiableReadingDeviceCount(), input.modelSnapshot(), templateSnapshotsJson);
+                applyRunContext(finalResult, input.attackScenario(), input.enablePrivacy(),
+                        input.attackSurface(), input.modelSnapshot(), templateSnapshotsJson);
                 saveResultJson(smvFile, finalResult);
             }
             cleanupTempFile(smvFile);
@@ -884,10 +887,12 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                      int modeledDeviceAttackPointCount,
                                      int modeledAutomationLinkAttackPointCount,
                                      int modeledFalsifiableReadingDeviceCount,
+                                     AttackScenarioDto attackScenario,
                                      VerificationRequestDto request,
                                      Map<String, DeviceSmvData> deviceSmvMap,
                                      Map<String, DeviceManifest> templateManifests,
-                                     ModelRunSnapshotDto modelSnapshot) {}
+                                     ModelRunSnapshotDto modelSnapshot,
+                                     AttackSurface attackSurface) {}
 
     private record ModelBoundaryInput(List<DeviceVerificationDto> devices,
                                        List<BoardEnvironmentVariableDto> environmentVariables,
@@ -1081,10 +1086,11 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                          int devicePointCount,
                                          int linkPointCount,
                                          int falsifiableReadingDeviceCount,
-                                         ModelRunSnapshotDto modelSnapshot) {
+                                         ModelRunSnapshotDto modelSnapshot,
+                                         String modelSemanticsJson) {
         taskRepository.updateModelContext(taskId, isAttack, isAttack ? attackBudget : 0, enablePrivacy,
                 devicePointCount, falsifiableReadingDeviceCount, linkPointCount,
-                JsonUtils.toJson(modelSnapshot));
+                JsonUtils.toJson(modelSnapshot), modelSemanticsJson);
     }
 
     @Override
@@ -1505,6 +1511,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                     .modeledAutomationLinkAttackPointCount(input.modeledAutomationLinkAttackPointCount())
                     .enablePrivacy(input.enablePrivacy())
                     .modelSnapshotJson(JsonUtils.toJson(input.modelSnapshot()))
+                    .modelSemanticsJson(JsonUtils.toJson(result.getModelSemantics()))
                     .outcome(outcome)
                     .violatedSpecCount(countViolatedSpecs(result.getSpecResults(), traces))
                     .disabledRuleCount(result.getDisabledRuleCount())
@@ -1654,6 +1661,29 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                 .modelComplete(false)
                 .traces(List.of()).specResults(List.of())
                 .checkLogs(outcomeLogs).nusmvOutput(truncateOutput(nusmvOutput)).build();
+    }
+
+    private SmvGenerator.GenerateResult generateResolvedModel(
+            Long userId,
+            List<DeviceVerificationDto> devices,
+            List<BoardEnvironmentVariableDto> environmentVariables,
+            List<RuleDto> rules,
+            List<SpecificationDto> specs,
+            AttackScenarioDto attackScenario,
+            boolean enablePrivacy,
+            SmvGenerator.GeneratePurpose purpose,
+            SmvGenerator.TempModelContext tempModelContext,
+            Map<String, DeviceSmvData> resolvedDeviceSmvMap) throws IOException {
+        AttackScenarioDto scenario = attackScenario != null ? attackScenario : AttackScenarioDto.none();
+        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            return smvGenerator.generateWithResolvedDeviceModel(
+                    userId, devices, environmentVariables, rules, specs, scenario,
+                    enablePrivacy, purpose, tempModelContext, resolvedDeviceSmvMap);
+        }
+        return smvGenerator.generateWithResolvedDeviceModel(
+                userId, devices, environmentVariables, rules, specs,
+                scenario.isEnabled(), scenario.effectiveBudget(), enablePrivacy,
+                purpose, tempModelContext, resolvedDeviceSmvMap);
     }
 
     private void cleanupTempFile(File file) {

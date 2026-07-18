@@ -88,25 +88,27 @@ class SimulationAsyncToolsTest {
     }
 
     @Test
-    void simulateModelAsync_invalidIntensity_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
-        String result = simulateModelAsyncTool.execute("{\"attackBudget\":-1}");
+    void simulateModelAsync_exactModeWithoutPoints_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
+        String result = simulateModelAsyncTool.execute(
+                "{\"attackMode\":\"exact\",\"attackPoints\":[]}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
-        assertEquals("attackBudget must be between 0 and 50.", json.path("error").asText());
+        assertEquals("attackPoints must contain between 1 and 50 points when attackMode is exact.",
+                json.path("error").asText());
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(simulationService, never()).submitSimulationWithTemplateSnapshot(anyLong(), any(), any());
     }
 
     @Test
-    void simulateModelAsync_attackEnabledWithZeroBudget_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
-        String result = simulateModelAsyncTool.execute("{\"isAttack\":true,\"attackBudget\":0}");
+    void simulateModelAsync_exhaustiveMode_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
+        String result = simulateModelAsyncTool.execute("{\"attackMode\":\"exhaustive\"}");
         JsonNode json = objectMapper.readTree(result);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
-        assertEquals("attackBudget must be between 1 and 50.", json.path("error").asText());
+        assertTrue(json.path("error").asText().contains("attackMode must be one of"));
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(simulationService, never()).submitSimulationWithTemplateSnapshot(anyLong(), any(), any());
     }

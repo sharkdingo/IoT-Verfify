@@ -5,14 +5,14 @@ import type { ModelRunSnapshot, ModelSemantics } from './modelSemantics'
 import type { Specification } from './spec'
 import type { AsyncTaskStatus, TaskProgressStage } from './task'
 import type { RunPersistence } from './runPersistence'
+import type { AttackScenario } from './attackScenario'
 
 export interface VerificationRequest {
   devices: ModelDevice[];
   environmentVariables: ModelEnvironmentVariable[];
   rules: ModelRule[];
   specs: ModelSpecification[];
-  isAttack: boolean;
-  attackBudget: number;
+  attackScenario: AttackScenario;
   enablePrivacy: boolean;
 }
 

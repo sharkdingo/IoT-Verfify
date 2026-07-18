@@ -28,7 +28,9 @@ import java.util.Optional;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -282,7 +284,7 @@ class NodeServiceImplMutationTest {
     }
 
     @Test
-    void addNode_materializesMissingLocalRuntimeWithoutOverwritingExplicitValues() {
+    void addNode_materializesOnlyValuesAndLeavesTemplateLabelsAsFallback() {
         String sensorJson = """
                 {"Name":"Sensor","Modes":["Mode"],"InitState":"idle",
                  "InternalVariables":[
@@ -306,17 +308,15 @@ class NodeServiceImplMutationTest {
 
         DeviceNodeDto saved = savedNode();
         assertEquals(List.of(
-                new VariableStateDto("battery", "high", "trusted"),
-                new VariableStateDto("signal", "0", "untrusted")
+                new VariableStateDto("battery", "high", null),
+                new VariableStateDto("signal", "0", null)
         ), saved.getVariables());
-        assertEquals(List.of(
-                new PrivacyStateDto("battery", "public"),
-                new PrivacyStateDto("signal", "private")
-        ), saved.getPrivacies());
-        assertTrue(result.getDefaultsApplied().contains("variables.battery.trust"));
+        assertEquals(List.of(), saved.getPrivacies());
+        assertNull(saved.getCurrentStateTrust());
+        assertNull(saved.getCurrentStatePrivacy());
+        assertFalse(result.getDefaultsApplied().contains("variables.battery.trust"));
         assertTrue(result.getDefaultsApplied().contains("variables.signal"));
-        assertTrue(result.getDefaultsApplied().contains("privacies.battery"));
-        assertTrue(result.getDefaultsApplied().contains("privacies.signal"));
+        assertFalse(result.getDefaultsApplied().stream().anyMatch(value -> value.startsWith("privacies")));
     }
 
     @Test

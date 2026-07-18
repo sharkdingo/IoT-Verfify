@@ -4,12 +4,14 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.FixContext;
+import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
@@ -45,11 +47,8 @@ public final class FixStrategyUtils {
         if (ctx.isExpired()) return false;
         File smvFile = null;
         try {
-            SmvGenerator.GenerateResult genResult = smvGenerator.generateWithResolvedDeviceModel(
-                    ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
-                    modifiedRules, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
-                    ctx.isEnablePrivacy(), SmvGenerator.GeneratePurpose.VERIFICATION,
-                    tempContext(ctx), ctx.getDeviceSmvMap());
+            SmvGenerator.GenerateResult genResult = generateResolved(
+                    smvGenerator, ctx, modifiedRules, SmvGenerator.GeneratePurpose.VERIFICATION);
             if (genResult == null) return false;
             smvFile = genResult.smvFile();
 
@@ -98,6 +97,40 @@ public final class FixStrategyUtils {
         } finally {
             cleanupTempDir(smvFile);
         }
+    }
+
+    public static SmvGenerator.GenerateResult generateResolved(
+            SmvGenerator smvGenerator,
+            FixContext ctx,
+            List<RuleDto> rules,
+            SmvGenerator.GeneratePurpose purpose) throws java.io.IOException {
+        AttackScenarioDto scenario = ctx.resolvedAttackScenario();
+        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            return smvGenerator.generateWithResolvedDeviceModel(
+                    ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
+                    scenario, ctx.isEnablePrivacy(), purpose, tempContext(ctx), ctx.getDeviceSmvMap());
+        }
+        return smvGenerator.generateWithResolvedDeviceModel(
+                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
+                scenario.isEnabled(), scenario.effectiveBudget(), ctx.isEnablePrivacy(), purpose,
+                tempContext(ctx), ctx.getDeviceSmvMap());
+    }
+
+    public static SmvGenerator.GenerateResult generateParameterizedResolved(
+            SmvGenerator smvGenerator,
+            FixContext ctx,
+            List<RuleDto> rules,
+            ParameterizationConfig config) throws java.io.IOException {
+        AttackScenarioDto scenario = ctx.resolvedAttackScenario();
+        if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
+            return smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                    ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
+                    scenario, ctx.isEnablePrivacy(), config, tempContext(ctx), ctx.getDeviceSmvMap());
+        }
+        return smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
+                scenario.isEnabled(), scenario.effectiveBudget(), ctx.isEnablePrivacy(), config,
+                tempContext(ctx), ctx.getDeviceSmvMap());
     }
 
     /**

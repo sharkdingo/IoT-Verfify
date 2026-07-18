@@ -646,11 +646,13 @@ class RecommendScenarioToolTest {
         assertEquals("off", defaults.path("state").asText());
         assertEquals(176, defaults.path("width").asInt());
         assertEquals(128, defaults.path("height").asInt());
-        assertEquals("trusted", defaults.path("currentStateTrust").asText());
-        assertEquals("public", defaults.path("currentStatePrivacy").asText());
-        assertEquals("trusted", defaults.path("variables.brightness.trust").asText());
-        assertEquals("public", defaults.path("privacies.brightness.privacy").asText());
-        assertEquals("public", scene.path("devices").get(0).path("privacies").get(0).path("privacy").asText());
+        assertFalse(defaults.has("currentStateTrust"));
+        assertFalse(defaults.has("currentStatePrivacy"));
+        assertFalse(defaults.has("variables.brightness.trust"));
+        assertFalse(defaults.has("privacies.brightness.privacy"));
+        assertFalse(scene.path("devices").get(0).has("currentStateTrust"));
+        assertFalse(scene.path("devices").get(0).has("currentStatePrivacy"));
+        assertFalse(scene.path("devices").get(0).has("privacies"));
     }
 
     @Test

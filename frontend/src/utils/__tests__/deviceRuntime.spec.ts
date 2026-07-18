@@ -78,16 +78,18 @@ const statelessSensorTemplate: DeviceTemplate = {
 }
 
 describe('device runtime authority helpers', () => {
-  it('resets a runtime draft from template defaults', () => {
+  it('keeps template labels as fallback instead of instance overrides', () => {
     const draft = createDeviceRuntimeDraft()
 
     resetDeviceRuntimeDraft(draft, thermostatTemplate)
 
     expect(draft.state).toBe('auto')
-    expect(draft.currentStateTrust).toBe('trusted')
-    expect(draft.currentStatePrivacy).toBe('public')
-    expect(draft.variableTrusts.temperature).toBe('trusted')
-    expect(draft.privacies.temperature).toBe('private')
+    expect(draft.currentStateTrust).toBe('')
+    expect(draft.currentStatePrivacy).toBe('')
+    expect(draft.variableTrusts.temperature).toBe('')
+    expect(draft.privacies.temperature).toBe('')
+    expect(findTemplateStateTrust(thermostatTemplate, 'auto')).toBe('trusted')
+    expect(findTemplateStatePrivacy(thermostatTemplate, 'auto')).toBe('public')
     expect(draft.variables.temperature).toBe('0')
     expect(draft.variables.presence).toBe('home')
     expect(getTemplateVariableDefaultValue(thermostatTemplate.manifest.InternalVariables![1])).toBe('home')
@@ -110,11 +112,10 @@ describe('device runtime authority helpers', () => {
       currentStatePrivacy: 'private',
       variables: [
         { name: 'temperature', value: '27', trust: 'untrusted' },
-        { name: 'presence', value: 'home', trust: 'trusted' }
+        { name: 'presence', value: 'home' }
       ],
       privacies: [
-        { name: 'temperature', privacy: 'private' },
-        { name: 'presence', privacy: 'public' }
+        { name: 'temperature', privacy: 'private' }
       ]
     })
   })
@@ -125,20 +126,14 @@ describe('device runtime authority helpers', () => {
       variables: [{ name: 'presence', value: 'away', trust: 'untrusted' }]
     }, { variableScope: 'local' })).toEqual({
       state: 'cool',
-      currentStateTrust: 'trusted',
-      currentStatePrivacy: 'public',
-      variables: [{ name: 'presence', value: 'away', trust: 'untrusted' }],
-      privacies: [{ name: 'presence', privacy: 'public' }]
+      variables: [{ name: 'presence', value: 'away', trust: 'untrusted' }]
     })
   })
 
   it('uses the same effective local defaults when runtime is omitted or explicitly empty', () => {
     const expected = {
       state: 'auto',
-      currentStateTrust: 'trusted',
-      currentStatePrivacy: 'public',
-      variables: [{ name: 'presence', value: 'home', trust: 'trusted' }],
-      privacies: [{ name: 'presence', privacy: 'public' }]
+      variables: [{ name: 'presence', value: 'home' }]
     }
 
     expect(materializeDeviceRuntimeConfig(thermostatTemplate, undefined, { variableScope: 'local' })).toEqual(expected)
@@ -156,13 +151,8 @@ describe('device runtime authority helpers', () => {
 
     expect(buildDeviceRuntimeConfig(thermostatTemplate, draft, { includeEmptyCollections: true })).toEqual({
       state: 'auto',
-      currentStateTrust: 'trusted',
-      currentStatePrivacy: 'public',
       variables: [],
-      privacies: [
-        { name: 'temperature', privacy: 'private' },
-        { name: 'presence', privacy: 'public' }
-      ]
+      privacies: []
     })
   })
 
@@ -176,13 +166,8 @@ describe('device runtime authority helpers', () => {
 
     expect(buildDeviceRuntimeConfig(thermostatTemplate, draft, { variableScope: 'local' })).toEqual({
       state: 'auto',
-      currentStateTrust: 'trusted',
-      currentStatePrivacy: 'public',
       variables: [
-        { name: 'presence', value: 'home', trust: 'trusted' }
-      ],
-      privacies: [
-        { name: 'presence', privacy: 'public' }
+        { name: 'presence', value: 'home' }
       ]
     })
 

@@ -158,7 +158,7 @@ final class NusmvRequestValidator {
         if (AttackSurface.analyze(rules, deviceSmvMap).totalCount() > 0) {
             return;
         }
-        putError(errors, "isAttack",
+        putError(errors, "attackScenario",
                 "Attack modeling would not change this model: the scene has no automation command-delivery "
                         + "links and no device reading marked FalsifiableWhenCompromised. Disable attack modeling, "
                         + "or add an applicable rule or explicitly falsifiable sensor/received-data variable.");

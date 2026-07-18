@@ -68,7 +68,7 @@ The replacement commits or rolls back as one transaction.
 | `width` / `height` | `Integer` | Required; width is `80..2000`, height is `60..2000`; UI and AI creation paths default to `176` / `128` when the creator omits explicit dimensions |
 | `currentStateTrust` | `String` | Optional only for templates with a state machine (`Modes` plus non-empty `WorkingStates`); `trusted` / `untrusted` |
 | `currentStatePrivacy` | `String` | Optional only for templates with a state machine; `public` / `private`. This is the selected initial state's data-sensitivity label, not access control |
-| `variables` | `VariableStateDto[]` | Optional; `{ name, value, trust }` for device-local template variables (`InternalVariables[].IsInside=true`) only |
+| `variables` | `VariableStateDto[]` | Optional; `{ name, value, trust? }` for device-local template variables (`InternalVariables[].IsInside=true`) only. `value` is the instance's initial value; omitted `trust` inherits the active template default, while an explicit value is an advanced instance override |
 | `privacies` | `PrivacyStateDto[]` | Optional; `{ name, privacy }` for device-local variables or generated state privacy keys only |
 
 > `DeviceNodeDto` is the canvas-CRUD shape (includes UI layout). The verification path
@@ -163,14 +163,13 @@ privacy keys with values `public|private`. Template variables with `IsInside=fal
 are not saved on a device instance; they are board-level environment variables
 stored through `/api/board/environment`.
 
-All ordinary creation paths materialize the same effective device-local starting point:
-the template initial state, each local enum's first value or bounded number's lower bound,
-and the template source/sensitivity labels. Manual creation shows these values in the
-form; device-list JSON import and AI creation merge explicit overrides onto the same
-defaults. A device-list JSON field that is omitted or `null` means "use the template
-default"; an explicit blank scalar or invalid value is rejected. Standard scene JSON is
-stricter and contains the already-materialized persisted runtime so export then import is
-lossless.
+All ordinary creation paths materialize the same device-local starting values: the
+template initial state and each local enum's first value or bounded number's lower bound.
+Trust/privacy labels remain template-owned fallbacks unless the user or AI explicitly
+supplies an advanced instance override. A device-list JSON field that is omitted or
+`null` means "use the template default"; an explicit blank scalar or invalid value is
+rejected. Standard scene JSON persists explicit overrides only, so export then import is
+lossless without freezing template labels into every device.
 
 ### `BoardEnvironmentVariableDto`
 
@@ -791,15 +790,17 @@ conflict freedom.
 > Device recommendations are instance-level. Each kept item contains `templateName`, an
 > effective `suggestedLabel`, and may contain advisory `intendedUse`/`suggestedPlacement`;
 > these two context fields are neither persisted device properties nor formal-model inputs. For a stateful or locally
-> parameterized template it also contains effective `initialState`, `currentStateTrust`,
-> `currentStatePrivacy`, `initialVariables`, and `initialPrivacies`. Runtime values are
+> parameterized template it also contains effective `initialState` and
+> `initialVariables`; explicit advanced overrides may add `currentStateTrust`,
+> `currentStatePrivacy`, per-variable trust, and `initialPrivacies`. Runtime values are
 > constrained to local template variables (`IsInside=true`). If an AI candidate supplies an
 > invalid initial state, malformed runtime arrays, unknown local variables, invalid local
 > variable values, or invalid trust/privacy values, the whole device candidate is rejected
 > with a `filteredItems[]` reason instead of being returned with those fields silently
-> dropped. Omitted runtime fields are materialized from template defaults and reported in
+> dropped. Omitted state/value fields are materialized from template defaults and reported in
 > `adjustedItems[]` as `{ type, index?, reasonCode, reason, label?, appliedValues }`, so the
-> preview and later create request use the same initial model. Display labels are unique
+> preview and later create request use the same initial model. Omitted trust/privacy
+> fields stay absent so the active template remains authoritative. Display labels are unique
 > across the whole board ignoring case, even across different templates. Multiple
 > recommendations may use the same template when they represent different labels or
 > advisory contexts. Applying a recommendation writes the effective device type, label,

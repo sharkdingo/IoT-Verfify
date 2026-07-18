@@ -5,14 +5,18 @@ import type { RuleForm, RuleSourceItemType } from '@/types/rule'
 import type { Specification } from '@/types/spec'
 import type { VerificationRequest } from '@/types/verify'
 import type { SimulationRequest } from '@/types/simulation'
+import type { AttackScenario } from '@/types/attackScenario'
 
 interface ModelRequestBase {
   nodes: DeviceNode[]
   deviceTemplates: DeviceTemplate[]
   environmentVariables?: ModelEnvironmentVariable[]
   rules: RuleForm[]
-  isAttack: boolean
-  attackBudget: number
+  attackScenario?: AttackScenario
+  /** @deprecated Test/helper compatibility; new callers must provide attackScenario. */
+  isAttack?: boolean
+  /** @deprecated Test/helper compatibility; new callers must provide attackScenario. */
+  attackBudget?: number
   enablePrivacy: boolean
 }
 
@@ -254,6 +258,30 @@ const buildEnvironmentVariables = (environmentVariables?: ModelEnvironmentVariab
       }
     })
 
+const buildAttackScenario = (attackScenario: AttackScenario): AttackScenario => {
+  if (attackScenario.mode === 'NONE') {
+    return { mode: 'NONE', budget: 0, points: [] }
+  }
+  if (attackScenario.mode === 'ANY_UP_TO_BUDGET') {
+    return {
+      mode: 'ANY_UP_TO_BUDGET',
+      budget: attackScenario.budget,
+      points: []
+    }
+  }
+  return {
+    mode: 'EXACT_POINTS',
+    points: (attackScenario.points || []).map(point => point.kind === 'DEVICE'
+      ? { kind: 'DEVICE' as const, deviceId: resolveDeviceVarName(point.deviceId) }
+      : { kind: 'AUTOMATION_LINK' as const, ruleId: point.ruleId })
+  }
+}
+
+const resolveAttackScenario = (params: ModelRequestBase): AttackScenario =>
+  params.attackScenario || (params.isAttack
+    ? { mode: 'ANY_UP_TO_BUDGET', budget: params.attackBudget, points: [] }
+    : { mode: 'NONE', budget: 0, points: [] })
+
 export const buildVerificationRequestPayload = (
   params: ModelRequestBase & { specifications: Specification[] }
 ): VerificationRequest => ({
@@ -261,8 +289,7 @@ export const buildVerificationRequestPayload = (
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   specs: buildSpecs(params.specifications),
-  isAttack: params.isAttack,
-  attackBudget: params.isAttack ? params.attackBudget : 0,
+  attackScenario: buildAttackScenario(resolveAttackScenario(params)),
   enablePrivacy: params.enablePrivacy
 })
 
@@ -273,8 +300,7 @@ export const buildSimulationRequestPayload = (
   environmentVariables: buildEnvironmentVariables(params.environmentVariables),
   rules: buildRules(params.rules),
   steps: params.steps,
-  isAttack: params.isAttack,
-  attackBudget: params.isAttack ? params.attackBudget : 0,
+  attackScenario: buildAttackScenario(resolveAttackScenario(params)),
   enablePrivacy: params.enablePrivacy
 })
 

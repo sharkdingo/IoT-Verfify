@@ -131,7 +131,7 @@ describe('modelRequest', () => {
     expect(verification.rules[0].id).toBeUndefined()
   })
 
-  it('zeros attackBudget when attack mode is disabled', () => {
+  it('canonicalizes disabled attack inputs to a NONE scenario', () => {
     const verification = buildVerificationRequestPayload({
       nodes,
       deviceTemplates,
@@ -152,8 +152,8 @@ describe('modelRequest', () => {
       enablePrivacy: false
     })
 
-    expect(verification.attackBudget).toBe(0)
-    expect(simulation.attackBudget).toBe(0)
+    expect(verification.attackScenario).toEqual({ mode: 'NONE', budget: 0, points: [] })
+    expect(simulation.attackScenario).toEqual({ mode: 'NONE', budget: 0, points: [] })
   })
 
   it('preserves explicit state trust overrides for mode templates', () => {
@@ -734,8 +734,7 @@ describe('modelRequest', () => {
       rules: request.rules,
       environmentVariables: request.environmentVariables,
       devices: request.devices,
-      attackBudget: request.attackBudget,
-      isAttack: request.isAttack
+      attackScenario: request.attackScenario
     }
     const withUnusedTemplate = [
       ...deviceTemplates,

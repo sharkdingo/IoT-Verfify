@@ -10,7 +10,7 @@ repaired rules back to the board (see [Applying a suggestion](#applying-a-sugges
 API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-16. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-18. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
 RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
 `parameterize/ParameterExtractor`; `service/impl/FixServiceImpl` (apply flow). Config keys
@@ -40,6 +40,12 @@ metadata. If any rule or specification was omitted, no strategy is run: the resu
 `fixable=false`, an empty suggestion list, `sourceModelComplete=false`, warnings, and
 `SKIPPED_INCOMPLETE_SOURCE_MODEL` for every requested strategy. Apply rejects the same
 trace. A repair must not be certified against a counterexample from a reduced model.
+
+The fixer also reuses the trace's complete per-run `attackScenario`. Exact device and
+automation-link selections remain fixed during every parameterized solve and forward
+verification; automation links are correlated by persisted rule id rather than generated
+list position. A repair is therefore checked against the same attacker choice that
+produced the counterexample, while exhaustive verification retains the original budget.
 
 A deadline (`FIX_TIMEOUT_MS`, default 300000) bounds the strategy pipeline. It is checked
 before each strategy and inside search loops; every NuSMV capacity wait and child process

@@ -92,11 +92,8 @@ public class ConditionAdjustStrategy implements FixStrategy {
             try {
                 // Pass augmentedRules (with candidate conditions appended) to NuSMV
                 SmvGenerator.GenerateResult genResult =
-                        smvGenerator.generateParameterizedWithResolvedDeviceModel(
-                                ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(),
-                                prep.augmentedRules, ctx.getSpecs(), ctx.isAttack(), ctx.getAttackBudget(),
-                                ctx.isEnablePrivacy(), config, FixStrategyUtils.tempContext(ctx),
-                                ctx.getDeviceSmvMap());
+                        FixStrategyUtils.generateParameterizedResolved(
+                                smvGenerator, ctx, prep.augmentedRules, config);
                 if (genResult == null) {
                     log.warn("ConditionAdjust attempt {}: SMV generation returned null", attempt + 1);
                     continue;

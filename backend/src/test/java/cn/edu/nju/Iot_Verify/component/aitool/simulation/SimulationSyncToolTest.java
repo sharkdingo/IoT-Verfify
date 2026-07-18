@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -157,44 +158,72 @@ class SimulationSyncToolTest {
     }
 
     @Test
-    void simulateModel_invalidIntensity_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
+    void simulateModel_exactModeWithoutPoints_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
         SimulateModelTool tool = new SimulateModelTool(boardDataConverter, simulationService, objectMapper);
 
-        String response = tool.execute("{\"attackBudget\":51}");
+        String response = tool.execute("{\"attackMode\":\"exact\",\"attackPoints\":[]}");
         JsonNode json = objectMapper.readTree(response);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
-        assertEquals("attackBudget must be between 0 and 50.", json.path("error").asText());
+        assertEquals("attackPoints must contain between 1 and 50 points when attackMode is exact.",
+                json.path("error").asText());
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(simulationService, never()).simulateWithTemplateSnapshot(anyLong(), any(), any());
     }
 
     @Test
-    void simulateModel_attackEnabledWithZeroBudget_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
+    void simulateModel_exhaustiveMode_shouldReturnValidationErrorBeforeLoadingBoard() throws Exception {
         SimulateModelTool tool = new SimulateModelTool(boardDataConverter, simulationService, objectMapper);
 
-        String response = tool.execute("{\"isAttack\":true,\"attackBudget\":0}");
+        String response = tool.execute("{\"attackMode\":\"exhaustive\"}");
         JsonNode json = objectMapper.readTree(response);
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         assertEquals(400, json.path("status").asInt());
-        assertEquals("attackBudget must be between 1 and 50.", json.path("error").asText());
+        assertTrue(json.path("error").asText().contains("attackMode must be one of"));
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(simulationService, never()).simulateWithTemplateSnapshot(anyLong(), any(), any());
     }
 
     @Test
-    void simulateModel_disabledAttackRejectsPositiveBudgetBeforeLoadingBoard() throws Exception {
+    void simulateModel_noneModeRejectsAttackPointsBeforeLoadingBoard() throws Exception {
         SimulateModelTool tool = new SimulateModelTool(boardDataConverter, simulationService, objectMapper);
 
         JsonNode json = objectMapper.readTree(
-                tool.execute("{\"steps\":10,\"isAttack\":false,\"attackBudget\":3}"));
+                tool.execute("{\"steps\":10,\"attackMode\":\"none\",\"attackPoints\":[{\"kind\":\"device\",\"deviceId\":\"d1\"}]}"));
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
-        assertTrue(json.path("error").asText().contains("Set isAttack=true"));
+        assertTrue(json.path("error").asText().contains("attackPoints must be omitted or empty"));
         verify(boardDataConverter, never()).getModelInputSnapshot(anyLong());
         verify(simulationService, never()).simulateWithTemplateSnapshot(anyLong(), any(), any());
+    }
+
+    @Test
+    void simulateModel_exactDevicePointNormalizesBoardOverviewId() throws Exception {
+        DeviceVerificationDto device = new DeviceVerificationDto();
+        device.setVarName("living_room_light");
+        device.setTemplateName("Light");
+        when(boardDataConverter.getModelInputSnapshot(1L)).thenReturn(snapshot(device));
+        when(simulationService.simulateWithTemplateSnapshot(anyLong(), any(), any()))
+                .thenReturn(SimulationResultDto.builder()
+                        .requestedSteps(1)
+                        .steps(1)
+                        .modelComplete(true)
+                        .states(List.of(new TraceStateDto(), new TraceStateDto()))
+                        .logs(List.of("ok"))
+                        .historyPersistence(RunPersistenceDto.notRequested())
+                        .build());
+
+        new SimulateModelTool(boardDataConverter, simulationService, objectMapper).execute("""
+                {"steps":1,"attackMode":"exact","attackPoints":[
+                  {"kind":"device","deviceId":"living-room-light"}
+                ]}
+                """);
+
+        verify(simulationService).simulateWithTemplateSnapshot(anyLong(), argThat(request ->
+                request.getAttackScenario().getPoints().get(0).getDeviceId()
+                        .equals("living_room_light")), any());
     }
 
     @Test

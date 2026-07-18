@@ -107,7 +107,10 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 - **Attack behavior is capability-scoped.** Compromise may falsify only variables whose
   manifest explicitly sets `FalsifiableWhenCompromised=true`; compromised targets or
   logical automation links drop matching commands. It does not add an arbitrary actuator
-  state-transition branch. See [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
+  state-transition branch. Attack selection is per-run: simulation requires explicit
+  points, while verification may use explicit points or exhaust all combinations up to a
+  budget. Persistent trust labels do not select attack points. See
+  [../docs/architecture/nusmv-model.md](../docs/architecture/nusmv-model.md).
 
 ## Reference (don't duplicate here — link)
 

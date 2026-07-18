@@ -80,6 +80,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
 - devices[].variables/privacies 只允许模板中 IsInside=true 的本地变量；共享环境量必须放在 environmentVariables。无法确定初始值或标签时应省略，不得猜测模板范围外的值。
 - devices[].id 只是本次回答内供规则/规约关联设备的临时别名，后端会统一改写；不要把它当作用户名称或永久技术 ID。
 - 只有同时声明 Modes 和 WorkingStates 的模板才填写 state/currentStateTrust/currentStatePrivacy。无状态机模板必须省略这三个字段，用变量表达读数。
+- currentStateTrust/currentStatePrivacy 以及变量 trust/privacy 都是实例级高级覆盖；需要模板默认值时必须省略，不能复制模板默认标签。
 - 推荐目标是构造一个可验证的场景，最好包含能暴露安全、响应、一致性或隐私问题的规则/规约组合。
 
 请只返回 JSON，不要返回 Markdown。
@@ -551,13 +552,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
             if (!isPresentNode(row.path("width"))) appliedDefaults.put("width", width);
             if (!isPresentNode(row.path("height"))) appliedDefaults.put("height", height);
             if (stateful) {
-                String effectiveTrust = trust != null ? trust : defaultStateTrust(template, effectiveState);
-                String effectivePrivacy = statePrivacy != null
-                        ? statePrivacy : defaultStatePrivacy(template, effectiveState);
-                device.put("currentStateTrust", effectiveTrust);
-                device.put("currentStatePrivacy", effectivePrivacy);
-                if (!isPresentNode(trustNode)) appliedDefaults.put("currentStateTrust", effectiveTrust);
-                if (!isPresentNode(statePrivacyNode)) appliedDefaults.put("currentStatePrivacy", effectivePrivacy);
+                if (trust != null) device.put("currentStateTrust", trust);
+                if (statePrivacy != null) device.put("currentStatePrivacy", statePrivacy);
             }
             if (!variables.isEmpty()) {
                 device.put("variables", variables);
@@ -606,11 +602,7 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("name", variable.getName());
                 item.put("value", value);
-                String effectiveTrust = trust != null ? trust : defaultLocalTrust(variable.getTrust());
-                item.put("trust", effectiveTrust);
-                if (!isPresentNode(row.path("trust"))) {
-                    appliedDefaults.put("variables." + variable.getName() + ".trust", effectiveTrust);
-                }
+                if (trust != null) item.put("trust", trust);
                 normalized.add(item);
             }
         }
@@ -619,14 +611,11 @@ public class RecommendScenarioTool extends AbstractAiTool {
             if (seen.contains(key)) continue;
             String value = defaultVariableValue(variable);
             if (value.isBlank()) continue;
-            String trust = defaultLocalTrust(variable.getTrust());
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("name", variable.getName());
             item.put("value", value);
-            item.put("trust", trust);
             normalized.add(item);
             appliedDefaults.put("variables." + variable.getName() + ".value", value);
-            appliedDefaults.put("variables." + variable.getName() + ".trust", trust);
         }
         return normalized;
     }
@@ -648,25 +637,13 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 JsonNode privacyNode = row.path("privacy");
                 String privacy = normalizePrivacy(text(privacyNode, ""));
                 if (isPresentNode(privacyNode) && privacy == null) return null;
-                String effectivePrivacy = privacy != null ? privacy : defaultPrivacy(normalizePrivacy(variable.getPrivacy()));
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("name", variable.getName());
-                item.put("privacy", effectivePrivacy);
-                if (!isPresentNode(privacyNode)) {
-                    appliedDefaults.put("privacies." + variable.getName() + ".privacy", effectivePrivacy);
+                if (privacy != null) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", variable.getName());
+                    item.put("privacy", privacy);
+                    normalized.add(item);
                 }
-                normalized.add(item);
             }
-        }
-        for (DeviceTemplateDto.DeviceManifest.InternalVariable variable : localVariables.values()) {
-            String key = variable.getName().toLowerCase(Locale.ROOT);
-            if (seen.contains(key)) continue;
-            String privacy = defaultPrivacy(normalizePrivacy(variable.getPrivacy()));
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", variable.getName());
-            item.put("privacy", privacy);
-            normalized.add(item);
-            appliedDefaults.put("privacies." + variable.getName() + ".privacy", privacy);
         }
         return normalized;
     }
@@ -1728,34 +1705,6 @@ public class RecommendScenarioTool extends AbstractAiTool {
         return states.isEmpty() ? "Working" : states.get(0);
     }
 
-    private String defaultStateTrust(DeviceTemplateDto template, String stateName) {
-        if (template != null && template.getManifest() != null) {
-            for (DeviceTemplateDto.DeviceManifest.WorkingState state :
-                    safeList(template.getManifest().getWorkingStates())) {
-                if (state != null && state.getName() != null
-                        && state.getName().equals(stateName)) {
-                    String trust = normalizeTrust(state.getTrust());
-                    return trust == null ? "trusted" : trust;
-                }
-            }
-        }
-        return "trusted";
-    }
-
-    private String defaultStatePrivacy(DeviceTemplateDto template, String stateName) {
-        if (template != null && template.getManifest() != null) {
-            for (DeviceTemplateDto.DeviceManifest.WorkingState state :
-                    safeList(template.getManifest().getWorkingStates())) {
-                if (state != null && state.getName() != null
-                        && state.getName().equals(stateName)) {
-                    String privacy = normalizePrivacy(state.getPrivacy());
-                    return privacy == null ? "public" : privacy;
-                }
-            }
-        }
-        return "public";
-    }
-
     private boolean hasStateMachine(DeviceTemplateDto template) {
         return template != null && template.getManifest() != null
                 && template.getManifest().getModes() != null
@@ -1891,11 +1840,6 @@ public class RecommendScenarioTool extends AbstractAiTool {
         String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         if ("public".equals(normalized) || "private".equals(normalized)) return normalized;
         return null;
-    }
-
-    private String defaultLocalTrust(String value) {
-        String normalized = normalizeTrust(value);
-        return normalized == null ? "trusted" : normalized;
     }
 
     private String defaultTrust(String value) {

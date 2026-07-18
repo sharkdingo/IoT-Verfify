@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.nusmv.generator.module;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackActivation;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.PropertyDimension;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
@@ -24,6 +25,13 @@ public class SmvDeviceModuleBuilder {
 
 
     public String build(DeviceSmvData smv, boolean isAttack, boolean enablePrivacy) {
+        return build(smv, isAttack ? AttackActivation.NONDETERMINISTIC : AttackActivation.DISABLED,
+                enablePrivacy);
+    }
+
+    public String build(DeviceSmvData smv,
+                        AttackActivation attackActivation,
+                        boolean enablePrivacy) {
         // 参数验证
         if (smv == null) {
             log.error("SmvDeviceModuleBuilder.build: smv 参数不能为 null");
@@ -52,12 +60,15 @@ public class SmvDeviceModuleBuilder {
         }
 
         boolean isSensor = smv.isSensor();
+        AttackActivation safeAttackActivation = attackActivation != null
+                ? attackActivation : AttackActivation.DISABLED;
+        boolean isAttack = safeAttackActivation.isModeled();
 
         // FROZENVAR for sensors (attack mode + variable trust/privacy)
         appendFrozenVarSection(content, smv, isAttack, isSensor, enablePrivacy);
 
         appendVariables(content, smv, isSensor, enablePrivacy);
-        appendAssignments(content, smv, isAttack, isSensor, enablePrivacy);
+        appendAssignments(content, smv, safeAttackActivation, isSensor, enablePrivacy);
 
         return content.toString();
     }
@@ -119,13 +130,19 @@ public class SmvDeviceModuleBuilder {
         }
     }
 
-    private void appendAssignments(StringBuilder content, DeviceSmvData smv, boolean isAttack, boolean isSensor, boolean enablePrivacy) {
+    private void appendAssignments(StringBuilder content,
+                                   DeviceSmvData smv,
+                                   AttackActivation attackActivation,
+                                   boolean isSensor,
+                                   boolean enablePrivacy) {
         StringBuilder assignContent = new StringBuilder();
+        boolean isAttack = attackActivation.isModeled();
 
         appendInitialValues(assignContent, smv, isAttack);
 
         if (isAttack) {
-            assignContent.append("\n\tinit(is_attack) := {TRUE, FALSE};");
+            assignContent.append("\n\tinit(is_attack) := ")
+                    .append(attackActivation.initialExpression()).append(";");
         }
 
         appendInitialProperty(assignContent, smv, isAttack, PropertyDimension.TRUST);

@@ -71,7 +71,11 @@ public class TraceMapper {
         dto.setAttack(po.getIsAttack());
         dto.setAttackBudget(Boolean.TRUE.equals(po.getIsAttack()) ? po.getAttackBudget() : 0);
         dto.setEnablePrivacy(po.getEnablePrivacy());
-        if (po.getModeledDeviceAttackPointCount() != null
+        if (po.getModelSemanticsJson() != null && !po.getModelSemanticsJson().isBlank()) {
+            dto.setModelSemantics(JsonUtils.readPersistedRequired(
+                    "verification trace", po.getId(), "modelSemanticsJson",
+                    () -> JsonUtils.fromJson(po.getModelSemanticsJson(), ModelSemanticsDto.class)));
+        } else if (po.getModeledDeviceAttackPointCount() != null
                 && po.getModeledAutomationLinkAttackPointCount() != null
                 && po.getModeledFalsifiableReadingDeviceCount() != null) {
             dto.setModelSemantics(ModelSemanticsDto.forRun(
@@ -103,6 +107,7 @@ public class TraceMapper {
         po.setRequestJson(traceDto.getRequestJson());
         po.setTemplateSnapshotsJson(traceDto.getTemplateSnapshotsJson());
         po.setModelSnapshotJson(JsonUtils.toJson(traceDto.getModelSnapshot()));
+        po.setModelSemanticsJson(JsonUtils.toJson(traceDto.getModelSemantics()));
         po.setIsAttack(traceDto.getAttack());
         po.setAttackBudget(Boolean.TRUE.equals(traceDto.getAttack()) ? traceDto.getAttackBudget() : 0);
         po.setEnablePrivacy(traceDto.getEnablePrivacy());

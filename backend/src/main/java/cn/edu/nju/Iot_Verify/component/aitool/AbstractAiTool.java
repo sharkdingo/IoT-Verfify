@@ -1,6 +1,9 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
+import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -202,6 +205,89 @@ public abstract class AbstractAiTool implements AiTool {
                     "VALIDATION_ERROR", 400));
         }
         return 0;
+    }
+
+    /** Parses the shared per-run attack scenario used by verification and simulation tools. */
+    protected final AttackScenarioDto attackScenarioArg(JsonNode args,
+                                                        boolean allowExhaustive)
+            throws ArgValidationException {
+        String mode = optionalEnumArg(args, "attackMode", "none",
+                allowExhaustive
+                        ? Set.of("none", "exact", "exhaustive")
+                        : Set.of("none", "exact"));
+        JsonNode budgetNode = args == null ? null : args.get("attackBudget");
+        JsonNode pointsNode = args == null ? null : args.get("attackPoints");
+
+        if ("none".equals(mode)) {
+            if (budgetNode != null && !budgetNode.isNull()
+                    && intArgInRange(args, "attackBudget", 0, 0, 50) != 0) {
+                throw new ArgValidationException(errorJson(
+                        "attackBudget must be omitted or 0 when attackMode is none.",
+                        "VALIDATION_ERROR", 400));
+            }
+            if (pointsNode != null && !pointsNode.isNull()
+                    && (!pointsNode.isArray() || !pointsNode.isEmpty())) {
+                throw new ArgValidationException(errorJson(
+                        "attackPoints must be omitted or empty when attackMode is none.",
+                        "VALIDATION_ERROR", 400));
+            }
+            return AttackScenarioDto.none();
+        }
+
+        if ("exhaustive".equals(mode)) {
+            if (!allowExhaustive) {
+                throw new ArgValidationException(errorJson(
+                        "attackMode exhaustive is verification-only; simulation requires exact attack points.",
+                        "VALIDATION_ERROR", 400));
+            }
+            if (pointsNode != null && !pointsNode.isNull()
+                    && (!pointsNode.isArray() || !pointsNode.isEmpty())) {
+                throw new ArgValidationException(errorJson(
+                        "attackPoints must be omitted or empty when attackMode is exhaustive.",
+                        "VALIDATION_ERROR", 400));
+            }
+            return AttackScenarioDto.anyUpToBudget(
+                    intArgInRange(args, "attackBudget", 1, 1, 50));
+        }
+
+        if (budgetNode != null && !budgetNode.isNull()
+                && intArgInRange(args, "attackBudget", 0, 0, 50) != 0) {
+            throw new ArgValidationException(errorJson(
+                    "attackBudget must be omitted or 0 when attackMode is exact.",
+                    "VALIDATION_ERROR", 400));
+        }
+        if (pointsNode == null || pointsNode.isNull() || !pointsNode.isArray()
+                || pointsNode.isEmpty() || pointsNode.size() > 50) {
+            throw new ArgValidationException(errorJson(
+                    "attackPoints must contain between 1 and 50 points when attackMode is exact.",
+                    "VALIDATION_ERROR", 400));
+        }
+
+        List<AttackPointDto> points = new ArrayList<>();
+        for (int index = 0; index < pointsNode.size(); index++) {
+            JsonNode pointNode = pointsNode.get(index);
+            String path = "attackPoints[" + index + "]";
+            requireOnlyFields(pointNode, path, Set.of("kind", "deviceId", "ruleId"));
+            String kind = optionalEnumArg(pointNode, "kind", "",
+                    Set.of("device", "automation_link"));
+            if ("device".equals(kind)) {
+                String deviceId = requiredTextField(pointNode, "deviceId", path);
+                if (pointNode.hasNonNull("ruleId")) {
+                    throw new ArgValidationException(errorJson(
+                            path + ".ruleId must be omitted for a device attack point.",
+                            "VALIDATION_ERROR", 400));
+                }
+                points.add(AttackPointDto.device(DeviceNameNormalizer.normalize(deviceId)));
+            } else {
+                if (pointNode.hasNonNull("deviceId")) {
+                    throw new ArgValidationException(errorJson(
+                            path + ".deviceId must be omitted for an automation-link attack point.",
+                            "VALIDATION_ERROR", 400));
+                }
+                points.add(AttackPointDto.automationLink(positiveLongArg(pointNode, "ruleId")));
+            }
+        }
+        return AttackScenarioDto.exactPoints(points);
     }
 
     protected final String optionalTextArg(JsonNode args,
