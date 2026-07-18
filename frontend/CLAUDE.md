@@ -105,7 +105,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   History Results with nested finding summaries.
 - **A stopped chat transport is not a cancelled tool operation.** Wait for the session
   activity endpoint to become idle before switching/deleting the session or allowing a
-  new assistant mutation, then reconcile board and run-history state.
+  new assistant mutation, then reconcile board and run-history state. Match the reloaded
+  terminal assistant row by `turnId`; never let an older completed turn replace the current
+  local request.
 
 ## Reference (link, don't duplicate)
 

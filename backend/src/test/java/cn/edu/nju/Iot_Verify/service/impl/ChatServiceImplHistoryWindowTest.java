@@ -27,12 +27,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -74,6 +76,11 @@ class ChatServiceImplHistoryWindowTest {
 
     @BeforeEach
     void setUp() {
+        lenient().doAnswer(invocation -> {
+            Consumer<TransactionStatus> action = invocation.getArgument(0);
+            action.accept(org.mockito.Mockito.mock(TransactionStatus.class));
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(org.mockito.ArgumentMatchers.any());
         lenient().when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
         service = new ChatServiceImpl(
@@ -400,6 +407,7 @@ class ChatServiceImplHistoryWindowTest {
         session.setId("busy-session");
         session.setUserId(1L);
         when(sessionRepo.findByIdAndUserId("busy-session", 1L)).thenReturn(Optional.of(session));
+        when(sessionRepo.findByIdAndUserIdForUpdate("busy-session", 1L)).thenReturn(Optional.of(session));
 
         service.beginStreamRequest(1L, "busy-session");
 

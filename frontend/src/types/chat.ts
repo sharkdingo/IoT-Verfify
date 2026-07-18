@@ -20,11 +20,12 @@ export interface ChatMessage {
     sessionId?: string
     role: 'user' | 'assistant' | 'tool'
     content: string
+    turnId?: string
     createdAt?: string
     // Persisted by the backend for history and populated live while streaming.
     executionTrace?: StreamProgress[]
     executionElapsedSeconds?: number
-    executionStatus?: 'COMPLETED' | 'PARTIAL' | 'DISCONNECTED' | 'FAILED'
+    executionStatus?: 'COMPLETED' | 'AWAITING_CONFIRMATION' | 'PARTIAL' | 'STOPPED' | 'DISCONNECTED' | 'FAILED'
 }
 
 export interface StreamCommand {

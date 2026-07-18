@@ -21,12 +21,13 @@ vi.mock('@/router', () => ({ router: routerMocks }))
 
 vi.mock('@/api/http', () => ({
   default: {
-    get: vi.fn()
+    get: vi.fn(),
+    post: vi.fn()
   }
 }))
 
 import http from '@/api/http'
-import { getSessionActivity, getSessionHistory, sendStreamChat } from './chat'
+import { getSessionActivity, getSessionHistory, requestSessionStop, sendStreamChat } from './chat'
 
 describe('chat stream lifecycle semantics', () => {
   beforeEach(() => {
@@ -81,6 +82,40 @@ describe('chat stream lifecycle semantics', () => {
       '/chat/sessions/session-1/activity',
       { timeout: 1500, signal: controller.signal }
     )
+  })
+
+  it('sends an explicit idempotent stop request for the active session', async () => {
+    vi.mocked(http.post).mockResolvedValue({ data: { data: null } })
+
+    await requestSessionStop('session-1')
+
+    expect(http.post).toHaveBeenCalledWith(
+      '/chat/sessions/session-1/stop',
+      null,
+      { timeout: 2500 }
+    )
+  })
+
+  it('includes the client turn id in the streaming request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: null
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() },
+      undefined,
+      'turn-1'
+    )).rejects.toMatchObject({ kind: 'MISSING_BODY' })
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      sessionId: 'session-1',
+      content: 'hello',
+      turnId: 'turn-1'
+    })
   })
 
   it('redirects an expired SSE session through the same login route as axios', async () => {

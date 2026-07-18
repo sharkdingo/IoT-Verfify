@@ -23,6 +23,7 @@ import {
   getSessionActivity,
   getSessionHistory,
   getSessionList,
+  requestSessionStop,
   sendStreamChat
 } from '@/api/chat';
 import { useChatStore } from '@/stores/chat';
@@ -215,6 +216,7 @@ let streamElapsedTimer: ReturnType<typeof setInterval> | null = null;
 const reconciliationRequired = ref(false);
 const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
+const activeStreamTurnId = ref('');
 const isLoadingHistory = ref(false);
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || reconciliationRequired.value);
@@ -345,15 +347,21 @@ const executionTraceStatus = (
     status?: ChatMessage['executionStatus']
 ) => {
   if (active) return t('app.chat.executionTraceRunning');
+  if (status === 'AWAITING_CONFIRMATION') {
+    return executionTraceTotals(trace).successful > 0
+        ? t('app.chat.executionTracePartialAwaitingConfirmation')
+        : t('app.chat.executionTraceAwaitingConfirmation');
+  }
+  if (status === 'STOPPED') return t('app.chat.executionTraceStopped');
   if (status === 'DISCONNECTED') return t('app.chat.executionTraceDisconnected');
-  if (status === 'PARTIAL') return t('app.chat.executionTracePartial');
-  if (status === 'FAILED') return t('app.chat.executionTraceFailed');
   const guard = [...trace].reverse().find(progress => progress.stage === 'EXECUTION_GUARD');
   if (guard) {
     return guard.outcome === 'NO_PROGRESS'
-        ? t('app.chat.executionTraceStoppedNoProgress')
-        : t('app.chat.executionTraceStoppedLimit');
+      ? t('app.chat.executionTraceStoppedNoProgress')
+      : t('app.chat.executionTraceStoppedLimit');
   }
+  if (status === 'PARTIAL') return t('app.chat.executionTracePartial');
+  if (status === 'FAILED') return t('app.chat.executionTraceFailed');
   const lastResult = [...trace].reverse().find(progress => progress.stage === 'TOOL_RESULT');
   return lastResult?.outcome === 'CONFIRMATION_REQUIRED'
       ? t('app.chat.executionTraceWaiting')
@@ -933,16 +941,35 @@ const markActiveAssistantAsResponseStopped = () => {
   scrollToBottom(false);
 };
 
-const abortActiveTransport = (showCancelledMessage = false) => {
+const hasTerminalAssistantRecord = (history: ChatMessage[], turnId?: string) => {
+  if (turnId) {
+    return history.some(message =>
+      message.role === 'assistant'
+      && message.turnId === turnId
+      && Boolean(message.executionStatus));
+  }
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message.role === 'assistant' && message.executionStatus) return true;
+    if (message.role === 'user') return false;
+  }
+  return false;
+};
+
+const detachActiveTransport = (showCancelledMessage = false) => {
   const controller = abortController.value;
-  if (!controller) return;
+  if (!controller) return null;
   streamRequestEpoch += 1;
-  controller.abort();
   if (abortController.value === controller) abortController.value = null;
   isStreaming.value = false;
   if (showCancelledMessage) {
     markActiveAssistantAsResponseStopped();
   }
+  return controller;
+};
+
+const abortActiveTransport = (showCancelledMessage = false) => {
+  detachActiveTransport(showCancelledMessage)?.abort();
 };
 
 const waitForSessionIdle = async (sessionId: string, signal?: AbortSignal): Promise<boolean> => {
@@ -968,13 +995,26 @@ const settleActiveRequest = (
 ): Promise<ChatLogoutPreparation> => {
   if (settlementPromise) return settlementPromise;
   const sessionId = activeStreamSessionId.value || currentSessionId.value;
+  const turnId = activeStreamTurnId.value;
   if (!abortController.value && !activeStreamSessionId.value) {
     if (!reconciliationRequired.value) return Promise.resolve('ready');
     return reconcileAuthoritativeState().then(
         reconciled => reconciled ? 'ready' : 'reconciliation-failed');
   }
 
-  abortActiveTransport(showCancelledMessage);
+  const stopRequested = showCancelledMessage && Boolean(activeStreamSessionId.value || currentSessionId.value);
+  if (stopRequested && sessionId) {
+    // Invalidate the original send flow before the stop endpoint closes SSE; otherwise it
+    // can race into its normal-completion reconciliation path.
+    const activeController = detachActiveTransport(showCancelledMessage);
+    void requestSessionStop(sessionId)
+        .catch(error => {
+          console.warn('[Chat] Failed to register explicit stop before aborting transport:', error);
+        })
+        .finally(() => activeController?.abort());
+  } else {
+    abortActiveTransport(showCancelledMessage);
+  }
   if (!sessionId) {
     return reconcileAuthoritativeState().then(
         reconciled => reconciled ? 'ready' : 'reconciliation-failed');
@@ -1011,10 +1051,14 @@ const settleActiveRequest = (
       try {
         if (currentSessionId.value === sessionId) {
           const history = await getSessionHistory(sessionId);
-          messages.value = history.map(message => ({
-            ...message,
-            content: message.content ? message.content.replace('CallEnd|>', '') : ''
-          }));
+          if (hasTerminalAssistantRecord(history, turnId)) {
+            messages.value = history.map(message => ({
+              ...message,
+              content: message.content ? message.content.replace('CallEnd|>', '') : ''
+            }));
+          } else {
+            ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+          }
         }
         await initSessions();
       } catch (error) {
@@ -1025,6 +1069,7 @@ const settleActiveRequest = (
     } finally {
       if (!retainActiveSession && activeStreamSessionId.value === sessionId) {
         activeStreamSessionId.value = '';
+        activeStreamTurnId.value = '';
       }
       isSettlingStream.value = false;
       if (settlementAbortController === controller) settlementAbortController = null;
@@ -1074,9 +1119,12 @@ const handleSend = async () => {
   }
   const content = inputValue.value.trim();
   if (!content || isLoading.value) return;
+  const turnId = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
   inputValue.value = '';
-  messages.value.push({role: 'user', content});
+  messages.value.push({ role: 'user', content, turnId });
   scrollToBottom(true);
 
   isStreaming.value = true;
@@ -1114,11 +1162,13 @@ const handleSend = async () => {
       currentSessionId.value = targetSessionId;
     }
     activeStreamSessionId.value = targetSessionId;
+    activeStreamTurnId.value = turnId;
 
     // 先插入一条空的 AI 消息占位
     aiMsgIndex = messages.value.push({
       role: 'assistant',
       content: '',
+      turnId,
       executionTrace: [...streamProgressEvents.value]
     }) - 1;
     scrollToBottom(true);
@@ -1180,7 +1230,8 @@ const handleSend = async () => {
             void initSessions();
           }
         },
-        controller
+        controller,
+        turnId
     );
   } catch (error) {
     if (requestEpoch !== streamRequestEpoch) return;
@@ -1207,6 +1258,7 @@ const handleSend = async () => {
       }
       if (abortController.value === controller) abortController.value = null;
       const completedSessionId = activeStreamSessionId.value;
+      const completedTurnId = activeStreamTurnId.value;
       if (completedSessionId) {
         isSettlingStream.value = true;
         let retainActiveSession = false;
@@ -1219,11 +1271,13 @@ const handleSend = async () => {
           } else if (currentSessionId.value === completedSessionId) {
             try {
               const history = await getSessionHistory(completedSessionId);
-              if (history.length > 0) {
+              if (hasTerminalAssistantRecord(history, completedTurnId)) {
                 messages.value = history.map(message => ({
                   ...message,
                   content: message.content ? message.content.replace('CallEnd|>', '') : ''
                 }));
+              } else {
+                ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
               }
               await initSessions();
             } catch (error) {
@@ -1241,6 +1295,7 @@ const handleSend = async () => {
         } finally {
           if (!retainActiveSession && activeStreamSessionId.value === completedSessionId) {
             activeStreamSessionId.value = '';
+            activeStreamTurnId.value = '';
           }
           isSettlingStream.value = false;
         }
@@ -1526,6 +1581,7 @@ const scrollToBottom = (force = false) => {
                               'is-stopped': !isActiveAssistantMessage(index)
                                 && (messageExecutionTrace(msg, index).some(progress => progress.stage === 'EXECUTION_GUARD')
                                   || msg.executionStatus === 'PARTIAL'
+                                  || msg.executionStatus === 'STOPPED'
                                   || msg.executionStatus === 'DISCONNECTED'),
                               'is-failed': !isActiveAssistantMessage(index)
                                 && msg.executionStatus === 'FAILED'
@@ -1587,6 +1643,7 @@ const scrollToBottom = (force = false) => {
                         class="chat-execution-state"
                         :class="{
                           'is-stopped': msg.executionStatus === 'PARTIAL'
+                            || msg.executionStatus === 'STOPPED'
                             || msg.executionStatus === 'DISCONNECTED',
                           'is-failed': msg.executionStatus === 'FAILED'
                         }"
@@ -1645,6 +1702,7 @@ const scrollToBottom = (force = false) => {
                     v-if="isStreaming"
                     type="button"
                     class="action-btn stop"
+                    data-testid="chat-stop"
                     :aria-label="t('app.chat.stopResponse')"
                     :title="t('app.chat.stopResponse')"
                     @click="handleStop"

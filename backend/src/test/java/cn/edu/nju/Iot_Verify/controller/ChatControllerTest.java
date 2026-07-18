@@ -63,13 +63,22 @@ class ChatControllerTest {
         SseEmitter emitter = controller.chat(1L, request);
 
         assertNotNull(emitter);
-        verify(chatService).processStreamChat(eq(1L), eq("s1"), eq("hello"), same(emitter));
+        verify(chatService).processStreamChat(
+                eq(1L), eq("s1"), eq("turn-s1"), eq("hello"), same(emitter));
+    }
+
+    @Test
+    void stopSession_delegatesExplicitStopToOwnedSession() {
+        controller.stopSession(1L, "s1");
+
+        verify(chatService).requestStreamStop(1L, "s1");
     }
 
     private static ChatRequestDto request(String sessionId, String content) {
         ChatRequestDto request = new ChatRequestDto();
         request.setSessionId(sessionId);
         request.setContent(content);
+        request.setTurnId("turn-" + sessionId);
         return request;
     }
 }

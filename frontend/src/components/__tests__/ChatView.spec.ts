@@ -11,6 +11,7 @@ const chatApi = vi.hoisted(() => ({
   getSessionActivity: vi.fn(),
   getSessionHistory: vi.fn(),
   getSessionList: vi.fn(),
+  requestSessionStop: vi.fn(),
   sendStreamChat: vi.fn()
 }))
 
@@ -54,6 +55,7 @@ describe('ChatView', () => {
     chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory.mockResolvedValue([])
     chatApi.deleteSession.mockResolvedValue(undefined)
+    chatApi.requestSessionStop.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -109,6 +111,133 @@ describe('ChatView', () => {
     const status = wrapper.get('[data-testid="chat-terminal-status"]')
     expect(status.text()).toContain('连接中断')
     expect(status.text()).toContain('4 秒')
+
+    wrapper.unmount()
+  })
+
+  it('shows user stop and confirmation-pending outcomes as distinct states', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '运行验证' },
+      { role: 'assistant', content: '已停止。', executionStatus: 'STOPPED' },
+      { role: 'user', content: '删除设备' },
+      {
+        role: 'assistant',
+        content: '已完成前置步骤，请确认删除。',
+        executionStatus: 'AWAITING_CONFIRMATION',
+        executionTrace: [
+          { stage: 'TOOL_RESULT', outcome: 'USABLE', successfulSteps: 1 }
+        ]
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    const statuses = wrapper.findAll('.chat-execution-state')
+    expect(statuses[0].text()).toContain('用户已停止')
+    expect(statuses[1].text()).toContain('部分完成，等待确认')
+
+    wrapper.unmount()
+  })
+
+  it('prefers an explicit stopped outcome over an earlier execution guard', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '运行验证' },
+      {
+        role: 'assistant',
+        content: '用户已停止。',
+        executionStatus: 'STOPPED',
+        executionTrace: [{ stage: 'EXECUTION_GUARD', outcome: 'NO_PROGRESS' }]
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.chat-execution-state').text()).toBe('用户已停止')
+
+    wrapper.unmount()
+  })
+
+  it('registers an explicit stop before aborting and reconciling the active response', async () => {
+    let streamSignal: AbortSignal | undefined
+    let activeTurnId = ''
+    const stopOrder: string[] = []
+    chatApi.createSession.mockResolvedValue(session)
+    chatApi.requestSessionStop.mockImplementation(async () => {
+      stopOrder.push('stop-request')
+    })
+    chatApi.sendStreamChat.mockImplementation((...args: any[]) => {
+      streamSignal = args[3]?.signal
+      activeTurnId = args[4]
+      return new Promise<void>(resolve => {
+        streamSignal?.addEventListener('abort', () => {
+          stopOrder.push('transport-abort')
+          resolve()
+        }, { once: true })
+      })
+    })
+    chatApi.getSessionHistory.mockImplementation(async () => [
+      { role: 'user', content: '运行验证', turnId: activeTurnId },
+      {
+        role: 'assistant',
+        content: '用户已停止。',
+        turnId: activeTurnId,
+        executionStatus: 'STOPPED'
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('运行验证')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1')
+    expect(streamSignal?.aborted).toBe(true)
+    expect(stopOrder).toEqual(['stop-request', 'transport-abort'])
+
+    wrapper.unmount()
+  })
+
+  it('keeps the current local turn when history only contains an older terminal reply', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { role: 'user', content: '旧问题', turnId: 'old-turn' },
+        {
+          role: 'assistant',
+          content: '旧回答',
+          turnId: 'old-turn',
+          executionStatus: 'COMPLETED'
+        }
+      ])
+    chatApi.sendStreamChat.mockResolvedValue(undefined)
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('当前问题')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.sendStreamChat.mock.calls[0][4]).toEqual(expect.any(String))
+    expect(wrapper.text()).toContain('当前问题')
+    expect(wrapper.text()).not.toContain('旧回答')
 
     wrapper.unmount()
   })

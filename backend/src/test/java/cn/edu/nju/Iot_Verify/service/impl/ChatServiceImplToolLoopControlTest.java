@@ -14,6 +14,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
@@ -50,6 +51,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -112,24 +114,11 @@ class ChatServiceImplToolLoopControlTest {
         defaultSession.setUserId(1L);
         lenient().when(sessionRepo.findByIdAndUserId("s1", 1L))
                 .thenReturn(Optional.of(defaultSession));
-        service = new ChatServiceImpl(
-                sessionRepo,
-                messageRepo,
-                userRepository,
-                llmChatService,
-                messageCodec,
-                new ChatConfirmationDetector(
-                        org.mockito.Mockito.mock(cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService.class),
-                        new ObjectMapper()),
-                aiToolManager,
-                destructiveActionGuard,
-                scenarioDraftStore,
-                taskContinuationStore,
-                new ObjectMapper(),
-                chatMapper,
-                transactionTemplate,
-                chatExecutionConfig
-        );
+        lenient().when(sessionRepo.findByIdAndUserIdForUpdate("s1", 1L))
+                .thenReturn(Optional.of(defaultSession));
+        lenient().when(sessionRepo.findByUserIdForUpdate(1L))
+                .thenReturn(List.of(defaultSession));
+        service = newService();
         executeToolLoopMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "executeToolLoop",
                 Long.class,
@@ -165,6 +154,27 @@ class ChatServiceImplToolLoopControlTest {
         toolProgressDetailMethod = ChatServiceImpl.class.getDeclaredMethod(
                 "toolProgressDetail", String.class, String.class, boolean.class);
         toolProgressDetailMethod.setAccessible(true);
+    }
+
+    private ChatServiceImpl newService() {
+        return new ChatServiceImpl(
+                sessionRepo,
+                messageRepo,
+                userRepository,
+                llmChatService,
+                messageCodec,
+                new ChatConfirmationDetector(
+                        org.mockito.Mockito.mock(cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService.class),
+                        new ObjectMapper()),
+                aiToolManager,
+                destructiveActionGuard,
+                scenarioDraftStore,
+                taskContinuationStore,
+                new ObjectMapper(),
+                chatMapper,
+                transactionTemplate,
+                chatExecutionConfig
+        );
     }
 
     @Test
@@ -735,7 +745,6 @@ class ChatServiceImplToolLoopControlTest {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("s1");
         session.setUserId(1L);
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
         SseEmitter emitter = mock(SseEmitter.class);
 
         service.beginStreamRequest(1L, "s1");
@@ -779,11 +788,6 @@ class ChatServiceImplToolLoopControlTest {
 
     @Test
     void processStreamChat_whenAccountStopArrivesDuringToolPlanning_doesNotExecutePlannedTool() {
-        ChatSessionPo session = new ChatSessionPo();
-        session.setId("s1");
-        session.setUserId(1L);
-        session.setTitle("New Chat");
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList())).thenAnswer(invocation -> {
@@ -802,7 +806,133 @@ class ChatServiceImplToolLoopControlTest {
                         && msg.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null && "tool".equals(msg.getRole())));
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void processStreamChat_whenUserStopsDuringPlanning_persistsStoppedInsteadOfDisconnected() {
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenAnswer(invocation -> {
+            service.requestStreamStop(1L, "s1");
+            return toolCallResult("list_rules", "{}");
+        });
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verify(aiToolManager, never()).execute(any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
+                        && msg.getContent().contains("user stopped")));
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void executionLease_isVisibleAndExclusiveAcrossServiceInstances() {
+        ChatServiceImpl otherInstance = newService();
+
+        service.beginStreamRequest(1L, "s1");
+
+        assertTrue(otherInstance.getSessionActivity(1L, "s1").isActive());
+        assertThrows(ChatSessionBusyException.class,
+                () -> otherInstance.beginStreamRequest(1L, "s1"));
+        service.endStreamRequest(1L, "s1");
+        assertFalse(otherInstance.getSessionActivity(1L, "s1").isActive());
+    }
+
+    @Test
+    void processStreamChat_whenAnotherInstanceStopsDuringPlanning_persistsStoppedAudit() {
+        ChatServiceImpl otherInstance = newService();
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenAnswer(invocation -> {
+            otherInstance.requestStreamStop(1L, "s1");
+            return toolCallResult("list_rules", "{}");
+        });
+
+        service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", mock(SseEmitter.class));
+
+        verify(aiToolManager, never()).execute(any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED));
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void processStreamChat_whenStoppedToolReturns_persistsItsAuthoritativeResultBeforeStopping() {
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"));
+        when(aiToolManager.execute("list_rules", "{}")).thenAnswer(invocation -> {
+            service.requestStreamStop(1L, "s1");
+            return "{\"rules\":[]}";
+        });
+
+        service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", mock(SseEmitter.class));
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "tool".equals(msg.getRole())
+                        && msg.getContent().contains("\\\"rules\\\":[]")));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
+                        && msg.getContent().contains("1 step(s) returned usable results")));
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void processStreamChat_whenQueuedRequestWasAlreadyStopped_persistsAuditWithoutCallingModel() {
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.beginStreamRequest(1L, "s1");
+        service.requestStreamStop(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verifyNoInteractions(llmChatService, aiToolManager);
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED));
         verify(emitter).complete();
+        service.endStreamRequest(1L, "s1");
+    }
+
+    @Test
+    void processStreamChat_whenUserStopsDuringFinalReply_persistsStoppedInsteadOfCompleted() {
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"))
+                .thenReturn(textResult("planning done"));
+        when(aiToolManager.execute("list_rules", "{}")).thenReturn("{\"rules\":[]}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            service.requestStreamStop(1L, "s1");
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("partial reply");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", "please list rules", emitter);
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
+                        && msg.getContent().contains("The user stopped")));
         service.endStreamRequest(1L, "s1");
     }
 
@@ -856,6 +986,94 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equalsIgnoreCase(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
                         && msg.getContent().contains("temporarily unavailable")));
+    }
+
+    @Test
+    void processStreamChat_whenToolResultFails_butReplyStreamClosesNormally_persistsFailedAudit() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"))
+                .thenReturn(textResult("I could not read the rules."));
+        when(aiToolManager.execute("list_rules", "{}")).thenReturn(
+                "{\"error\":\"rules unavailable\",\"errorCode\":\"SERVICE_UNAVAILABLE\"}");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("The rules could not be loaded.");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        service.processStreamChat(1L, "s1", "请列出规则", mock(SseEmitter.class));
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.FAILED
+                        && msg.getContent().contains("1 个步骤失败")));
+    }
+
+    @Test
+    void processStreamChat_persistsTheSameTurnIdOnUserAndTerminalMessages() {
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenReturn(textResult("done"));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("done");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+
+        service.processStreamChat(1L, "s1", "turn-1", "hello", mock(SseEmitter.class));
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "user".equals(msg.getRole()) && "turn-1".equals(msg.getTurnId())));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "assistant".equals(msg.getRole())
+                        && "turn-1".equals(msg.getTurnId())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.COMPLETED));
+    }
+
+    @Test
+    void processStreamChat_whenNormalTerminalPersistenceFails_doesNotRetryAsDisconnected() throws Exception {
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList())).thenReturn(textResult("done"));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<String> onDelta = invocation.getArgument(1, Consumer.class);
+            onDelta.accept("done");
+            return null;
+        }).when(llmChatService).streamReply(anyList(), any(), any());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            ChatMessagePo message = invocation.getArgument(0, ChatMessagePo.class);
+            if ("assistant".equals(message.getRole())) {
+                throw new IllegalStateException("database unavailable");
+            }
+            return message;
+        }).when(messageRepo).saveAndFlush(any(ChatMessagePo.class));
+        AtomicReference<Runnable> completionCallback = new AtomicReference<>();
+        SseEmitter emitter = mock(SseEmitter.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            completionCallback.set(invocation.getArgument(0, Runnable.class));
+            return null;
+        }).when(emitter).onCompletion(any(Runnable.class));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            completionCallback.get().run();
+            return null;
+        }).when(emitter).complete();
+
+        service.processStreamChat(1L, "s1", "hello", emitter);
+
+        verify(messageRepo, org.mockito.Mockito.times(1)).saveAndFlush(
+                org.mockito.ArgumentMatchers.argThat(message ->
+                        message != null && "assistant".equals(message.getRole())));
     }
 
     @Test
@@ -951,7 +1169,8 @@ class ChatServiceImplToolLoopControlTest {
                         && msg.getContent() != null
                         && msg.getContent().startsWith("提示：当前只是未写入的影响预览或备选方案")
                         && msg.getContent().contains("尚未删除，请确认是否继续。")
-                        && !msg.getContent().contains("A no-write preview")));
+                        && !msg.getContent().contains("A no-write preview")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.AWAITING_CONFIRMATION));
         verify(emitter).complete();
     }
 
@@ -1081,7 +1300,8 @@ class ChatServiceImplToolLoopControlTest {
                         && msg.getContent() != null
                         && msg.getContent().contains("repeated the exact same tool calls and results")
                         && msg.getContent().contains("No rules were found; repeated reads were stopped.")
-                        && !msg.getContent().contains("5-round planning limit")));
+                        && !msg.getContent().contains("5-round planning limit")
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL));
         verify(emitter).complete();
     }
 

@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-16.
+Verified against code on 2026-07-18.
 
 ---
 
@@ -137,6 +137,7 @@ Verified against code on 2026-07-16.
 | POST | `/api/chat/sessions` | Create session | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/messages` | Message history | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/activity` | Check whether server work is still active for the session | `docs/api/chat-sse.md` |
+| POST | `/api/chat/sessions/{sessionId}/stop` | Request an explicit stop for the active response; idempotent when idle | `docs/api/chat-sse.md` |
 | POST | `/api/chat/completions` | Send message — **SSE stream** (not `Result<T>`) | `docs/api/chat-sse.md` |
 | DELETE | `/api/chat/sessions/{sessionId}` | Delete session | `docs/api/chat-sse.md` |
 

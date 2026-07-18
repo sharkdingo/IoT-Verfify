@@ -18,6 +18,7 @@ public class ChatMessageResponseDto {
     private String sessionId;
     private String role;
     private String content;
+    private String turnId;
     private LocalDateTime createdAt;
     private List<StreamResponseDto.ProgressDto> executionTrace;
     private Integer executionElapsedSeconds;

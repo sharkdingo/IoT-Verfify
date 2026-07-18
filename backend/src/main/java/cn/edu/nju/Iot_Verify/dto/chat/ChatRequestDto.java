@@ -13,4 +13,7 @@ public class ChatRequestDto {
     @NotBlank(message = "Content is required")
     @Size(max = 10000, message = "Content must not exceed 10000 characters")
     private String content;
+
+    @Size(max = 64, message = "Turn ID must not exceed 64 characters")
+    private String turnId;
 }

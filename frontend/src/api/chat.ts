@@ -54,6 +54,10 @@ export const getSessionHistory = async (sessionId: string, signal?: AbortSignal)
   return unpack<ChatMessage[]>(response);
 }
 
+export const requestSessionStop = async (sessionId: string): Promise<void> => {
+  await api.post(`/chat/sessions/${sessionId}/stop`, null, { timeout: CHAT_ACTIVITY_TIMEOUT_MS });
+}
+
 export const deleteSession = async (sessionId: string): Promise<void> => {
   await api.delete(`/chat/sessions/${sessionId}`);
 }
@@ -83,7 +87,8 @@ export const sendStreamChat = async (
         onError?: (err: any) => void
         onFinish?: () => void
     },
-    controller?: AbortController
+    controller?: AbortController,
+    turnId?: string
 ) => {
     try {
         const { getToken, logout } = useAuth();
@@ -101,7 +106,7 @@ export const sendStreamChat = async (
         const response = await fetch(`${API_BASE}/api/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ sessionId, content }),
+            body: JSON.stringify({ sessionId, content, ...(turnId ? { turnId } : {}) }),
             signal: controller?.signal
         });
 

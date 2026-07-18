@@ -31,6 +31,9 @@ public class ChatMessagePo {
     @Column(columnDefinition = "TEXT") // 支持长文本
     private String content;
 
+    @Column(name = "turn_id", length = 64)
+    private String turnId;
+
     @Lob
     @Column(name = "execution_trace_json", columnDefinition = "LONGTEXT")
     private String executionTraceJson;
@@ -39,7 +42,7 @@ public class ChatMessagePo {
     private Integer executionElapsedSeconds;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "execution_status", length = 20)
+    @Column(name = "execution_status", length = 32)
     private ChatExecutionStatus executionStatus;
 
     private LocalDateTime createdAt;

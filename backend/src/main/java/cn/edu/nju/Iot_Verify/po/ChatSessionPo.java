@@ -25,6 +25,18 @@ public class ChatSessionPo {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    @Column(name = "active_execution_id", length = 36)
+    private String activeExecutionId;
+
+    @Column(name = "active_execution_expires_at")
+    private LocalDateTime activeExecutionExpiresAt;
+
+    @Column(name = "execution_stop_requested")
+    private Boolean executionStopRequested;
+
+    @Column(name = "execution_user_stop_requested")
+    private Boolean executionUserStopRequested;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

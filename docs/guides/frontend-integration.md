@@ -751,12 +751,13 @@ object of the same two. **Rule persistence is not here**: targeted `getRules`/`a
 ## Chat (SSE) — `api/chat.ts`
 
 Named exports. Session management (`getSessionList`, `createSession`,
-`getSessionHistory`, `getSessionActivity`, `deleteSession`) uses axios; **streaming does
-not**.
+`getSessionHistory`, `getSessionActivity`, `requestSessionStop`, `deleteSession`) uses
+axios; **streaming does not**.
 
 `sendStreamChat(...)` uses the native `fetch` API against
 `${VITE_API_BASE_URL || ''}/api/chat/completions` (relative by default, so it also goes
-through the proxy) and reads the response body with `response.body.getReader()` (SSE).
+through the proxy), sends a per-request `turnId`, and reads the response body with
+`response.body.getReader()` (SSE).
 This is the one place the axios
 instance and its interceptors are bypassed — the `Authorization` header must be set
 manually here. Protocol detail: [../api/chat-sse.md](../api/chat-sse.md).
@@ -767,13 +768,15 @@ task resumption after confirmation, every planning round, localized tool actions
 outcomes, cumulative success/failure/unconfirmed counts, duplicate-loop protection, and
 final-answer generation inside the active assistant message. A resumed-task event shows
 the bounded original user objective supplied by the backend; it does not expose model
-reasoning. The record remains attached to that message as a collapsible in-memory view
-after completion. Server history reloads contain the persisted user-visible answer but
-not these transient progress frames.
+reasoning. The record remains attached to that message and is persisted with the terminal
+assistant row. History reload replaces the local response only when that row has the same
+`turnId`, so an older completed turn cannot erase the current request.
 
-The chat stop control aborts only the SSE response. It cannot undo a backend tool call
-that already started. `ChatView` therefore polls `getSessionActivity` until the server
-reports idle, keeps assistant mutations locked, then reloads conversation/board/history.
+The chat stop control first calls `requestSessionStop`, then aborts the SSE response. It
+cannot undo a backend tool call that already started, but the backend still persists a
+result that returns after the stop request before ending the workflow. `ChatView`
+therefore polls `getSessionActivity` until the cross-instance execution lease reports
+idle, keeps assistant mutations locked, then reloads conversation/board/history.
 Session switching, new-conversation creation, and deletion wait for the same settling
 step. Activity checks have their own 2.5-second request timeout, so three consecutive
 query failures produce an outcome-unknown warning and an authoritative state refresh

@@ -44,9 +44,16 @@ history into a technical spec. The spec content itself now lives under
 - Persisted expiring AI continuation, scene-draft, and protected-action confirmation
   state in the shared database with scheduled cleanup and atomic single-use consumption.
   Normal backend restarts and load-balanced follow-up turns now preserve live pending work.
-- Added explicit `COMPLETED`, `PARTIAL`, `DISCONNECTED`, and `FAILED` chat terminal
-  outcomes. Failure and disconnect paths now save a visible audit record, and the frontend
-  reloads authoritative history after stream settlement.
+- Added explicit `COMPLETED`, `AWAITING_CONFIRMATION`, `PARTIAL`, `STOPPED`,
+  `DISCONNECTED`, and `FAILED` chat terminal outcomes. Results now reflect failed,
+  uncertain, guarded, and confirmation-pending tool work instead of treating every
+  normally closed stream as completed. Explicit user stops are distinguished from transport
+  failures, and history reconciliation keeps the local response when no matching terminal
+  assistant record has reached persistence.
+- Serialized chat execution across backend instances with an expiring database lease and
+  distributed stop flags. Stopping now preserves the authoritative result of a tool that
+  already returned, and per-turn ids prevent an older terminal reply from replacing the
+  current local conversation.
 
 #### Added
 - Added the `reset_default_templates` AI tool. It previews the exact bundled-template and

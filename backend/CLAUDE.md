@@ -141,10 +141,12 @@ authored-formula/device-binding persistence; `verification_task` carries
 `disabled_rule_count` / `skipped_spec_count`
 mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
 rows also back verification run history for both synchronous and asynchronous checks;
-`chat_message` stores the exact user-visible assistant execution trace, elapsed time, and
-terminal status on the final assistant row, while older rows remain reconstructable from
-tool blocks; `ai_session_state` durably stores expiring task continuation, scenario draft,
+`chat_message` stores a per-turn correlation id plus the exact user-visible assistant execution
+trace, elapsed time, and terminal status on the final assistant row, while older rows remain
+reconstructable from tool blocks; `ai_session_state` durably stores expiring task continuation, scenario draft,
 and protected-action confirmation state shared by backend instances;
+`chat_session` stores the expiring cross-instance execution lease and stop flags so only one
+assistant request can mutate a session at a time;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

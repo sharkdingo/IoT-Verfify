@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -57,11 +58,15 @@ public class ChatController {
     public SseEmitter chat(@CurrentUser Long userId, @Valid @RequestBody ChatRequestDto request) {
         log.debug("Received chat request from userId={}, sessionId={}", userId, request.getSessionId());
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
+        String turnId = request.getTurnId() == null || request.getTurnId().isBlank()
+                ? UUID.randomUUID().toString()
+                : request.getTurnId().trim();
         chatService.beginStreamRequest(userId, request.getSessionId());
         try {
             executor.execute(() -> {
                 try {
-                    chatService.processStreamChat(userId, request.getSessionId(), request.getContent(), emitter);
+                    chatService.processStreamChat(
+                            userId, request.getSessionId(), turnId, request.getContent(), emitter);
                 } catch (Exception e) {
                     log.error("Error processing chat request for userId={}", userId, e);
                     emitter.completeWithError(e);
@@ -81,6 +86,13 @@ public class ChatController {
     public Result<ChatSessionActivityDto> getSessionActivity(
             @CurrentUser Long userId, @PathVariable String sessionId) {
         return Result.success(chatService.getSessionActivity(userId, sessionId));
+    }
+
+    @PostMapping("/sessions/{sessionId}/stop")
+    public Result<Void> stopSession(
+            @CurrentUser Long userId, @PathVariable String sessionId) {
+        chatService.requestStreamStop(userId, sessionId);
+        return Result.success();
     }
 
     @DeleteMapping("/sessions/{sessionId}")

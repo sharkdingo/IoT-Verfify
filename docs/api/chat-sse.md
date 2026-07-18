@@ -16,7 +16,8 @@ Verified against code on 2026-07-18. Source: `controller/ChatController.java`,
 | GET | `/api/chat/sessions` | → `ChatSessionResponseDto[]` | List the user's sessions |
 | POST | `/api/chat/sessions` | → `ChatSessionResponseDto` | Create a session (no body) |
 | GET | `/api/chat/sessions/{sessionId}/messages` | → `ChatMessageResponseDto[]` | Message history |
-| GET | `/api/chat/sessions/{sessionId}/activity` | → `ChatSessionActivityDto { sessionId, active }` | Authoritative check for whether this backend is still processing a request for the session |
+| GET | `/api/chat/sessions/{sessionId}/activity` | → `ChatSessionActivityDto { sessionId, active }` | Authoritative cross-instance check for whether a request is still active for the session |
+| POST | `/api/chat/sessions/{sessionId}/stop` | → `null` | Idempotently request that the active response stop; already-started writes are not rolled back |
 | DELETE | `/api/chat/sessions/{sessionId}` | → `null` | Delete a session |
 
 `ChatSessionResponseDto`: `{ id: String, userId: Long, title: String | null, createdAt,
@@ -25,27 +26,35 @@ updatedAt }`.
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
 `ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: String, content:
-String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
-executionStatus?: "COMPLETED" | "PARTIAL" | "DISCONNECTED" | "FAILED" }`.
-Every started user turn that reaches message persistence receives a visible terminal
-assistant record, including provider failure and client-disconnect paths. The row stores
+String, turnId?: String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
+executionStatus?: "COMPLETED" | "AWAITING_CONFIRMATION" | "PARTIAL" | "STOPPED" |
+"DISCONNECTED" | "FAILED" }`.
+Every started user turn that reaches message persistence attempts to save a visible
+terminal assistant record, including provider failure and client-disconnect paths. A
+terminal-write failure does not create a misleading disconnect row; the client retains
+its local response when authoritative history has no terminal row with the same `turnId`.
+When saved, the row stores
 the exact bounded execution record, elapsed time, and explicit terminal status; `PARTIAL`
-means tool work began before a later failure, while `DISCONNECTED` means transport loss
-ended the visible response and does not imply rollback. Older rows without this metadata
+means tool work began before a later failure, an execution guard, or an uncertain result.
+`AWAITING_CONFIRMATION` means a no-write preview is waiting for the user's decision.
+`STOPPED` means the user explicitly requested the response to stop, while `DISCONNECTED`
+means transport loss ended it. Neither status implies rollback. Older rows without this metadata
 are reconstructed from persisted internal tool-call/result blocks. Raw tool JSON, internal
 identifiers, provider exceptions, and private model reasoning remain hidden.
 
-Only one stream request may be active for a session on one running backend instance.
+Only one stream request may be active for a session across all backend instances.
 A concurrent request or deletion returns `409` with
 `data={ reasonCode: "CHAT_SESSION_BUSY", sessionId }`; it does not interrupt the first
 request. Registration happens before the worker is queued, so the short enqueue window
-cannot admit a second request. The activity flag is cleared in the worker's `finally`
-block and on queue rejection. Multi-instance deployments require shared request-affinity
-or distributed activity coordination; this in-memory guard is not a cluster-wide lock.
+cannot admit a second request. The active request id, expiry, and stop flags are stored on
+the locked `chat_session` row. Activity checks and stop requests therefore remain
+authoritative without load-balancer affinity. A two-hour expiry prevents a crashed worker
+from locking the session indefinitely; normal completion and queue rejection clear the
+lease immediately.
 
-Permanent account deletion is stronger than ordinary per-session activity handling. After the
-deletion transaction commits, the backend marks every local stream for that user as stopped and
-completes any bound emitter. Correctness does not depend on that in-memory optimization: each
+Permanent account deletion is stronger than ordinary per-session activity handling. The backend
+marks every persisted execution lease for that user as stopped and completes locally bound
+emitters. Correctness does not depend on the local emitter optimization: each
 session/message write locks the active user row and rechecks that the session is still owned by
 that user in the same transaction. Database cascade constraints make this invariant independent
 of the chat process: work committed first is removed with the account, while a user/session/task
@@ -182,6 +191,7 @@ retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
 | :--- | :--- | :--- |
 | `sessionId` | `String` | Required |
 | `content` | `String` | Required; ≤10000 characters |
+| `turnId` | `String` | Optional for compatibility; ≤64 characters. Current clients send a unique value used to associate the user message and terminal assistant record. The server generates one when omitted. |
 
 If the chat thread pool is saturated the request is rejected with `503`
 (`ServiceUnavailableException`) before streaming starts. Errors that happen after the
@@ -272,13 +282,18 @@ attempts the client-only `board_state` reconciliation. A second failure leaves a
 localized retry panel open and keeps assistant requests, scene replacement, and trace
 playback locked until a later full reconciliation succeeds.
 
-Aborting the browser stream means **stop receiving the AI response**, not cancel or roll
-back a tool transaction already running on the server. After an explicit stop or a
-session-switch/new-session request, the Board polls the session activity endpoint until
-`active=false`, keeps assistant mutations locked during that settling period, and only
-then reloads message history, board collections, and run history. Normal stream completion
-also waits for `active=false` and reloads authoritative message history so persisted
-terminal status wins over locally inferred progress. Closing the floating
+The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop`, then aborts the
+browser stream. This distinguishes an explicit user stop from an unexpected transport
+loss, but it still cannot cancel or roll back a tool transaction already running on the
+server. A tool that has already returned is still classified and persisted before the
+worker stops, so committed writes and confirmation previews do not lose their audit result.
+After an explicit stop or a session-switch/new-session request, the Board polls
+the session activity endpoint until `active=false`, keeps assistant mutations locked
+during that settling period, and only then reloads message history, board collections,
+and run history. Normal stream completion also waits for `active=false` and reloads
+authoritative message history so persisted terminal status wins over locally inferred
+progress. History replaces the local response only when the terminal row carries the same
+`turnId`; an older terminal reply cannot erase the current request. Closing the floating
 panel only hides it and does not abort the request. If three consecutive activity checks
 fail, each check uses a dedicated 2.5-second timeout instead of the general 100-second
 REST timeout, so the client reaches an outcome-unknown warning and authoritative
