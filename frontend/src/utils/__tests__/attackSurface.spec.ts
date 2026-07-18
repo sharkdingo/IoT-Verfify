@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeBoardAttackSurface, getAttackSelectionIssue, selectedAttackPoints } from '@/utils/attackSurface'
+import {
+  analyzeBoardAttackSurface,
+  getAttackScenarioIssue,
+  getAttackSelectionIssue,
+  selectedAttackPoints
+} from '@/utils/attackSurface'
 import type { DeviceTemplate } from '@/types/device'
 import type { DeviceNode } from '@/types/node'
 import type { RuleForm } from '@/types/rule'
@@ -81,5 +86,29 @@ describe('getAttackSelectionIssue', () => {
   it('requires the user to revise a budget after the current attack surface shrinks', () => {
     expect(getAttackSelectionIssue(true, 4, 3)).toBe('INVALID_BUDGET')
     expect(getAttackSelectionIssue(true, 3, 3)).toBeNull()
+  })
+})
+
+describe('getAttackScenarioIssue', () => {
+  it('rejects more explicit points than the backend attack-scenario contract allows', () => {
+    const rules: RuleForm[] = Array.from({ length: 51 }, (_, index) => ({
+      id: String(index + 1),
+      sources: [],
+      toId: 'target',
+      toApi: 'turnOn'
+    }))
+    const surface = analyzeBoardAttackSurface(
+      [node('target', 'Target')],
+      rules,
+      () => template('Target', false)
+    )
+
+    expect(getAttackScenarioIssue(
+      'EXACT_POINTS',
+      1,
+      rules.map(rule => `AUTOMATION_LINK:${rule.id}`),
+      surface,
+      true
+    )).toBe('TOO_MANY_EXPLICIT_POINTS')
   })
 })

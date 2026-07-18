@@ -54,6 +54,8 @@ history into a technical spec. The spec content itself now lives under
 - Preserved an explicitly selected state trust/privacy override when the user changes the
   initial state; switching the state no longer silently discards an advanced setting, and
   the user can deliberately choose the template-default option when desired.
+- Aligned the canvas exact-attack-point limit with the backend contract: selections above
+  50 points are rejected before a run request is sent, with localized guidance.
 - Rejected automatic-fix candidates that remove or duplicate an explicitly selected
   automation-link attack point, preventing forward verification from silently changing
   the counterexample's fixed attack scenario.

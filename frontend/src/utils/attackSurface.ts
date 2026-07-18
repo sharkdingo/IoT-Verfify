@@ -4,6 +4,8 @@ import type { RuleForm } from '@/types/rule'
 import type { AttackPoint, AttackScenarioMode } from '@/types/attackScenario'
 import { normalizeNuSmvDeviceName } from '@/utils/modelRequest'
 
+export const ATTACK_POINT_HARD_MAX = 50
+
 export interface BoardAttackPointOption {
   key: string
   kind: 'DEVICE' | 'AUTOMATION_LINK'
@@ -25,6 +27,7 @@ export type AttackSelectionIssue =
   | 'NO_MODELED_EFFECT'
   | 'INVALID_BUDGET'
   | 'EXPLICIT_POINTS_REQUIRED'
+  | 'TOO_MANY_EXPLICIT_POINTS'
   | 'UNAVAILABLE_EXPLICIT_POINT'
   | 'EXHAUSTIVE_NOT_ALLOWED'
 
@@ -53,9 +56,10 @@ export const getAttackScenarioIssue = (
   if (surface.totalPointCount < 1) return 'NO_MODELED_EFFECT'
   if (mode === 'ANY_UP_TO_BUDGET') {
     if (!allowExhaustive) return 'EXHAUSTIVE_NOT_ALLOWED'
-    return getAttackSelectionIssue(true, budget, Math.min(50, surface.totalPointCount))
+    return getAttackSelectionIssue(true, budget, Math.min(ATTACK_POINT_HARD_MAX, surface.totalPointCount))
   }
   if (selectedKeys.length < 1) return 'EXPLICIT_POINTS_REQUIRED'
+  if (selectedKeys.length > ATTACK_POINT_HARD_MAX) return 'TOO_MANY_EXPLICIT_POINTS'
   const pointsByKey = new Map(surface.points.map(point => [point.key, point]))
   if (selectedKeys.some(key => !pointsByKey.get(key)?.selectable)) {
     return 'UNAVAILABLE_EXPLICIT_POINT'

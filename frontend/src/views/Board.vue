@@ -99,6 +99,7 @@ import {
 } from '@/utils/modelRequest'
 import { isModelSemanticsConsistent } from '@/utils/modelSemantics'
 import {
+  ATTACK_POINT_HARD_MAX,
   analyzeBoardAttackSurface,
   getAttackScenarioIssue,
   getAttackSelectionIssue,
@@ -6419,7 +6420,7 @@ const fuzzingLocalConfigurationError = computed(() => {
   return ''
 })
 
-const ATTACK_BUDGET_HARD_MAX = 50
+const ATTACK_BUDGET_HARD_MAX = ATTACK_POINT_HARD_MAX
 const boardAttackSurface = computed(() => analyzeBoardAttackSurface(
   nodes.value,
   rules.value,
@@ -6453,6 +6454,9 @@ const attackConfigurationError = (
     })
   }
   if (issue === 'EXPLICIT_POINTS_REQUIRED') return t('app.attackExplicitPointsRequired')
+  if (issue === 'TOO_MANY_EXPLICIT_POINTS') {
+    return t('app.attackExplicitPointsTooMany', { limit: ATTACK_POINT_HARD_MAX })
+  }
   if (issue === 'UNAVAILABLE_EXPLICIT_POINT') return t('app.attackExplicitPointUnavailable')
   if (issue === 'EXHAUSTIVE_NOT_ALLOWED') return t('app.simulationAttackMustBeExplicit')
   return ''
