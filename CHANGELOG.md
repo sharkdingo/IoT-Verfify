@@ -41,6 +41,12 @@ history into a technical spec. The spec content itself now lives under
   explain the current goal, observed facts, next action, and remaining work, are sanitized
   before streaming/persistence, retain enough context to explain multi-step decisions, and
   do not expose private hidden chain-of-thought.
+- Persisted expiring AI continuation, scene-draft, and protected-action confirmation
+  state in the shared database with scheduled cleanup and atomic single-use consumption.
+  Normal backend restarts and load-balanced follow-up turns now preserve live pending work.
+- Added explicit `COMPLETED`, `PARTIAL`, `DISCONNECTED`, and `FAILED` chat terminal
+  outcomes. Failure and disconnect paths now save a visible audit record, and the frontend
+  reloads authoritative history after stream settlement.
 
 #### Added
 - Added the `reset_default_templates` AI tool. It previews the exact bundled-template and
@@ -48,6 +54,11 @@ history into a technical spec. The spec content itself now lives under
   same atomic refresh authority as the Board UI while preserving custom templates.
 
 #### Fixed
+- Bounded isolated in-memory AI-state fallbacks, replaced unbounded per-session chat locks
+  with fixed lock stripes, and made empty/invalid scenario recommendations report whether
+  the previous valid draft remains active.
+- Added compatible-provider support for explicitly safe reasoning-summary fields while
+  continuing to ignore raw `reasoning_content` and other hidden-reasoning fields.
 - Kept left-panel single-device creation on template-owned trust/privacy defaults unless
   the user explicitly selects an advanced override, and added a restore-to-template option
   for each state and local-variable label.

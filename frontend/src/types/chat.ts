@@ -24,6 +24,7 @@ export interface ChatMessage {
     // Persisted by the backend for history and populated live while streaming.
     executionTrace?: StreamProgress[]
     executionElapsedSeconds?: number
+    executionStatus?: 'COMPLETED' | 'PARTIAL' | 'DISCONNECTED' | 'FAILED'
 }
 
 export interface StreamCommand {

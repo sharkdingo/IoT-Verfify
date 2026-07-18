@@ -339,8 +339,15 @@ const executionTraceTotals = (trace: StreamProgress[]) => {
 };
 const traceHasToolResults = (trace: StreamProgress[]) =>
     trace.some(progress => progress.stage === 'TOOL_RESULT');
-const executionTraceStatus = (trace: StreamProgress[], active: boolean) => {
+const executionTraceStatus = (
+    trace: StreamProgress[],
+    active: boolean,
+    status?: ChatMessage['executionStatus']
+) => {
   if (active) return t('app.chat.executionTraceRunning');
+  if (status === 'DISCONNECTED') return t('app.chat.executionTraceDisconnected');
+  if (status === 'PARTIAL') return t('app.chat.executionTracePartial');
+  if (status === 'FAILED') return t('app.chat.executionTraceFailed');
   const guard = [...trace].reverse().find(progress => progress.stage === 'EXECUTION_GUARD');
   if (guard) {
     return guard.outcome === 'NO_PROGRESS'
@@ -1209,6 +1216,20 @@ const handleSend = async () => {
             retainActiveSession = true;
             reconciliationRequired.value = true;
             ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+          } else if (currentSessionId.value === completedSessionId) {
+            try {
+              const history = await getSessionHistory(completedSessionId);
+              if (history.length > 0) {
+                messages.value = history.map(message => ({
+                  ...message,
+                  content: message.content ? message.content.replace('CallEnd|>', '') : ''
+                }));
+              }
+              await initSessions();
+            } catch (error) {
+              console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
+              ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+            }
           }
         } catch (error) {
           console.error('[Chat] Failed to confirm normal stream completion:', error);
@@ -1503,10 +1524,18 @@ const scrollToBottom = (force = false) => {
                             :class="{
                               'is-running': isActiveAssistantMessage(index),
                               'is-stopped': !isActiveAssistantMessage(index)
-                                && messageExecutionTrace(msg, index).some(progress => progress.stage === 'EXECUTION_GUARD')
+                                && (messageExecutionTrace(msg, index).some(progress => progress.stage === 'EXECUTION_GUARD')
+                                  || msg.executionStatus === 'PARTIAL'
+                                  || msg.executionStatus === 'DISCONNECTED'),
+                              'is-failed': !isActiveAssistantMessage(index)
+                                && msg.executionStatus === 'FAILED'
                             }"
                           >
-                            {{ executionTraceStatus(messageExecutionTrace(msg, index), isActiveAssistantMessage(index)) }}
+                            {{ executionTraceStatus(
+                              messageExecutionTrace(msg, index),
+                              isActiveAssistantMessage(index),
+                              msg.executionStatus
+                            ) }}
                           </span>
                           <span>{{ t('app.chat.progressElapsed', { seconds: messageExecutionElapsed(msg, index) }) }}</span>
                         </div>
@@ -1549,6 +1578,23 @@ const scrollToBottom = (force = false) => {
                         </li>
                       </ol>
                     </details>
+                    <div
+                      v-else-if="msg.executionStatus"
+                      class="chat-terminal-status"
+                      data-testid="chat-terminal-status"
+                    >
+                      <span
+                        class="chat-execution-state"
+                        :class="{
+                          'is-stopped': msg.executionStatus === 'PARTIAL'
+                            || msg.executionStatus === 'DISCONNECTED',
+                          'is-failed': msg.executionStatus === 'FAILED'
+                        }"
+                      >
+                        {{ executionTraceStatus([], false, msg.executionStatus) }}
+                      </span>
+                      <span>{{ t('app.chat.progressElapsed', { seconds: msg.executionElapsedSeconds ?? 0 }) }}</span>
+                    </div>
                     <ChatMarkdown v-if="msg.content" :source="getProcessedContent(msg.content) || ''" />
                   </article>
 
@@ -2401,6 +2447,20 @@ const scrollToBottom = (force = false) => {
 .chat-execution-state.is-stopped {
   border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
   color: #b45309;
+}
+
+.chat-execution-state.is-failed {
+  border-color: color-mix(in srgb, #dc2626 48%, var(--chat-border));
+  color: #dc2626;
+}
+
+.chat-terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+  color: var(--chat-muted);
+  font-size: 0.75rem;
 }
 
 .chat-execution-metrics {

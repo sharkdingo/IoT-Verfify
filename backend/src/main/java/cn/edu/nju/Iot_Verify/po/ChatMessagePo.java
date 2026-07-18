@@ -1,6 +1,7 @@
 // src/main/java/cn/edu/nju/Iot_Verify/po/ChatMessagePo.java
 package cn.edu.nju.Iot_Verify.po;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -36,6 +37,10 @@ public class ChatMessagePo {
 
     @Column(name = "execution_elapsed_seconds")
     private Integer executionElapsedSeconds;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "execution_status", length = 20)
+    private ChatExecutionStatus executionStatus;
 
     private LocalDateTime createdAt;
 

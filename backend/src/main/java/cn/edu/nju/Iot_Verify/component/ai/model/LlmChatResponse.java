@@ -9,19 +9,27 @@ import java.util.List;
  * <ul>
  *   <li>the model returned text → {@code text} is non-blank, {@code toolCalls} empty;</li>
  *   <li>the model requested tools → {@code toolCalls} is non-empty;</li>
- *   <li>ReAct-capable providers may attach a user-visible reasoning summary in {@code text}
- *       alongside the tool calls.</li>
+ *   <li>ReAct-capable providers may attach an explicit safe summary separately from the
+ *       assistant text. Raw hidden chain-of-thought is never represented here.</li>
  * </ul>
  * An empty/absent choice from the provider maps to {@link #empty()}.
  *
  * @param text      assistant text content (never null; empty when no visible summary was returned)
- * @param toolCalls tool-call requests (never null; empty when the model replied with text)
+ * @param toolCalls        tool-call requests (never null; empty when the model replied with text)
+ * @param reasoningSummary provider-declared user-safe reasoning summary (never null)
  */
-public record LlmChatResponse(String text, List<LlmToolCall> toolCalls) {
+public record LlmChatResponse(String text,
+                              List<LlmToolCall> toolCalls,
+                              String reasoningSummary) {
 
     public LlmChatResponse {
         text = text == null ? "" : text;
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+        reasoningSummary = reasoningSummary == null ? "" : reasoningSummary;
+    }
+
+    public LlmChatResponse(String text, List<LlmToolCall> toolCalls) {
+        this(text, toolCalls, "");
     }
 
     public static LlmChatResponse ofText(String text) {

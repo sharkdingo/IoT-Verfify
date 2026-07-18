@@ -1,36 +1,30 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.component.ai.state.AiSessionStateStore;
+import cn.edu.nju.Iot_Verify.component.ai.state.InMemoryAiSessionStateStore;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
-/**
- * Session-scoped, single-use authorization for destructive AI tool calls.
- *
- * <p>The model only receives an opaque token. The server binds that token to the authenticated
- * user, chat session, tool, target, and a canonical digest of the exact preview. A successful
- * consume removes the pending action atomically, so one user confirmation cannot authorize a
- * second protected mutation in the same tool-planning turn.
- */
+/** Session-scoped, single-use authorization for destructive AI tool calls. */
 @Component
 public class AiDestructiveActionGuard {
 
@@ -38,12 +32,23 @@ public class AiDestructiveActionGuard {
     private static final int TOKEN_BYTES = 32;
 
     private final ObjectMapper objectMapper;
+    private final AiSessionStateStore stateStore;
+    private final Clock clock;
     private final SecureRandom secureRandom = new SecureRandom();
-    private final ConcurrentMap<SessionScope, PendingAction> pendingBySession =
-            new ConcurrentHashMap<>();
 
     public AiDestructiveActionGuard(ObjectMapper objectMapper) {
+        this(objectMapper, new InMemoryAiSessionStateStore(), Clock.systemUTC());
+    }
+
+    @Autowired
+    public AiDestructiveActionGuard(ObjectMapper objectMapper, AiSessionStateStore stateStore) {
+        this(objectMapper, stateStore, Clock.systemUTC());
+    }
+
+    AiDestructiveActionGuard(ObjectMapper objectMapper, AiSessionStateStore stateStore, Clock clock) {
         this.objectMapper = objectMapper;
+        this.stateStore = stateStore;
+        this.clock = clock;
     }
 
     public String issue(Long userId,
@@ -55,15 +60,16 @@ public class AiDestructiveActionGuard {
         byte[] tokenBytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(tokenBytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
-        PendingAction pending = new PendingAction(
-                token,
-                requireText(toolName, "toolName"),
-                requireText(targetKey, "targetKey"),
-                digest(previewSnapshot),
-                domainImpactToken,
-                Instant.now().plus(TOKEN_TTL));
-        pendingBySession.put(scope, pending);
-        removeExpiredEntries();
+        Instant expiresAt = clock.instant().plus(TOKEN_TTL);
+
+        ObjectNode payload = JsonNodeFactory.instance.objectNode();
+        payload.put("token", token);
+        payload.put("toolName", requireText(toolName, "toolName"));
+        payload.put("targetKey", requireText(targetKey, "targetKey"));
+        payload.put("previewDigest", Base64.getEncoder().encodeToString(digest(previewSnapshot)));
+        if (domainImpactToken != null) payload.put("domainImpactToken", domainImpactToken);
+        stateStore.put(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                payload, expiresAt);
         return token;
     }
 
@@ -90,17 +96,20 @@ public class AiDestructiveActionGuard {
                     "No changes were made because the protected-action confirmation is not associated with an active chat session.");
         }
 
-        PendingAction pending = pendingBySession.get(scope);
-        if (pending == null) {
+        AiSessionStateStore.Snapshot snapshot = stateStore.get(
+                scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                clock.instant()).orElse(null);
+        if (snapshot == null) {
             return ConsumeResult.rejected(
                     "CONFIRMATION_MISSING",
                     "No changes were made. The preview is missing, expired, or already used; request a fresh preview.");
         }
-        if (pending.expiresAt().isBefore(Instant.now())) {
-            pendingBySession.remove(scope, pending);
+
+        PendingAction pending = parsePending(scope, snapshot);
+        if (pending == null) {
             return ConsumeResult.rejected(
-                    "CONFIRMATION_EXPIRED",
-                    "No changes were made. The protected-action preview expired; request and confirm a fresh preview.");
+                    "CONFIRMATION_MISSING",
+                    "No changes were made. The preview is missing, expired, or unreadable; request a fresh preview.");
         }
 
         String expectedTool = requireText(toolName, "toolName");
@@ -115,13 +124,15 @@ public class AiDestructiveActionGuard {
 
         byte[] currentDigest = digest(currentPreviewSnapshot);
         if (!MessageDigest.isEqual(pending.previewDigest(), currentDigest)) {
-            pendingBySession.remove(scope, pending);
+            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                    snapshot.version());
             return ConsumeResult.rejected(
                     "CONFIRMATION_STALE",
                     "No changes were made because the protected-action impact changed after the preview; review and confirm the current preview.");
         }
 
-        if (!pendingBySession.remove(scope, pending)) {
+        if (!stateStore.remove(scope.userId(), scope.sessionId(),
+                AiSessionStateStore.Kind.DESTRUCTIVE_ACTION, snapshot.version())) {
             return ConsumeResult.rejected(
                     "CONFIRMATION_CONSUMED",
                     "No changes were made. This protected-action confirmation was already used; request a fresh preview.");
@@ -131,26 +142,44 @@ public class AiDestructiveActionGuard {
 
     public void clearSession(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) return;
-        pendingBySession.remove(new SessionScope(userId, sessionId));
+        stateStore.remove(userId, sessionId, AiSessionStateStore.Kind.DESTRUCTIVE_ACTION);
     }
 
     public void clearUser(Long userId) {
         if (userId == null) return;
-        pendingBySession.keySet().removeIf(scope -> Objects.equals(scope.userId(), userId));
+        stateStore.removeUser(userId);
     }
 
     /** Returns compact confirmation context without depending on persisted tool-result history. */
     public Optional<PendingActionContext> pendingContext(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) return Optional.empty();
         SessionScope scope = new SessionScope(userId, sessionId);
-        PendingAction pending = pendingBySession.get(scope);
+        AiSessionStateStore.Snapshot snapshot = stateStore.get(
+                userId, sessionId, AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                clock.instant()).orElse(null);
+        if (snapshot == null) return Optional.empty();
+        PendingAction pending = parsePending(scope, snapshot);
         if (pending == null) return Optional.empty();
-        if (!pending.expiresAt().isAfter(Instant.now())) {
-            pendingBySession.remove(scope, pending);
-            return Optional.empty();
-        }
         return Optional.of(new PendingActionContext(
                 pending.toolName(), pending.targetKey(), pending.token()));
+    }
+
+    private PendingAction parsePending(SessionScope scope, AiSessionStateStore.Snapshot snapshot) {
+        try {
+            JsonNode payload = snapshot.payload();
+            return new PendingAction(
+                    requireText(payload.path("token").asText(null), "token"),
+                    requireText(payload.path("toolName").asText(null), "toolName"),
+                    requireText(payload.path("targetKey").asText(null), "targetKey"),
+                    Base64.getDecoder().decode(requireText(
+                            payload.path("previewDigest").asText(null), "previewDigest")),
+                    payload.hasNonNull("domainImpactToken")
+                            ? payload.path("domainImpactToken").asText() : null);
+        } catch (RuntimeException e) {
+            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.DESTRUCTIVE_ACTION,
+                    snapshot.version());
+            return null;
+        }
     }
 
     private SessionScope currentScope(Long userId) {
@@ -197,11 +226,6 @@ public class AiDestructiveActionGuard {
         return node.deepCopy();
     }
 
-    private void removeExpiredEntries() {
-        Instant now = Instant.now();
-        pendingBySession.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
-    }
-
     private boolean secureEquals(String expected, String supplied) {
         if (expected == null || supplied == null) return false;
         return MessageDigest.isEqual(
@@ -223,8 +247,7 @@ public class AiDestructiveActionGuard {
                                  String toolName,
                                  String targetKey,
                                  byte[] previewDigest,
-                                 String domainImpactToken,
-                                 Instant expiresAt) {
+                                 String domainImpactToken) {
     }
 
     public record PendingActionContext(String toolName, String targetKey, String impactToken) {

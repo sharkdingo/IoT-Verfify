@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.ai;
 
+import cn.edu.nju.Iot_Verify.component.ai.state.InMemoryAiSessionStateStore;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -60,6 +61,19 @@ class AiTaskContinuationStoreTest {
         assertEquals("delete_device", context.pendingToolName());
         assertEquals("{\"suggestedLabel\":\"Hall Sensor 2\"}", context.pendingResult());
         assertEquals(java.util.List.of("Keep the existing rules"), context.recentUserMessages());
+    }
+
+    @Test
+    void anotherStoreInstanceCanResumeThePersistedTask() {
+        Clock clock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC);
+        InMemoryAiSessionStateStore sharedState = new InMemoryAiSessionStateStore();
+        AiTaskContinuationStore writer = new AiTaskContinuationStore(sharedState, clock);
+        AiTaskContinuationStore reader = new AiTaskContinuationStore(sharedState, clock);
+
+        writer.save(1L, "s1", "replace the sensor and verify");
+
+        assertEquals("replace the sensor and verify",
+                reader.pendingObjective(1L, "s1").orElseThrow());
     }
 
     private static final class MutableClock extends Clock {

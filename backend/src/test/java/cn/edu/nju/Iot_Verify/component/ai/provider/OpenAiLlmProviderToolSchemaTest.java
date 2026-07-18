@@ -1,15 +1,18 @@
 package cn.edu.nju.Iot_Verify.component.ai.provider;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
+import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
 import cn.edu.nju.Iot_Verify.configure.LlmConfig;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.openai.core.JsonValue;
 import com.openai.client.OpenAIClient;
 import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionMessage;
 import com.openai.models.chat.completions.ChatCompletionTool;
 import com.openai.services.blocking.ChatService;
 import com.openai.services.blocking.chat.ChatCompletionService;
@@ -19,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,6 +33,24 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OpenAiLlmProviderToolSchemaTest {
+
+    @Test
+    void chatReadsOnlyExplicitSafeReasoningSummaryFields() {
+        OpenAiLlmProvider provider = new OpenAiLlmProvider(new LlmConfig());
+        ChatCompletion safeCompletion = completion(Map.of(
+                "reasoning_summary", JsonValue.from("Checked current board state."),
+                "reasoning_content", JsonValue.from("private chain of thought")));
+        ChatCompletion rawOnlyCompletion = completion(Map.of(
+                "reasoning_content", JsonValue.from("must remain hidden")));
+
+        LlmChatResponse safe = ReflectionTestUtils.invokeMethod(
+                provider, "parseResponse", safeCompletion);
+        LlmChatResponse rawOnly = ReflectionTestUtils.invokeMethod(
+                provider, "parseResponse", rawOnlyCompletion);
+
+        assertEquals("Checked current board state.", safe.reasoningSummary());
+        assertTrue(rawOnly.reasoningSummary().isBlank());
+    }
 
     @Test
     void chatForwardsRootAndNestedAdditionalPropertiesWithoutLosingConstraints() {
@@ -99,18 +121,37 @@ class OpenAiLlmProviderToolSchemaTest {
     }
 
     private OpenAiLlmProvider providerWith(ChatCompletionService completions) {
+        ChatCompletion completion = mock(ChatCompletion.class);
+        when(completion.choices()).thenReturn(List.of());
+        return providerWith(completions, completion);
+    }
+
+    private OpenAiLlmProvider providerWith(ChatCompletionService completions,
+                                           ChatCompletion completion) {
         OpenAIClient client = mock(OpenAIClient.class);
         ChatService chatService = mock(ChatService.class);
-        ChatCompletion completion = mock(ChatCompletion.class);
         when(client.chat()).thenReturn(chatService);
         when(chatService.completions()).thenReturn(completions);
-        when(completions.create(any(ChatCompletionCreateParams.class))).thenReturn(completion);
-        when(completion.choices()).thenReturn(List.of());
+        if (completion != null) {
+            when(completions.create(any(ChatCompletionCreateParams.class))).thenReturn(completion);
+        }
 
         LlmConfig config = new LlmConfig();
         config.setModel("mock-model");
         OpenAiLlmProvider provider = new OpenAiLlmProvider(config);
         ReflectionTestUtils.setField(provider, "client", client);
         return provider;
+    }
+
+    private ChatCompletion completion(Map<String, JsonValue> additionalProperties) {
+        ChatCompletionMessage message = mock(ChatCompletionMessage.class);
+        when(message.content()).thenReturn(Optional.of(""));
+        when(message.toolCalls()).thenReturn(Optional.empty());
+        when(message._additionalProperties()).thenReturn(additionalProperties);
+        ChatCompletion.Choice choice = mock(ChatCompletion.Choice.class);
+        when(choice.message()).thenReturn(message);
+        ChatCompletion completion = mock(ChatCompletion.class);
+        when(completion.choices()).thenReturn(List.of(choice));
+        return completion;
     }
 }

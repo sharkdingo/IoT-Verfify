@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.chat;
 
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -20,4 +21,5 @@ public class ChatMessageResponseDto {
     private LocalDateTime createdAt;
     private List<StreamResponseDto.ProgressDto> executionTrace;
     private Integer executionElapsedSeconds;
+    private ChatExecutionStatus executionStatus;
 }

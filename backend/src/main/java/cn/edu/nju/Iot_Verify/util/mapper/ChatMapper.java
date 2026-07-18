@@ -24,6 +24,8 @@ public class ChatMapper {
         dto.setRole(chatMessagePo.getRole());
         dto.setContent(chatMessagePo.getContent());
         dto.setCreatedAt(chatMessagePo.getCreatedAt());
+        dto.setExecutionStatus(chatMessagePo.getExecutionStatus());
+        dto.setExecutionElapsedSeconds(chatMessagePo.getExecutionElapsedSeconds());
         return dto;
     }
 

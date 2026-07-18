@@ -104,6 +104,23 @@ class RecommendScenarioToolTest {
         assertEquals("NO_DEVICES", json.path("readinessIssues").get(0).path("code").asText());
         assertEquals("NO_SPECIFICATIONS", json.path("readinessIssues").get(1).path("code").asText());
         assertTrue(json.path("message").asText().contains("returned no scene-item candidates"));
+        assertFalse(json.path("draftStored").asBoolean());
+        assertFalse(json.path("previousDraftRetained").asBoolean());
+    }
+
+    @Test
+    void execute_whenEmptyRecommendationRetainsPreviousDraft_reportsItExplicitly() throws Exception {
+        UserContextHolder.setChatSessionId("session-1");
+        draftStore.saveDraft(1L, "session-1", "Previous", objectMapper.readTree(
+                "{\"devices\":[{\"id\":\"device_1\"}],\"rules\":[],\"specs\":[]}"));
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of());
+
+        JsonNode json = objectMapper.readTree(tool.execute("{\"language\":\"en\"}"));
+
+        assertFalse(json.path("draftStored").asBoolean());
+        assertTrue(json.path("previousDraftRetained").asBoolean());
+        assertTrue(json.path("message").asText().contains("previous valid draft"));
+        assertEquals("Previous", draftStore.latestDraft(1L, "session-1").orElseThrow().scenarioName());
     }
 
     @Test
@@ -170,6 +187,8 @@ class RecommendScenarioToolTest {
         assertEquals(1, scene.path("rules").size());
         assertEquals(1, scene.path("specs").size());
         assertTrue(json.path("verificationReady").asBoolean());
+        assertTrue(json.path("draftStored").asBoolean());
+        assertFalse(json.path("previousDraftRetained").asBoolean());
         assertEquals(0, json.path("readinessIssues").size());
         assertEquals("a_noise", scene.path("environmentVariables").get(0).path("name").asText());
         assertEquals("a_noise", scene.path("rules").get(0).path("sources").get(0).path("fromApi").asText());

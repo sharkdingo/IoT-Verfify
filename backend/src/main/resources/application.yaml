@@ -37,6 +37,10 @@ chat:
     max-tool-rounds: ${CHAT_MAX_TOOL_ROUNDS:64}
     max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
 
+iot-verify:
+  ai:
+    session-state-cleanup-ms: ${AI_SESSION_STATE_CLEANUP_MS:60000}
+
 jwt:
   secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}
   expiration: ${JWT_EXPIRATION:86400000}

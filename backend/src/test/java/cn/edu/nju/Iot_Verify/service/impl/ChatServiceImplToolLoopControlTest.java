@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.AiTaskContinuationStore;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
@@ -795,8 +796,12 @@ class ChatServiceImplToolLoopControlTest {
         service.processStreamChat(1L, "s1", "please list rules", emitter);
 
         verify(aiToolManager, never()).execute(any(), any());
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
-                msg -> msg != null && ("assistant".equals(msg.getRole()) || "tool".equals(msg.getRole()))));
+                msg -> msg != null && "tool".equals(msg.getRole())));
         verify(emitter).complete();
         service.endStreamRequest(1L, "s1");
     }
@@ -819,8 +824,38 @@ class ChatServiceImplToolLoopControlTest {
 
         verify(emitter, org.mockito.Mockito.atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
-        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
-                msg -> msg != null && "assistant".equalsIgnoreCase(msg.getRole())));
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.FAILED
+                        && msg.getContent().contains("temporarily unavailable")));
+    }
+
+    @Test
+    void processStreamChat_whenFinalReplyFailsAfterToolResult_persistsPartialAudit() throws Exception {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        session.setTitle("New Chat");
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"))
+                .thenReturn(textResult("planning done"));
+        when(aiToolManager.execute("list_rules", "{}")).thenReturn("""
+                {"rules":[]}
+                """);
+        doThrow(ServiceUnavailableException.aiService(new RuntimeException("provider unavailable")))
+                .when(llmChatService).streamReply(anyList(), any(), any());
+
+        service.processStreamChat(1L, "s1", "list rules", mock(SseEmitter.class));
+
+        verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equalsIgnoreCase(msg.getRole())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL
+                        && msg.getContent().contains("temporarily unavailable")));
     }
 
     @Test
@@ -871,7 +906,8 @@ class ChatServiceImplToolLoopControlTest {
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equalsIgnoreCase(msg.getRole())
-                        && "stream final".equals(msg.getContent())));
+                        && "stream final".equals(msg.getContent())
+                        && msg.getExecutionStatus() == ChatExecutionStatus.COMPLETED));
         String systemPrompt = streamedMessages.get().get(0).content();
         assertTrue(systemPrompt.contains("Tool executions may already be present"));
         assertTrue(systemPrompt.contains("Do not emit tool-call JSON"));

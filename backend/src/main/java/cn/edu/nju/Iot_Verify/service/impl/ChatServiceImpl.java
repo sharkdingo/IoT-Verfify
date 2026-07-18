@@ -7,6 +7,7 @@ import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.ConfirmationK
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
@@ -49,6 +50,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -69,6 +71,8 @@ import java.util.concurrent.ConcurrentMap;
 public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private static final int HISTORY_CHAR_LIMIT = 4000;
+    private static final int SESSION_LOCK_STRIPES = 256;
+    private static final Object[] SESSION_LOCKS = createSessionLocks();
     private static final Set<String> CONTINUATION_SENSITIVE_FIELDS = Set.of(
             "impactToken", "confirmationToken", "domainImpactToken");
 
@@ -87,7 +91,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private final TransactionTemplate transactionTemplate;
     private final ChatExecutionConfig chatExecutionConfig;
     private final ConcurrentMap<String, ActiveStreamRequest> activeStreamRequests = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
 
     @Override
     @Transactional(readOnly = true)
@@ -132,8 +135,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             messageRepo.deleteBySessionId(sessionId);
             sessionRepo.deleteById(Objects.requireNonNull(sessionId, "sessionId must not be null"));
             destructiveActionGuard.clearSession(userId, sessionId);
-            scenarioDraftStore.clearSession(sessionId);
-            taskContinuationStore.clearSession(sessionId);
+            scenarioDraftStore.clearSession(userId, sessionId);
+            taskContinuationStore.clearSession(userId, sessionId);
         }
     }
 
@@ -192,8 +195,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     private Object sessionLock(String sessionId) {
-        return sessionLocks.computeIfAbsent(
-                Objects.requireNonNull(sessionId, "sessionId must not be null"), ignored -> new Object());
+        String requiredSessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
+        int hash = requiredSessionId.hashCode();
+        hash ^= hash >>> 16;
+        return SESSION_LOCKS[hash & (SESSION_LOCK_STRIPES - 1)];
+    }
+
+    private static Object[] createSessionLocks() {
+        Object[] locks = new Object[SESSION_LOCK_STRIPES];
+        Arrays.setAll(locks, ignored -> new Object());
+        return locks;
     }
 
     @Override
@@ -240,6 +251,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         ToolLoopResult loopResult = ToolLoopResult.empty();
+        boolean userMessagePersisted = false;
+        boolean terminalRecordPersisted = false;
         emitter.onCompletion(() -> isDisconnect.set(true));
         emitter.onTimeout(() -> isDisconnect.set(true));
         emitter.onError(ex -> isDisconnect.set(true));
@@ -260,6 +273,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 saveSimpleMsg(sessionId, "user", content);
                 touchSessionTitle(sessionId, userId, content);
             });
+            userMessagePersisted = true;
             if (!sendSseProgress(emitter, "CONTEXT_READY", null, null,
                     null, null, null, executionTrace)) {
                 isDisconnect.set(true);
@@ -357,20 +371,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 }
             }
 
-            if (!finalAnswer.isEmpty()) {
-                int elapsedSeconds = (int) Math.min(
-                        Integer.MAX_VALUE,
-                        Math.max(0L, (System.nanoTime() - executionStartedNanos) / 1_000_000_000L));
-                executeOwnedSessionWrite(userId, sessionId, () ->
-                        saveAssistantMsg(
-                                sessionId,
-                                finalAnswer.toString(),
-                                executionTrace,
-                                elapsedSeconds));
-            }
+            terminalRecordPersisted = persistAssistantTerminal(
+                    userId,
+                    sessionId,
+                    finalAnswer.toString(),
+                    executionTrace,
+                    elapsedSeconds(executionStartedNanos),
+                    ChatExecutionStatus.COMPLETED);
             completeEmitter(emitter, isDisconnect);
         } catch (Exception e) {
             if (isDisconnect.get() || isClientDisconnect(e)) {
+                isDisconnect.set(true);
                 log.info("Chat stream ended after client disconnect: {}", e.toString());
                 return;
             }
@@ -383,8 +394,33 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         : " One or more earlier tool mutations may already have completed; "
                             + "the client was asked to refresh affected data. Review current state before retrying.";
             }
+            ChatExecutionStatus status = loopResult.hadToolCalls()
+                    || executionTrace.stream().anyMatch(progress ->
+                            "TOOL_EXECUTION".equals(progress.getStage())
+                                    || "TOOL_RESULT".equals(progress.getStage()))
+                    || !commandSet.isEmpty()
+                    ? ChatExecutionStatus.PARTIAL
+                    : ChatExecutionStatus.FAILED;
+            if (userMessagePersisted) {
+                terminalRecordPersisted = persistAssistantTerminal(
+                        userId,
+                        sessionId,
+                        errorMessage,
+                        executionTrace,
+                        elapsedSeconds(executionStartedNanos),
+                        status);
+            }
             sendSseErrorMessage(emitter, errorMessage);
         } finally {
+            if (userMessagePersisted && !terminalRecordPersisted && isDisconnect.get()) {
+                persistAssistantTerminal(
+                        userId,
+                        sessionId,
+                        disconnectedAuditNotice(loopResult, preferChinese),
+                        executionTrace,
+                        elapsedSeconds(executionStartedNanos),
+                        ChatExecutionStatus.DISCONNECTED);
+            }
             UserContextHolder.clear();
         }
     }
@@ -876,7 +912,10 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         confirmationPending);
             }
 
-            String reasoningSummary = compactReasoningProgressDetail(response.text());
+            String reasoningSource = response.reasoningSummary().isBlank()
+                    ? response.text()
+                    : response.reasoningSummary();
+            String reasoningSummary = compactReasoningProgressDetail(reasoningSource);
             if (reasoningSummary != null && !reasoningSummary.isBlank()
                     && !sendSseProgress(emitter, "REASONING", null, round + 1,
                     null, currentResult, reasoningSummary, executionTrace)) {
@@ -1573,12 +1612,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     private void saveAssistantMsg(String sid,
                                   String content,
                                   List<StreamResponseDto.ProgressDto> executionTrace,
-                                  Integer elapsedSeconds) {
+                                  Integer elapsedSeconds,
+                                  ChatExecutionStatus executionStatus) {
         ChatMessagePo po = new ChatMessagePo();
         po.setSessionId(sid);
         po.setRole("assistant");
         po.setContent(content);
         po.setExecutionElapsedSeconds(elapsedSeconds);
+        po.setExecutionStatus(executionStatus);
         if (executionTrace != null && !executionTrace.isEmpty()) {
             try {
                 po.setExecutionTraceJson(objectMapper.writeValueAsString(executionTrace));
@@ -1587,6 +1628,48 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
         }
         messageRepo.saveAndFlush(po);
+    }
+
+    private boolean persistAssistantTerminal(Long userId,
+                                             String sessionId,
+                                             String content,
+                                             List<StreamResponseDto.ProgressDto> executionTrace,
+                                             Integer elapsedSeconds,
+                                             ChatExecutionStatus executionStatus) {
+        try {
+            executeOwnedSessionWrite(userId, sessionId, () -> saveAssistantMsg(
+                    sessionId, content, executionTrace, elapsedSeconds, executionStatus));
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Could not persist {} chat terminal record for session {}: {}",
+                    executionStatus, sessionId, e.toString());
+            return false;
+        }
+    }
+
+    private int elapsedSeconds(long executionStartedNanos) {
+        return (int) Math.min(
+                Integer.MAX_VALUE,
+                Math.max(0L, (System.nanoTime() - executionStartedNanos) / 1_000_000_000L));
+    }
+
+    private String disconnectedAuditNotice(ToolLoopResult result, boolean preferChinese) {
+        if (result != null && result.hadToolCalls()) {
+            return preferChinese
+                    ? "连接在任务完成前中断。中断前有 " + result.successfulToolCalls()
+                        + " 个步骤返回可用结果、" + result.failedToolCalls() + " 个步骤失败、"
+                        + result.resultUnavailableToolCalls()
+                        + " 个步骤结果未确认。已开始的写入不会因断线回滚，请以刷新后的画布和运行历史为准。"
+                    : "The connection ended before the task completed. Before disconnecting, "
+                        + result.successfulToolCalls() + " step(s) returned usable results, "
+                        + result.failedToolCalls() + " failed, and "
+                        + result.resultUnavailableToolCalls()
+                        + " had unconfirmed results. Started writes are not rolled back by a disconnect; "
+                        + "rely on the refreshed Board and run history.";
+        }
+        return preferChinese
+                ? "连接在回复完成前中断，未记录到已完成的工具步骤。请重试当前请求。"
+                : "The connection ended before the reply completed, with no completed tool step recorded. Please retry the request.";
     }
 
     private boolean isUntitledSessionTitle(String title) {

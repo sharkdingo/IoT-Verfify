@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.component.ai.state.InMemoryAiSessionStateStore;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -9,6 +10,9 @@ import org.junit.jupiter.api.Test;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -155,5 +159,22 @@ class AiDestructiveActionGuardTest {
         assertEquals("delete_device", context.toolName());
         assertEquals("alarm_1", context.targetKey());
         assertEquals(token, context.impactToken());
+    }
+
+    @Test
+    void anotherGuardInstanceCanConsumeThePersistedSingleUseConfirmation() {
+        InMemoryAiSessionStateStore sharedState = new InMemoryAiSessionStateStore();
+        Clock clock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC);
+        AiDestructiveActionGuard issuer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState, clock);
+        AiDestructiveActionGuard consumer = new AiDestructiveActionGuard(
+                new ObjectMapper(), sharedState, clock);
+        Map<String, Object> preview = Map.of("id", 17);
+        String token = issuer.issue(1L, "delete_trace", "17", preview, null);
+        UserContextHolder.setDestructiveActionConfirmed(true);
+
+        assertTrue(consumer.consume(1L, "delete_trace", "17", token, preview).approved());
+        assertEquals("CONFIRMATION_MISSING",
+                issuer.consume(1L, "delete_trace", "17", token, preview).errorCode());
     }
 }

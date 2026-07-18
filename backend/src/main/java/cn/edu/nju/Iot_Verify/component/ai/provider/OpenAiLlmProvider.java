@@ -58,6 +58,14 @@ import java.util.stream.Stream;
         prefix = "llm", name = "provider", havingValue = "openai", matchIfMissing = true)
 public class OpenAiLlmProvider implements LlmProvider {
 
+    private static final int MAX_REASONING_SUMMARY_CHARS = 2000;
+    private static final List<String> SAFE_REASONING_SUMMARY_FIELDS = List.of(
+            "reasoning_summary",
+            "reasoningSummary",
+            "reasoning_summary_content",
+            "analysis_summary",
+            "analysisSummary");
+
     private final LlmConfig config;
     private OpenAIClient client;
 
@@ -241,10 +249,51 @@ public class OpenAiLlmProvider implements LlmProvider {
         List<LlmToolCall> toolCalls = message.toolCalls()
                 .map(this::toDomainToolCalls)
                 .orElseGet(List::of);
+        String reasoningSummary = safeReasoningSummary(message);
         if (!toolCalls.isEmpty()) {
-            return LlmChatResponse.ofTextAndToolCalls(message.content().orElse(""), toolCalls);
+            return new LlmChatResponse(
+                    message.content().orElse(""), toolCalls, reasoningSummary);
         }
-        return LlmChatResponse.ofText(message.content().orElse(""));
+        return new LlmChatResponse(message.content().orElse(""), List.of(), reasoningSummary);
+    }
+
+    private String safeReasoningSummary(ChatCompletionMessage message) {
+        Map<String, JsonValue> additional = message._additionalProperties();
+        for (String field : SAFE_REASONING_SUMMARY_FIELDS) {
+            JsonValue value = additional.get(field);
+            if (value == null) continue;
+            try {
+                com.fasterxml.jackson.databind.JsonNode node = value.convert(
+                        com.fasterxml.jackson.databind.JsonNode.class);
+                String summary = summaryText(node);
+                if (summary != null) return summary;
+            } catch (RuntimeException e) {
+                log.debug("Ignoring unreadable safe reasoning summary field {}", field);
+            }
+        }
+        // Deliberately ignore reasoning_content and analysis: compatible endpoints commonly
+        // use those names for private chain-of-thought rather than a user-safe summary.
+        return "";
+    }
+
+    private String summaryText(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        String value = null;
+        if (node.isTextual()) {
+            value = node.asText();
+        } else if (node.isObject()) {
+            for (String key : List.of("summary", "text", "content")) {
+                if (node.path(key).isTextual()) {
+                    value = node.path(key).asText();
+                    break;
+                }
+            }
+        }
+        if (value == null || value.isBlank()) return null;
+        String normalized = value.trim();
+        return normalized.length() <= MAX_REASONING_SUMMARY_CHARS
+                ? normalized
+                : normalized.substring(0, MAX_REASONING_SUMMARY_CHARS);
     }
 
     private List<LlmToolCall> toDomainToolCalls(List<ChatCompletionMessageToolCall> sdkCalls) {

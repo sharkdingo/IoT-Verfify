@@ -1,16 +1,19 @@
 package cn.edu.nju.Iot_Verify.component.aitool.scenario;
 
+import cn.edu.nju.Iot_Verify.component.ai.state.AiSessionStateStore;
+import cn.edu.nju.Iot_Verify.component.ai.state.InMemoryAiSessionStateStore;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * Server-side lifecycle for the latest chat-generated scene draft.
@@ -25,41 +28,51 @@ public class AiScenarioDraftStore {
     static final Duration DRAFT_TTL = Duration.ofHours(1);
     static final Duration PENDING_TTL = Duration.ofMinutes(15);
 
-    private final ConcurrentMap<SessionScope, Entry> entries = new ConcurrentHashMap<>();
+    private final AiSessionStateStore stateStore;
+    private final ObjectMapper objectMapper;
     private final Clock clock;
 
     public AiScenarioDraftStore() {
-        this(Clock.systemUTC());
+        this(new InMemoryAiSessionStateStore(), new ObjectMapper(), Clock.systemUTC());
     }
 
-    AiScenarioDraftStore(Clock clock) {
+    @Autowired
+    public AiScenarioDraftStore(AiSessionStateStore stateStore, ObjectMapper objectMapper) {
+        this(stateStore, objectMapper, Clock.systemUTC());
+    }
+
+    AiScenarioDraftStore(AiSessionStateStore stateStore, ObjectMapper objectMapper, Clock clock) {
+        this.stateStore = stateStore;
+        this.objectMapper = objectMapper;
         this.clock = clock;
     }
 
-    public void saveDraft(Long userId, String sessionId, String scenarioName, JsonNode scene) {
+    public DraftSaveResult saveDraft(Long userId, String sessionId, String scenarioName, JsonNode scene) {
         SessionScope scope = scope(userId, sessionId);
         if (scene == null || !scene.isObject() || !scene.path("devices").isArray()
                 || scene.path("devices").isEmpty()) {
-            return;
+            return new DraftSaveResult(false, active(scope) != null);
         }
         Instant now = clock.instant();
-        entries.put(scope, new Entry(
+        save(scope, new Entry(
                 scenarioName == null || scenarioName.isBlank() ? "AI Scenario" : scenarioName,
                 scene.deepCopy(),
                 now.plus(DRAFT_TTL),
                 null,
                 null));
+        return new DraftSaveResult(true, false);
     }
 
     public void clearDraft(Long userId, String sessionId) {
-        entries.remove(scope(userId, sessionId));
+        SessionScope scope = scope(userId, sessionId);
+        stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT);
     }
 
     public void clearPendingApplication(Long userId, String sessionId) {
         SessionScope scope = scope(userId, sessionId);
         Entry entry = active(scope);
         if (entry != null && entry.pendingPreview() != null) {
-            entries.put(scope, entry.withPending(null, null));
+            save(scope, entry.withPending(null, null));
         }
     }
 
@@ -77,7 +90,7 @@ public class AiScenarioDraftStore {
         if (entry == null || preview == null) return Optional.empty();
         Instant expiresAt = clock.instant().plus(PENDING_TTL);
         Entry pending = entry.withPending(copyPreview(preview), expiresAt);
-        entries.put(scope, pending);
+        save(scope, pending);
         return Optional.of(toPending(pending));
     }
 
@@ -87,8 +100,7 @@ public class AiScenarioDraftStore {
             return Optional.empty();
         }
         if (!entry.pendingExpiresAt().isAfter(clock.instant())) {
-            entries.computeIfPresent(scope(userId, sessionId), (ignored, current) ->
-                    current.withPending(null, null));
+            save(scope(userId, sessionId), entry.withPending(null, null));
             return Optional.empty();
         }
         return Optional.of(toPending(entry));
@@ -101,32 +113,60 @@ public class AiScenarioDraftStore {
         Entry entry = active(scope);
         if (entry == null || entry.pendingPreview() == null || preview == null) return Optional.empty();
         Entry refreshed = entry.withPending(copyPreview(preview), clock.instant().plus(PENDING_TTL));
-        entries.put(scope, refreshed);
+        save(scope, refreshed);
         return Optional.of(toPending(refreshed));
     }
 
     public void completeApplication(Long userId, String sessionId) {
-        entries.remove(scope(userId, sessionId));
+        clearDraft(userId, sessionId);
     }
 
-    public void clearSession(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) return;
-        entries.keySet().removeIf(scope -> scope.sessionId().equals(sessionId));
+    public void clearSession(Long userId, String sessionId) {
+        if (userId == null || sessionId == null || sessionId.isBlank()) return;
+        stateStore.remove(userId, sessionId, AiSessionStateStore.Kind.SCENARIO_DRAFT);
     }
 
     public void clearUser(Long userId) {
         if (userId == null) return;
-        entries.keySet().removeIf(scope -> scope.userId().equals(userId));
+        stateStore.removeUser(userId);
     }
 
     private Entry active(SessionScope scope) {
-        Entry entry = entries.get(scope);
-        if (entry == null) return null;
-        if (!entry.draftExpiresAt().isAfter(clock.instant())) {
-            entries.remove(scope, entry);
+        AiSessionStateStore.Snapshot snapshot = stateStore.get(
+                scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT,
+                clock.instant()).orElse(null);
+        if (snapshot == null) return null;
+        try {
+            JsonNode payload = snapshot.payload();
+            String scenarioName = payload.path("scenarioName").asText("AI Scenario");
+            JsonNode scene = payload.path("scene");
+            if (!scene.isObject()) throw new IllegalArgumentException("missing scene");
+            BoardReplacementPreviewDto preview = payload.hasNonNull("pendingPreview")
+                    ? previewFromJson(payload.get("pendingPreview"))
+                    : null;
+            Instant pendingExpiresAt = payload.hasNonNull("pendingExpiresAt")
+                    ? Instant.parse(payload.path("pendingExpiresAt").asText())
+                    : null;
+            return new Entry(scenarioName, scene.deepCopy(), snapshot.expiresAt(), preview, pendingExpiresAt);
+        } catch (Exception e) {
+            stateStore.remove(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT,
+                    snapshot.version());
             return null;
         }
-        return entry;
+    }
+
+    private void save(SessionScope scope, Entry entry) {
+        ObjectNode payload = JsonNodeFactory.instance.objectNode();
+        payload.put("scenarioName", entry.scenarioName());
+        payload.set("scene", entry.scene().deepCopy());
+        if (entry.pendingPreview() != null) {
+            payload.set("pendingPreview", objectMapper.valueToTree(entry.pendingPreview()));
+        }
+        if (entry.pendingExpiresAt() != null) {
+            payload.put("pendingExpiresAt", entry.pendingExpiresAt().toString());
+        }
+        stateStore.put(scope.userId(), scope.sessionId(), AiSessionStateStore.Kind.SCENARIO_DRAFT,
+                payload, entry.draftExpiresAt());
     }
 
     private PendingApplication toPending(Entry entry) {
@@ -148,6 +188,19 @@ public class AiScenarioDraftStore {
                 .build();
     }
 
+    private BoardReplacementPreviewDto previewFromJson(JsonNode source) {
+        if (source == null || !source.isObject()) {
+            throw new IllegalArgumentException("missing pending preview");
+        }
+        return BoardReplacementPreviewDto.builder()
+                .impactToken(source.path("impactToken").asText(null))
+                .deviceCount(source.path("deviceCount").asInt())
+                .environmentVariableCount(source.path("environmentVariableCount").asInt())
+                .ruleCount(source.path("ruleCount").asInt())
+                .specificationCount(source.path("specificationCount").asInt())
+                .build();
+    }
+
     private SessionScope scope(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("A chat user and session are required for a scenario draft.");
@@ -156,6 +209,9 @@ public class AiScenarioDraftStore {
     }
 
     public record DraftSnapshot(String scenarioName, JsonNode scene) {
+    }
+
+    public record DraftSaveResult(boolean draftStored, boolean previousDraftRetained) {
     }
 
     public record PendingApplication(String scenarioName,

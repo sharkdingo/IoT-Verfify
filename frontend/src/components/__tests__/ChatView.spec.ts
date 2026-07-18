@@ -88,6 +88,31 @@ describe('ChatView', () => {
     wrapper.unmount()
   })
 
+  it('shows a persisted disconnect status even when no progress frame reached the client', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'user', content: '运行验证' },
+      {
+        role: 'assistant',
+        content: '连接在任务完成前中断。',
+        executionStatus: 'DISCONNECTED',
+        executionElapsedSeconds: 4
+      }
+    ])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    const status = wrapper.get('[data-testid="chat-terminal-status"]')
+    expect(status.text()).toContain('连接中断')
+    expect(status.text()).toContain('4 秒')
+
+    wrapper.unmount()
+  })
+
   it('renders the pending response inside one full-width assistant activity bubble', async () => {
     let finishStream!: () => void
     chatApi.createSession.mockResolvedValue(session)

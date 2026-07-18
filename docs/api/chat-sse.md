@@ -25,10 +25,13 @@ updatedAt }`.
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
 `ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: String, content:
-String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer }`.
-Each newly completed assistant response stores its exact bounded user-visible execution
-record and elapsed time on the final assistant row, including task-resumption and
-execution-guard events even when no tool ultimately runs. Older rows without this metadata
+String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
+executionStatus?: "COMPLETED" | "PARTIAL" | "DISCONNECTED" | "FAILED" }`.
+Every started user turn that reaches message persistence receives a visible terminal
+assistant record, including provider failure and client-disconnect paths. The row stores
+the exact bounded execution record, elapsed time, and explicit terminal status; `PARTIAL`
+means tool work began before a later failure, while `DISCONNECTED` means transport loss
+ended the visible response and does not imply rollback. Older rows without this metadata
 are reconstructed from persisted internal tool-call/result blocks. Raw tool JSON, internal
 identifiers, provider exceptions, and private model reasoning remain hidden.
 
@@ -115,7 +118,9 @@ catalog. A targeted replacement can therefore preview and confirm a deletion, cr
 replacement, repair dependent rules/specs, and run requested verification without treating
 the confirmation as the end of the task. A second protected action still requires its own
 preview and confirmation. Ordinary questions and task updates preserve the pending preview;
-explicit cancellation, session/account cleanup, backend restart, and expiration clear it.
+explicit cancellation, session/account cleanup, and expiration clear it. Continuation
+state is stored in the shared database, so a normal backend restart or load-balanced
+follow-up does not by itself discard a still-live entry.
 
 If a model response contains several parallel tool calls and one call reaches this
 boundary, later calls in that same response are not executed. The backend records an
@@ -158,8 +163,10 @@ The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
 expired, cross-session, cross-user, changed-preview, and replayed tokens return a no-write
 `409` with `requiresUserConfirmation=true` and a fresh preview where available. Explicit
-cancellation clears the relevant pending action; session/account deletion, expiration, and
-backend restart also clear it. This binding applies uniformly to device, template, rule,
+cancellation clears the relevant pending action; session/account deletion and expiration
+also clear it. Pending confirmations are stored in the shared database and consumed with
+an optimistic compare-and-delete, so restart or instance switching preserves both the
+binding and single-use guarantee. This binding applies uniformly to device, template, rule,
 specification, verification-trace, and simulation-trace deletion.
 
 `RESULT_UNAVAILABLE` is distinct from both success and failure. It means response details
@@ -180,6 +187,10 @@ If the chat thread pool is saturated the request is rejected with `503`
 (`ServiceUnavailableException`) before streaming starts. Errors that happen after the
 emitter is created, including an inaccessible session or LLM provider failure, are
 reported as an SSE content frame prefixed with `[ERROR] ` and then the stream completes.
+After the user message has been saved, the same error path also persists a visible
+`FAILED` or `PARTIAL` terminal assistant row. A detected disconnect persists
+`DISCONNECTED`; the client reloads authoritative history after the backend reports the
+session idle, so that record remains visible even when its SSE frame could not arrive.
 
 ### Stream frames
 
@@ -221,6 +232,10 @@ Frames are emitted with `MediaType.APPLICATION_JSON`. Notes on framing:
   show a full-width ReAct-style record of sanitized reasoning summaries, localized actions,
   observations, confirmation points, cumulative outcomes, and elapsed time. `REASONING` is an
   audit-oriented summary requested from the model, not the provider's private hidden chain-of-thought.
+  Compatible-provider fields explicitly named as safe summaries (`reasoning_summary`,
+  `reasoningSummary`, `reasoning_summary_content`, `analysis_summary`, or
+  `analysisSummary`) are accepted through the provider adapter. Raw `reasoning_content`
+  and `analysis` fields are deliberately ignored.
   Live frames are not stored as separate rows. After completion, the exact emitted event list
   and elapsed time are serialized on the final assistant message, so reloads preserve task
   resumption, confirmation, and execution-guard boundaries. Legacy assistant rows fall back to
@@ -261,7 +276,9 @@ Aborting the browser stream means **stop receiving the AI response**, not cancel
 back a tool transaction already running on the server. After an explicit stop or a
 session-switch/new-session request, the Board polls the session activity endpoint until
 `active=false`, keeps assistant mutations locked during that settling period, and only
-then reloads message history, board collections, and run history. Closing the floating
+then reloads message history, board collections, and run history. Normal stream completion
+also waits for `active=false` and reloads authoritative message history so persisted
+terminal status wins over locally inferred progress. Closing the floating
 panel only hides it and does not abort the request. If three consecutive activity checks
 fail, each check uses a dedicated 2.5-second timeout instead of the general 100-second
 REST timeout, so the client reaches an outcome-unknown warning and authoritative

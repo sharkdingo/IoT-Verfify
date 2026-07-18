@@ -237,6 +237,13 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 Map<String, Object> scene = emptyScene();
                 result.put("scene", scene);
                 putVerificationReadiness(result, objectMapper.valueToTree(scene));
+                attachDraftStatus(
+                        result,
+                        language,
+                        chatSessionId == null || chatSessionId.isBlank()
+                                ? new AiScenarioDraftStore.DraftSaveResult(false, false)
+                                : draftStore.saveDraft(
+                                        userId, chatSessionId, "AI Scenario", objectMapper.valueToTree(scene)));
                 return objectMapper.writeValueAsString(result);
             }
 
@@ -252,19 +259,25 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 String message = "zh-CN".equals(language)
                         ? "AI 返回的内容不是可解析的场景草案 JSON，请重试。"
                         : "The AI response was not a parseable scene-draft JSON object. Please try again.";
+                boolean previousDraftRetained = chatSessionId != null && !chatSessionId.isBlank()
+                        && draftStore.latestDraft(userId, chatSessionId).isPresent();
                 return errorJson(message, "AI_RESPONSE_INVALID", 502,
-                        Map.of("phase", "response_parse"));
+                        Map.of(
+                                "phase", "response_parse",
+                                "draftStored", false,
+                                "previousDraftRetained", previousDraftRetained));
             }
+            AiScenarioDraftStore.DraftSaveResult draftSaveResult =
+                    new AiScenarioDraftStore.DraftSaveResult(false, false);
             if (chatSessionId != null && !chatSessionId.isBlank()) {
                 JsonNode scene = objectMapper.valueToTree(result.get("scene"));
-                String serializedResult = objectMapper.writeValueAsString(result);
-                draftStore.saveDraft(
+                draftSaveResult = draftStore.saveDraft(
                         userId,
                         chatSessionId,
                         String.valueOf(result.getOrDefault("scenarioName", "AI Scenario")),
                         scene);
-                return serializedResult;
             }
+            attachDraftStatus(result, language, draftSaveResult);
             return objectMapper.writeValueAsString(result);
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
@@ -1797,6 +1810,19 @@ public class RecommendScenarioTool extends AbstractAiTool {
         return "zh-CN".equals(language)
                 ? String.format("已生成通过结构与设备能力校验的可导入场景草案：%d 个设备、%d 条规则、%d 条规约。尚未进行形式化验证，也未修改画布。", devices, rules, specs)
                 : String.format("Generated an importable scene draft that passed structure and capability checks: %d devices, %d rules, and %d specs. It has not been formally verified and has not changed the board.", devices, rules, specs);
+    }
+
+    private void attachDraftStatus(Map<String, Object> result,
+                                   String language,
+                                   AiScenarioDraftStore.DraftSaveResult saveResult) {
+        result.put("draftStored", saveResult.draftStored());
+        result.put("previousDraftRetained", saveResult.previousDraftRetained());
+        if (!saveResult.previousDraftRetained()) return;
+        String currentMessage = String.valueOf(result.getOrDefault("message", "")).trim();
+        String warning = "zh-CN".equals(language)
+                ? "本次结果没有替换草稿；会话中上一次有效草稿仍被保留，“应用最新草稿”将应用上一次草稿。"
+                : "This result did not replace the draft. The previous valid draft is still retained, so applying the latest draft would apply that earlier draft.";
+        result.put("message", currentMessage.isEmpty() ? warning : currentMessage + " " + warning);
     }
 
     private int intOrDefault(JsonNode node, int fallback, int min, int max) {

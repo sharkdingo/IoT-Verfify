@@ -129,10 +129,10 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
 
 ## Data model
 
-15 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
+16 tables, auto-created by Hibernate (`ddl-auto: update`): `app_user`, `device_node`,
 `board_environment_variable`, `rules`, `specification`, `board_layout`,
 `device_templates`, `verification_task`, `simulation_task`, `fuzz_task`, `trace`,
-`simulation_trace`, `fuzz_finding`, `chat_session`, `chat_message`. Notable: `device_node` has a
+`simulation_trace`, `fuzz_finding`, `chat_session`, `chat_message`, `ai_session_state`. Notable: `device_node` has a
 composite PK `(id, user_id)` for user isolation; `board_environment_variable` has a
 composite PK `(name, user_id)` for per-user shared environment state;
 `device_templates` has a unique constraint on `(user_id, name)`; `specification` has a
@@ -141,8 +141,10 @@ authored-formula/device-binding persistence; `verification_task` carries
 `disabled_rule_count` / `skipped_spec_count`
 mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
 rows also back verification run history for both synchronous and asynchronous checks;
-`chat_message` stores the exact user-visible assistant execution trace and elapsed time
-on the final assistant row, while older rows remain reconstructable from tool blocks;
+`chat_message` stores the exact user-visible assistant execution trace, elapsed time, and
+terminal status on the final assistant row, while older rows remain reconstructable from
+tool blocks; `ai_session_state` durably stores expiring task continuation, scenario draft,
+and protected-action confirmation state shared by backend instances;
 the task-list endpoint excludes them and `/api/verify/runs` exposes result-oriented DTOs.
 Completed `fuzz_task` rows likewise back `/api/fuzz/runs`; their independent
 `fuzz_finding` rows are heuristic candidate evidence, not formal traces.

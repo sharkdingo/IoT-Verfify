@@ -115,7 +115,9 @@ so it cannot authorize another target or a second mutation in the same planning 
 wrong token, changed preview, expired token, cross-user/session use, or replay returns
 `409`, makes no change, and asks the user to review a fresh preview. An ordinary question
 or task update preserves the live preview; explicit cancellation, a replacement preview,
-session/account deletion, expiry, and backend restart invalidate it.
+session/account deletion and expiry invalidate it. The pending action is stored in the
+shared database, so a normal backend restart or load-balanced confirmation turn preserves
+it until expiry or explicit cleanup.
 On an explicit confirmation turn, the chat service injects the compact pending tool,
 target, and token from this server-side state. Confirmation therefore remains executable
 even when the original detailed tool result is larger than the persisted chat-history
@@ -188,7 +190,9 @@ with a no-applicable-scene message rather than a misleading "complete scenario" 
 
 When `recommend_scenario` runs inside chat, the backend keeps the latest non-empty
 validated scene for that authenticated user/session for up to one hour. A failed or empty
-new recommendation does not erase the previous valid draft. The raw scene is
+new recommendation does not erase the previous valid draft. Every response reports
+`draftStored` and `previousDraftRetained`; when the latter is true, the message explicitly
+warns that "apply latest draft" still refers to the earlier valid draft. The raw scene is
 not reconstructed from the model's later conversation window. Asking the assistant to
 apply it calls `apply_scenario` with `confirmed=false`; this reads the authoritative
 current Board replacement preview and returns both current and replacement counts without
@@ -202,8 +206,9 @@ It never simulates replacement through a sequence of `delete_device` calls.
 If the Board changes after preview, the atomic storage authority writes nothing and
 returns a fresh preview; the assistant asks for another confirmation. A new scenario
 recommendation replaces the earlier draft, a normal intervening message clears only a
-pending application preview, and session/account deletion or backend restart removes the
-in-memory draft. Successful application clears the draft and refreshes the complete
+pending application preview, and session/account deletion or expiration removes the
+database-backed draft. A normal backend restart or instance switch does not discard it.
+Successful application clears the draft and refreshes the complete
 frontend `board_state`. Structural validation and persistence do not constitute formal
 verification, so the result remains `NOT_VERIFIED` until a verification run completes.
 
