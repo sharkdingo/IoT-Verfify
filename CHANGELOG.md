@@ -48,6 +48,12 @@ history into a technical spec. The spec content itself now lives under
   same atomic refresh authority as the Board UI while preserving custom templates.
 
 #### Fixed
+- Kept left-panel single-device creation on template-owned trust/privacy defaults unless
+  the user explicitly selects an advanced override, and added a restore-to-template option
+  for each state and local-variable label.
+- Rejected automatic-fix candidates that remove or duplicate an explicitly selected
+  automation-link attack point, preventing forward verification from silently changing
+  the counterexample's fixed attack scenario.
 - Kept the in-flight assistant status compact even when it already contains execution
   activity; completed execution records remain full-width for review.
 - Synchronized the climate-conflict example's Air Conditioner template snapshot with the

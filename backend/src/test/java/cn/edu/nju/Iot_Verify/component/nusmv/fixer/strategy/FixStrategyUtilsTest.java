@@ -3,6 +3,8 @@ package cn.edu.nju.Iot_Verify.component.nusmv.fixer.strategy;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
@@ -13,6 +15,24 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FixStrategyUtilsTest {
+
+    @Test
+    void preservesExactAutomationLinkSelection_requiresEverySelectedRuleExactlyOnce() {
+        AttackScenarioDto exactLink = AttackScenarioDto.exactPoints(List.of(
+                AttackPointDto.automationLink(7L)));
+
+        assertTrue(FixStrategyUtils.preservesExactAutomationLinkSelection(
+                exactLink, List.of(RuleDto.builder().id(7L).build())));
+        assertFalse(FixStrategyUtils.preservesExactAutomationLinkSelection(
+                exactLink, List.of(RuleDto.builder().id(8L).build())));
+        assertFalse(FixStrategyUtils.preservesExactAutomationLinkSelection(
+                exactLink, List.of(
+                        RuleDto.builder().id(7L).build(),
+                        RuleDto.builder().id(7L).build())));
+        assertTrue(FixStrategyUtils.preservesExactAutomationLinkSelection(
+                AttackScenarioDto.exactPoints(List.of(AttackPointDto.device("sensor_1"))),
+                List.of()));
+    }
 
     // ======================== E2: expandRuleIndices ========================
 

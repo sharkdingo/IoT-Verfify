@@ -239,10 +239,10 @@ const resetSingleDeviceRuntime = () => {
 
 watch(() => deviceForm.type, resetSingleDeviceRuntime)
 
-watch(() => singleDeviceRuntime.state, (state) => {
+watch(() => singleDeviceRuntime.state, () => {
   if (!selectedTemplateHasModes.value) return
-  singleDeviceRuntime.currentStateTrust = findTemplateStateTrust(selectedDeviceTemplate.value, state)
-  singleDeviceRuntime.currentStatePrivacy = findTemplateStatePrivacy(selectedDeviceTemplate.value, state)
+  singleDeviceRuntime.currentStateTrust = ''
+  singleDeviceRuntime.currentStatePrivacy = ''
 })
 
 const variableInputPlaceholder = (variable: InternalVariable) => {
@@ -2369,7 +2369,7 @@ const exportTemplate = (template: any) => {
               >
                 <span class="inline-flex items-center gap-1.5">
                   <span class="material-symbols-outlined text-sm text-purple-500" aria-hidden="true">tune</span>
-                  {{ t('app.initialValues') }}
+                  {{ t('app.advancedInitialValuesOverrides') }}
                 </span>
                 <span class="material-symbols-outlined text-sm text-slate-400 transition-transform group-open:rotate-180" aria-hidden="true">expand_more</span>
               </summary>
@@ -2396,6 +2396,7 @@ const exportTemplate = (template: any) => {
                     data-testid="single-device-state-trust"
                     class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
                   >
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStateTrust(selectedDeviceTemplate, singleDeviceRuntime.state) || 'trusted'}`) }) }}</option>
                     <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
                   </select>
                 </label>
@@ -2407,6 +2408,7 @@ const exportTemplate = (template: any) => {
                     data-testid="single-device-state-privacy"
                     class="w-full rounded-lg border-2 border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-sm transition-all focus:border-purple-400 focus:ring-2 focus:ring-purple-100/50"
                   >
+                    <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${findTemplateStatePrivacy(selectedDeviceTemplate, singleDeviceRuntime.state) || 'public'}`) }) }}</option>
                     <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
                   </select>
                 </label>
@@ -2454,6 +2456,7 @@ const exportTemplate = (template: any) => {
                         :data-testid="`single-device-variable-trust-${variable.Name}`"
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-700"
                       >
+                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Trust || 'trusted'}`) }) }}</option>
                         <option v-for="trust in TRUST_OPTIONS" :key="trust" :value="trust">{{ t(`app.${trust}`) }}</option>
                       </select>
                     </label>
@@ -2465,6 +2468,7 @@ const exportTemplate = (template: any) => {
                         :data-testid="`single-device-privacy-${variable.Name}`"
                         class="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-700"
                       >
+                        <option value="">{{ t('app.useTemplateDefaultWithValue', { value: t(`app.${variable.Privacy || 'public'}`) }) }}</option>
                         <option v-for="privacy in PRIVACY_OPTIONS" :key="privacy" :value="privacy">{{ t(`app.${privacy}`) }}</option>
                       </select>
                     </label>

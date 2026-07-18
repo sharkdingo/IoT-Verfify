@@ -23,6 +23,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -105,6 +106,10 @@ public final class FixStrategyUtils {
             List<RuleDto> rules,
             SmvGenerator.GeneratePurpose purpose) throws java.io.IOException {
         AttackScenarioDto scenario = ctx.resolvedAttackScenario();
+        if (!preservesExactAutomationLinkSelection(scenario, rules)) {
+            ctx.addDiagnostic("A candidate was rejected because it would remove or duplicate an explicitly selected automation-link attack point and change the original attack scenario.");
+            return null;
+        }
         if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
             return smvGenerator.generateWithResolvedDeviceModel(
                     ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
@@ -122,6 +127,10 @@ public final class FixStrategyUtils {
             List<RuleDto> rules,
             ParameterizationConfig config) throws java.io.IOException {
         AttackScenarioDto scenario = ctx.resolvedAttackScenario();
+        if (!preservesExactAutomationLinkSelection(scenario, rules)) {
+            ctx.addDiagnostic("A candidate was rejected because it would remove or duplicate an explicitly selected automation-link attack point and change the original attack scenario.");
+            return null;
+        }
         if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
             return smvGenerator.generateParameterizedWithResolvedDeviceModel(
                     ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
@@ -131,6 +140,26 @@ public final class FixStrategyUtils {
                 ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
                 scenario.isEnabled(), scenario.effectiveBudget(), ctx.isEnablePrivacy(), config,
                 tempContext(ctx), ctx.getDeviceSmvMap());
+    }
+
+    static boolean preservesExactAutomationLinkSelection(AttackScenarioDto scenario,
+                                                           List<RuleDto> rules) {
+        if (scenario == null || scenario.getMode() != AttackScenarioDto.Mode.EXACT_POINTS) {
+            return true;
+        }
+        Set<Long> selectedRuleIds = scenario.selectedAutomationLinkRuleIds();
+        if (selectedRuleIds.isEmpty()) {
+            return true;
+        }
+        Map<Long, Integer> ruleIdCounts = new HashMap<>();
+        if (rules != null) {
+            for (RuleDto rule : rules) {
+                if (rule != null && rule.getId() != null) {
+                    ruleIdCounts.merge(rule.getId(), 1, Integer::sum);
+                }
+            }
+        }
+        return selectedRuleIds.stream().allMatch(ruleId -> ruleIdCounts.getOrDefault(ruleId, 0) == 1);
     }
 
     /**

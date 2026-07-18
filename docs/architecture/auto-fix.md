@@ -46,6 +46,9 @@ automation-link selections remain fixed during every parameterized solve and for
 verification; automation links are correlated by persisted rule id rather than generated
 list position. A repair is therefore checked against the same attacker choice that
 produced the counterexample, while exhaustive verification retains the original budget.
+Any candidate that removes or duplicates an explicitly selected automation-link rule is
+ineligible because it would change that fixed attacker choice rather than repair the model
+under the original scenario.
 
 A deadline (`FIX_TIMEOUT_MS`, default 300000) bounds the strategy pipeline. It is checked
 before each strategy and inside search loops; every NuSMV capacity wait and child process
@@ -121,7 +124,8 @@ regenerates the model without those rules and re-verifies. Emits readable
 `removedRuleDescriptions` so a user can review what will be permanently deleted;
 internal rule positions are not part of the external contract. The product has no
 persisted enabled/disabled rule state, so this action must never be described as
-"disable" or imply that it can later be re-enabled.
+"disable" or imply that it can later be re-enabled. Under an exact attack scenario, the
+strategy skips every removal set containing a selected automation-link attack point.
 
 ---
 

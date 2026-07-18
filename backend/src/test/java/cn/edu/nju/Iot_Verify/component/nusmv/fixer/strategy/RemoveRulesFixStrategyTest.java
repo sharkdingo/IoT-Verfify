@@ -8,6 +8,8 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckRes
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
+import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,6 +54,11 @@ class RemoveRulesFixStrategyTest {
     }
 
     private FixContext ctx(List<FaultRuleDto> faultRules, List<RuleDto> allRules, int maxAttempts) {
+        return ctx(faultRules, allRules, maxAttempts, AttackScenarioDto.none());
+    }
+
+    private FixContext ctx(List<FaultRuleDto> faultRules, List<RuleDto> allRules, int maxAttempts,
+                           AttackScenarioDto attackScenario) {
         return FixContext.builder()
                 .faultRules(faultRules)
                 .allRules(allRules)
@@ -63,6 +70,7 @@ class RemoveRulesFixStrategyTest {
                 .userId(1L)
                 .isAttack(false)
                 .attackBudget(0)
+                .attackScenario(attackScenario)
                 .enablePrivacy(false)
                 .maxAttempts(maxAttempts)
                 .build();
@@ -112,6 +120,22 @@ class RemoveRulesFixStrategyTest {
         assertEquals(List.of(1), suggestion.getRemovedRuleIndices());
         assertEquals(List.of("rule1 (fault)"), suggestion.getRemovedRuleDescriptions());
         assertFalse(suggestion.getDescription().contains("'rule1 (fault)'"));
+    }
+
+    @Test
+    void tryFix_rejectsRemovalOfExplicitlyAttackedAutomationLink() {
+        List<FaultRuleDto> faultRules = List.of(FaultRuleDto.builder().ruleIndex(0).build());
+        List<RuleDto> allRules = List.of(
+                RuleDto.builder().id(7L).ruleString("selected attacked link").build());
+        FixContext context = ctx(faultRules, allRules, 20,
+                AttackScenarioDto.exactPoints(List.of(AttackPointDto.automationLink(7L))));
+
+        FixSuggestionDto suggestion = strategy.tryFix(context);
+
+        assertNull(suggestion);
+        verifyNoInteractions(smvGenerator, nusmvExecutor);
+        assertTrue(context.diagnosticsSnapshot().stream()
+                .anyMatch(message -> message.contains("selected automation-link attack point")));
     }
 
     @Test

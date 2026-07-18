@@ -644,6 +644,8 @@ test.describe('board full-stack NuSMV user flow', () => {
 
     const motion = await addDeviceViaLeftPanel(page, request, auth, 'Motion Detector', 'roundtrip_motion')
     const alarm = await addDeviceViaLeftPanel(page, request, auth, 'Alarm', 'roundtrip_alarm')
+    expect(alarm.currentStateTrust ?? null).toBeNull()
+    expect(alarm.currentStatePrivacy ?? null).toBeNull()
 
     await addMotionRuleViaDialog(
       page, request, auth, motion.id, alarm.id, 'siren',
