@@ -5,7 +5,7 @@ module. The endpoint index lives in [rest-endpoints.md](rest-endpoints.md); glob
 authentication, `Result<T>`, and error conventions live in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-16. Source: `controller/FuzzController.java`,
+Verified against code on 2026-07-20. Source: `controller/FuzzController.java`,
 `service/impl/FuzzServiceImpl.java`, and `dto/fuzz/`.
 
 ---
@@ -226,11 +226,20 @@ Lease creation, renewal, and expiry comparison use the database clock, so JVM ti
 host-clock differences cannot make another instance expire healthy work. Another backend
 instance leaves a live lease untouched and only converts an expired active lease to `FAILED`;
 this prevents a rolling deployment from terminating work owned by a healthy instance while
-still recovering work abandoned by a stopped process. Future and
+still recovering work abandoned by a stopped process. Start and renewal both require the
+persisted lease to remain unexpired, so a delayed local Future cannot revive abandoned work
+in the interval before recovery maintenance runs. Worker success and failure require the same
+live owner and lease, use the database clock for terminal timestamps, and cannot commit stale
+results before recovery runs; user cancellation remains independently authoritative. Future and
 executor control remain process-local: when another instance commits cancellation, the
 owner observes the failed lease renewal on its next maintenance cycle and removes a queued
 Future or interrupts its running worker. The database status predicate remains the
 cross-instance correctness authority throughout that bounded reconciliation delay.
+
+Progress writes use the same worker-id and unexpired-lease predicate. Completion locks the
+task row before the database terminal time is sampled and writes findings in that transaction,
+so a worker delayed behind cancellation or recovery cannot commit stale evidence and a very
+fast task cannot finish before its persisted creation timestamp.
 
 - `GET /api/fuzz/tasks`: active plus failed/cancelled no-result tasks; completed rows are
   excluded. Optional repeated/comma-separated `excludeTaskIds` prevents duplicate polling

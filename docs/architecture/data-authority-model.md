@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-18. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-20. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -217,7 +217,7 @@ trust/privacy propagation use the same selected branch. The generator also walks
 conditions in list order when building guards and internal parameterized fix locators.
 Fault localization and repair application retain
 zero-based positions server-side as trace-snapshot diagnostics, while REST/AI DTOs expose
-readable rule/condition descriptions and the opaque `ParameterAdjustment.targetId` rather
+readable rule/condition descriptions and the opaque `ParameterTarget.targetId` rather
 than `ruleIndex` / `conditionIndex`.
 Portable scene JSON therefore omits backend rule row ids but preserves the `rules[]` and
 `sources[]` array order during import/export.

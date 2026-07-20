@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
@@ -17,6 +17,7 @@ import type {
   FixStrategyName,
   FixSuggestion,
   ParameterAdjustment,
+  ParameterTarget,
   PreferredRangeSelection
 } from '@/types/fix'
 import type { InteractiveOperationStage } from '@/types/task'
@@ -51,7 +52,7 @@ const faultLocalization = ref<FaultLocalizationResult | null>(null)
 const faultRules = ref<FaultRule[]>([])
 const selectedStrategy = ref<FixStrategyName>('parameter')
 const applyingFix = ref(false)
-const parameterAdjustmentCatalog = ref<ParameterAdjustment[]>([])
+const parameterTargetCatalog = ref<ParameterTarget[]>([])
 const lastParameterRequestFingerprint = ref<string | null>(null)
 // 记录本次 /fix 用的参数偏好选择，apply 时原样回传，保证后端重算复现同一建议。
 const lastPreferredRangeSelections = ref<PreferredRangeSelection[] | undefined>(undefined)
@@ -140,7 +141,8 @@ const localizedFixLimitations = computed(() => {
   }
   if (fixResult.value?.templateSnapshotComparison === 'CHANGED') {
     messages.push(t('app.fixTemplateSnapshotChangedLimitation'))
-  } else if (fixResult.value?.templateSnapshotComparison === 'UNAVAILABLE') {
+  } else if (fixResult.value?.templateSnapshotComparison === 'UNAVAILABLE'
+    || fixResult.value?.templateSnapshotComparison === 'NOT_CHECKED') {
     messages.push(t('app.fixTemplateSnapshotUnavailableLimitation'))
   }
   return Array.from(new Set(messages))
@@ -168,17 +170,16 @@ const preferredRangeRows = ref<PreferredRangeRow[]>([])
 const newRangeRowId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 const parameterAdjustments = computed(() => {
-  return parameterAdjustmentCatalog.value
+  return parameterTargetCatalog.value
 })
 
-const preferredRangeTargetId = (adjustment: ParameterAdjustment) => adjustment.targetId
+const preferredRangeTargetId = (adjustment: ParameterTarget) => adjustment.targetId
 
-const formatPreferredRangeTarget = (adjustment: ParameterAdjustment) => t('app.preferredRangeTargetLabel', {
-  description: adjustment.description || t('app.parameterAdjustmentFallback', {
+const formatPreferredRangeTarget = (adjustment: ParameterTarget) => t('app.preferredRangeTargetLabel', {
+  description: adjustment.description || t('app.parameterTargetFallback', {
     attribute: adjustment.attribute,
     relation: adjustment.relation,
-    original: adjustment.originalValue,
-    suggested: adjustment.newValue
+    original: adjustment.originalValue
   })
 })
 
@@ -189,7 +190,7 @@ const preferredRangeTargetOptions = computed(() => parameterAdjustments.value.ma
 })).filter(option => option.value))
 
 const parameterAdjustmentByTargetId = computed(() => {
-  const byTargetId = new Map<string, ParameterAdjustment>()
+  const byTargetId = new Map<string, ParameterTarget>()
   parameterAdjustments.value.forEach(adjustment => {
     const targetId = preferredRangeTargetId(adjustment)
     if (targetId) byTargetId.set(targetId, adjustment)
@@ -217,6 +218,9 @@ const parameterPreferencesChanged = computed(() => {
 
 const suggestionIsCurrent = (suggestion: FixSuggestion) =>
   suggestion.strategy !== 'parameter' || !parameterPreferencesChanged.value
+
+const templateSnapshotAllowsApply = computed(() =>
+  fixResult.value?.templateSnapshotComparison === 'UNCHANGED')
 
 const isBlank = (value: unknown) => value === null || value === undefined || value === ''
 
@@ -267,7 +271,7 @@ const buildPreferredRangeSelections = (showWarnings = false): PreferredRangeSele
   return selections.length > 0 ? selections : undefined
 }
 
-const addPreferenceRow = (adjustment?: ParameterAdjustment) => {
+const addPreferenceRow = (adjustment?: ParameterTarget) => {
   const nextAdjustment = adjustment ?? parameterAdjustments.value.find(adj => {
     const targetId = preferredRangeTargetId(adj)
     return targetId && !preferredRangeRows.value.some(row => row.targetId === targetId)
@@ -293,6 +297,20 @@ const useAdjustmentAsPreference = (adjustment: ParameterAdjustment) => {
     existing.upper = adjustment.upperBound
   } else {
     addPreferenceRow(adjustment)
+  }
+}
+
+const lockAdjustmentAtOriginal = (adjustment: ParameterAdjustment) => {
+  const original = Number(adjustment.originalValue)
+  if (!Number.isInteger(original)) {
+    ElMessage.warning(t('app.preferredRangeIntegerBounds'))
+    return
+  }
+  useAdjustmentAsPreference(adjustment)
+  const row = preferredRangeRows.value.find(item => item.targetId === preferredRangeTargetId(adjustment))
+  if (row) {
+    row.lower = original
+    row.upper = original
   }
 }
 
@@ -366,7 +384,10 @@ const mergeFixResult = (current: FixResult | null, incoming: FixResult): FixResu
     warnings: Array.from(new Set(strategyOrder.flatMap(strategy => strategyWarnings.value[strategy] || []))),
     unusedPreferredRangeSelections: incomingStrategies.has('parameter')
       ? incoming.unusedPreferredRangeSelections
-      : current.unusedPreferredRangeSelections
+      : current.unusedPreferredRangeSelections,
+    parameterTargets: incomingStrategies.has('parameter')
+      ? incoming.parameterTargets
+      : current.parameterTargets
   }
 }
 
@@ -380,7 +401,7 @@ const invalidateStrategyResult = (strategy: FixStrategyName) => {
     fixable: suggestions.some(item => item.verified),
     warnings: Array.from(new Set(strategyOrder.flatMap(item => strategyWarnings.value[item] || []))),
     unusedPreferredRangeSelections: strategy === 'parameter'
-      ? undefined
+      ? []
       : fixResult.value.unusedPreferredRangeSelections
   }
 }
@@ -424,11 +445,8 @@ const fetchFixSuggestions = async (strategy: FixStrategyName = selectedStrategy.
     if (requestVersion !== dialogRequestVersion || traceId !== props.traceId || !props.visible) return
     strategyWarnings.value[strategy] = result.warnings || []
     if (strategy === 'parameter') {
-      const suggestion = result.suggestions.find(item => item.strategy === 'parameter')
       lastParameterRequestFingerprint.value = requestFingerprint
-      if (suggestion?.parameterAdjustments?.length) {
-        parameterAdjustmentCatalog.value = suggestion.parameterAdjustments
-      }
+      parameterTargetCatalog.value = result.parameterTargets || []
     }
     fixResult.value = mergeFixResult(fixResult.value, result)
     if (result.faultRules?.length) faultRules.value = result.faultRules
@@ -475,7 +493,7 @@ const handleOpen = () => {
   strategyErrors.value = {}
   strategyWarnings.value = {}
   preferredRangeRows.value = []
-  parameterAdjustmentCatalog.value = []
+  parameterTargetCatalog.value = []
   lastParameterRequestFingerprint.value = null
   lastPreferredRangeSelections.value = undefined
   selectedStrategy.value = 'parameter'
@@ -494,6 +512,12 @@ const applyFix = async (suggestion: FixSuggestion) => {
   if (!props.traceId) return
   if (!suggestion.verified) {
     ElMessage.warning(t('app.unverifiedFixCannotApply'))
+    return
+  }
+  if (!templateSnapshotAllowsApply.value) {
+    ElMessage.warning(fixResult.value?.templateSnapshotComparison === 'CHANGED'
+      ? t('app.fixTemplateSnapshotChangedLimitation')
+      : t('app.fixTemplateSnapshotUnavailableLimitation'))
     return
   }
   if (suggestion.strategy === 'remove') {
@@ -522,19 +546,24 @@ const applyFix = async (suggestion: FixSuggestion) => {
       ElMessage.warning(localizedTextOrFallback(result.message, t('app.failedToApplyFix'), locale.value))
       return
     }
-    ElMessage.success(t('app.fixAppliedSuccessfully'))
+    ElMessage.success(t(result.verificationRechecked
+      ? 'app.fixAppliedWithRecheck'
+      : 'app.fixAppliedWithSignedEvidence'))
     emit('applied', result)
     emit('update:visible', false)
   } catch (error: any) {
     console.error('Failed to apply fix:', error)
     const status = Number(error?.response?.status)
-    const definitiveRejection = Number.isFinite(status) && status >= 400 && status < 500
+    const reasonCode = error?.response?.data?.data?.reasonCode
+    const definitiveRejection = Number.isFinite(status)
+      && ((status >= 400 && status < 500)
+        || (status === 503 && reasonCode === 'FIX_APPLY_PREFLIGHT_UNAVAILABLE'))
     if (!definitiveRejection) {
       emit('outcome-uncertain')
       emit('update:visible', false)
       return
     }
-    // Board drift and invalid/stale targets are definitive 4xx rejections with a user-facing reason.
+    // Drift, stale targets, and service-unavailable preflight failures occur before the write.
     ElMessage.error(fixApplyErrorMessage(error))
   } finally {
     applyingFix.value = false
@@ -569,6 +598,24 @@ const strategyAttemptReasonLabel = (status?: FixStrategyAttemptStatus) => {
   return t(`app.fixAttemptReason.${status}`)
 }
 
+const strategyAttemptProgress = (attempt: FixStrategyAttempt | null) => {
+  if (!attempt || !Number.isInteger(attempt.attemptsUsed) || !Number.isInteger(attempt.attemptLimit)) {
+    return ''
+  }
+  return t('app.fixAttemptProgress', {
+    used: attempt.attemptsUsed,
+    limit: attempt.attemptLimit
+  })
+}
+
+const parameterAdjustmentMakesRuleUnreachable = (adjustment: ParameterAdjustment) => {
+  const relation = adjustment.relation.trim().toLowerCase()
+  const newValue = Number(adjustment.newValue)
+  if (!Number.isSafeInteger(newValue)) return false
+  return (['>', 'gt'].includes(relation) && newValue === adjustment.upperBound)
+    || (['<', 'lt'].includes(relation) && newValue === adjustment.lowerBound)
+}
+
 // A completed strategy with no verified proposal is different from a strategy
 // that was never run. Keep the empty state explicit so users do not read it as
 // a loading or transport failure.
@@ -580,6 +627,9 @@ const strategyAttemptOutcomeTitle = (attempt: FixStrategyAttempt | null) => {
       : t('app.noVerifiedFixSuggestion')
   }
   if (attempt.status === 'NOT_VERIFIED') return t('app.fixSuggestionNotVerifiedTitle')
+  if (attempt.status === 'FAILED_MODEL_GENERATION') return t('app.fixStrategyGenerationFailedTitle')
+  if (attempt.status === 'FAILED_SOLVER_EXECUTION') return t('app.fixStrategySolverFailedTitle')
+  if (attempt.status === 'SEARCH_BUDGET_EXHAUSTED') return t('app.fixStrategyBudgetExhaustedTitle')
   if (attempt.status === 'TIMED_OUT' || attempt.status === 'SKIPPED_TIMEOUT') {
     return t('app.fixStrategyTimedOutTitle')
   }
@@ -647,22 +697,14 @@ const formatConditionAdjustment = (adjustment: NonNullable<FixSuggestion['condit
   return adjustment.description
 }
 
-// Watch visible prop
-watch(() => props.visible, (val) => {
-  if (val) {
-    handleOpen()
-  }
-}, { immediate: true })
-
-// Close dialog
-const closeDialog = () => {
-  if (applyingFix.value) {
-    ElMessage.warning(t('app.fixApplyStillRunning'))
-    return
-  }
+const cancelActiveFixSearch = () => {
   if (activeFixRequestId.value) {
     fixProgressStage.value = 'CANCELLING'
-    void boardApi.cancelFixRequest(activeFixRequestId.value)
+    const requestId = activeFixRequestId.value
+    void boardApi.cancelFixRequest(requestId).catch(error => {
+      // The local request is still aborted below; contain best-effort server cancellation failures.
+      console.warn(`[Fix] Failed to cancel automatic-fix request ${requestId}:`, error)
+    })
     activeFixRequestId.value = null
   }
   activeFixAbortController.value?.abort()
@@ -672,6 +714,30 @@ const closeDialog = () => {
     clearInterval(fixSearchTimer)
     fixSearchTimer = null
   }
+}
+
+// Watch visible prop. Parent-driven hides and route teardown must cancel expensive searches too.
+watch(() => props.visible, (val) => {
+  if (val) {
+    handleOpen()
+  } else {
+    cancelActiveFixSearch()
+    dialogRequestVersion += 1
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  cancelActiveFixSearch()
+  dialogRequestVersion += 1
+})
+
+// Close dialog
+const closeDialog = () => {
+  if (applyingFix.value) {
+    ElMessage.warning(t('app.fixApplyStillRunning'))
+    return
+  }
+  cancelActiveFixSearch()
   dialogRequestVersion += 1
   emit('update:visible', false)
 }
@@ -846,6 +912,9 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 >
                   <span class="font-bold">{{ strategyAttemptStatusLabel(currentStrategyAttempt.status) }}</span>
                   <span class="ml-1">{{ strategyAttemptReasonLabel(currentStrategyAttempt.status) }}</span>
+                  <span v-if="strategyAttemptProgress(currentStrategyAttempt)" class="ml-1 font-semibold">
+                    {{ strategyAttemptProgress(currentStrategyAttempt) }}
+                  </span>
                 </div>
               </div>
 
@@ -1043,6 +1112,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                           >
                             {{ t('app.prefer') }}
                           </button>
+                          <button
+                            type="button"
+                            data-testid="fix-lock-original"
+                            :title="t('app.lockOriginalValue')"
+                            :aria-label="t('app.lockOriginalValue')"
+                            @click="lockAdjustmentAtOriginal(adj)"
+                            class="flex h-7 w-7 items-center justify-center rounded border border-blue-200 bg-white text-blue-700 transition-colors hover:bg-blue-100"
+                          >
+                            <span class="material-symbols-outlined text-base" aria-hidden="true">lock</span>
+                          </button>
                         </div>
                       </div>
                       <div class="flex items-center gap-2 mt-2">
@@ -1050,6 +1129,13 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                         <span class="material-symbols-outlined text-slate-400">arrow_forward</span>
                         <span class="px-2 py-1 bg-green-100 text-green-700 rounded font-mono text-sm">{{ adj.newValue }}</span>
                       </div>
+                      <p
+                        v-if="parameterAdjustmentMakesRuleUnreachable(adj)"
+                        data-testid="fix-parameter-unreachable-warning"
+                        class="mt-2 text-xs font-semibold text-amber-700"
+                      >
+                        {{ t('app.fixParameterMakesRuleUnreachable') }}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -1095,9 +1181,10 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   </div>
                   <div class="bg-orange-50 border border-orange-200 rounded-lg p-3">
                     <div class="space-y-2">
-                      <span 
-                        v-for="description in currentSuggestion.removedRuleDescriptions"
-                        :key="description"
+                      <span
+                        v-for="(description, index) in currentSuggestion.removedRuleDescriptions"
+                        :key="`${index}-${description}`"
+                        data-testid="fix-removed-rule"
                         class="block rounded-lg bg-orange-500 px-3 py-1 text-sm font-medium text-white"
                       >
                         {{ description }}
@@ -1111,12 +1198,12 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                   <button 
                     data-testid="fix-apply-current"
                     class="w-full py-3 rounded-lg font-bold text-base transition-all flex items-center justify-center gap-2"
-                    :class="applyingFix || strategyLoading
+                    :class="applyingFix || strategyLoading || !templateSnapshotAllowsApply
                       ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
                       : currentSuggestion.strategy === 'remove'
                         ? 'bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg'
                         : 'bg-green-500 hover:bg-green-600 text-white shadow-md hover:shadow-lg'"
-                    :disabled="applyingFix || strategyLoading !== null"
+                    :disabled="applyingFix || strategyLoading !== null || !templateSnapshotAllowsApply"
                     @click="applyFix(currentSuggestion)"
                   >
                     <span v-if="!applyingFix" class="material-symbols-outlined">check_circle</span>
@@ -1166,6 +1253,12 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
                 <p>{{ strategyAttemptOutcomeTitle(currentStrategyAttempt) }}</p>
                 <p class="mx-auto mt-2 max-w-lg text-xs text-slate-500">
                   {{ strategyAttemptOutcomeDetail(currentStrategyAttempt) }}
+                </p>
+                <p
+                  v-if="strategyAttemptProgress(currentStrategyAttempt)"
+                  class="mx-auto mt-2 max-w-lg text-xs font-semibold text-slate-600"
+                >
+                  {{ strategyAttemptProgress(currentStrategyAttempt) }}
                 </p>
               </div>
 

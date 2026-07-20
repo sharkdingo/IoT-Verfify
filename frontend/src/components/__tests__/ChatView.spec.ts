@@ -32,7 +32,8 @@ const session = {
   id: 'session-1',
   userId: 1,
   title: '玄关场景检查',
-  updatedAt: '2026-07-13T12:00:00Z'
+  updatedAt: '2026-07-13T12:00:00Z',
+  active: false
 }
 
 const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
@@ -88,6 +89,159 @@ describe('ChatView', () => {
     expect(item.text()).not.toContain('New Chat')
 
     wrapper.unmount()
+  })
+
+  it('reattaches to an active server execution after reload', async () => {
+    chatApi.getSessionList.mockResolvedValue([{ ...session, active: true }])
+    chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: true })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+
+    expect(chatApi.getSessionHistory).toHaveBeenCalledWith('session-1', expect.any(AbortSignal))
+    expect(wrapper.get('[data-testid="chat-session-active"]').attributes('title')).toBe('后台任务执行中')
+    expect(wrapper.get('[data-testid="chat-remote-execution"]').text()).toContain('已重新连接到后台执行')
+    expect(wrapper.get('[data-testid="chat-stop"]').attributes('title')).toBe('停止仍在后台运行的助手任务')
+    expect(chatStore.state.streaming).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('keeps a known active session locked when history loading fails', async () => {
+    chatApi.getSessionList.mockResolvedValue([{ ...session, active: true }])
+    chatApi.getSessionHistory.mockRejectedValue(new Error('history unavailable'))
+    chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: true })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeDefined()
+    expect(chatStore.state.streaming).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('stops a reattached execution and reloads its persisted terminal result', async () => {
+    const terminalHistory = [
+      { role: 'user', content: '运行验证', turnId: 'remote-turn' },
+      {
+        role: 'assistant',
+        content: '用户已停止。',
+        turnId: 'remote-turn',
+        executionStatus: 'STOPPED'
+      }
+    ]
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(terminalHistory)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1')
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: 'REFRESH_DATA',
+      payload: { target: 'board_state' }
+    })
+    expect(wrapper.text()).toContain('用户已停止。')
+    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
+    expect(chatStore.state.streaming).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('automatically reloads a reattached execution when it finishes remotely', async () => {
+    vi.useFakeTimers()
+    const terminalHistory = [
+      { role: 'user', content: '检查场景', turnId: 'remote-turn' },
+      {
+        role: 'assistant',
+        content: '后台检查已完成。',
+        turnId: 'remote-turn',
+        executionStatus: 'COMPLETED'
+      }
+    ]
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(terminalHistory)
+    const executeCommand = vi.fn().mockResolvedValue(true)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('后台检查已完成。')
+      expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reloads terminal history even when Board reconciliation must be retried', async () => {
+    vi.useFakeTimers()
+    const terminalHistory = [
+      { role: 'user', content: '检查场景', turnId: 'remote-turn' },
+      {
+        role: 'assistant',
+        content: '后台结果已持久化。',
+        turnId: 'remote-turn',
+        executionStatus: 'COMPLETED'
+      }
+    ]
+    chatApi.getSessionList
+      .mockResolvedValueOnce([{ ...session, active: true }])
+      .mockResolvedValue([{ ...session, active: false }])
+    chatApi.getSessionActivity
+      .mockResolvedValueOnce({ sessionId: 'session-1', active: true })
+      .mockResolvedValue({ sessionId: 'session-1', active: false })
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(terminalHistory)
+    const executeCommand = vi.fn().mockResolvedValue(false)
+    chatStore.openChat()
+
+    const wrapper = mountChat({ executeCommand })
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('后台结果已持久化。')
+      expect(wrapper.find('[data-testid="chat-reconciliation-required"]').exists()).toBe(true)
+      expect(chatStore.state.streaming).toBe(true)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('shows a persisted disconnect status even when no progress frame reached the client', async () => {

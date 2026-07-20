@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AccountDeleteDialog: typeof import('./src/components/AccountDeleteDialog.vue')['default']
+    AppErrorBoundary: typeof import('./src/components/AppErrorBoundary.vue')['default']
     CanvasBoard: typeof import('./src/components/CanvasBoard.vue')['default']
     ChatMarkdown: typeof import('./src/components/ChatMarkdown.vue')['default']
     ChatView: typeof import('./src/components/ChatView.vue')['default']

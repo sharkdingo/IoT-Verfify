@@ -79,6 +79,34 @@ class ConditionAdjustStrategyTest {
     }
 
     @Test
+    void semanticExclusion_ignoresFreeValueWhenCandidateIsDisabled() {
+        ParameterizationConfig.ConditionValueInfo valueInfo =
+                ParameterizationConfig.ConditionValueInfo.builder()
+                        .frozenVarName("condition_value_r0_c1")
+                        .values(List.of("off", "on"))
+                        .build();
+        Map<String, String> lambdas = new java.util.LinkedHashMap<>();
+        lambdas.put("r0_c0", "lambda_r0_c0");
+        lambdas.put("r0_c1", "lambda_r0_c1");
+        Map<String, ParameterizationConfig.ConditionValueInfo> values =
+                Map.of("r0_c1", valueInfo);
+
+        String disabled = ConditionAdjustStrategy.semanticExclusion(
+                lambdas, values, Map.of(
+                        "lambda_r0_c0", "TRUE",
+                        "lambda_r0_c1", "FALSE",
+                        "condition_value_r0_c1", "off"));
+        String enabled = ConditionAdjustStrategy.semanticExclusion(
+                lambdas, values, Map.of(
+                        "lambda_r0_c0", "TRUE",
+                        "lambda_r0_c1", "TRUE",
+                        "condition_value_r0_c1", "off"));
+
+        assertEquals("!(lambda_r0_c0=TRUE & lambda_r0_c1=FALSE)", disabled);
+        assertEquals("!(lambda_r0_c0=TRUE & lambda_r0_c1=TRUE & condition_value_r0_c1=off)", enabled);
+    }
+
+    @Test
     void tryFix_negatedSpecTrue_returnsNull() throws Exception {
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(
@@ -320,6 +348,47 @@ class ConditionAdjustStrategyTest {
         assertNull(strategy.tryFix(context));
         // Verify it retried all 3 attempts before giving up
         verify(nusmvExecutor, times(3)).execute(any(File.class));
+        assertNotNull(context.strategySolverFailure("condition"));
+        assertEquals(3, context.strategySearchProgress("condition").attemptsUsed());
+    }
+
+    @Test
+    void tryFix_transientSolverFailureThenConclusiveUnsat_clearsFailureOutcome() throws Exception {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1").attribute("temperature")
+                        .targetType("variable").relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
+                .thenReturn(createGenResult());
+        NusmvResult failed = mock(NusmvResult.class);
+        when(failed.isSuccess()).thenReturn(false);
+        when(failed.getErrorMessage()).thenReturn("transient failure");
+        SpecCheckResult unsat = mock(SpecCheckResult.class);
+        when(unsat.isPassed()).thenReturn(true);
+        NusmvResult conclusive = mock(NusmvResult.class);
+        when(conclusive.isSuccess()).thenReturn(true);
+        when(conclusive.getSpecResults()).thenReturn(List.of(unsat));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(failed, conclusive);
+
+        FixContext context = FixContext.builder()
+                .faultRules(List.of(fault)).allRules(List.of(rule)).devices(List.of())
+                .specs(List.of(spec)).deviceSmvMap(Map.of()).violatedSpecIndex(0)
+                .userId(1L).maxAttempts(2).build();
+
+        assertNull(strategy.tryFix(context));
+        assertNull(context.strategySolverFailure("condition"));
+        assertNull(context.strategyNoResult("condition"));
+        assertEquals(2, context.strategySearchProgress("condition").attemptsUsed());
     }
 
     @Test
@@ -374,12 +443,103 @@ class ConditionAdjustStrategyTest {
         assertNull(strategy.tryFix(context));
         verify(nusmvExecutor, times(3)).execute(any(File.class));
 
-        // Verify NO exclusion was added across all attempts:
-        // every config passed to generateParameterized should have null exclusionInvars
+        // The prioritized single-change invariant may be present, but a partial witness must
+        // never add a semantic assignment exclusion beginning with "!(".
         for (ParameterizationConfig captured : configCaptor.getAllValues()) {
-            assertTrue(captured.getExclusionInvars() == null || captured.getExclusionInvars().isEmpty(),
-                    "Partial extraction must NOT add exclusion INVARs, but found: "
+            assertTrue(captured.getExclusionInvars() == null
+                            || captured.getExclusionInvars().stream().noneMatch(value -> value.startsWith("!(")),
+                    "Partial extraction must NOT add an assignment exclusion, but found: "
                             + captured.getExclusionInvars());
         }
+    }
+
+    @Test
+    void tryFix_preservesFailedAssignmentsAcrossPrioritizedAndJointSearch() throws Exception {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("temperature").relation(">").value("30").build(),
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("humidity").relation(">").value("60").build(),
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("pressure").relation(">").value("10").build(),
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("light").relation(">").value("20").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        ArgumentCaptor<ParameterizationConfig> configCaptor =
+                ArgumentCaptor.forClass(ParameterizationConfig.class);
+        when(smvGenerator.generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
+                .thenReturn(createGenResult());
+        when(smvGenerator.generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(SmvGenerator.TempModelContext.class), anyMap()))
+                .thenReturn(createGenResult());
+
+        SpecCheckResult failing = mock(SpecCheckResult.class);
+        when(failing.isPassed()).thenReturn(false);
+        SpecCheckResult passing = mock(SpecCheckResult.class);
+        when(passing.isPassed()).thenReturn(true);
+
+        NusmvResult removeFirst = mock(NusmvResult.class);
+        when(removeFirst.isSuccess()).thenReturn(true);
+        when(removeFirst.getSpecResults()).thenReturn(List.of(failing));
+        when(removeFirst.getOutput()).thenReturn("""
+                  -> State: 1.1 <-
+                    lambda_r0_c0 = FALSE
+                    lambda_r0_c1 = TRUE
+                    lambda_r0_c2 = TRUE
+                    lambda_r0_c3 = TRUE
+                """);
+        NusmvResult removeSecond = mock(NusmvResult.class);
+        when(removeSecond.isSuccess()).thenReturn(true);
+        when(removeSecond.getSpecResults()).thenReturn(List.of(failing));
+        when(removeSecond.getOutput()).thenReturn("""
+                  -> State: 1.1 <-
+                    lambda_r0_c0 = TRUE
+                    lambda_r0_c1 = FALSE
+                    lambda_r0_c2 = TRUE
+                    lambda_r0_c3 = TRUE
+                """);
+        NusmvResult forwardFailure = mock(NusmvResult.class);
+        when(forwardFailure.isSuccess()).thenReturn(true);
+        when(forwardFailure.getSpecResults()).thenReturn(List.of(failing));
+        NusmvResult conclusive = mock(NusmvResult.class);
+        when(conclusive.isSuccess()).thenReturn(true);
+        when(conclusive.getSpecResults()).thenReturn(List.of(passing));
+
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(
+                removeFirst, forwardFailure,
+                conclusive,
+                removeSecond, forwardFailure,
+                conclusive);
+
+        FixContext context = FixContext.builder()
+                .faultRules(List.of(fault)).allRules(List.of(rule)).devices(List.of())
+                .specs(List.of(spec)).deviceSmvMap(Map.of()).violatedSpecIndex(0)
+                .userId(1L).maxAttempts(6).build();
+
+        assertNull(strategy.tryFix(context));
+
+        List<ParameterizationConfig> configs = configCaptor.getAllValues();
+        assertEquals(4, configs.size());
+        String firstFailedAssignment =
+                "!(lambda_r0_c0=FALSE & lambda_r0_c1=TRUE & lambda_r0_c2=TRUE & lambda_r0_c3=TRUE)";
+        String secondFailedAssignment =
+                "!(lambda_r0_c0=TRUE & lambda_r0_c1=FALSE & lambda_r0_c2=TRUE & lambda_r0_c3=TRUE)";
+        assertTrue(configs.get(2).getExclusionInvars().contains(firstFailedAssignment),
+                "Changing prioritized configurations must retain earlier failed assignments");
+        assertTrue(configs.get(3).getExclusionInvars().containsAll(
+                        List.of(firstFailedAssignment, secondFailedAssignment)),
+                "Joint search must retain failed assignments from prioritized probes");
     }
 }

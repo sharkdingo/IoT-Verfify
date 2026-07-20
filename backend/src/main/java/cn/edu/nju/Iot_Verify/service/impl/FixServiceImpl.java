@@ -26,8 +26,8 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationRequestDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.FixApplyPreflightUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
-import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
@@ -282,7 +282,8 @@ public class FixServiceImpl implements FixService {
                 .appliedSuggestion(suggestionToApply)
                 .previousRuleCount(before[0])
                 .currentRuleCount(saved.size())
-                .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size()))
+                .message(buildApplyMessage(validatedStrategy, suggestionToApply, before[0], saved.size(),
+                        useSignedSuggestion))
                 .rules(saved)
                 .build();
     }
@@ -411,7 +412,7 @@ public class FixServiceImpl implements FixService {
                     + "Please re-run verification before applying a fix.");
         }
         if (comparison == TemplateSnapshotComparison.UNAVAILABLE) {
-            throw new ServiceUnavailableException("Could not confirm whether the current device templates "
+            throw new FixApplyPreflightUnavailableException("Could not confirm whether the current device templates "
                     + "still match this verification run. Please retry applying the fix later.");
         }
     }
@@ -447,7 +448,7 @@ public class FixServiceImpl implements FixService {
             if (isTransientCurrentDeviceModelFailure(e)) {
                 log.warn("Spec/device drift check: current board device model could not be confirmed; "
                         + "failing closed [{}]: {}", e.getErrorCategory(), e.getMessage());
-                throw new ServiceUnavailableException("Could not confirm the current board device model. "
+                throw new FixApplyPreflightUnavailableException("Could not confirm the current board device model. "
                         + "Please retry applying the fix later.", e);
             }
             throw currentBoardDeviceModelChanged(e);
@@ -459,7 +460,7 @@ public class FixServiceImpl implements FixService {
             log.warn("Spec/device drift check: current board device model check failed unexpectedly; "
                             + "failing closed: {}",
                     e.getMessage());
-            throw new ServiceUnavailableException("Could not confirm the current board device model. "
+            throw new FixApplyPreflightUnavailableException("Could not confirm the current board device model. "
                     + "Please retry applying the fix later.", e);
         }
 
@@ -628,24 +629,24 @@ public class FixServiceImpl implements FixService {
     }
 
     private String buildApplyMessage(String strategy, FixSuggestionDto suggestion,
-                                     int before, int after) {
+                                     int before, int after, boolean verificationEvidenceReused) {
+        String evidence = verificationEvidenceReused
+                ? " using the signed verification evidence after drift checks."
+                : " after the server recomputed and verified the suggestion.";
         switch (strategy) {
             case "parameter":
                 int pCount = suggestion.getParameterAdjustments() == null ? 0
                         : suggestion.getParameterAdjustments().size();
-                return "Applied " + pCount + " parameter adjustment(s) after the server recomputed "
-                        + "and verified the suggestion.";
+                return "Applied " + pCount + " parameter adjustment(s)" + evidence;
             case "condition":
                 int cCount = suggestion.getConditionAdjustments() == null ? 0
                         : (int) suggestion.getConditionAdjustments().stream()
                                 .filter(a -> !"keep".equals(a.getAction())).count();
-                return "Applied " + cCount + " condition change(s) after the server recomputed "
-                        + "and verified the suggestion.";
+                return "Applied " + cCount + " condition change(s)" + evidence;
             case "remove":
-                return "Permanently removed " + (before - after) + " automation rule(s) after the server recomputed "
-                        + "and verified the suggestion.";
+                return "Permanently removed " + (before - after) + " automation rule(s)" + evidence;
             default:
-                return "Fix applied after the server recomputed and verified the suggestion.";
+                return "Fix applied" + evidence;
         }
     }
 

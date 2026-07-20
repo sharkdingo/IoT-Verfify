@@ -5,8 +5,11 @@ import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.NusmvResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.executor.NusmvExecutor.SpecCheckResult;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.FixContext;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
+import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.CounterexampleInitialStateConstraints;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackScenarioSurfaceValidator;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceReferenceResolver;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
@@ -17,13 +20,13 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
+import cn.edu.nju.Iot_Verify.util.RuleSemanticSignature;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -45,7 +48,18 @@ public final class FixStrategyUtils {
      */
     public static boolean forwardVerify(SmvGenerator smvGenerator, NusmvExecutor nusmvExecutor,
                                          FixContext ctx, List<RuleDto> modifiedRules) {
+        return forwardVerify(smvGenerator, nusmvExecutor, ctx, modifiedRules, null);
+    }
+
+    public static boolean forwardVerify(SmvGenerator smvGenerator, NusmvExecutor nusmvExecutor,
+                                         FixContext ctx, List<RuleDto> modifiedRules,
+                                         String strategyName) {
         if (ctx.isExpired()) return false;
+        if (!candidateRulesPersistable(modifiedRules)) {
+            ctx.addDiagnostic("A candidate was rejected because it would create an identical automation rule.");
+            log.info("Forward verification rejected a candidate containing identical automation rules");
+            return false;
+        }
         File smvFile = null;
         try {
             SmvGenerator.GenerateResult genResult = generateResolved(
@@ -58,6 +72,7 @@ public final class FixStrategyUtils {
                         + genResult.disabledRuleCount() + " rule(s) disabled, "
                         + genResult.skippedSpecCount() + " specification(s) skipped).";
                 ctx.addDiagnostic(diagnostic);
+                ctx.recordStrategyGenerationFailure(strategyName, diagnostic);
                 log.warn("Forward verification rejected incomplete generated model: disabledRules={}, skippedSpecs={}",
                         genResult.disabledRuleCount(), genResult.skippedSpecCount());
                 return false;
@@ -66,7 +81,8 @@ public final class FixStrategyUtils {
             NusmvResult result = executeWithinDeadline(nusmvExecutor, smvFile, ctx);
             if (!result.isSuccess()) {
                 log.warn("Forward verification: NuSMV execution failed: {}", result.getErrorMessage());
-                ctx.addDiagnostic("A candidate could not be confirmed because NuSMV forward verification failed.");
+                recordSolverFailure(ctx, strategyName,
+                        "NuSMV could not complete forward verification for a candidate.");
                 return false;
             }
 
@@ -80,7 +96,8 @@ public final class FixStrategyUtils {
                     || expectedSpecCount == 0
                     || genResult.emittedSpecs().size() == expectedSpecCount;
             if (!resultCountComplete || !emittedCountComplete) {
-                ctx.addDiagnostic("A candidate was rejected because forward verification did not return one reliable result for every specification.");
+                recordSolverFailure(ctx, strategyName,
+                        "NuSMV forward verification did not return one reliable result for every specification.");
                 log.warn("Forward verification rejected incomplete result set: expected={}, emitted={}, parsed={}",
                         expectedSpecCount,
                         genResult.emittedSpecs() != null ? genResult.emittedSpecs().size() : 0,
@@ -93,11 +110,38 @@ public final class FixStrategyUtils {
             return allPass;
         } catch (Exception e) {
             log.warn("Forward verification failed: {}", e.getMessage(), e);
-            ctx.addDiagnostic("A candidate could not be confirmed because forward verification encountered an error.");
+            if (smvFile == null) {
+                String reason = "Candidate model generation failed during forward verification: " + e.getMessage();
+                ctx.addDiagnostic(reason);
+                ctx.recordStrategyGenerationFailure(strategyName, reason);
+            } else {
+                recordSolverFailure(ctx, strategyName,
+                        "NuSMV forward verification encountered an error: " + e.getMessage());
+            }
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             return false;
         } finally {
             cleanupTempDir(smvFile);
         }
+    }
+
+    static void recordSolverFailure(FixContext ctx, String strategyName, String reason) {
+        ctx.addDiagnostic(reason);
+        ctx.recordStrategySolverFailure(strategyName, reason);
+    }
+
+    static boolean candidateRulesPersistable(List<RuleDto> rules) {
+        List<RuleDto> safeRules = rules == null ? List.of() : rules;
+        for (int left = 0; left < safeRules.size(); left++) {
+            for (int right = 0; right < left; right++) {
+                if (RuleSemanticSignature.exactlyMatches(safeRules.get(left), safeRules.get(right))) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     public static SmvGenerator.GenerateResult generateResolved(
@@ -106,8 +150,8 @@ public final class FixStrategyUtils {
             List<RuleDto> rules,
             SmvGenerator.GeneratePurpose purpose) throws java.io.IOException {
         AttackScenarioDto scenario = ctx.resolvedAttackScenario();
-        if (!preservesExactAutomationLinkSelection(scenario, rules)) {
-            ctx.addDiagnostic("A candidate was rejected because it would remove or duplicate an explicitly selected automation-link attack point and change the original attack scenario.");
+        if (!preservesExactAttackSelection(scenario, rules, ctx.getDeviceSmvMap())) {
+            ctx.addDiagnostic("A candidate was rejected because it would remove an explicitly selected automation-link attack point or device attack point and change the original attack scenario.");
             return null;
         }
         if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
@@ -127,10 +171,17 @@ public final class FixStrategyUtils {
             List<RuleDto> rules,
             ParameterizationConfig config) throws java.io.IOException {
         AttackScenarioDto scenario = ctx.resolvedAttackScenario();
-        if (!preservesExactAutomationLinkSelection(scenario, rules)) {
-            ctx.addDiagnostic("A candidate was rejected because it would remove or duplicate an explicitly selected automation-link attack point and change the original attack scenario.");
+        if (!preservesExactAttackSelection(scenario, rules, ctx.getDeviceSmvMap())) {
+            ctx.addDiagnostic("A candidate was rejected because it would remove an explicitly selected automation-link attack point or device attack point and change the original attack scenario.");
             return null;
         }
+        if (ctx.isRequireCounterexampleReplay() && ctx.getCounterexampleInitialState() == null) {
+            throw SmvGenerationException.smvGenerationError(
+                    "Cannot reproduce the counterexample initial state: the persisted trace has no first state");
+        }
+        config.setInitialStateConstraints(CounterexampleInitialStateConstraints.build(
+                ctx.getCounterexampleInitialState(), rules, ctx.getDeviceSmvMap(),
+                scenario, ctx.isEnablePrivacy()));
         if (scenario.getMode() == AttackScenarioDto.Mode.EXACT_POINTS) {
             return smvGenerator.generateParameterizedWithResolvedDeviceModel(
                     ctx.getUserId(), ctx.getDevices(), ctx.getEnvironmentVariables(), rules, ctx.getSpecs(),
@@ -142,24 +193,28 @@ public final class FixStrategyUtils {
                 tempContext(ctx), ctx.getDeviceSmvMap());
     }
 
-    static boolean preservesExactAutomationLinkSelection(AttackScenarioDto scenario,
-                                                           List<RuleDto> rules) {
-        if (scenario == null || scenario.getMode() != AttackScenarioDto.Mode.EXACT_POINTS) {
+    static boolean preservesExactAttackSelection(
+            AttackScenarioDto scenario,
+            List<RuleDto> rules,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        AttackSurface surface = AttackSurface.analyze(rules, deviceSmvMap);
+        return AttackScenarioSurfaceValidator
+                .firstExactSelectionViolation(scenario, surface, rules)
+                .isEmpty();
+    }
+
+    static boolean candidateModelComplete(SmvGenerator.GenerateResult result, FixContext ctx,
+                                          String strategyName) {
+        if (result == null) return false;
+        if (result.disabledRuleCount() == 0 && result.skippedSpecCount() == 0) {
             return true;
         }
-        Set<Long> selectedRuleIds = scenario.selectedAutomationLinkRuleIds();
-        if (selectedRuleIds.isEmpty()) {
-            return true;
-        }
-        Map<Long, Integer> ruleIdCounts = new HashMap<>();
-        if (rules != null) {
-            for (RuleDto rule : rules) {
-                if (rule != null && rule.getId() != null) {
-                    ruleIdCounts.merge(rule.getId(), 1, Integer::sum);
-                }
-            }
-        }
-        return selectedRuleIds.stream().allMatch(ruleId -> ruleIdCounts.getOrDefault(ruleId, 0) == 1);
+        String reason = "Candidate model generation disabled "
+                + result.disabledRuleCount() + " rule(s) and skipped "
+                + result.skippedSpecCount() + " specification(s).";
+        ctx.addDiagnostic(reason);
+        ctx.recordStrategyGenerationFailure(strategyName, reason);
+        return false;
     }
 
     /**
@@ -229,10 +284,9 @@ public final class FixStrategyUtils {
     // ======================== E2: Expand parameterization scope ========================
 
     /**
-     * §5: faultRules ∪ rules sharing devices with violated spec.
+     * §5: faultRules ∪ rules sharing devices or environmental domains with violated spec.
      * Uses the same device-reference resolver as the generator so scope expansion aligns raw board
      * node ids with SMV-safe verification-time varNames consistently.
-     * Known limitation: "domains" not supported — device-level only alignment.
      */
     public static Set<Integer> expandRuleIndices(
             List<FaultRuleDto> faultRules,
@@ -257,6 +311,7 @@ public final class FixStrategyUtils {
 
         // 2. Extract spec device varNames
         Set<String> specVarNames = new HashSet<>();
+        Set<String> specDomains = new HashSet<>();
         if (violatedSpec != null) {
             List<SpecConditionDto> allSpecConds = new ArrayList<>();
             if (violatedSpec.getAConditions() != null) allSpecConds.addAll(violatedSpec.getAConditions());
@@ -266,21 +321,66 @@ public final class FixStrategyUtils {
             for (SpecConditionDto sc : allSpecConds) {
                 if (sc.getDeviceId() == null || sc.getDeviceId().isBlank()) continue;
                 String varName = resolveVarNameInclusive(sc.getDeviceId(), deviceSmvMap);
-                if (varName != null) specVarNames.add(varName);
+                if (varName != null) {
+                    specVarNames.add(varName);
+                    DeviceSmvData smv = deviceSmvMap.get(varName);
+                    collectImpactedDomains(smv, specDomains);
+                    if ("variable".equalsIgnoreCase(sc.getTargetType()) && sc.getKey() != null
+                            && smv != null && smv.getEnvVariables() != null
+                            && smv.getEnvVariables().containsKey(sc.getKey())) {
+                        specDomains.add(sc.getKey());
+                    }
+                }
             }
         }
 
-        if (specVarNames.isEmpty()) return result;
+        if (specVarNames.isEmpty() && specDomains.isEmpty()) return result;
 
-        // 3. Scan allRules for shared-device rules
+        // 3. Scan allRules for shared-device or shared-domain rules
         for (int i = 0; i < allRules.size(); i++) {
             if (result.contains(i)) continue;
             RuleDto rule = allRules.get(i);
-            if (ruleReferencesAnyDevice(rule, specVarNames, deviceSmvMap)) {
+            if (ruleReferencesAnyDevice(rule, specVarNames, deviceSmvMap)
+                    || ruleReferencesAnyDomain(rule, specDomains, deviceSmvMap)) {
                 result.add(i);
             }
         }
         return result;
+    }
+
+    private static boolean ruleReferencesAnyDomain(
+            RuleDto rule, Set<String> targetDomains,
+            Map<String, DeviceSmvData> deviceSmvMap) {
+        if (rule == null || targetDomains.isEmpty()) return false;
+        if (rule.getConditions() != null) {
+            for (RuleDto.Condition condition : rule.getConditions()) {
+                if (condition == null || condition.getAttribute() == null
+                        || !"variable".equalsIgnoreCase(condition.getTargetType())) continue;
+                String varName = resolveVarNameInclusive(condition.getDeviceName(), deviceSmvMap);
+                DeviceSmvData smv = varName == null ? null : deviceSmvMap.get(varName);
+                if (smv != null && smv.getEnvVariables() != null
+                        && smv.getEnvVariables().containsKey(condition.getAttribute())
+                        && targetDomains.contains(condition.getAttribute())) {
+                    return true;
+                }
+            }
+        }
+        if (rule.getCommand() != null) {
+            String varName = resolveVarNameInclusive(rule.getCommand().getDeviceName(), deviceSmvMap);
+            DeviceSmvData smv = varName == null ? null : deviceSmvMap.get(varName);
+            Set<String> impacted = new HashSet<>();
+            collectImpactedDomains(smv, impacted);
+            if (impacted.stream().anyMatch(targetDomains::contains)) return true;
+        }
+        return false;
+    }
+
+    private static void collectImpactedDomains(DeviceSmvData smv, Set<String> target) {
+        if (smv == null) return;
+        if (smv.getImpactedVariables() != null) target.addAll(smv.getImpactedVariables());
+        if (smv.getImpactedEnvironmentVariables() != null) {
+            target.addAll(smv.getImpactedEnvironmentVariables().keySet());
+        }
     }
 
     /**
@@ -356,6 +456,26 @@ public final class FixStrategyUtils {
         }
     }
 
+    /** Full command identity used when coordinating rules that perform the same action. */
+    static String commandFingerprint(
+            RuleDto rule, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (rule == null || rule.getCommand() == null) return null;
+        RuleDto.Command command = rule.getCommand();
+        if (command.getDeviceName() == null || command.getAction() == null) return null;
+        String target = resolveVarNameSafe(command.getDeviceName(), deviceSmvMap);
+        if (target == null) return null;
+        String contentDevice = "";
+        if (command.getContentDevice() != null && !command.getContentDevice().isBlank()) {
+            contentDevice = resolveVarNameSafe(command.getContentDevice(), deviceSmvMap);
+            if (contentDevice == null) return null;
+        }
+        return String.join("\u0000",
+                target,
+                command.getAction().trim(),
+                contentDevice,
+                command.getContent() != null ? command.getContent().trim() : "");
+    }
+
     // ======================== E1: Candidate condition extraction ========================
 
     /**
@@ -373,10 +493,13 @@ public final class FixStrategyUtils {
 
         // 1. Build existing-condition fingerprint set for dedup
         Set<String> existingFingerprints = new HashSet<>();
+        Set<String> existingShapes = new HashSet<>();
         if (rule.getConditions() != null) {
             for (RuleDto.Condition c : rule.getConditions()) {
                 String fp = conditionFingerprint(c, deviceSmvMap);
                 if (fp != null) existingFingerprints.add(fp);
+                String shape = conditionShapeFingerprint(c, deviceSmvMap);
+                if (shape != null) existingShapes.add(shape);
             }
         }
 
@@ -389,19 +512,32 @@ public final class FixStrategyUtils {
         // 3. Map, validate, dedup, truncate
         List<RuleDto.Condition> candidates = new ArrayList<>();
         Set<String> candidateFingerprints = new HashSet<>();
+        Set<String> candidateShapes = new HashSet<>();
+        Set<String> freeValueCandidateShapes = new HashSet<>();
 
         for (SpecConditionDto sc : allSpecConds) {
             String targetType = sc.getTargetType();
             if (targetType == null) continue;
             targetType = targetType.toLowerCase();
 
-            if (!"state".equals(targetType) && !"mode".equals(targetType) && !"variable".equals(targetType)) continue;
+            if (!"state".equals(targetType) && !"mode".equals(targetType)
+                    && !"variable".equals(targetType) && !"api".equals(targetType)) continue;
 
             String deviceRef = DeviceReferenceResolver.resolvableReference(
                     sc.getDeviceId(), deviceSmvMap);
 
             RuleDto.Condition candidate;
-            if ("state".equals(targetType)) {
+            if ("api".equals(targetType)) {
+                String relation = SmvRelationUtils.normalizeRelation(sc.getRelation());
+                if (!"=".equals(relation) || !"TRUE".equalsIgnoreCase(sc.getValue())) {
+                    continue;
+                }
+                candidate = RuleDto.Condition.builder()
+                        .deviceName(deviceRef)
+                        .attribute(sc.getKey())
+                        .targetType(targetType)
+                        .build();
+            } else if ("state".equals(targetType)) {
                 candidate = RuleDto.Condition.builder()
                         .deviceName(deviceRef)
                         .attribute("state")
@@ -433,30 +569,159 @@ public final class FixStrategyUtils {
                 continue;
             }
 
-            // A condition equal to the command's own resulting state is a postcondition, not a
-            // meaningful trigger. Keeping it would turn e.g. "motion -> take photo" into
-            // "camera already taking photo -> take photo", which can pass a safety property only
-            // because the useful automation has become unreachable.
-            if (isCommandOutcomeCondition(rule, candidate, deviceSmvMap)) {
-                log.debug("extractCandidates: skipped command-outcome condition for rule command {}",
-                        rule.getCommand() != null ? rule.getCommand().getAction() : "<none>");
-                continue;
-            }
-            if (isCommandPrestateIncompatible(rule, candidate, deviceSmvMap)) {
-                log.debug("extractCandidates: skipped condition incompatible with the command API pre-state for {}",
-                        rule.getCommand() != null ? rule.getCommand().getAction() : "<none>");
-                continue;
+            ParameterizationConfig.ConditionValueInfo freeValueInfo = candidateConditionValueInfo(
+                    candidate, rule, deviceSmvMap, "candidate_value_probe");
+            if (freeValueInfo == null) {
+                // Fixed-value postconditions can make the useful automation unreachable. A free-Y
+                // candidate is handled differently: its domain has already had those values removed.
+                if (isCommandOutcomeCondition(rule, candidate, deviceSmvMap)) {
+                    log.debug("extractCandidates: skipped command-outcome condition for rule command {}",
+                            rule.getCommand() != null ? rule.getCommand().getAction() : "<none>");
+                    continue;
+                }
+                if (isCommandPrestateIncompatible(rule, candidate, deviceSmvMap)) {
+                    log.debug("extractCandidates: skipped condition incompatible with the command API pre-state for {}",
+                            rule.getCommand() != null ? rule.getCommand().getAction() : "<none>");
+                    continue;
+                }
             }
 
             String fp = conditionFingerprint(candidate, deviceSmvMap);
-            if (fp == null) continue;
-            if (existingFingerprints.contains(fp) || candidateFingerprints.contains(fp)) continue;
+            String shape = conditionShapeFingerprint(candidate, deviceSmvMap);
+            if (fp == null || shape == null) continue;
+            if (freeValueInfo != null) {
+                if (existingShapes.contains(shape) || candidateShapes.contains(shape)) continue;
+                freeValueCandidateShapes.add(shape);
+            } else if (existingFingerprints.contains(fp)
+                    || candidateFingerprints.contains(fp)
+                    || freeValueCandidateShapes.contains(shape)) {
+                continue;
+            }
             candidateFingerprints.add(fp);
+            candidateShapes.add(shape);
 
             candidates.add(candidate);
             if (candidates.size() >= maxCandidatesPerRule) break;
         }
         return candidates;
+    }
+
+    /**
+     * Resolve the finite value domain for a §5.2 candidate clause. The violated policy
+     * supplies the clause shape; NuSMV chooses its value Y from this domain.
+     */
+    static ParameterizationConfig.ConditionValueInfo candidateConditionValueInfo(
+            RuleDto.Condition candidate,
+            Map<String, DeviceSmvData> deviceSmvMap,
+            String frozenVarName) {
+        return candidateConditionValueInfo(candidate, null, deviceSmvMap, frozenVarName);
+    }
+
+    static ParameterizationConfig.ConditionValueInfo candidateConditionValueInfo(
+            RuleDto.Condition candidate,
+            RuleDto rule,
+            Map<String, DeviceSmvData> deviceSmvMap,
+            String frozenVarName) {
+        if (candidate == null || frozenVarName == null || frozenVarName.isBlank()) return null;
+
+        DeviceSmvData smv;
+        try {
+            smv = DeviceReferenceResolver.resolve(candidate.getDeviceName(), deviceSmvMap);
+        } catch (SmvGenerationException e) {
+            return null;
+        }
+        if (smv == null || candidate.getTargetType() == null || candidate.getAttribute() == null) {
+            return null;
+        }
+
+        String targetType = candidate.getTargetType().trim().toLowerCase();
+        String relation = SmvRelationUtils.normalizeRelation(candidate.getRelation());
+        if ("mode".equals(targetType)) {
+            if (!List.of("=", "!=", "in", "not in").contains(relation)) return null;
+            List<String> values = smv.getModeStates() == null
+                    ? null : smv.getModeStates().get(candidate.getAttribute());
+            return filterCommandIncompatibleValues(candidate, rule, deviceSmvMap,
+                    discreteConditionValueInfo(frozenVarName, values));
+        }
+        if (!"variable".equals(targetType)) return null;
+
+        DeviceManifest.InternalVariable variable = null;
+        if (smv.getVariables() != null) {
+            variable = smv.getVariables().stream()
+                    .filter(Objects::nonNull)
+                    .filter(value -> candidate.getAttribute().equals(value.getName()))
+                    .findFirst()
+                    .orElse(null);
+        }
+        if (variable == null && smv.getEnvVariables() != null) {
+            variable = smv.getEnvVariables().get(candidate.getAttribute());
+        }
+        if (variable == null) return null;
+
+        if (variable.getValues() != null && !variable.getValues().isEmpty()) {
+            if (!List.of("=", "!=", "in", "not in").contains(relation)) return null;
+            return filterCommandIncompatibleValues(candidate, rule, deviceSmvMap,
+                    discreteConditionValueInfo(frozenVarName, variable.getValues()));
+        }
+        if (variable.getLowerBound() == null || variable.getUpperBound() == null
+                || variable.getLowerBound() >= variable.getUpperBound()) {
+            return null;
+        }
+        return ParameterizationConfig.ConditionValueInfo.builder()
+                .frozenVarName(frozenVarName)
+                .lowerBound(variable.getLowerBound())
+                .upperBound(variable.getUpperBound())
+                .build();
+    }
+
+    private static ParameterizationConfig.ConditionValueInfo filterCommandIncompatibleValues(
+            RuleDto.Condition candidate,
+            RuleDto rule,
+            Map<String, DeviceSmvData> deviceSmvMap,
+            ParameterizationConfig.ConditionValueInfo valueInfo) {
+        if (valueInfo == null || rule == null || valueInfo.getValues() == null
+                || valueInfo.getValues().isEmpty()) {
+            return valueInfo;
+        }
+        List<String> allowedValues = valueInfo.getValues().stream()
+                .filter(value -> {
+                    RuleDto.Condition selected = copyConditionWithValue(candidate, value);
+                    return !isCommandOutcomeCondition(rule, selected, deviceSmvMap)
+                            && !isCommandPrestateIncompatible(rule, selected, deviceSmvMap);
+                })
+                .toList();
+        if (allowedValues.isEmpty()) return null;
+        return ParameterizationConfig.ConditionValueInfo.builder()
+                .frozenVarName(valueInfo.getFrozenVarName())
+                .values(new ArrayList<>(allowedValues))
+                .build();
+    }
+
+    private static RuleDto.Condition copyConditionWithValue(
+            RuleDto.Condition condition, String value) {
+        return RuleDto.Condition.builder()
+                .deviceName(condition.getDeviceName())
+                .attribute(condition.getAttribute())
+                .targetType(condition.getTargetType())
+                .relation(condition.getRelation())
+                .value(value)
+                .build();
+    }
+
+    private static ParameterizationConfig.ConditionValueInfo discreteConditionValueInfo(
+            String frozenVarName, List<String> rawValues) {
+        if (rawValues == null) return null;
+        List<String> values = rawValues.stream()
+                .filter(Objects::nonNull)
+                .map(value -> value.replace(" ", ""))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+        if (values.size() < 2) return null;
+        return ParameterizationConfig.ConditionValueInfo.builder()
+                .frozenVarName(frozenVarName)
+                .values(new ArrayList<>(values))
+                .build();
     }
 
     /**
@@ -732,18 +997,27 @@ public final class FixStrategyUtils {
         }
         if (smv == null) return false;
 
-        // 2. Value non-blank
-        if (candidate.getValue() == null || candidate.getValue().isBlank()) return false;
-
-        // 3. Attribute resolvable
+        // 2. Attribute resolvable
         String attr = candidate.getAttribute();
         if (attr == null || attr.isBlank()) return false;
         String targetType = candidate.getTargetType();
         if (targetType == null || targetType.isBlank()) return false;
         targetType = targetType.toLowerCase();
-        if (!"state".equals(targetType) && !"mode".equals(targetType) && !"variable".equals(targetType)) {
+        if (!"state".equals(targetType) && !"mode".equals(targetType)
+                && !"variable".equals(targetType) && !"api".equals(targetType)) {
             return false;
         }
+
+        if ("api".equals(targetType)) {
+            boolean signalExists = smv.getManifest() != null && smv.getManifest().getApis() != null
+                    && smv.getManifest().getApis().stream().anyMatch(api -> api != null
+                    && Boolean.TRUE.equals(api.getSignal()) && attr.equals(api.getName()));
+            if (!signalExists) return false;
+            if (candidate.getRelation() == null && candidate.getValue() == null) return true;
+        }
+
+        // 3. Non-bare conditions require a value.
+        if (candidate.getValue() == null || candidate.getValue().isBlank()) return false;
 
         // 4. Relation valid (type-specific)
         if (candidate.getRelation() == null) return false;
@@ -790,7 +1064,7 @@ public final class FixStrategyUtils {
                 }
             }
             return true;
-        } else {
+        } else if ("variable".equals(targetType)) {
             // Non-state: general relation validation
             if (!SmvRelationUtils.isSupportedRelation(normalizedRel)) return false;
 
@@ -801,6 +1075,11 @@ public final class FixStrategyUtils {
                 return smv.getEnvVariables().containsKey(attr);
             }
             return false;
+        } else {
+            if (!List.of("=", "!=", "in", "not in").contains(normalizedRel)) return false;
+            List<String> values = SmvRelationUtils.splitRuleValues(candidate.getValue());
+            return !values.isEmpty() && values.stream()
+                    .allMatch(value -> "TRUE".equalsIgnoreCase(value) || "FALSE".equalsIgnoreCase(value));
         }
     }
 
@@ -918,5 +1197,17 @@ public final class FixStrategyUtils {
         String attr = c.getAttribute() != null ? c.getAttribute() : "";
         String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase() : "";
         return varName + "|" + targetType + "|" + attr + "|" + normRel + "|" + normVal;
+    }
+
+    /** Fingerprint for a candidate whose value is a free NuSMV parameter. */
+    static String conditionShapeFingerprint(
+            RuleDto.Condition c, Map<String, DeviceSmvData> deviceSmvMap) {
+        if (c == null || c.getDeviceName() == null) return null;
+        String varName = resolveVarNameSafe(c.getDeviceName(), deviceSmvMap);
+        if (varName == null) return null;
+        String normRel = SmvRelationUtils.normalizeRelation(c.getRelation());
+        String attr = c.getAttribute() != null ? c.getAttribute() : "";
+        String targetType = c.getTargetType() != null ? c.getTargetType().toLowerCase() : "";
+        return varName + "|" + targetType + "|" + attr + "|" + normRel;
     }
 }

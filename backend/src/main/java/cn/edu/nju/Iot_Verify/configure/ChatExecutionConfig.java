@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.configure;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -23,4 +24,21 @@ public class ChatExecutionConfig {
      */
     @Min(1)
     private int maxStagnantRounds = 2;
+
+    /**
+     * Distributed lease lifetime. A live worker renews this independently of the SSE connection.
+     */
+    @Min(3000)
+    private long leaseTtlMs = 30_000;
+
+    /**
+     * Delay between lease heartbeats and expired-lease cleanup passes.
+     */
+    @Min(1000)
+    private long leaseHeartbeatMs = 10_000;
+
+    @AssertTrue(message = "chat.execution.lease-ttl-ms must be at least twice lease-heartbeat-ms")
+    public boolean isLeaseTimingValid() {
+        return leaseHeartbeatMs <= leaseTtlMs / 2;
+    }
 }

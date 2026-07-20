@@ -15,6 +15,142 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-20
+
+#### Added
+- Added a real-NuSMV three-strategy acceptance matrix and live browser coverage for
+  parameter threshold repair, occupancy guard addition, and permanent rule removal. Each
+  flow now asserts a complete counterexample model, the exact user-visible edit, signed
+  apply, persistence reload, and a complete post-repair verification.
+- Added a combined-scene regression where one counterexample yields all three verified
+  strategies, plus explicit `UNKNOWN_SPEC` gate coverage and sequential frontend result
+  merging across parameter, condition, and removal searches.
+- Added real-NuSMV interaction regressions for inverse duplicate boundaries, redundant
+  same-command rules requiring coordinated edits or pair removal, environment-only
+  counterexamples with no rule root cause, and an unrepairable numeric upper-bound case
+  where condition and removal strategies must still complete. Full-stack browser coverage
+  now independently applies, reloads, and re-verifies multi-item coordinated suggestions
+  for all three strategies through the live REST API and database.
+  Signed-token round-trip regressions additionally prove that every hidden locator in a
+  multi-item parameter, condition, or removal proposal is restored and applied.
+
+#### Fixed
+- Unified asynchronous task creation, progress, lease, and terminal timestamps on the
+  microsecond database clock. Progress writes now require the live owning lease, while
+  completion and evidence persistence lock the task row before sampling terminal time;
+  fast tasks and workers delayed behind a row lock can no longer produce inverted
+  timestamps or commit after their lease expires.
+- Extended chat execution fencing to verification/simulation task creation, cancellation,
+  synchronous verification-history persistence, and trace deletion. Account deletion now
+  clears durable AI session state in independent post-commit transactions and isolates each
+  cleanup stage so one failure cannot skip the remaining cleanup.
+- Added same-user Board invalidation over `BroadcastChannel` for successful semantic
+  mutations and assistant refresh commands. Tabs coalesce refreshes through the existing
+  mutation queue, retain invalidations received while hidden, and still reconcile on focus
+  for browser compatibility.
+- Added route and assistant subtree error boundaries with localized retry and page-reload
+  recovery, preventing one render failure from replacing the entire application with a
+  blank screen.
+- Fixed automatic-fix condition search so disabled free-value candidates are excluded by
+  semantic assignment, same-shape policy literals share one candidate, and command outcome
+  values are pruned without discarding the remaining valid value domain. One-condition
+  additions/removals are now tried before unrestricted joint edits.
+- Added suggestion-independent numeric parameter targets and accurate preferred-range match
+  reporting. The Board can refine ranges after a search finds no suggestion, and unrelated
+  same-named device attributes no longer bias the bounded near-value probe.
+- Prevented automatic-fix search from certifying parameter or condition edits that would be
+  rejected by Board persistence as an identical rule. Integer policy-boundary probes now
+  include adjacent values and continue past duplicate boundaries without spending a NuSMV
+  attempt, avoiding an unnecessary joint-solver timeout and returning an applicable edit.
+- Added bounded coordinated parameter and condition probes for redundant rules issuing the
+  same command, avoiding expensive unrestricted Cartesian solving when several thresholds or
+  guards must move together. Permanent removal now expands through the violated specification
+  so a dormant lower-priority rule cannot take over after the localized rule is deleted.
+- Preserved exact device as well as automation-link attack points during every fix candidate
+  generation, preventing rule removal from certifying a model after silently disabling a
+  selected actuator attack variable.
+- Serialized Board mount, retry, and cross-tab semantic snapshot reads through one refresh
+  coordinator, so a delayed initial response cannot suppress a queued invalidation refresh.
+  Returning from a hidden tab now consumes its deferred invalidation with one snapshot read
+  instead of scheduling a redundant second refresh.
+- Distinguished NuSMV execution or result-parsing failures and truncated candidate searches
+  from a completed automatic-fix search with no verified suggestion. Strategy attempts now
+  expose their main-search count and limit, and the Board explains both incomplete outcomes.
+- Aligned coordinated parameter/condition grouping with the Board's full command identity,
+  including content device and content value, so unrelated payload commands are not repaired
+  together. Parameter closest-value refinement now handles the full signed 32-bit domain
+  without distance or bound overflow.
+- Corrected boundary-effect messaging for parameter repairs: only impossible strict bounds
+  are identified as making a rule unreachable, while reachable non-strict endpoints are not
+  described as disabled. The fix dialog now shows that consequence directly and renders every
+  removal item even when multiple distinct rules have the same display name.
+- Cancelled in-flight automatic-fix requests when the dialog is hidden programmatically or
+  unmounted, not only when its own close button is used. A failed best-effort server cancellation
+  is now contained and logged after the local request is aborted instead of becoming an unhandled
+  promise rejection.
+- Aligned the frontend automatic-fix types and strict response validator with the backend's
+  required condition display snapshots and always-present collection fields.
+
+### 2026-07-19
+
+#### Changed
+- Automatic-fix parameter search now spends a bounded first phase on one-threshold,
+  near-original repairs before joint tuple solving, and the Board can lock a suggested
+  parameter at its original value for the next search. Multi-threshold scenes no longer
+  depend entirely on arbitrary Cartesian-product witness order.
+- Condition adjustment now models Salus's candidate-clause value `Y` as a NuSMV
+  `FROZENVAR` for enum and numeric mode/variable domains. Added conditions carry the
+  solver-selected value instead of blindly copying the violated policy's value.
+- Automatic-fix parameter and condition discovery now reproduces the complete first
+  counterexample state, including concrete attack choices, while final forward verification
+  still checks the unconstrained complete model. Condition-search scope also includes shared
+  environment domains and positive API-event candidates.
+- Automatic-fix strategy attempts now distinguish candidate-model generation failure from a
+  completed search with no verified suggestion. First-state replay derives required fields from
+  the resolved model and fails closed on every missing device, value, property, environment, or
+  attack choice.
+- Fix apply UI and responses now distinguish fresh rechecking from reuse of signed verification
+  evidence. Confirmed or unavailable template comparison disables apply, and retryable `503`
+  preflight failures carry a stable reason code; unclassified infrastructure `503` responses
+  remain outcome-uncertain and trigger board reconciliation.
+- Chat session-list responses now expose authoritative execution activity. On reload or in
+  another tab, the assistant automatically opens a running session, shows a live activity
+  marker and reconnected status, retains a working Stop control, and reloads persisted
+  history plus Board/run state when execution finishes.
+- The assistant now refreshes cross-tab activity whenever its panel opens or the browser
+  document returns to the foreground. A session already reported active is locked and
+  monitored before history loading, so a history error cannot expose mutation controls.
+
+#### Fixed
+- Signed fix tokens now carry every hidden operation locator required by apply, including
+  nonzero parameter/condition indices and condition-add device references. Public JSON
+  round-trips can no longer collapse an applicable suggestion onto rule 0/condition 0.
+- Parameterized fix generation now fails closed when a rule/specification is omitted or the
+  negated specification cannot be translated, instead of silently searching a reduced model or
+  substituting a trivially true property.
+- Replaced the fixed two-hour chat execution lease with a configurable 30-second renewable
+  lease, a 10-second execution-id-guarded heartbeat, and scheduled expired-row cleanup.
+  Backend crashes no longer leave sessions busy for hours, while healthy long-running tool
+  workflows renew their lease instead of aborting when the original deadline passes.
+- Bound chat workers and controller cleanup to the exact acquired execution id and moved
+  every lease comparison to the database clock. A delayed queued worker or older request
+  cleanup can no longer start without ownership or clear a replacement execution lease.
+- Reloaded terminal assistant history even when the separate Board/run reconciliation
+  fails, while retaining the visible locked retry state for the failed reconciliation.
+- Replaced verification/simulation startup-wide active-task failure with renewable
+  per-instance database leases covering queued and running work. Rolling deployments now
+  preserve healthy work on other instances, expired work is recovered as failed, and a
+  queued task that loses ownership cannot later start. Counterexample-search start and
+  renewal now also reject an already-expired lease instead of reviving abandoned work.
+- Fenced verification, simulation, and counterexample-search success/failure commits by the
+  current worker id and unexpired database-clock lease. An expired worker can no longer publish
+  a terminal result before recovery maintenance runs; user cancellation remains authoritative.
+- Fenced AI-originated Board transactions, chat messages, confirmation state, scene drafts,
+  and task continuations by the exact live chat execution id. A replaced or expired worker can
+  no longer mutate shared state or append terminal history after ownership changes.
+- The Board now refreshes its full semantic snapshot through the mutation queue whenever its
+  tab becomes visible or its window regains focus, reconciling changes made in another tab.
+
 ### 2026-07-18
 
 #### Changed

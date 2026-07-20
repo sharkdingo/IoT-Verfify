@@ -655,7 +655,7 @@ public class SmvGenerator {
         if (config != null) {
             // Only emit the negated spec (¬ρ)
             content.append(specBuilder.buildNegated(specs, config.getNegatedSpecIndex(),
-                    isAttack, attackBudget, deviceSmvMap, enablePrivacy));
+                    isAttack, attackBudget, deviceSmvMap, enablePrivacy, context));
         } else {
             content.append(specBuilder.build(specs, isAttack, attackBudget, deviceSmvMap, enablePrivacy, context));
         }

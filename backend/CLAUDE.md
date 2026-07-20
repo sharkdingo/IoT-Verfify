@@ -85,8 +85,13 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   `ImpactedVariables` name is defined by an external `InternalVariable` or
   `EnvironmentDomains` entry in that same manifest. Never scan the user's whole template
   library to fill a missing domain: unused templates must not alter the current board.
-- **Async task state** uses atomic conditional UPDATEs (`WHERE status <> CANCELLED`) to
-  avoid TOCTOU races — don't replace with read-then-write.
+- **Async task state** uses atomic status predicates to avoid TOCTOU races. Verification,
+  simulation, and fuzz queue/running work also use renewable per-instance database leases;
+  start, progress, renewal, worker success, and worker failure require the owning worker
+  and an unexpired lease measured by the microsecond database clock. Completion/failure
+  transactions lock the task row before sampling their terminal time and persisting linked
+  evidence. Cancellation remains user-authoritative. Do not replace these transitions with
+  read-then-write, a pre-lock JVM timestamp, or global startup cleanup.
 - **Fuzz findings are not formal traces.** The bounded explorer supports only its
   documented finite safety subset, and budget exhaustion is never satisfaction. Keep
   `fuzz_finding` separate from NuSMV `trace`; direct automatic fix remains formal-only.
@@ -141,6 +146,10 @@ authored-formula/device-binding persistence; `verification_task` carries
 `disabled_rule_count` / `skipped_spec_count`
 mirroring the generation-warning counts surfaced in `VerificationResultDto`. Completed
 rows also back verification run history for both synchronous and asynchronous checks;
+`verification_task`, `simulation_task`, and `fuzz_task` carry internal `worker_id` and
+`lease_expires_at` ownership for queued/running work; worker terminal transitions require
+that live ownership and clear it, user cancellation clears it independently, and maintenance
+recovers only expired active rows. Their lifecycle transitions use the database clock;
 `chat_message` stores a per-turn correlation id plus the exact user-visible assistant execution
 trace, elapsed time, and terminal status on the final assistant row, while older rows remain
 reconstructable from tool blocks; `ai_session_state` durably stores expiring task continuation, scenario draft,

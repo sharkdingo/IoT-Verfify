@@ -3,12 +3,16 @@ import { ref, computed, defineAsyncComponent, watch } from "vue";
 import { useRoute } from "vue-router";
 import type { ChatLogoutPreparation, StreamCommand } from "@/types/chat";
 import { useChatStore } from "@/stores/chat";
+import { useAuth } from "@/stores/auth";
+import { publishBoardInvalidation } from "@/utils/boardInvalidation";
+import AppErrorBoundary from "./components/AppErrorBoundary.vue";
 
 const route = useRoute();
 const routerViewRef = ref<any>(null);
 const chatViewRef = ref<any>(null);
 const ChatView = defineAsyncComponent(() => import("./components/ChatView.vue"));
 const chatStore = useChatStore();
+const { getUser } = useAuth();
 
 // Load the assistant lazily on first open, then keep it mounted while hidden. Closing a
 // floating panel must not discard the selected conversation or abort an active stream.
@@ -42,6 +46,12 @@ const invokeViewMethod = async (methodName: string): Promise<boolean> => {
   return await view[methodName]() !== false;
 };
 
+const invokeBoardRefresh = async (methodName: string): Promise<boolean> => {
+  const refreshed = await invokeViewMethod(methodName);
+  if (refreshed) publishBoardInvalidation(getUser()?.userId, 'chat-tool');
+  return refreshed;
+};
+
 const handleSystemCommand = async (cmd: StreamCommand): Promise<boolean> => {
   if (cmd.type === 'REFRESH_DATA') {
     const target = cmd.payload?.target as string | undefined;
@@ -51,19 +61,19 @@ const handleSystemCommand = async (cmd: StreamCommand): Promise<boolean> => {
 
     switch (target) {
       case 'device_list':
-        return await invokeViewMethod('refreshDevices');
+        return await invokeBoardRefresh('refreshDevices');
       case 'environment_list':
-        return await invokeViewMethod('refreshEnvironmentVariables');
+        return await invokeBoardRefresh('refreshEnvironmentVariables');
       case 'rule_list':
-        return await invokeViewMethod('refreshRules');
+        return await invokeBoardRefresh('refreshRules');
       case 'spec_list':
-        return await invokeViewMethod('refreshSpecifications');
+        return await invokeBoardRefresh('refreshSpecifications');
       case 'template_list':
-        return await invokeViewMethod('refreshDeviceTemplates');
+        return await invokeBoardRefresh('refreshDeviceTemplates');
       case 'run_history':
         return await invokeViewMethod('refreshRunHistory');
       case 'board_state':
-        return await invokeViewMethod('refreshAllBoardState');
+        return await invokeBoardRefresh('refreshAllBoardState');
       default:
         console.warn(`Unsupported REFRESH_DATA target: ${target}`);
         return false;
@@ -92,17 +102,20 @@ const routerViewProps = computed(() => isBoardChat.value
   <div class="app-layout">
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <component :is="Component" ref="routerViewRef" v-bind="routerViewProps" />
+        <AppErrorBoundary :reset-key="route.fullPath">
+          <component :is="Component" ref="routerViewRef" v-bind="routerViewProps" />
+        </AppErrorBoundary>
       </router-view>
 
-      <ChatView
-        v-if="shouldMountChat"
-        ref="chatViewRef"
-        :board-mode="isBoardChat"
-        :get-board-context="getBoardChatContext"
-        :interaction-locked="isBoardChatInteractionLocked"
-        :execute-command="handleSystemCommand"
-      />
+      <AppErrorBoundary v-if="shouldMountChat" :reset-key="route.fullPath">
+        <ChatView
+          ref="chatViewRef"
+          :board-mode="isBoardChat"
+          :get-board-context="getBoardChatContext"
+          :interaction-locked="isBoardChatInteractionLocked"
+          :execute-command="handleSystemCommand"
+        />
+      </AppErrorBoundary>
     </main>
   </div>
 </template>

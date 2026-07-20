@@ -5,7 +5,7 @@ counterexample, and optional fix attempt. Field-level contracts live in
 [../api/verification.md](../api/verification.md); model construction lives in
 [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-18. Primary sources:
+Verified against code on 2026-07-20. Primary sources:
 `VerificationController`, `SimulationController`, `VerificationServiceImpl`,
 `SimulationServiceImpl`, `SmvGenerator`, `NusmvExecutor`, and `SmvTraceParser`.
 
@@ -116,8 +116,24 @@ templates once during request acceptance and uses that frozen set for the run.
 Async validation and template capture complete before task creation. Invalid requests
 return no pollable task. Queue saturation returns 503. A successful submit returns the
 task's persisted current status; acceptance never implies completion.
-Task completion/failure/cancellation uses conditional state transitions so a terminal
-state cannot be overwritten by a late worker.
+Task completion, worker failure, and user cancellation use conditional state transitions so
+a terminal state cannot be overwritten by a late worker. Success and worker-failure writes
+require the current worker id plus an unexpired lease; cancellation remains authoritative
+without depending on worker ownership.
+
+Accepted async verification and simulation tasks receive a renewable instance lease
+before executor dispatch. Lease timestamps come from the database clock and cover both
+queued and running work. Atomic start and heartbeat updates require the persisted worker
+id plus an unexpired lease. Worker success/failure uses that same ownership predicate,
+lease/start/terminal timestamps come from the database clock, and terminal transitions
+clear ownership. Maintenance on every instance renews only its local work and marks only expired active rows failed; it
+does not scan and fail all `PENDING`/`RUNNING` rows at process startup. This preserves
+healthy work during rolling deployments and prevents a delayed queued worker from starting
+after ownership has been lost.
+Progress updates use the same worker-id and lease predicate. Terminal transactions acquire
+the task row lock before sampling the microsecond database time and before writing linked
+counterexamples or simulation traces, so a worker waiting behind cancellation/recovery cannot
+publish stale evidence and a sub-second task cannot have `completedAt` before `createdAt`.
 
 Run history separates execution lifecycle from completed evidence. Task-list endpoints
 exclude `COMPLETED`; completed verification rows are exposed through `/api/verify/runs`,

@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-18. Source:
+Verified against code on 2026-07-20. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -188,6 +188,22 @@ An async task reaches `progress=100` only in the same atomic completion operatio
 stores its final result and counterexamples. If that completion write does not commit,
 the task is marked `FAILED` when possible; clients must never interpret an earlier 100%
 progress update as a completed result.
+
+Every accepted verification task is owned by one backend instance through a renewable
+database lease, including its time in the executor queue. The two-minute lease is renewed
+every ten seconds using the database clock. Worker start and renewal require the same
+worker id and a still-unexpired lease; an expired queued or running worker cannot revive
+its row. Startup and rolling deployment maintenance therefore leave another instance's
+live task untouched and atomically mark only expired `PENDING`/`RUNNING` rows `FAILED`.
+Worker completion and failure also require that same live ownership, while user cancellation
+remains authoritative regardless of the worker. Lease, start, and terminal transitions use the
+database clock and clear ownership on a committed terminal state. Local queued/running work is stopped
+when renewal proves that this instance no longer owns it.
+
+Progress updates are fenced by that same worker id and unexpired lease. Terminal transactions
+lock the task row before sampling the microsecond database time and before persisting linked
+verification counterexamples or simulation traces. This prevents a lock-delayed worker from
+publishing stale evidence and keeps creation/completion ordering valid even for sub-second tasks.
 
 ### `GET /api/verify/tasks` — verification task status layer
 
@@ -737,6 +753,12 @@ As with verification, `progress=100` is written only together with the completed
 and its saved simulation trace. A failed completion write is not exposed as a completed
 100% task.
 
+Async simulation uses the same database-clock, per-instance renewable lease contract as
+async verification. Queue wait is leased as well as execution; start/renewal fail closed
+after expiry or ownership loss, worker success/failure cannot commit after the lease is lost,
+healthy work on another backend instance survives startup, and only expired active rows are
+recovered as `FAILED`.
+
 ### `GET /api/simulate/tasks` — simulation task status layer
 
 Optional query parameter: `excludeTaskIds=1,2,3`. Use it when the frontend is already
@@ -874,10 +896,11 @@ timers or hidden model reasoning.
 | Field | Type | Default | Notes |
 | :--- | :--- | :--- | :--- |
 | `strategies` | `String[]` | `["parameter","condition","remove"]` when omitted | Exact, non-empty, duplicate-free strategy order when supplied. Values are limited to `parameter`, `condition`, and `remove`. An explicit empty/invalid list is rejected rather than replaced by defaults. `remove` permanently deletes suggested automation rules; it is not a reversible enable/disable toggle |
-| `preferredRangeSelections` | `PreferredRangeSelection[]` | `null` | Optional ranges selected from concrete parameter-adjustment targets returned in `ParameterAdjustment.targetId`. Each item is `{ targetId, lower, upper }`; all fields are required, `targetId` is an opaque trace-scoped selector copied from a returned adjustment, `lower`/`upper` are integers, and `lower <= upper` |
+| `preferredRangeSelections` | `PreferredRangeSelection[]` | `null` | Optional ranges selected from `FixResultDto.parameterTargets[].targetId`. Each item is `{ targetId, lower, upper }`; all fields are required, `targetId` is an opaque trace-scoped selector copied from a returned target, `lower`/`upper` are integers, and `lower <= upper` |
 
-Clients should build `preferredRangeSelections` from selectable `ParameterAdjustment`
-targets and display the fault rule text, condition context, attribute, and relation.
+Clients should build `preferredRangeSelections` from selectable `parameterTargets`
+and display the fault rule text, condition context, attribute, and relation. Targets are
+returned even when the parameter search produces no verified suggestion.
 No rule/condition locator map is part of either public request DTO. As with other REST
 requests, any extra field is rejected by strict JSON parsing instead of being silently
 ignored. Defaults apply only when `strategies` is omitted (or the optional request body is
@@ -899,14 +922,24 @@ omitted), never when the caller explicitly supplies an empty or malformed select
 | `templateSnapshotComparison` | `NOT_CHECKED \| UNCHANGED \| CHANGED \| UNAVAILABLE` | Structured comparison between current device templates and the frozen run snapshot; clients localize drift/unavailable limitations from this field |
 | `summary` | `String` | Overall result summary |
 | `warnings` | `String[]` | English technical diagnostics for logs/advanced details; ordinary UI derives localized limitations from source-completeness fields, `templateSnapshotComparison`, generation issues, and strategy-attempt statuses |
+| `parameterTargets` | `ParameterTarget[]` | Every bounded numeric inequality eligible for preferred-range selection in this attempt, independent of whether a verified suggestion was found |
 | `unusedPreferredRangeSelections` | `PreferredRangeSelection[]` | Preferred range selections that matched no parameter-adjustment target |
 
-`FixStrategyAttemptDto` is `{ strategy, status, reason }`. Status is one of
-`VERIFIED`, `NOT_VERIFIED`, `NO_VERIFIED_SUGGESTION`, `TIMED_OUT`, `SKIPPED_TIMEOUT`,
-`SKIPPED_NO_SPEC`, `SKIPPED_NO_FAULT_RULES`, `SKIPPED_UNSUPPORTED`, or
+`FixStrategyAttemptDto` is
+`{ strategy, status, reason, attemptsUsed?, attemptLimit? }`. The two nullable attempt
+fields are present together when a strategy starts its main candidate search; they do not
+include the parameter strategy's separate post-solution refinement budget. Status is one of
+`VERIFIED`, `NOT_VERIFIED`, `NO_VERIFIED_SUGGESTION`, `FAILED_MODEL_GENERATION`,
+`FAILED_SOLVER_EXECUTION`, `SEARCH_BUDGET_EXHAUSTED`, `TIMED_OUT`, `SKIPPED_TIMEOUT`,
+`SKIPPED_NO_SPEC`, `SKIPPED_NO_PARAMETERIZABLE_VALUES`, `SKIPPED_NO_FAULT_RULES`, `SKIPPED_UNSUPPORTED`, or
 `SKIPPED_INCOMPLETE_SOURCE_MODEL`. This distinguishes "no verified repair was found"
 from "the strategy started but did not finish" (`TIMED_OUT`) and "the strategy was
-not run" (`SKIPPED_*`).
+not run" (`SKIPPED_*`). `FAILED_MODEL_GENERATION` means the strategy could not construct
+a complete candidate model, for example because the persisted counterexample initial state
+could not be replayed. `FAILED_SOLVER_EXECUTION` covers NuSMV execution failure and missing,
+incomplete, or unparseable solver output. `SEARCH_BUDGET_EXHAUSTED` means unchecked candidates
+remain after `attemptsUsed == attemptLimit`. None of these three incomplete outcomes is evidence
+that no repair exists.
 
 `FixSuggestionDto`: `{ suggestionToken, strategy, description, parameterAdjustments[],
 conditionAdjustments[], removedRuleDescriptions: String[], verified }`.
@@ -915,12 +948,19 @@ JSON arrays. A collection that does not apply to the selected strategy is `[]`, 
 `null`, so clients can distinguish "no such changes" from a malformed response.
 `ParameterAdjustment`: `{ targetId, attribute, relation, originalValue, newValue,
 lowerBound, upperBound, description }`.
-`ConditionAdjustment`: `{ action, attribute, targetType, description, deviceName,
-relation, value }`.
+`ParameterTarget`: `{ targetId, attribute, relation, originalValue, lowerBound,
+upperBound, description }`.
+`ConditionAdjustment`: `{ action, attribute, targetType, description, ruleDescription,
+deviceLabel, relation, value }`. `ruleDescription` and `deviceLabel` are required,
+non-blank display snapshots; `relation` and `value` remain action-dependent optional fields.
+the internal model device reference used to apply an add operation is not serialized.
+`targetType` is required and is one of `api`, `variable`, `mode`, or `state`; trust and
+privacy labels are not rule-condition targets.
 `targetId` is the opaque API-facing selector for preferred ranges within the same
-trace/fix context. Clients should copy it from a returned `ParameterAdjustment`, not generate it.
+trace/fix context. Clients should copy it from a returned `ParameterTarget`, not generate it.
 If a copied target is not available during generation, the response reports it in
-`unusedPreferredRangeSelections`. Rule/condition positions remain server-side
+`unusedPreferredRangeSelections`. A target that matched and constrained the search is not
+unused merely because no verified suggestion was found. Rule/condition positions remain server-side
 trace-snapshot locators for verification, drift checks, and patching; they are not part of
 the REST or AI response contract.
 
@@ -943,7 +983,8 @@ still matches the verification context.
 
 - **Exact-suggestion signature.** The client submits the displayed proposal, but cannot alter it:
   the HMAC-protected token binds the user, trace, strategy, complete visible suggestion,
-  preferred ranges, expiry, and hidden remove-rule positions. Tampering, expiry, or mixing a token
+  preferred ranges, expiry, and all hidden operation locators (parameter/condition positions,
+  the internal device reference for condition additions, and remove-rule positions). Tampering, expiry, or mixing a token
   with another trace/range rejects with `400`. Apply therefore cannot silently substitute a
   different newly searched proposal.
 - **Complete-source-model guard.** A trace produced while any rule/specification was
@@ -988,6 +1029,9 @@ still matches the verification context.
   (device removed, template deleted, manifest unparseable) rejects with `400` ("re-run verification"),
   while an infrastructure error that leaves drift *unconfirmable* (e.g. template repository unavailable)
   rejects with `503` ("retry later") rather than misattributing it to a board change.
+  These application-generated, proven-pre-write `503` responses include
+  `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE`. Clients treat any unclassified `503`
+  as an uncertain mutation response and reconcile the current rule snapshot before retrying.
   Verification flags (`isAttack`/`attackBudget`/`enablePrivacy`) are per-request and not persisted for
   re-proving, so re-run verification after changing them.
 

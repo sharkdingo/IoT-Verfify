@@ -4,7 +4,7 @@ Architecture and semantic boundary for the HAFuzz-inspired bounded search module
 API fields and endpoints are owned by [../api/fuzzing.md](../api/fuzzing.md); formal
 model semantics remain owned by [nusmv-model.md](nusmv-model.md).
 
-Verified against code on 2026-07-16. Source: `component/fuzz/`,
+Verified against code on 2026-07-20. Source: `component/fuzz/`,
 `service/impl/FuzzServiceImpl.java`, `po/FuzzTaskPo.java`, and
 `po/FuzzFindingPo.java`.
 
@@ -145,9 +145,11 @@ Canvas coordinates and dimensions do not invalidate a semantic preview.
    rule-produced output. A violating prefix becomes one finding per specification;
    otherwise each unresolved specification retains its own guidance candidate.
 10. The worker limits each serialized finding to 4 MiB and aggregate run evidence to
-   16 MiB, then writes all findings and atomically transitions `RUNNING -> COMPLETED` in
-   one transaction. A concurrent cancellation rolls that transaction back. Worker cleanup
-   releases its lease even when initial progress or failure persistence throws.
+    16 MiB, then locks the task row, stamps findings with the microsecond database clock,
+    and writes all findings before atomically transitioning `RUNNING -> COMPLETED` in one
+    transaction. The transition and every progress update require the current worker id and
+    unexpired lease. A concurrent cancellation rolls that transaction back. Worker cleanup
+    releases its lease even when initial progress or failure persistence throws.
 
 Replay evidence preserves both input meaning and provenance. Device state Events,
 device-local variable choices, environment direct values, and environment rates use

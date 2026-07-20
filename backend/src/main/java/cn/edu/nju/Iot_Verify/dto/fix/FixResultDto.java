@@ -33,6 +33,9 @@ public class FixResultDto {
     /** Non-fatal limitations that affect how the result should be interpreted. */
     @Builder.Default
     private List<String> warnings = List.of();
+    /** Numeric conditions eligible for trace-scoped preferred-range selection. */
+    @Builder.Default
+    private List<ParameterTarget> parameterTargets = List.of();
     /** Preferred range selections that did not match any parameterizable condition (informational). */
     @Builder.Default
     private List<PreferredRangeSelection> unusedPreferredRangeSelections = List.of();

@@ -20,6 +20,7 @@ import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -40,8 +41,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -75,7 +78,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private static final int HISTORY_CHAR_LIMIT = 4000;
     private static final int SESSION_LOCK_STRIPES = 256;
-    private static final Duration EXECUTION_LEASE_TTL = Duration.ofHours(2);
     private static final long EXECUTION_CONTROL_POLL_NANOS = Duration.ofMillis(250).toNanos();
     private static final Object[] SESSION_LOCKS = createSessionLocks();
     private static final Set<String> CONTINUATION_SENSITIVE_FIELDS = Set.of(
@@ -100,7 +102,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     @Override
     @Transactional(readOnly = true)
     public List<ChatSessionResponseDto> getUserSessions(Long userId) {
-        return chatMapper.toChatSessionDtoList(sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId));
+        LocalDateTime now = databaseNow();
+        List<ChatSessionPo> sessions = sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+        List<ChatSessionResponseDto> response = chatMapper.toChatSessionDtoList(sessions);
+        for (int index = 0; index < response.size(); index++) {
+            response.get(index).setActive(hasActiveExecutionLease(sessions.get(index), now));
+        }
+        return response;
     }
 
     @Override
@@ -134,7 +142,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             requireActiveUserForWrite(userId);
             ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-            if (hasActiveExecutionLease(session, LocalDateTime.now())) {
+            if (hasActiveExecutionLease(session, databaseNow())) {
                 throw new ChatSessionBusyException(sessionId);
             }
             messageRepo.deleteBySessionId(sessionId);
@@ -146,19 +154,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     }
 
     @Override
-    public void beginStreamRequest(Long userId, String sessionId) {
+    public String beginStreamRequest(Long userId, String sessionId) {
         synchronized (sessionLock(sessionId)) {
             AtomicReference<ActiveStreamRequest> claimed = new AtomicReference<>();
             transactionTemplate.executeWithoutResult(status -> {
                 ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                         .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = databaseNow();
                 if (hasActiveExecutionLease(session, now)) {
                     throw new ChatSessionBusyException(sessionId);
                 }
                 String requestId = UUID.randomUUID().toString();
                 session.setActiveExecutionId(requestId);
-                session.setActiveExecutionExpiresAt(now.plus(EXECUTION_LEASE_TTL));
+                session.setActiveExecutionExpiresAt(now.plus(executionLeaseTtl()));
                 session.setExecutionStopRequested(false);
                 session.setExecutionUserStopRequested(false);
                 sessionRepo.saveAndFlush(session);
@@ -173,22 +181,19 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 releaseExecutionLease(userId, sessionId, request.requestId());
                 throw new ChatSessionBusyException(sessionId);
             }
+            return request.requestId();
         }
     }
 
     @Override
-    public void endStreamRequest(Long userId, String sessionId) {
-        if (sessionId == null) return;
-        AtomicReference<ActiveStreamRequest> removed = new AtomicReference<>();
-        activeStreamRequests.computeIfPresent(sessionId, (ignored, request) -> {
-            if (!Objects.equals(request.userId(), userId)) return request;
-            removed.set(request);
-            return null;
-        });
-        ActiveStreamRequest request = removed.get();
-        if (request != null) {
-            releaseExecutionLease(userId, sessionId, request.requestId());
-        }
+    public void endStreamRequest(Long userId, String sessionId, String executionId) {
+        if (sessionId == null || executionId == null || executionId.isBlank()) return;
+        activeStreamRequests.computeIfPresent(sessionId, (ignored, request) ->
+                Objects.equals(request.userId(), userId)
+                        && Objects.equals(request.requestId(), executionId)
+                        ? null
+                        : request);
+        releaseExecutionLease(userId, sessionId, executionId);
     }
 
     @Override
@@ -198,7 +203,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             transactionTemplate.executeWithoutResult(status -> {
                 ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(sessionId, userId)
                         .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-                if (!hasActiveExecutionLease(session, LocalDateTime.now())) {
+                if (!hasActiveExecutionLease(session, databaseNow())) {
                     clearExecutionLease(session);
                     sessionRepo.saveAndFlush(session);
                     return;
@@ -220,23 +225,44 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     @Override
     public void requestLocalUserExecutionStop(Long userId) {
         if (userId == null) return;
-        destructiveActionGuard.clearUser(userId);
-        scenarioDraftStore.clearUser(userId);
-        taskContinuationStore.clearUser(userId);
-        transactionTemplate.executeWithoutResult(status -> {
-            List<ChatSessionPo> sessions = sessionRepo.findByUserIdForUpdate(userId);
-            LocalDateTime now = LocalDateTime.now();
-            for (ChatSessionPo session : sessions) {
-                if (!hasActiveExecutionLease(session, now)) continue;
-                session.setExecutionStopRequested(true);
-                session.setExecutionUserStopRequested(false);
-            }
-            sessionRepo.saveAllAndFlush(sessions);
-        });
+        try {
+            independentTransactionTemplate().executeWithoutResult(status -> {
+                List<ChatSessionPo> sessions = sessionRepo.findByUserIdForUpdate(userId);
+                LocalDateTime now = databaseNow();
+                for (ChatSessionPo session : sessions) {
+                    if (!hasActiveExecutionLease(session, now)) continue;
+                    // Account cleanup is a silent transport stop, not an explicit user cancellation.
+                    session.setExecutionStopRequested(true);
+                    session.setExecutionUserStopRequested(false);
+                }
+                sessionRepo.saveAllAndFlush(sessions);
+            });
+        } catch (RuntimeException e) {
+            log.warn("Could not mark chat sessions stopped for deleted user {}", userId, e);
+        }
         activeStreamRequests.forEach((sessionId, request) -> {
             if (!Objects.equals(request.userId(), userId)) return;
             stopActiveRequest(sessionId, request, false);
         });
+        runUserCleanupStep("destructive-action confirmations", () -> destructiveActionGuard.clearUser(userId));
+        runUserCleanupStep("scenario drafts", () -> scenarioDraftStore.clearUser(userId));
+        runUserCleanupStep("task continuations", () -> taskContinuationStore.clearUser(userId));
+    }
+
+    private TransactionTemplate independentTransactionTemplate() {
+        TransactionTemplate independent = new TransactionTemplate(
+                Objects.requireNonNull(transactionTemplate.getTransactionManager(),
+                        "transaction manager is required"));
+        independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return independent;
+    }
+
+    private void runUserCleanupStep(String resource, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (RuntimeException e) {
+            log.warn("Could not clear {} during account cleanup", resource, e);
+        }
     }
 
     private void stopActiveRequest(String sessionId, ActiveStreamRequest request, boolean userInitiated) {
@@ -260,7 +286,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
         return ChatSessionActivityDto.builder()
                 .sessionId(sessionId)
-                .active(hasActiveExecutionLease(session, LocalDateTime.now()))
+                .active(hasActiveExecutionLease(session, databaseNow()))
                 .build();
     }
 
@@ -288,6 +314,43 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         session.setExecutionUserStopRequested(false);
     }
 
+    @Scheduled(fixedDelayString = "${chat.execution.lease-heartbeat-ms:10000}")
+    public void maintainExecutionLeases() {
+        LocalDateTime now = databaseNow();
+        LocalDateTime expiresAt = now.plus(executionLeaseTtl());
+        activeStreamRequests.forEach((sessionId, request) -> {
+            try {
+                int renewed = sessionRepo.renewActiveExecutionLease(
+                        sessionId, request.userId(), request.requestId(), now, expiresAt);
+                if (renewed == 0 && activeStreamRequests.remove(sessionId, request)) {
+                    stopActiveRequest(sessionId, request, false);
+                    log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
+                            sessionId, request.requestId());
+                }
+            } catch (RuntimeException e) {
+                log.warn("Could not renew chat execution lease for session {}: {}", sessionId, e.toString());
+            }
+        });
+        try {
+            int cleared = sessionRepo.clearExpiredExecutionLeases(now);
+            if (cleared > 0) {
+                log.debug("Cleared {} expired chat execution lease(s)", cleared);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not clear expired chat execution leases: {}", e.toString());
+        }
+    }
+
+    private Duration executionLeaseTtl() {
+        return Duration.ofMillis(chatExecutionConfig.getLeaseTtlMs());
+    }
+
+    private LocalDateTime databaseNow() {
+        return Objects.requireNonNull(
+                sessionRepo.currentDatabaseTime(),
+                "Database current timestamp must not be null");
+    }
+
     private Object sessionLock(String sessionId) {
         String requiredSessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
         int hash = requiredSessionId.hashCode();
@@ -304,12 +367,26 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     @Override
     public void processStreamChat(Long userId,
                                   String sessionId,
+                                  String executionId,
                                   String turnId,
                                   String content,
                                   SseEmitter emitter) {
         String effectiveTurnId = turnId == null || turnId.isBlank()
                 ? UUID.randomUUID().toString()
                 : turnId.trim();
+        ActiveStreamRequest activeRequest = activeStreamRequests.get(sessionId);
+        if (activeRequest == null
+                || !Objects.equals(activeRequest.userId(), userId)
+                || !Objects.equals(activeRequest.requestId(), executionId)) {
+            log.warn("Rejected chat worker without its claimed execution lease: sessionId={}, executionId={}",
+                    sessionId, executionId);
+            try {
+                emitter.complete();
+            } catch (IllegalStateException e) {
+                log.debug("Chat emitter was already complete for unowned execution {}", executionId);
+            }
+            return;
+        }
         AiDestructiveActionGuard.PendingActionContext destructivePending = destructiveActionGuard
                 .pendingContext(userId, sessionId)
                 .orElse(null);
@@ -333,6 +410,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         ConfirmationDecision confirmationDecision = chatConfirmationDetector.detect(content, pendingKinds);
         UserContextHolder.setUserId(userId);
         UserContextHolder.setChatSessionId(sessionId);
+        UserContextHolder.setChatExecutionId(executionId);
         UserContextHolder.setConfirmedProtectedActionKind(
                 confirmationDecision.confirmed() && confirmationDecision.kind() != ConfirmationKind.CHOICE
                         ? confirmationDecision.kind().name()
@@ -344,18 +422,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         StringBuilder finalAnswer = new StringBuilder();
         List<StreamResponseDto.ProgressDto> executionTrace = new ArrayList<>();
         long executionStartedNanos = System.nanoTime();
-        ActiveStreamRequest activeRequest = activeStreamRequests.get(sessionId);
-        AtomicBoolean isDisconnect = activeRequest != null && Objects.equals(activeRequest.userId(), userId)
-                ? activeRequest.stopRequested() : new AtomicBoolean(false);
-        AtomicBoolean isUserStop = activeRequest != null && Objects.equals(activeRequest.userId(), userId)
-                ? activeRequest.userStopRequested() : new AtomicBoolean(false);
+        AtomicBoolean isDisconnect = activeRequest.stopRequested();
+        AtomicBoolean isUserStop = activeRequest.userStopRequested();
         BooleanSupplier shouldStop = () -> synchronizeExecutionStop(
                 userId, sessionId, activeRequest, isDisconnect, isUserStop, false);
         BooleanSupplier forceStopCheck = () -> synchronizeExecutionStop(
                 userId, sessionId, activeRequest, isDisconnect, isUserStop, true);
-        if (activeRequest != null && Objects.equals(activeRequest.userId(), userId)) {
-            activeRequest.emitter().compareAndSet(null, emitter);
-        }
+        activeRequest.emitter().compareAndSet(null, emitter);
         Set<StreamResponseDto.CommandDto> commandSet = new LinkedHashSet<>();
         ToolLoopResult loopResult = ToolLoopResult.empty();
         boolean userMessagePersisted = false;
@@ -388,7 +461,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             sessionRepo.findByIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
 
-            executeOwnedSessionWrite(userId, sessionId, () -> {
+            executeOwnedSessionWrite(userId, sessionId, executionId, () -> {
                 saveSimpleMsg(sessionId, "user", content, effectiveTurnId);
                 touchSessionTitle(sessionId, userId, content);
             });
@@ -433,7 +506,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             log.debug("Starting model-driven planning with the complete {}-tool catalog", tools.size());
             loopResult = executeToolLoop(
                     userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                    preferChinese, executionTrace, shouldStop, forceStopCheck);
+                    preferChinese, executionTrace, executionId, shouldStop, forceStopCheck);
+
+            if (forceStopCheck.getAsBoolean()) {
+                return;
+            }
 
             if (loopResult.confirmationPending()) {
                 taskContinuationStore.savePendingStep(
@@ -501,6 +578,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             terminalRecordPersisted = persistAssistantTerminal(
                     userId,
                     sessionId,
+                    executionId,
                     effectiveTurnId,
                     finalAnswer.toString(),
                     executionTrace,
@@ -534,6 +612,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 terminalRecordPersisted = persistAssistantTerminal(
                         userId,
                         sessionId,
+                        executionId,
                         effectiveTurnId,
                         errorMessage,
                         executionTrace,
@@ -550,6 +629,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 persistAssistantTerminal(
                         userId,
                         sessionId,
+                        executionId,
                         effectiveTurnId,
                         interruptedAuditNotice(loopResult, preferChinese, isUserStop.get()),
                         executionTrace,
@@ -560,17 +640,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
-    public void processStreamChat(Long userId, String sessionId, String content, SseEmitter emitter) {
-        processStreamChat(userId, sessionId, UUID.randomUUID().toString(), content, emitter);
-    }
-
     private boolean synchronizeExecutionStop(Long userId,
                                              String sessionId,
                                              ActiveStreamRequest activeRequest,
                                              AtomicBoolean isDisconnect,
                                              AtomicBoolean isUserStop,
                                              boolean forcePoll) {
-        if (isDisconnect.get() || activeRequest == null) return isDisconnect.get();
+        if (isDisconnect.get()) return true;
         long nowNanos = System.nanoTime();
         long nextPoll = activeRequest.nextControlPollNanos().get();
         if (!forcePoll && (nowNanos < nextPoll || !activeRequest.nextControlPollNanos().compareAndSet(
@@ -582,10 +658,16 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
         try {
             ChatSessionPo session = sessionRepo.findByIdAndUserId(sessionId, userId).orElse(null);
+            LocalDateTime now = databaseNow();
             boolean sameExecution = session != null
-                    && hasActiveExecutionLease(session, LocalDateTime.now())
                     && Objects.equals(session.getActiveExecutionId(), activeRequest.requestId());
             if (!sameExecution) {
+                isDisconnect.set(true);
+                return true;
+            }
+            if (!hasActiveExecutionLease(session, now)) {
+                log.warn("Chat execution lease expired before its heartbeat renewed it: sessionId={}, executionId={}",
+                        sessionId, activeRequest.requestId());
                 isDisconnect.set(true);
                 return true;
             }
@@ -1014,7 +1096,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                            AtomicBoolean isDisconnect) {
         return executeToolLoop(
                 userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                false, null, isDisconnect::get, isDisconnect::get);
+                false, null, null, isDisconnect::get, isDisconnect::get);
     }
 
     private ToolLoopResult executeToolLoop(Long userId,
@@ -1027,7 +1109,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                            boolean preferChinese) {
         return executeToolLoop(
                 userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                preferChinese, null, isDisconnect::get, isDisconnect::get);
+                preferChinese, null, null, isDisconnect::get, isDisconnect::get);
     }
 
     private ToolLoopResult executeToolLoop(Long userId,
@@ -1041,7 +1123,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                            List<StreamResponseDto.ProgressDto> executionTrace) {
         return executeToolLoop(
                 userId, sessionId, messages, tools, commandSet, emitter, isDisconnect,
-                preferChinese, executionTrace, isDisconnect::get, isDisconnect::get);
+                preferChinese, executionTrace, null, isDisconnect::get, isDisconnect::get);
     }
 
     private ToolLoopResult executeToolLoop(Long userId,
@@ -1053,6 +1135,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                            AtomicBoolean isDisconnect,
                                            boolean preferChinese,
                                            List<StreamResponseDto.ProgressDto> executionTrace,
+                                           String executionId,
                                            BooleanSupplier shouldStop,
                                            BooleanSupplier forceStopCheck) {
         boolean hadToolCalls = false;
@@ -1120,7 +1203,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
 
             hadToolCalls = true;
-            executeOwnedSessionWrite(userId, sessionId, () ->
+            executeOwnedSessionWrite(userId, sessionId, executionId, () ->
                     saveAiToolCallRequest(sessionId, toolCalls));
             messages.add(LlmMessage.assistantToolCalls(toolCalls));
             StringBuilder roundFingerprint = new StringBuilder();
@@ -1182,7 +1265,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 }
 
                 final String finalToolResult = toolResult;
-                executeOwnedSessionWrite(userId, sessionId, () ->
+                executeOwnedSessionWrite(userId, sessionId, executionId, () ->
                         saveToolExecutionResult(sessionId, toolCallId, finalToolResult));
                 messages.add(LlmMessage.tool(toolCallId, toolResult));
                 roundFingerprint.append(functionName).append('\u001f')
@@ -1214,7 +1297,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                             confirmationPending);
                 }
                 if (requiresConfirmation) {
-                    appendSkippedToolResults(userId, sessionId, messages, toolCalls, toolCallIndex + 1,
+                    appendSkippedToolResults(userId, sessionId, executionId, messages, toolCalls,
+                            toolCallIndex + 1,
                             "PRIOR_CONFIRMATION_REQUIRED",
                             "Tool call was not executed because an earlier call in the same planning response "
                                     + "requires user confirmation.");
@@ -1224,7 +1308,8 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                             functionName, toolResult);
                 }
                 if (executionOutcome == ToolExecutionOutcome.RESULT_UNAVAILABLE) {
-                    appendSkippedToolResults(userId, sessionId, messages, toolCalls, toolCallIndex + 1,
+                    appendSkippedToolResults(userId, sessionId, executionId, messages, toolCalls,
+                            toolCallIndex + 1,
                             "PRIOR_RESULT_UNAVAILABLE",
                             "Tool call was not executed because an earlier result in the same planning response "
                                     + "was unavailable and may require state reconciliation.");
@@ -1299,6 +1384,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private void appendSkippedToolResults(Long userId,
                                           String sessionId,
+                                          String executionId,
                                           List<LlmMessage> messages,
                                           List<LlmToolCall> toolCalls,
                                           int startIndex,
@@ -1319,7 +1405,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 continue;
             }
             String toolCallId = safeString(skippedCall.id());
-            executeOwnedSessionWrite(userId, sessionId, () ->
+            executeOwnedSessionWrite(userId, sessionId, executionId, () ->
                     saveToolExecutionResult(sessionId, toolCallId, skippedResult));
             messages.add(LlmMessage.tool(toolCallId, skippedResult));
         }
@@ -1836,13 +1922,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     private boolean persistAssistantTerminal(Long userId,
                                              String sessionId,
+                                             String executionId,
                                              String turnId,
                                              String content,
                                              List<StreamResponseDto.ProgressDto> executionTrace,
                                              Integer elapsedSeconds,
                                              ChatExecutionStatus executionStatus) {
         try {
-            executeOwnedSessionWrite(userId, sessionId, () -> saveAssistantMsg(
+            executeOwnedSessionWrite(userId, sessionId, executionId, () -> saveAssistantMsg(
                     sessionId, turnId, content, executionTrace, elapsedSeconds, executionStatus));
             return true;
         } catch (RuntimeException e) {
@@ -1928,17 +2015,33 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         messageRepo.saveAndFlush(po);
     }
 
-    private void executeOwnedSessionWrite(Long userId, String sessionId, Runnable write) {
+    private void executeOwnedSessionWrite(Long userId,
+                                          String sessionId,
+                                          String executionId,
+                                          Runnable write) {
         transactionTemplate.executeWithoutResult(status -> {
-            requireOwnedSessionForWrite(userId, sessionId);
+            requireOwnedSessionForWrite(userId, sessionId, executionId);
             write.run();
         });
     }
 
-    private void requireOwnedSessionForWrite(Long userId, String sessionId) {
+    private void requireOwnedSessionForWrite(Long userId, String sessionId, String executionId) {
         requireActiveUserForWrite(userId);
-        sessionRepo.findByIdAndUserId(Objects.requireNonNull(sessionId, "sessionId must not be null"), userId)
+        String requiredSessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
+        if (executionId == null || executionId.isBlank()) {
+            sessionRepo.findByIdAndUserId(requiredSessionId, userId)
+                    .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+            return;
+        }
+        ChatSessionPo session = sessionRepo.findByIdAndUserIdForUpdate(requiredSessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+        LocalDateTime now = databaseNow();
+        if (!Objects.equals(executionId, session.getActiveExecutionId())
+                || session.getActiveExecutionExpiresAt() == null
+                || !session.getActiveExecutionExpiresAt().isAfter(now)) {
+            throw new ConflictException(
+                    "The assistant execution no longer owns this session. No new message was committed.");
+        }
     }
 
     private void requireActiveUserForWrite(Long userId) {

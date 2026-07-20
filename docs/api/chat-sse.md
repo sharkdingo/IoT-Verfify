@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-18. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-20. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -21,7 +21,9 @@ Verified against code on 2026-07-18. Source: `controller/ChatController.java`,
 | DELETE | `/api/chat/sessions/{sessionId}` | → `null` | Delete a session |
 
 `ChatSessionResponseDto`: `{ id: String, userId: Long, title: String | null, createdAt,
-updatedAt }`.
+updatedAt, active: boolean }`. `active` is computed from the same renewable database
+lease as the dedicated activity endpoint, allowing a new browser connection to discover
+an already-running session from the list response.
 `title=null` means the session has no user-derived title yet; clients render their own
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
@@ -48,9 +50,24 @@ A concurrent request or deletion returns `409` with
 request. Registration happens before the worker is queued, so the short enqueue window
 cannot admit a second request. The active request id, expiry, and stop flags are stored on
 the locked `chat_session` row. Activity checks and stop requests therefore remain
-authoritative without load-balancer affinity. A two-hour expiry prevents a crashed worker
-from locking the session indefinitely; normal completion and queue rejection clear the
-lease immediately.
+authoritative without load-balancer affinity. A scheduled heartbeat renews the short-lived
+lease while the owning worker is registered; timing keys and defaults are owned by the
+[configuration reference](../getting-started/configuration.md#ai-assistant). Renewal is an
+atomic conditional update over session, user, execution id, and an unexpired current lease,
+so a stale worker cannot revive or overwrite a replacement lease.
+Lease creation, activity checks, renewal, release, and expiry cleanup all compare against
+the database clock rather than a JVM clock. The execution id acquired before dispatch is
+also carried through the queued worker and controller cleanup: a worker whose local
+registration was replaced cannot start, and an older request's `finally` cannot remove or
+release the replacement execution.
+The execution id also fences persisted user/tool/terminal messages and the shared
+confirmation, scenario-draft, and task-continuation state. Each such write locks and rechecks
+the session row in the same transaction, so a replaced or expired worker cannot append audit
+rows or overwrite follow-up state after losing ownership.
+The same scheduled pass clears expired lease ids and stop flags. A crashed or restarted
+worker therefore releases its session after at most one TTL instead of leaving it busy for
+hours, while a healthy execution can run past any single lease window. Normal completion
+and queue rejection still clear the lease immediately.
 
 Permanent account deletion is stronger than ordinary per-session activity handling. The backend
 marks every persisted execution lease for that user as stopped and completes locally bound
@@ -102,13 +119,24 @@ Board replacement authority as UI scene import. See [ai-tools.md](ai-tools.md) f
 stored-draft and expiration contract.
 
 Tool execution is not one transaction across an entire user request. Each mutating tool
-commits or rejects independently. There is no five-round product budget: planning
+commits or rejects independently. AI-originated Board writes, verification/simulation task
+creation and cancellation, synchronous verification-history persistence, and trace deletion
+lock the chat session inside their own write transaction and require the same unexpired
+execution id with no committed stop request. Long NuSMV computation does not hold that chat
+row lock; only its eventual write boundary is fenced. A replacement or stop committed before
+that transaction begins therefore rejects the mutation; if the write transaction already holds
+the row lock, the control request waits and the already-started write may commit. There is no five-round product budget: planning
 continues while calls or results are changing. Two guards prevent runaway execution:
 consecutive rounds that repeat the exact same calls and results stop after
 `CHAT_MAX_STAGNANT_ROUNDS`, and `CHAT_MAX_TOOL_ROUNDS` is a high emergency ceiling rather
 than a normal task limit. Either guard preserves earlier commits, emits a visible guard
 event, and still runs the streaming final-answer model with an instruction to identify
 completed, failed, and unfinished work accurately.
+
+Account deletion first commits the account and domain-row removal, then stops local chat
+transport and clears confirmation, draft, and continuation state. Durable AI-state deletion
+uses an independent transaction because Spring invokes this cleanup from `afterCommit`; each
+cleanup category is isolated so a failure in one does not suppress the others.
 
 `requiresUserConfirmation=true` is a generic no-write boundary, not only a deletion
 preview. The planning loop stops immediately for destructive previews and for proposed
@@ -286,7 +314,9 @@ The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop`, then ab
 browser stream. This distinguishes an explicit user stop from an unexpected transport
 loss, but it still cannot cancel or roll back a tool transaction already running on the
 server. A tool that has already returned is still classified and persisted before the
-worker stops, so committed writes and confirmation previews do not lose their audit result.
+worker stops when the same execution still owns the lease, so committed writes and
+confirmation previews do not lose their audit result. A worker replaced by a newer execution
+cannot persist that result or a terminal assistant row.
 After an explicit stop or a session-switch/new-session request, the Board polls
 the session activity endpoint until `active=false`, keeps assistant mutations locked
 during that settling period, and only then reloads message history, board collections,
@@ -301,6 +331,10 @@ reconciliation within seconds rather than several minutes. It does not claim can
 or automatically repeat the command. The
 client-only `board_state` refresh target is used for full reconciliation; it is not an AI
 tool result.
+Frontend cross-tab discovery, immediate locking, foreground refresh, and settlement behavior
+are owned by the [frontend integration guide](../guides/frontend-integration.md).
+Live SSE progress frames are not replayed to a new connection; the complete persisted
+execution trace becomes available with the terminal assistant row.
 If the activity endpoint remains reachable but still reports `active=true` for the
 10-second settlement window, the client stops spinning, keeps the interaction lock, and
 asks the user to retry settlement later; it does not treat a running tool as cancelled.

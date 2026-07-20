@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -83,6 +84,7 @@ class ChatServiceImplHistoryWindowTest {
         }).when(transactionTemplate).executeWithoutResult(org.mockito.ArgumentMatchers.any());
         lenient().when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
+        lenient().when(sessionRepo.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
         service = new ChatServiceImpl(
                 sessionRepo,
                 messageRepo,
@@ -402,6 +404,28 @@ class ChatServiceImplHistoryWindowTest {
     }
 
     @Test
+    void sessionListExposesTheSameAuthoritativeLeaseActivityUsedByPolling() {
+        ChatSessionPo live = new ChatSessionPo();
+        live.setId("live-session");
+        live.setActiveExecutionId("live-execution");
+        live.setActiveExecutionExpiresAt(LocalDateTime.now().plusMinutes(1));
+        ChatSessionPo expired = new ChatSessionPo();
+        expired.setId("expired-session");
+        expired.setActiveExecutionId("expired-execution");
+        expired.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
+        ChatSessionResponseDto liveDto = new ChatSessionResponseDto();
+        ChatSessionResponseDto expiredDto = new ChatSessionResponseDto();
+        when(sessionRepo.findByUserIdOrderByUpdatedAtDesc(1L)).thenReturn(List.of(live, expired));
+        when(chatMapper.toChatSessionDtoList(List.of(live, expired)))
+                .thenReturn(List.of(liveDto, expiredDto));
+
+        List<ChatSessionResponseDto> result = service.getUserSessions(1L);
+
+        assertTrue(result.get(0).isActive());
+        assertFalse(result.get(1).isActive());
+    }
+
+    @Test
     void activeStream_shouldBlockConcurrentStreamAndSessionDeletionUntilServerFinishes() {
         ChatSessionPo session = new ChatSessionPo();
         session.setId("busy-session");
@@ -409,7 +433,7 @@ class ChatServiceImplHistoryWindowTest {
         when(sessionRepo.findByIdAndUserId("busy-session", 1L)).thenReturn(Optional.of(session));
         when(sessionRepo.findByIdAndUserIdForUpdate("busy-session", 1L)).thenReturn(Optional.of(session));
 
-        service.beginStreamRequest(1L, "busy-session");
+        String executionId = service.beginStreamRequest(1L, "busy-session");
 
         assertTrue(service.getSessionActivity(1L, "busy-session").isActive());
         assertThrows(ChatSessionBusyException.class,
@@ -418,7 +442,7 @@ class ChatServiceImplHistoryWindowTest {
                 () -> service.deleteSession(1L, "busy-session"));
         verify(messageRepo, never()).deleteBySessionId("busy-session");
 
-        service.endStreamRequest(1L, "busy-session");
+        service.endStreamRequest(1L, "busy-session", executionId);
 
         assertFalse(service.getSessionActivity(1L, "busy-session").isActive());
         service.deleteSession(1L, "busy-session");

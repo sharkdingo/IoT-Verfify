@@ -210,6 +210,16 @@ public class GlobalExceptionHandler {
                 .body(Result.serviceUnavailable(e.getMessage()));
     }
 
+    @ExceptionHandler(FixApplyPreflightUnavailableException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleFixApplyPreflightUnavailableException(
+            FixApplyPreflightUnavailableException e) {
+        log.warn("Automatic-fix apply preflight unavailable");
+        Result<Map<String, Object>> result = Result.error(
+                HttpStatus.SERVICE_UNAVAILABLE.value(), e.getMessage());
+        result.setData(Map.of("reasonCode", FixApplyPreflightUnavailableException.REASON_CODE));
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(result);
+    }
+
     @ExceptionHandler(SimulationExecutionException.class)
     public ResponseEntity<Result<Map<String, Object>>> handleSimulationExecutionException(
             SimulationExecutionException e) {

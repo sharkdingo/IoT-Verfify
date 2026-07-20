@@ -36,11 +36,13 @@ import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -52,13 +54,21 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
 public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTaskPo> implements SimulationService {
+
+    private static final Duration TASK_LEASE_DURATION = Duration.ofMinutes(2);
+    private static final long LEASE_MAINTENANCE_SECONDS = 10L;
+    private static final List<SimulationTaskPo.TaskStatus> ACTIVE_STATUSES = List.of(
+            SimulationTaskPo.TaskStatus.PENDING,
+            SimulationTaskPo.TaskStatus.RUNNING);
 
     private final SmvGenerator smvGenerator;
     private final SmvTraceParser smvTraceParser;
@@ -72,7 +82,17 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final ThreadPoolTaskExecutor simulationTaskExecutor;
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
     private final TransactionTemplate transactionTemplate;
+    private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
     private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
+    private final String workerId = UUID.randomUUID().toString();
+    private final ScheduledExecutorService leaseMaintenanceExecutor =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "simulation-task-lease-maintenance");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private final ConcurrentHashMap<Long, LocalSimulationExecution> localExecutions =
+            new ConcurrentHashMap<>();
 
     @Autowired
     public SimulationServiceImpl(SmvGenerator smvGenerator,
@@ -88,6 +108,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  @Qualifier("simulationTaskExecutor") ThreadPoolTaskExecutor simulationTaskExecutor,
                                  @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor,
                                  TransactionTemplate transactionTemplate,
+                                 ChatExecutionLeaseGuard chatExecutionLeaseGuard,
                                  AsyncTaskAdmissionConfig taskAdmissionConfig) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
@@ -102,6 +123,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.simulationTaskExecutor = simulationTaskExecutor;
         this.syncSimulationExecutor = syncSimulationExecutor;
         this.transactionTemplate = transactionTemplate;
+        this.chatExecutionLeaseGuard = chatExecutionLeaseGuard;
         this.taskAdmissionLimits = taskAdmissionConfig.getSimulation();
     }
 
@@ -117,29 +139,58 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                           ObjectMapper objectMapper,
                           ThreadPoolTaskExecutor simulationTaskExecutor,
                           ThreadPoolTaskExecutor syncSimulationExecutor,
-                          TransactionTemplate transactionTemplate) {
+                          TransactionTemplate transactionTemplate,
+                          ChatExecutionLeaseGuard chatExecutionLeaseGuard) {
         this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, objectMapper,
-                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
+                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
                 new AsyncTaskAdmissionConfig());
     }
 
+    private void requireChatExecutionLease() {
+        chatExecutionLeaseGuard.requireCurrentExecutionLease();
+    }
+
     @PostConstruct
-    void cleanupStaleTasks() {
-        List<SimulationTaskPo> staleTasks = simulationTaskRepository.findByStatusIn(
-                List.of(SimulationTaskPo.TaskStatus.RUNNING, SimulationTaskPo.TaskStatus.PENDING));
-        if (!staleTasks.isEmpty()) {
-            log.warn("Found {} stale simulation tasks on startup, marking as FAILED", staleTasks.size());
-            String msg = "Server restarted while simulation task was in progress";
-            for (SimulationTaskPo task : staleTasks) {
-                task.setStatus(SimulationTaskPo.TaskStatus.FAILED);
-                task.setProgress(100);
-                task.setCompletedAt(LocalDateTime.now());
-                task.setErrorMessage(msg);
-                writeCheckLogs(task, List.of(msg));
-                simulationTaskRepository.save(task);
+    void initializeTaskLeaseMaintenance() {
+        maintainTaskLeases();
+        leaseMaintenanceExecutor.scheduleWithFixedDelay(
+                this::maintainTaskLeases,
+                LEASE_MAINTENANCE_SECONDS,
+                LEASE_MAINTENANCE_SECONDS,
+                TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    void stopTaskLeaseMaintenance() {
+        leaseMaintenanceExecutor.shutdownNow();
+    }
+
+    void maintainTaskLeases() {
+        try {
+            LocalDateTime now = databaseNow();
+            LocalDateTime renewedUntil = now.plus(TASK_LEASE_DURATION);
+            for (LocalSimulationExecution execution : List.copyOf(localExecutions.values())) {
+                int renewed = simulationTaskRepository.renewOwnedActiveLease(
+                        execution.taskId, workerId, now, renewedUntil, ACTIVE_STATUSES);
+                if (renewed == 0) {
+                    execution.requestStop();
+                }
             }
+            String message = "The simulation worker stopped before the task completed";
+            int recovered = simulationTaskRepository.failExpiredActiveTasks(
+                    SimulationTaskPo.TaskStatus.FAILED,
+                    now,
+                    message,
+                    serializeCheckLogs(List.of(message)),
+                    ACTIVE_STATUSES,
+                    now);
+            if (recovered > 0) {
+                log.warn("Recovered {} expired simulation task lease(s)", recovered);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not maintain simulation task leases; the next cycle will retry", e);
         }
     }
 
@@ -368,6 +419,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                             String modelSemanticsJson) {
         return transactionTemplate.execute(status -> {
             requireActiveUserForPersistence(userId);
+            requireChatExecutionLease();
             long storedTaskCount = simulationTaskRepository.countByUserId(userId);
             if (storedTaskCount >= taskAdmissionLimits.getMaxStoredTasksPerUser()) {
                 throw new AsyncTaskQuotaExceededException(
@@ -381,6 +433,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                         "simulation", AsyncTaskQuotaExceededException.QuotaType.ACTIVE,
                         activeTaskCount, taskAdmissionLimits.getMaxActiveTasksPerUser());
             }
+            LocalDateTime createdAt = databaseNow();
             SimulationTaskPo task = SimulationTaskPo.builder()
                     .userId(userId)
                     .status(SimulationTaskPo.TaskStatus.PENDING)
@@ -393,9 +446,11 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     .enablePrivacy(enablePrivacy)
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
                     .modelSemanticsJson(modelSemanticsJson)
-                    .createdAt(LocalDateTime.now())
+                    .createdAt(createdAt)
                     .progress(0)
                     .progressStage(TaskProgressStage.QUEUED)
+                    .workerId(workerId)
+                    .leaseExpiresAt(createdAt.plus(TASK_LEASE_DURATION))
                     .build();
             SimulationTaskPo saved = simulationTaskRepository.save(Objects.requireNonNull(task));
             log.info("Created simulation task: {} for user: {}", saved.getId(), userId);
@@ -468,7 +523,32 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private void enqueueSimulationTask(Long userId, Long taskId, SimulationInput input) {
         Long requiredTaskId = requireTaskId(taskId);
         SimulationInput requiredInput = Objects.requireNonNull(input, "simulation input must not be null");
-        simulationTaskExecutor.execute(() -> runSimulationTask(userId, requiredTaskId, requiredInput));
+        LocalSimulationExecution execution =
+                new LocalSimulationExecution(userId, requiredTaskId, requiredInput);
+        if (localExecutions.putIfAbsent(requiredTaskId, execution) != null) {
+            throw new IllegalStateException("Duplicate local simulation task execution " + requiredTaskId);
+        }
+        try {
+            simulationTaskExecutor.execute(execution.futureTask);
+        } catch (RuntimeException e) {
+            execution.requestStop();
+            throw e;
+        }
+    }
+
+    private LocalDateTime databaseNow() {
+        return Objects.requireNonNull(
+                simulationTaskRepository.currentDatabaseTime(),
+                "Database current timestamp must not be null");
+    }
+
+    private void purgeCancelledSimulationTasks() {
+        try {
+            ThreadPoolExecutor executor = simulationTaskExecutor.getThreadPoolExecutor();
+            if (executor != null) executor.purge();
+        } catch (RuntimeException e) {
+            log.warn("Could not purge cancelled simulation tasks from the local executor queue", e);
+        }
     }
 
     private void persistTaskModelContext(Long taskId,
@@ -510,13 +590,17 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             // Atomically transition PENDING → RUNNING to close the cancel-vs-start race window.
             // A plain findById + save was vulnerable to TOCTOU: a concurrent cancel could set
             // CANCELLED between the read and the save, and the save would overwrite it back to RUNNING.
-            LocalDateTime startedAt = LocalDateTime.now();
+            LocalDateTime currentTime = databaseNow();
+            LocalDateTime startedAt = currentTime;
             String startCheckLogs = serializeCheckLogs(List.of("Task started"));
             int updated = simulationTaskRepository.startTaskIfStillPending(
                     taskId,
                     SimulationTaskPo.TaskStatus.RUNNING,
                     startedAt, 0, startCheckLogs,
-                    SimulationTaskPo.TaskStatus.PENDING);
+                    SimulationTaskPo.TaskStatus.PENDING,
+                    workerId,
+                    currentTime,
+                    currentTime.plus(TASK_LEASE_DURATION));
             if (updated == 0) {
                 log.info("Simulation task {} is no longer PENDING (cancelled or already started), aborting", taskId);
                 return;
@@ -564,6 +648,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             }
             removeRunningTask(taskId);
             removeTaskProgress(taskId);
+            try {
+                simulationTaskRepository.releaseOwnedActiveLease(
+                        taskId, workerId, databaseNow().minusSeconds(1), ACTIVE_STATUSES);
+            } catch (RuntimeException e) {
+                log.warn("Could not release simulation task {} lease; it will expire naturally", taskId, e);
+            }
         }
     }
 
@@ -646,6 +736,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Override
     @Transactional
     public TaskCancellationResultDto cancelTask(Long userId, Long taskId) {
+        requireChatExecutionLease();
         return super.cancelTask(userId, taskId);
     }
 
@@ -716,6 +807,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     @Override
     @Transactional
     public void deleteSimulation(Long userId, Long id) {
+        requireChatExecutionLease();
         SimulationTracePo po = simulationTraceRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("SimulationTrace", id));
         simulationTaskRepository.deleteByUserIdAndSimulationTraceId(userId, id);
@@ -861,7 +953,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  List<ModelGenerationIssueDto> generationIssues) {
         if (task == null) return false;
         try {
-            LocalDateTime completedAt = LocalDateTime.now();
+            simulationTaskRepository.findByIdForUpdate(task.getId());
+            LocalDateTime completedAt = databaseNow();
             Long processingTimeMs = task.getStartedAt() != null
                     ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
             String checkLogsJson = serializeCheckLogs(logs);
@@ -871,9 +964,11 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                     SimulationTaskPo.TaskStatus.COMPLETED,
                     completedAt, steps, simulationTraceId,
                     null, checkLogsJson, generationIssuesJson, processingTimeMs,
-                    SimulationTaskPo.TaskStatus.RUNNING);
+                    SimulationTaskPo.TaskStatus.RUNNING,
+                    workerId, completedAt);
             if (updated == 0) {
-                log.info("Simulation task {} was not RUNNING or was already terminal, skipping completion", task.getId());
+                log.info("Simulation task {} was not RUNNING, no longer owned, or already terminal; skipping completion",
+                        task.getId());
                 return false;
             }
             return true;
@@ -886,20 +981,25 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private void failTask(SimulationTaskPo task, String errorMessage, List<String> logs) {
         if (task == null) return;
         try {
-            LocalDateTime completedAt = LocalDateTime.now();
-            Long processingTimeMs = task.getStartedAt() != null
-                    ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
-            String checkLogsJson = serializeCheckLogs(logs == null || logs.isEmpty() ? List.of(errorMessage) : logs);
-            int updated = simulationTaskRepository.failTaskIfActive(
-                    task.getId(),
-                    SimulationTaskPo.TaskStatus.FAILED,
-                    completedAt, errorMessage,
-                    checkLogsJson, processingTimeMs,
-                    List.of(SimulationTaskPo.TaskStatus.PENDING,
-                            SimulationTaskPo.TaskStatus.RUNNING));
-            if (updated == 0) {
-                log.info("Simulation task {} was no longer active, skipping fail", task.getId());
-            }
+            transactionTemplate.executeWithoutResult(status -> {
+                simulationTaskRepository.findByIdForUpdate(task.getId());
+                LocalDateTime completedAt = databaseNow();
+                Long processingTimeMs = task.getStartedAt() != null
+                        ? java.time.Duration.between(task.getStartedAt(), completedAt).toMillis() : null;
+                String checkLogsJson = serializeCheckLogs(
+                        logs == null || logs.isEmpty() ? List.of(errorMessage) : logs);
+                int updated = simulationTaskRepository.failTaskIfActive(
+                        task.getId(),
+                        SimulationTaskPo.TaskStatus.FAILED,
+                        completedAt, errorMessage,
+                        checkLogsJson, processingTimeMs,
+                        List.of(SimulationTaskPo.TaskStatus.PENDING,
+                                SimulationTaskPo.TaskStatus.RUNNING),
+                        workerId, completedAt);
+                if (updated == 0) {
+                    log.info("Simulation task {} was no longer active or owned; skipping fail", task.getId());
+                }
+            });
         } catch (Exception e) {
             log.error("Failed to mark simulation task as failed: {}", task.getId(), e);
         }
@@ -961,6 +1061,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 status.setRollbackOnly();
                 return false;
             }
+            simulationTaskRepository.findByIdForUpdate(task.getId());
             SimulationTracePo savedTrace = persistSimulationTrace(
                     userId, result, requestJson, templateSnapshotsJson);
             if (isCompletionCancelled(task.getId())) {
@@ -1154,7 +1255,77 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     }
 
     @Override
+    protected LocalDateTime currentTaskTime() {
+        return databaseNow();
+    }
+
+    @Override
     protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
-        return simulationTaskRepository.updateProgressIfActive(taskId, progress, stage);
+        return simulationTaskRepository.updateProgressIfActive(
+                taskId, progress, stage, workerId, databaseNow());
+    }
+
+    @Override
+    protected LocalExecutionStopResult stopAdditionalLocalExecution(Long taskId) {
+        LocalSimulationExecution execution = localExecutions.get(taskId);
+        return execution == null ? LocalExecutionStopResult.NONE : execution.requestStop();
+    }
+
+    private enum LocalExecutionState {
+        QUEUED,
+        RUNNING,
+        CANCELLED_BEFORE_START,
+        FINISHED
+    }
+
+    private final class LocalSimulationExecution implements Runnable {
+        private final Long userId;
+        private final Long taskId;
+        private final SimulationInput input;
+        private final AtomicReference<LocalExecutionState> state =
+                new AtomicReference<>(LocalExecutionState.QUEUED);
+        private final FutureTask<Void> futureTask = new FutureTask<>(this, null);
+
+        private LocalSimulationExecution(Long userId, Long taskId, SimulationInput input) {
+            this.userId = userId;
+            this.taskId = taskId;
+            this.input = input;
+        }
+
+        @Override
+        public void run() {
+            if (!state.compareAndSet(LocalExecutionState.QUEUED, LocalExecutionState.RUNNING)) {
+                return;
+            }
+            try {
+                runSimulationTask(userId, taskId, input);
+            } finally {
+                removeCancelledMark(taskId);
+                state.set(LocalExecutionState.FINISHED);
+                localExecutions.remove(taskId, this);
+            }
+        }
+
+        private LocalExecutionStopResult requestStop() {
+            while (true) {
+                LocalExecutionState current = state.get();
+                if (current == LocalExecutionState.QUEUED) {
+                    if (!state.compareAndSet(
+                            LocalExecutionState.QUEUED,
+                            LocalExecutionState.CANCELLED_BEFORE_START)) {
+                        continue;
+                    }
+                    futureTask.cancel(false);
+                    purgeCancelledSimulationTasks();
+                    localExecutions.remove(taskId, this);
+                    return LocalExecutionStopResult.STOPPED_BEFORE_START;
+                }
+                if (current == LocalExecutionState.RUNNING) {
+                    futureTask.cancel(true);
+                    return LocalExecutionStopResult.STOP_REQUESTED;
+                }
+                return LocalExecutionStopResult.NONE;
+            }
+        }
     }
 }

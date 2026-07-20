@@ -271,9 +271,46 @@ expected verification counts until the repair step:
 
 ## Automated evidence
 
-The regression test runs real NuSMV verification, random simulation, trace parsing,
-budget-one attack verification, fault localization, forward-verified automatic repair,
-and post-repair verification:
+The real-NuSMV regression includes a strategy-specific repair matrix. Every row starts from a
+complete model with exactly one counterexample, parses an animatable trace, localizes a rule,
+requires the requested strategy attempt to report `VERIFIED`, applies the concrete suggestion,
+and verifies the complete repaired model again:
+
+| Strategy | Deliberately unsafe scene | Required concrete edit | Repaired result |
+| --- | --- | --- | --- |
+| `parameter` | Temperature `>= 28` heats the room while the policy requires `off` below `35` and `heat` from `35` | Move that threshold from `28` to `35` | `2 / 2` specifications satisfied; `0` disabled rules; `0` skipped specifications |
+| `condition` | A cold-room rule heats while a separate occupancy sensor reports `absent` | Add `occupied = present` to the heating rule | `1 / 1` specification satisfied; `0` disabled rules; `0` skipped specifications |
+| `remove` | Hall motion commands a privacy-forbidden camera photo | Permanently remove the camera-photo automation | `5 / 5` specifications satisfied; `0` disabled rules; `0` skipped specifications |
+
+An additional interaction regression combines all three strategies on one trace. An early
+`temperature >= 28 -> heat` rule conflicts with an occupancy-aware low-temperature policy,
+while `temperature <= 35 -> off` and `temperature >= 36 -> heat` retain the intended hysteresis.
+The default request returns independently verified parameter, condition, and removal suggestions.
+The parameter search must reject `28 -> 36` because it would duplicate the existing high-temperature
+rule, continue to the persistable `28 -> 37` edit, and apply that signed suggestion successfully.
+With an unresolved `UNKNOWN_SPEC`, the same regression requires parameter and condition to report
+`SKIPPED_NO_SPEC` while removal remains `VERIFIED`.
+
+Four additional real-NuSMV edge cases exercise interactions that isolated strategy fixtures miss:
+
+- an inverse `<=` cooling boundary rejects the duplicate `<= 14` edit, continues to `<= 13`,
+  and verifies parameter, occupancy-guard, and removal repairs against a `>= 15 -> off`
+  hysteresis rule;
+- two same-command heating rules demonstrate command priority: only the executed rule is
+  localized, but coordinated parameter and condition edits cover the dormant backup rule,
+  while destructive repair proves that neither single removal works and returns `[0, 1]`;
+- a natural environment-only temperature violation localizes no automation and requires all
+  strategies to report `SKIPPED_NO_FAULT_RULES` instead of fabricating a repair;
+- a `temperature >= 100` trigger at the manifest upper bound has no legal parameter repair,
+  yet the default request still completes condition and removal strategies and verifies both.
+
+These scenarios deliberately include closing hysteresis rules. A threshold that safely starts
+heating or cooling is not sufficient by itself: device modes persist, so the environment can
+later re-enter the forbidden region unless another rule exits that mode. Every expected repair
+is therefore applied to the original rules and checked again against the complete model.
+
+The same test class also runs random simulation, budget-one attack verification, and the
+additional default-template scenario matrix:
 
 ```bash
 cd backend
@@ -282,10 +319,16 @@ mvn -Dtest=AcceptanceDemoScenarioNusmvTest test
 
 The test is skipped only when the NuSMV executable is unavailable.
 
-The browser acceptance regression exercises the same imported scene through the live
-REST API and Board UI, including timeline playback and repair application:
+The browser acceptance regression exercises all three rows and the combined-response case through scene import, the live REST
+API, the Board verification UI, repair application, persistence reload, and a new verification.
+It also repeats the redundant same-command scenario independently for parameter, condition,
+and removal, requiring all two-item signed operations to survive apply and database reload
+before the complete model is verified again.
+The parameter and condition fixtures are generated in memory from the exact bundled template
+snapshots so the browser path tests the real import contract without adding test-only device
+capabilities:
 
 ```bash
 cd frontend
-npx playwright test e2e/board-full-flow.spec.ts --grep acceptance
+npx playwright test e2e/board-full-flow.spec.ts --grep "finds and applies|persists every item in a coordinated|imports the acceptance scene"
 ```

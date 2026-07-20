@@ -16,6 +16,7 @@ import cn.edu.nju.Iot_Verify.dto.fix.ParameterAdjustment;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -41,6 +44,53 @@ class ParameterAdjustStrategyTest {
     @Mock private NusmvExecutor nusmvExecutor;
 
     private ParameterAdjustStrategy strategy;
+
+    @Test
+    void refinementMath_handlesFullIntegerDomainWithoutOverflow() {
+        assertEquals(4_294_967_295L,
+                ParameterAdjustStrategy.distance(Integer.MIN_VALUE, Integer.MAX_VALUE));
+        assertArrayEquals(
+                new int[]{Integer.MIN_VALUE, Integer.MAX_VALUE - 1},
+                ParameterAdjustStrategy.refinementWindow(
+                        Integer.MIN_VALUE, 4_294_967_295L,
+                        Integer.MIN_VALUE, Integer.MAX_VALUE));
+        assertArrayEquals(
+                new int[]{Integer.MIN_VALUE + 1, Integer.MAX_VALUE},
+                ParameterAdjustStrategy.refinementWindow(
+                        Integer.MAX_VALUE, 4_294_967_295L,
+                        Integer.MIN_VALUE, Integer.MAX_VALUE));
+    }
+
+    @Test
+    void boundaryDescription_distinguishesImpossibleStrictAndReachableNonStrictEndpoints() {
+        List<RuleDto> rules = List.of(RuleDto.builder().ruleString("Boundary rule").build());
+
+        ParameterAdjustment strictUpper = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature")
+                .relation(">").originalValue("30").newValue("50")
+                .lowerBound(0).upperBound(50).build();
+        ParameterAdjustment nonStrictUpper = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature")
+                .relation(">=").originalValue("30").newValue("50")
+                .lowerBound(0).upperBound(50).build();
+        ParameterAdjustment strictLower = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature")
+                .relation("<").originalValue("20").newValue("0")
+                .lowerBound(0).upperBound(50).build();
+        ParameterAdjustment nonStrictLower = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature")
+                .relation("<=").originalValue("20").newValue("0")
+                .lowerBound(0).upperBound(50).build();
+
+        assertTrue(ParameterAdjustStrategy.describeParameterAdjustment(strictUpper, rules)
+                .contains("rule unreachable"));
+        assertTrue(ParameterAdjustStrategy.describeParameterAdjustment(strictLower, rules)
+                .contains("rule unreachable"));
+        assertFalse(ParameterAdjustStrategy.describeParameterAdjustment(nonStrictUpper, rules)
+                .contains("unreachable"));
+        assertFalse(ParameterAdjustStrategy.describeParameterAdjustment(nonStrictLower, rules)
+                .contains("unreachable"));
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -175,6 +225,43 @@ class ParameterAdjustStrategyTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void numericPolicyHints_ignoreOtherDevicesAndIncludeAdjacentDiscreteBoundaries() throws Exception {
+        java.lang.reflect.Method method = ParameterAdjustStrategy.class.getDeclaredMethod(
+                "numericPolicyHints", SpecificationDto.class, ParameterAdjustment.class,
+                List.class, Map.class);
+        method.setAccessible(true);
+
+        DeviceSmvData sensor1 = buildDeviceMap().get("sensor_1");
+        DeviceSmvData sensor2 = new DeviceSmvData();
+        sensor2.setVarName("sensor_2");
+        sensor2.setVariables(List.of(DeviceManifest.InternalVariable.builder()
+                .name("temperature").lowerBound(0).upperBound(50).build()));
+        Map<String, DeviceSmvData> devices = Map.of("sensor_1", sensor1, "sensor_2", sensor2);
+        RuleDto.Condition adjusted = RuleDto.Condition.builder()
+                .deviceName("sensor_1").targetType("variable").attribute("temperature")
+                .relation(">").value("30").build();
+        ParameterAdjustment template = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature").build();
+        SpecificationDto spec = new SpecificationDto();
+        SpecConditionDto otherDevice = new SpecConditionDto();
+        otherDevice.setDeviceId("sensor_2");
+        otherDevice.setKey("temperature");
+        otherDevice.setValue("5");
+        SpecConditionDto sameDevice = new SpecConditionDto();
+        sameDevice.setDeviceId("sensor_1");
+        sameDevice.setKey("temperature");
+        sameDevice.setValue("10");
+        spec.setAConditions(List.of(otherDevice, sameDevice));
+
+        LinkedHashSet<Integer> hints = (LinkedHashSet<Integer>) method.invoke(
+                null, spec, template,
+                List.of(RuleDto.builder().conditions(List.of(adjusted)).build()), devices);
+
+        assertEquals(List.of(9, 10, 11), new ArrayList<>(hints));
+    }
+
+    @Test
     void tryFix_noNumericConditions_returnsNull() {
         // Rule with state condition (non-numeric) — should not be parameterizable
         RuleDto rule = RuleDto.builder()
@@ -187,7 +274,123 @@ class ParameterAdjustStrategyTest {
         spec.setId("s1");
         spec.setTemplateId("1");
 
-        assertNull(strategy.tryFix(ctx(List.of(fault), List.of(rule), List.of(spec), buildDeviceMap())));
+        FixContext context = ctx(List.of(fault), List.of(rule), List.of(spec), buildDeviceMap());
+        assertNull(strategy.tryFix(context));
+        assertEquals("SKIPPED_NO_PARAMETERIZABLE_VALUES",
+                context.strategyNoResult("parameter").status());
+        assertTrue(context.parameterTargetsSnapshot().isEmpty());
+    }
+
+    @Test
+    void tryFix_oneAttemptWithMultipleThresholds_reservesJointSolve() throws Exception {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(
+                        RuleDto.Condition.builder()
+                                .deviceName("sensor_1").attribute("temperature")
+                                .targetType("variable").relation(">=").value("30").build(),
+                        RuleDto.Condition.builder()
+                                .deviceName("sensor_1").attribute("temperature")
+                                .targetType("variable").relation("<").value("40").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class)))
+                .thenReturn(createGenResult());
+        SpecCheckResult passing = mock(SpecCheckResult.class);
+        when(passing.isPassed()).thenReturn(true);
+        NusmvResult result = mock(NusmvResult.class);
+        when(result.isSuccess()).thenReturn(true);
+        when(result.getSpecResults()).thenReturn(List.of(passing));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(result);
+
+        FixContext context = FixContext.builder()
+                .faultRules(List.of(fault))
+                .allRules(List.of(rule))
+                .devices(List.of())
+                .specs(List.of(spec))
+                .deviceSmvMap(buildDeviceMap())
+                .violatedSpecIndex(0)
+                .userId(1L)
+                .isAttack(false)
+                .attackBudget(0)
+                .enablePrivacy(false)
+                .maxAttempts(1)
+                .build();
+
+        assertNull(strategy.tryFix(context));
+        verify(smvGenerator, times(1)).generateParameterizedWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class), anyMap());
+        verify(smvGenerator, never()).generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(SmvGenerator.TempModelContext.class), anyMap());
+    }
+
+    @Test
+    void closestSingleParameterSearch_doesNotRetryDynamicallyScheduledPolicyProbe() throws Exception {
+        RuleDto firstRule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("temperature").relation(">").value("9").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        RuleDto duplicateBoundaryRule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1").targetType("variable")
+                        .attribute("temperature").relation(">").value("11").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        List<RuleDto> rules = List.of(firstRule, duplicateBoundaryRule);
+
+        ParameterAdjustment firstTemplate = ParameterAdjustment.builder()
+                .ruleIndex(0).conditionIndex(0).attribute("temperature").relation(">")
+                .originalValue("9").lowerBound(0).upperBound(50).build();
+        ParameterAdjustment secondTemplate = ParameterAdjustment.builder()
+                .ruleIndex(1).conditionIndex(0).attribute("temperature").relation(">")
+                .originalValue("11").lowerBound(0).upperBound(50).build();
+
+        SpecConditionDto policyBoundary = new SpecConditionDto();
+        policyBoundary.setDeviceId("sensor_1");
+        policyBoundary.setKey("temperature");
+        policyBoundary.setValue("10");
+        SpecificationDto spec = new SpecificationDto();
+        spec.setAConditions(List.of(policyBoundary));
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        FixContext context = ctx(List.of(fault), rules, List.of(spec), buildDeviceMap());
+
+        List<Integer> attemptedValues = new ArrayList<>();
+        when(smvGenerator.generate(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(SmvGenerator.GeneratePurpose.class),
+                any(SmvGenerator.TempModelContext.class))).thenAnswer(invocation -> {
+                    List<RuleDto> candidateRules = invocation.getArgument(2);
+                    attemptedValues.add(Integer.parseInt(
+                            candidateRules.get(0).getConditions().get(0).getValue()));
+                    return createGenResult();
+                });
+        SpecCheckResult failing = mock(SpecCheckResult.class);
+        when(failing.isPassed()).thenReturn(false);
+        NusmvResult forwardFailure = mock(NusmvResult.class);
+        when(forwardFailure.isSuccess()).thenReturn(true);
+        when(forwardFailure.getSpecResults()).thenReturn(List.of(failing));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(forwardFailure);
+
+        java.lang.reflect.Method method = ParameterAdjustStrategy.class.getDeclaredMethod(
+                "tryClosestSingleParameterFix", List.class, List.class,
+                SpecificationDto.class, List.class, int.class, FixContext.class);
+        method.setAccessible(true);
+        method.invoke(strategy, List.of(firstTemplate, secondTemplate), rules,
+                spec, List.of(fault), 5, context);
+
+        assertEquals(List.of(10, 12, 8, 7, 6), attemptedValues,
+                "The dynamically scheduled value 12 must consume the search budget only once");
     }
 
     @Test
@@ -215,7 +418,12 @@ class ParameterAdjustStrategyTest {
         when(result.getSpecResults()).thenReturn(List.of(passing));
         when(nusmvExecutor.execute(any(File.class))).thenReturn(result);
 
-        assertNull(strategy.tryFix(ctx(List.of(fault), List.of(rule), List.of(spec), buildDeviceMap())));
+        FixContext context = ctx(List.of(fault), List.of(rule), List.of(spec), buildDeviceMap());
+        assertNull(strategy.tryFix(context));
+        assertEquals(1, context.parameterTargetsSnapshot().size(),
+                "eligible targets must be returned even when no verified suggestion is found");
+        assertEquals(0, context.parameterTargetsSnapshot().get(0).getLowerBound());
+        assertEquals(50, context.parameterTargetsSnapshot().get(0).getUpperBound());
     }
 
     @Test
@@ -872,6 +1080,45 @@ class ParameterAdjustStrategyTest {
         assertNull(strategy.tryFix(context));
         // Verify it retried all 3 attempts before giving up
         verify(nusmvExecutor, times(3)).execute(any(File.class));
+        assertNotNull(context.strategySolverFailure("parameter"));
+        assertEquals(3, context.strategySearchProgress("parameter").attemptsUsed());
+    }
+
+    @Test
+    void tryFix_transientSolverFailureThenConclusiveUnsat_clearsFailureOutcome() throws Exception {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor_1").attribute("temperature")
+                        .targetType("variable").relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+
+        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), any(ParameterizationConfig.class),
+                any(SmvGenerator.TempModelContext.class))).thenReturn(createGenResult());
+        NusmvResult failed = mock(NusmvResult.class);
+        when(failed.isSuccess()).thenReturn(false);
+        when(failed.getErrorMessage()).thenReturn("transient failure");
+        SpecCheckResult unsat = mock(SpecCheckResult.class);
+        when(unsat.isPassed()).thenReturn(true);
+        NusmvResult conclusive = mock(NusmvResult.class);
+        when(conclusive.isSuccess()).thenReturn(true);
+        when(conclusive.getSpecResults()).thenReturn(List.of(unsat));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(failed, conclusive);
+
+        FixContext context = FixContext.builder()
+                .faultRules(List.of(fault)).allRules(List.of(rule)).devices(List.of())
+                .specs(List.of(spec)).deviceSmvMap(buildDeviceMap()).violatedSpecIndex(0)
+                .userId(1L).maxAttempts(2).build();
+
+        assertNull(strategy.tryFix(context));
+        assertNull(context.strategySolverFailure("parameter"));
+        assertNull(context.strategyNoResult("parameter"));
+        assertEquals(2, context.strategySearchProgress("parameter").attemptsUsed());
     }
 
     // ---- P3: preferred range tests ----
@@ -987,5 +1234,58 @@ class ParameterAdjustStrategyTest {
 
         // Should return null because the only parameterizable condition was skipped
         assertNull(strategy.tryFix(context));
+    }
+
+    @Test
+    void tryFix_mixedPreferredRanges_skipsOnlyTheDisjointTarget() throws Exception {
+        RuleDto rule = RuleDto.builder()
+                .conditions(List.of(
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("temperature").targetType("variable")
+                                .relation(">").value("30").build(),
+                        RuleDto.Condition.builder().deviceName("sensor_1")
+                                .attribute("temperature").targetType("variable")
+                                .relation("<").value("40").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("turnOn").build())
+                .build();
+        FaultRuleDto fault = FaultRuleDto.builder().ruleIndex(0).build();
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("s1");
+        spec.setTemplateId("1");
+        long traceId = 77L;
+        String disjointTarget = PreferredRangeSelection.targetIdFor(traceId, 0, 0);
+        String usableTarget = PreferredRangeSelection.targetIdFor(traceId, 0, 1);
+
+        ArgumentCaptor<ParameterizationConfig> configCaptor =
+                ArgumentCaptor.forClass(ParameterizationConfig.class);
+        when(smvGenerator.generateParameterized(anyLong(), anyList(), anyList(), anyList(),
+                anyBoolean(), anyInt(), anyBoolean(), configCaptor.capture(),
+                any(SmvGenerator.TempModelContext.class))).thenReturn(createGenResult());
+        SpecCheckResult unsat = mock(SpecCheckResult.class);
+        when(unsat.isPassed()).thenReturn(true);
+        NusmvResult result = mock(NusmvResult.class);
+        when(result.isSuccess()).thenReturn(true);
+        when(result.getSpecResults()).thenReturn(List.of(unsat));
+        when(nusmvExecutor.execute(any(File.class))).thenReturn(result);
+
+        FixContext context = FixContext.builder()
+                .traceId(traceId).faultRules(List.of(fault)).allRules(List.of(rule))
+                .devices(List.of()).specs(List.of(spec)).deviceSmvMap(buildDeviceMap())
+                .violatedSpecIndex(0).userId(1L).maxAttempts(1)
+                .preferredRanges(Map.of(
+                        disjointTarget, new PreferredRange(60, 70),
+                        usableTarget, new PreferredRange(35, 45)))
+                .build();
+
+        assertNull(strategy.tryFix(context));
+        assertEquals(2, context.parameterTargetsSnapshot().size());
+        assertEquals(java.util.Set.of(disjointTarget, usableTarget),
+                context.matchedPreferredRangeTargetIdsSnapshot());
+        assertEquals(java.util.Set.of("r0_c1"),
+                configCaptor.getValue().getParameterizedThresholds().keySet());
+        ParameterizationConfig.ParamInfo usable =
+                configCaptor.getValue().getParameterizedThresholds().get("r0_c1");
+        assertEquals(35, usable.getLowerBound());
+        assertEquals(45, usable.getUpperBound());
     }
 }

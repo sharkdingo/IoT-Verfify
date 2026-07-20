@@ -8,6 +8,7 @@ import type {
   FixStrategyName,
   FixSuggestion,
   ParameterAdjustment,
+  ParameterTarget,
   PreferredRangeSelection
 } from '@/types/fix'
 import type { ModelGenerationIssue } from '@/types/verify'
@@ -28,9 +29,13 @@ const ATTEMPT_STATUSES = new Set<FixStrategyAttemptStatus>([
   'VERIFIED',
   'NOT_VERIFIED',
   'NO_VERIFIED_SUGGESTION',
+  'FAILED_MODEL_GENERATION',
+  'FAILED_SOLVER_EXECUTION',
+  'SEARCH_BUDGET_EXHAUSTED',
   'TIMED_OUT',
   'SKIPPED_TIMEOUT',
   'SKIPPED_NO_SPEC',
+  'SKIPPED_NO_PARAMETERIZABLE_VALUES',
   'SKIPPED_NO_FAULT_RULES',
   'SKIPPED_INCOMPLETE_SOURCE_MODEL',
   'SKIPPED_UNSUPPORTED'
@@ -176,6 +181,26 @@ const validateParameterAdjustment = (
   return row as ParameterAdjustment
 }
 
+const validateParameterTarget = (
+  value: unknown,
+  context: string,
+  index: number
+): ParameterTarget => {
+  const row = record(value, context, `parameterTargets[${index}]`)
+  if (!TARGET_ID_PATTERN.test(text(row, 'targetId', context))) {
+    throw new FixResponseContractError(context, `parameterTargets[${index}].targetId is invalid`)
+  }
+  for (const field of ['attribute', 'relation', 'originalValue', 'description']) {
+    text(row, field, context)
+  }
+  const lower = integer(row, 'lowerBound', context, Number.MIN_SAFE_INTEGER)
+  const upper = integer(row, 'upperBound', context, Number.MIN_SAFE_INTEGER)
+  if (lower > upper) {
+    throw new FixResponseContractError(context, 'parameter target bounds are reversed')
+  }
+  return row as ParameterTarget
+}
+
 const validateConditionAdjustment = (
   value: unknown,
   context: string,
@@ -188,8 +213,7 @@ const validateConditionAdjustment = (
   for (const field of ['attribute', 'description', 'ruleDescription', 'deviceLabel']) {
     text(row, field, context)
   }
-  if (row.targetType !== undefined
-      && !['api', 'variable', 'mode', 'state', 'trust', 'privacy'].includes(row.targetType)) {
+  if (!['api', 'variable', 'mode', 'state'].includes(row.targetType)) {
     throw new FixResponseContractError(context, `conditionAdjustments[${index}].targetType is invalid`)
   }
   return row as ConditionAdjustment
@@ -198,7 +222,8 @@ const validateConditionAdjustment = (
 export const validateFixSuggestion = (
   value: unknown,
   context: string,
-  expectedStrategy?: FixStrategyName
+  expectedStrategy?: FixStrategyName,
+  requireVerifiedToken = false
 ): FixSuggestion => {
   const suggestion = record(value, context, 'suggestion')
   if (!STRATEGIES.has(suggestion.strategy)) {
@@ -208,24 +233,15 @@ export const validateFixSuggestion = (
     throw new FixResponseContractError(context, 'suggestion strategy does not match the request')
   }
   text(suggestion, 'description', context)
-  bool(suggestion, 'verified', context)
-  if (suggestion.parameterAdjustments !== undefined && !Array.isArray(suggestion.parameterAdjustments)) {
-    throw new FixResponseContractError(context, 'parameterAdjustments must be an array when present')
+  const verified = bool(suggestion, 'verified', context)
+  if (requireVerifiedToken && verified) {
+    text(suggestion, 'suggestionToken', context)
   }
-  if (suggestion.conditionAdjustments !== undefined && !Array.isArray(suggestion.conditionAdjustments)) {
-    throw new FixResponseContractError(context, 'conditionAdjustments must be an array when present')
-  }
-  if (suggestion.removedRuleDescriptions !== undefined
-      && !Array.isArray(suggestion.removedRuleDescriptions)) {
-    throw new FixResponseContractError(context, 'removedRuleDescriptions must be an array when present')
-  }
-  const parameters = (suggestion.parameterAdjustments || []).map(
+  const parameters = array(suggestion, 'parameterAdjustments', context).map(
     (item: unknown, index: number) => validateParameterAdjustment(item, context, index))
-  const conditions = (suggestion.conditionAdjustments || []).map(
+  const conditions = array(suggestion, 'conditionAdjustments', context).map(
     (item: unknown, index: number) => validateConditionAdjustment(item, context, index))
-  const removed = suggestion.removedRuleDescriptions === undefined
-    ? []
-    : stringArray(suggestion, 'removedRuleDescriptions', context)
+  const removed = stringArray(suggestion, 'removedRuleDescriptions', context)
   const detailCount = suggestion.strategy === 'parameter'
     ? parameters.length
     : suggestion.strategy === 'condition'
@@ -246,6 +262,24 @@ const validateAttempt = (value: unknown, context: string, index: number): FixStr
     throw new FixResponseContractError(context, `strategyAttempts[${index}].status is invalid`)
   }
   text(attempt, 'reason', context)
+  const hasAttemptsUsed = attempt.attemptsUsed !== undefined && attempt.attemptsUsed !== null
+  const hasAttemptLimit = attempt.attemptLimit !== undefined && attempt.attemptLimit !== null
+  if (hasAttemptsUsed !== hasAttemptLimit) {
+    throw new FixResponseContractError(
+      context,
+      `strategyAttempts[${index}] must provide attemptsUsed and attemptLimit together`
+    )
+  }
+  if (hasAttemptsUsed) {
+    const used = integer(attempt, 'attemptsUsed', context)
+    const limit = integer(attempt, 'attemptLimit', context, 1)
+    if (used > limit) {
+      throw new FixResponseContractError(
+        context,
+        `strategyAttempts[${index}].attemptsUsed must not exceed attemptLimit`
+      )
+    }
+  }
   return attempt as FixStrategyAttempt
 }
 
@@ -283,7 +317,7 @@ export const validateFixResult = (
   validateSourceModel(result, context)
   validateFaultRules(result, context)
   const suggestions = array(result, 'suggestions', context).map(suggestion =>
-    validateFixSuggestion(suggestion, context))
+    validateFixSuggestion(suggestion, context, undefined, true))
   const attempts = array(result, 'strategyAttempts', context).map((attempt, index) =>
     validateAttempt(attempt, context, index))
   const expected = requestedStrategies.length > 0
@@ -321,19 +355,20 @@ export const validateFixResult = (
   }
   text(result, 'summary', context)
   stringArray(result, 'warnings', context)
-  if (result.unusedPreferredRangeSelections !== undefined) {
-    if (!Array.isArray(result.unusedPreferredRangeSelections)) {
-      throw new FixResponseContractError(context, 'unusedPreferredRangeSelections must be an array')
-    }
-    const seen = new Set<string>()
-    result.unusedPreferredRangeSelections.forEach((selection: unknown, index: number) => {
-      const validated = validatePreferredRangeSelection(
-        selection, context, `unusedPreferredRangeSelections[${index}]`)
-      if (seen.has(validated.targetId)) {
-        throw new FixResponseContractError(context, 'unusedPreferredRangeSelections contains duplicate targets')
-      }
-      seen.add(validated.targetId)
-    })
+  const parameterTargets = array(result, 'parameterTargets', context).map(
+    (target, index) => validateParameterTarget(target, context, index))
+  if (new Set(parameterTargets.map(target => target.targetId)).size !== parameterTargets.length) {
+    throw new FixResponseContractError(context, 'parameterTargets contains duplicate targets')
   }
+  const unusedPreferredRangeSelections = array(result, 'unusedPreferredRangeSelections', context)
+  const seenUnusedTargets = new Set<string>()
+  unusedPreferredRangeSelections.forEach((selection: unknown, index: number) => {
+    const validated = validatePreferredRangeSelection(
+      selection, context, `unusedPreferredRangeSelections[${index}]`)
+    if (seenUnusedTargets.has(validated.targetId)) {
+      throw new FixResponseContractError(context, 'unusedPreferredRangeSelections contains duplicate targets')
+    }
+    seenUnusedTargets.add(validated.targetId)
+  })
   return result as FixResult
 }

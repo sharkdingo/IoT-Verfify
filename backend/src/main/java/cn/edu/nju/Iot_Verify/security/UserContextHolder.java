@@ -4,6 +4,7 @@ public final class UserContextHolder {
 
     private static final ThreadLocal<Long> currentUserId = new ThreadLocal<>();
     private static final ThreadLocal<String> currentChatSessionId = new ThreadLocal<>();
+    private static final ThreadLocal<String> currentChatExecutionId = new ThreadLocal<>();
     private static final ThreadLocal<String> confirmedProtectedActionKind = new ThreadLocal<>();
 
     private UserContextHolder() {
@@ -23,6 +24,18 @@ public final class UserContextHolder {
 
     public static String getChatSessionId() {
         return currentChatSessionId.get();
+    }
+
+    public static void setChatExecutionId(String executionId) {
+        if (executionId == null || executionId.isBlank()) {
+            currentChatExecutionId.remove();
+            return;
+        }
+        currentChatExecutionId.set(executionId);
+    }
+
+    public static String getChatExecutionId() {
+        return currentChatExecutionId.get();
     }
 
     public static void setDestructiveActionConfirmed(boolean confirmed) {
@@ -64,6 +77,7 @@ public final class UserContextHolder {
     public static void clear() {
         currentUserId.remove();
         currentChatSessionId.remove();
+        currentChatExecutionId.remove();
         confirmedProtectedActionKind.remove();
     }
 }

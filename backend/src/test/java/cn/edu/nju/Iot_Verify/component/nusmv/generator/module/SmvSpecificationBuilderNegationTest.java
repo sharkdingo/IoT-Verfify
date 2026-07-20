@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecConditionDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
+import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -330,8 +331,10 @@ class SmvSpecificationBuilderNegationTest {
     }
 
     @Test
-    void buildNegated_invalidIndex_returnsEmpty() {
-        assertEquals("", builder.buildNegated(List.of(), 0, false, 0, Map.of(), false));
-        assertEquals("", builder.buildNegated(null, 0, false, 0, Map.of(), false));
+    void buildNegated_invalidIndex_failsClosed() {
+        assertThrows(SmvGenerationException.class,
+                () -> builder.buildNegated(List.of(), 0, false, 0, Map.of(), false));
+        assertThrows(SmvGenerationException.class,
+                () -> builder.buildNegated(null, 0, false, 0, Map.of(), false));
     }
 }

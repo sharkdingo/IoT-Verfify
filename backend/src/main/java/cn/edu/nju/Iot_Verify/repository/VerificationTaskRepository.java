@@ -3,7 +3,9 @@ package cn.edu.nju.Iot_Verify.repository;
 import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,7 +20,11 @@ import java.util.Optional;
  * 验证任务仓储接口
  */
 @Repository
-public interface VerificationTaskRepository extends JpaRepository<VerificationTaskPo, Long> {
+public interface VerificationTaskRepository extends JpaRepository<VerificationTaskPo, Long>, DatabaseClockRepository {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM VerificationTaskPo t WHERE t.id = :taskId")
+    Optional<VerificationTaskPo> findByIdForUpdate(@Param("taskId") Long taskId);
 
     long countByUserId(Long userId);
 
@@ -54,11 +60,6 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     List<VerificationTaskPo> findByUserIdAndStatus(Long userId, VerificationTaskPo.TaskStatus status);
 
     /**
-     * 根据状态列表查询任务（用于启动时清理僵尸任务）
-     */
-    List<VerificationTaskPo> findByStatusIn(List<VerificationTaskPo.TaskStatus> statuses);
-
-    /**
      * 删除用户的所有任务
      */
     void deleteByUserId(Long userId);
@@ -74,8 +75,10 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
          + "t.disabledRuleCount = :disabledRuleCount, t.skippedSpecCount = :skippedSpecCount, "
          + "t.specResultsJson = :specResultsJson, t.checkLogsJson = :checkLogsJson, "
          + "t.generationIssuesJson = :generationIssuesJson, t.nusmvOutput = :nusmvOutput, "
-         + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status = :runningStatus")
+         + "t.errorMessage = :errorMessage, t.processingTimeMs = :processingTimeMs, "
+         + "t.workerId = NULL, t.leaseExpiresAt = NULL "
+         + "WHERE t.id = :taskId AND t.status = :runningStatus "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int completeTaskIfRunning(@Param("taskId") Long taskId,
                               @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
                               @Param("completedAt") LocalDateTime completedAt,
@@ -89,7 +92,9 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                               @Param("nusmvOutput") String nusmvOutput,
                               @Param("errorMessage") String errorMessage,
                               @Param("processingTimeMs") Long processingTimeMs,
-                              @Param("runningStatus") VerificationTaskPo.TaskStatus runningStatus);
+                              @Param("runningStatus") VerificationTaskPo.TaskStatus runningStatus,
+                              @Param("workerId") String workerId,
+                              @Param("currentTime") LocalDateTime currentTime);
 
     /**
      * Atomically fail a task only while it is still active.
@@ -98,8 +103,10 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :newStatus, t.completedAt = :completedAt, "
          + "t.progress = 100, t.outcome = :outcome, t.errorMessage = :errorMessage, "
-         + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs "
-         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
+         + "t.checkLogsJson = :checkLogsJson, t.processingTimeMs = :processingTimeMs, "
+         + "t.workerId = NULL, t.leaseExpiresAt = NULL "
+         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses) "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int failTaskIfActive(@Param("taskId") Long taskId,
                          @Param("newStatus") VerificationTaskPo.TaskStatus newStatus,
                          @Param("completedAt") LocalDateTime completedAt,
@@ -107,7 +114,9 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
                          @Param("errorMessage") String errorMessage,
                          @Param("checkLogsJson") String checkLogsJson,
                          @Param("processingTimeMs") Long processingTimeMs,
-                         @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
+                         @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses,
+                         @Param("workerId") String workerId,
+                         @Param("currentTime") LocalDateTime currentTime);
 
     /**
      * Atomically transition a task from PENDING to RUNNING.
@@ -118,14 +127,54 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :running, "
          + "t.startedAt = :startedAt, t.progress = :progress, "
-         + "t.checkLogsJson = :checkLogsJson "
-         + "WHERE t.id = :taskId AND t.status = :pendingStatus")
+         + "t.checkLogsJson = :checkLogsJson, t.leaseExpiresAt = :leaseExpiresAt "
+         + "WHERE t.id = :taskId AND t.status = :pendingStatus "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int startTaskIfStillPending(@Param("taskId") Long taskId,
                                 @Param("running") VerificationTaskPo.TaskStatus running,
                                 @Param("startedAt") LocalDateTime startedAt,
                                 @Param("progress") int progress,
                                 @Param("checkLogsJson") String checkLogsJson,
-                                @Param("pendingStatus") VerificationTaskPo.TaskStatus pendingStatus);
+                                @Param("pendingStatus") VerificationTaskPo.TaskStatus pendingStatus,
+                                @Param("workerId") String workerId,
+                                @Param("currentTime") LocalDateTime currentTime,
+                                @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt);
+
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.leaseExpiresAt = :leaseExpiresAt "
+         + "WHERE t.id = :taskId AND t.workerId = :workerId "
+         + "AND t.status IN (:activeStatuses) AND t.leaseExpiresAt > :currentTime")
+    int renewOwnedActiveLease(@Param("taskId") Long taskId,
+                              @Param("workerId") String workerId,
+                              @Param("currentTime") LocalDateTime currentTime,
+                              @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt,
+                              @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
+
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.workerId = NULL, t.leaseExpiresAt = :expiredAt "
+         + "WHERE t.id = :taskId AND t.workerId = :workerId "
+         + "AND t.status IN (:activeStatuses)")
+    int releaseOwnedActiveLease(@Param("taskId") Long taskId,
+                                @Param("workerId") String workerId,
+                                @Param("expiredAt") LocalDateTime expiredAt,
+                                @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses);
+
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE VerificationTaskPo t SET t.status = :failed, t.completedAt = :completedAt, "
+         + "t.progress = 100, t.outcome = :outcome, t.errorMessage = :errorMessage, "
+         + "t.checkLogsJson = :checkLogsJson, t.workerId = NULL, t.leaseExpiresAt = NULL "
+         + "WHERE t.status IN (:activeStatuses) "
+         + "AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt <= :expiredBefore)")
+    int failExpiredActiveTasks(@Param("failed") VerificationTaskPo.TaskStatus failed,
+                               @Param("completedAt") LocalDateTime completedAt,
+                               @Param("outcome") VerificationOutcome outcome,
+                               @Param("errorMessage") String errorMessage,
+                               @Param("checkLogsJson") String checkLogsJson,
+                               @Param("activeStatuses") List<VerificationTaskPo.TaskStatus> activeStatuses,
+                               @Param("expiredBefore") LocalDateTime expiredBefore);
 
     /**
      * Atomically cancel a task only if it is still PENDING or RUNNING.
@@ -135,7 +184,8 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.status = :cancelledStatus, "
-         + "t.completedAt = :completedAt, t.progress = 100, t.outcome = :outcome "
+         + "t.completedAt = :completedAt, t.progress = 100, t.outcome = :outcome, "
+         + "t.workerId = NULL, t.leaseExpiresAt = NULL "
          + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
     int cancelTaskIfStillActive(@Param("taskId") Long taskId,
                                 @Param("cancelledStatus") VerificationTaskPo.TaskStatus cancelledStatus,
@@ -150,9 +200,12 @@ public interface VerificationTaskRepository extends JpaRepository<VerificationTa
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE VerificationTaskPo t SET t.progress = :progress, t.progressStage = :stage "
-         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
+         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING') "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress,
-                               @Param("stage") TaskProgressStage stage);
+                               @Param("stage") TaskProgressStage stage,
+                               @Param("workerId") String workerId,
+                               @Param("currentTime") LocalDateTime currentTime);
 
     /** Persist the assumptions under which this task will run without replacing task state. */
     @Transactional

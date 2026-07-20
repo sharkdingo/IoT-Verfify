@@ -9,7 +9,7 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-18. Source:
+Verified against code on 2026-07-19. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
 `configure/ChatExecutionConfig`,
@@ -96,6 +96,8 @@ process that starts it.
 | `CHAT_SSE_TIMEOUT_MS` | `3600000` | Total SSE emitter lifetime for `/api/chat/completions` (60 minutes by default); keep it higher than `LLM_TIMEOUT_MINUTES` so long multi-step tasks and provider errors remain visible. |
 | `CHAT_MAX_TOOL_ROUNDS` | `64` | Emergency runaway guard for one assistant request, not a normal task budget. Product flows should finish or stop on confirmation/result safety before this value. Minimum `8`. |
 | `CHAT_MAX_STAGNANT_ROUNDS` | `2` | Stop after this many consecutive rounds repeat the exact same tool calls and results. A changed call or changed result resets the counter. Minimum `1`. |
+| `CHAT_EXECUTION_LEASE_TTL_MS` | `30000` | Lifetime of the cross-instance chat execution lease without a successful heartbeat. A crashed/restarted worker therefore stops reporting the session as active after at most this interval. Minimum `3000`; must be at least twice the heartbeat interval. |
+| `CHAT_EXECUTION_LEASE_HEARTBEAT_MS` | `10000` | Fixed delay between execution-lease renewals and expired-lease cleanup passes. Renewal is conditional on the same session/user/execution id, so an old worker cannot reclaim a replaced lease. Minimum `1000`. |
 | `AI_SESSION_STATE_CLEANUP_MS` | `60000` | Fixed delay between database cleanup passes for expired AI task-continuation, scenario-draft, and protected-action state. Active reads also reject and remove expired rows. |
 
 ## NuSMV
@@ -112,7 +114,7 @@ process that starts it.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
-| `FIX_MAX_ATTEMPTS` | `20` | Max main search attempts per fix strategy; parameter refinement is separately bounded by `FIX_MAX_REFINE_ATTEMPTS`, and the whole pipeline by `FIX_TIMEOUT_MS` |
+| `FIX_MAX_ATTEMPTS` | `20` | Max main candidate attempts per fix strategy; a multi-threshold parameter search shares this budget between one-threshold probes and joint solving, refinement is separately bounded by `FIX_MAX_REFINE_ATTEMPTS`, and the whole pipeline by `FIX_TIMEOUT_MS` |
 | `FIX_MAX_CANDIDATES_PER_RULE` | `5` | Max candidate fixes per rule |
 | `FIX_MAX_REFINE_ATTEMPTS` | `10` | Max refinement-loop iterations |
 | `FIX_TIMEOUT_MS` | `300000` | Overall fix timeout / soft deadline (ms) |

@@ -37,7 +37,7 @@ public class FixApplyRequestDto {
     private String suggestionToken;
 
     /**
-     * 生成该建议时 /fix 使用的参数范围选择（若有）。每项选择使用 ParameterAdjustment.targetId，
+     * 生成该建议时 /fix 使用的参数范围选择（若有）。每项选择使用 ParameterTarget.targetId，
      * The signed suggestion binds these ranges so a different parameter search cannot be applied.
      */
     private List<@Valid @NotNull(message = "preferredRangeSelections item must not be null")

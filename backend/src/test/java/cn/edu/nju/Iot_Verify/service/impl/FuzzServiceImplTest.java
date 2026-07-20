@@ -404,7 +404,8 @@ class FuzzServiceImplTest {
         verify(taskRepository).deleteUndispatchedTask(
                 eq(41L), eq(7L), anyString(), eq(FuzzTaskPo.TaskStatus.PENDING));
         verify(taskRepository, never()).failTaskIfActive(
-                eq(41L), any(), any(), any(), anyString(), anyString(), anyList());
+                eq(41L), any(), any(), any(), anyString(), anyString(), anyList(),
+                anyString(), any(LocalDateTime.class));
         verify(fuzzTaskExecutor, org.mockito.Mockito.times(2)).execute(any(Runnable.class));
     }
 
@@ -541,7 +542,7 @@ class FuzzServiceImplTest {
             return null;
         }).when(fuzzTaskExecutor).execute(any(Runnable.class));
         when(taskRepository.renewOwnedActiveLease(
-                eq(41L), anyString(), any(), anyList())).thenReturn(0);
+                eq(41L), anyString(), any(), any(), anyList())).thenReturn(0);
 
         assertEquals(41L, service.submit(7L, validRequest()));
         service.maintainTaskLeases();
@@ -549,7 +550,7 @@ class FuzzServiceImplTest {
         assertTrue(((Future<?>) submittedWorkers.get(0)).isCancelled());
         assertEquals(42L, service.submit(7L, validRequest()));
         verify(taskRepository).renewOwnedActiveLease(
-                eq(41L), anyString(), any(), anyList());
+                eq(41L), anyString(), any(), any(), anyList());
     }
 
     @Test
@@ -576,9 +577,10 @@ class FuzzServiceImplTest {
                         .map(FuzzTaskPo::getStatus));
         when(taskRepository.findByIdAndUserId(anyLong(), eq(7L))).thenAnswer(invocation ->
                 Optional.ofNullable(savedTasks.get(invocation.getArgument(0, Long.class))));
-        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class))).thenReturn(1);
+        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class),
+                anyString(), any(LocalDateTime.class))).thenReturn(1);
         when(taskRepository.startTaskIfStillPending(
-                eq(41L), eq(FuzzTaskPo.TaskStatus.RUNNING), any(), anyString(), any(),
+                eq(41L), eq(FuzzTaskPo.TaskStatus.RUNNING), any(), anyString(), any(), any(),
                 anyString(), eq(FuzzTaskPo.TaskStatus.PENDING))).thenAnswer(invocation -> {
                     savedTasks.get(41L).setStatus(FuzzTaskPo.TaskStatus.RUNNING);
                     return 1;
@@ -1337,18 +1339,19 @@ class FuzzServiceImplTest {
     @Test
     void workerInitializationFailureFailsByTaskIdAndReleasesItsLease() {
         Runnable worker = captureSubmittedWorker();
-        when(taskRepository.updateProgressIfActive(41L, 0, TaskProgressStage.STARTING))
+        when(taskRepository.updateProgressIfActive(eq(41L), eq(0), eq(TaskProgressStage.STARTING),
+                anyString(), any(LocalDateTime.class)))
                 .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("jdbc details"));
         when(taskRepository.failTaskIfActive(
                 eq(41L), eq(FuzzTaskPo.TaskStatus.FAILED), any(), any(),
-                anyString(), anyString(), any())).thenReturn(1);
+                anyString(), anyString(), any(), anyString(), any(LocalDateTime.class))).thenReturn(1);
 
         assertDoesNotThrow(worker::run);
 
         ArgumentCaptor<String> publicError = ArgumentCaptor.forClass(String.class);
         verify(taskRepository).failTaskIfActive(
                 eq(41L), eq(FuzzTaskPo.TaskStatus.FAILED), any(), any(),
-                publicError.capture(), anyString(), any());
+                publicError.capture(), anyString(), any(), anyString(), any(LocalDateTime.class));
         assertEquals("Counterexample search failed: Internal counterexample exploration error",
                 publicError.getValue());
         verify(taskRepository).releaseOwnedActiveLease(
@@ -1358,12 +1361,13 @@ class FuzzServiceImplTest {
     @Test
     void failurePersistenceErrorStillReleasesLeaseForRecovery() {
         Runnable worker = captureSubmittedWorker();
-        when(taskRepository.updateProgressIfActive(41L, 0, TaskProgressStage.STARTING))
+        when(taskRepository.updateProgressIfActive(eq(41L), eq(0), eq(TaskProgressStage.STARTING),
+                anyString(), any(LocalDateTime.class)))
                 .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("progress failed"));
         doThrow(new org.springframework.dao.DataAccessResourceFailureException("failure update failed"))
                 .when(taskRepository).failTaskIfActive(
                         eq(41L), eq(FuzzTaskPo.TaskStatus.FAILED), any(), any(),
-                        anyString(), anyString(), any());
+                        anyString(), anyString(), any(), anyString(), any(LocalDateTime.class));
 
         assertDoesNotThrow(worker::run);
 
@@ -1490,9 +1494,10 @@ class FuzzServiceImplTest {
         });
         ArgumentCaptor<Runnable> workerCaptor = ArgumentCaptor.forClass(Runnable.class);
 
-        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class))).thenReturn(1);
+        when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(TaskProgressStage.class),
+                anyString(), any(LocalDateTime.class))).thenReturn(1);
         when(taskRepository.startTaskIfStillPending(
-                anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1);
+                anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
         when(taskRepository.findById(41L)).thenAnswer(invocation -> {
             FuzzTaskPo task = savedTask.get();
             task.setStatus(FuzzTaskPo.TaskStatus.RUNNING);
@@ -1510,7 +1515,8 @@ class FuzzServiceImplTest {
             return findings;
         });
         when(taskRepository.completeTaskIfRunning(
-                anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class)))
                 .thenReturn(1);
 
         AtomicReference<FuzzEngineInput> workerInput = new AtomicReference<>();
@@ -1589,6 +1595,11 @@ class FuzzServiceImplTest {
             TransactionCallback callback = invocation.getArgument(0);
             return callback.doInTransaction(transactionStatus);
         }).when(transactionTemplate).execute(any(TransactionCallback.class));
+        doAnswer(invocation -> {
+            java.util.function.Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            callback.accept(transactionStatus);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
         when(taskRepository.save(any(FuzzTaskPo.class))).thenAnswer(invocation -> {
             FuzzTaskPo task = invocation.getArgument(0);
             task.setId(41L);

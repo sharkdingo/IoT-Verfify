@@ -17,4 +17,5 @@ public class ChatSessionResponseDto {
     private String title;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private boolean active;
 }

@@ -7,6 +7,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { useAuth } from '@/stores/auth'
+import { subscribeBoardInvalidation } from '@/utils/boardInvalidation'
 import { authApi } from '@/api/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // Icons
@@ -2657,6 +2658,54 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
   }
 }
 
+let boardForegroundRefreshPromise: Promise<boolean> | null = null
+let boardRefreshRequestedWhileBusy = false
+
+interface BoardSnapshotRefreshOptions {
+  force?: boolean
+  queueIfBusy?: boolean
+}
+
+const requestBoardSnapshotRefresh = ({
+  force = false,
+  queueIfBusy = true
+}: BoardSnapshotRefreshOptions = {}): Promise<boolean> => {
+  if (boardLifecycleDisposed) return Promise.resolve(false)
+  if (!force && document.visibilityState === 'hidden') {
+    if (queueIfBusy) boardRefreshRequestedWhileBusy = true
+    return Promise.resolve(false)
+  }
+  if (boardForegroundRefreshPromise) {
+    if (queueIfBusy) boardRefreshRequestedWhileBusy = true
+    return boardForegroundRefreshPromise
+  }
+  // Starting a refresh consumes any invalidation deferred while the tab was hidden.
+  // New invalidations can request one follow-up; duplicate lifecycle events only reuse it.
+  boardRefreshRequestedWhileBusy = false
+  const refreshPromise = enqueueBoardMutation(refreshBoardSnapshot)
+  boardForegroundRefreshPromise = refreshPromise
+  void refreshPromise.finally(() => {
+    if (boardForegroundRefreshPromise === refreshPromise) {
+      boardForegroundRefreshPromise = null
+    }
+    if (boardRefreshRequestedWhileBusy && !boardLifecycleDisposed
+      && document.visibilityState !== 'hidden') {
+      boardRefreshRequestedWhileBusy = false
+      requestBoardSnapshotRefresh()
+    }
+  })
+  return refreshPromise
+}
+
+const refreshBoardOnForeground = () => {
+  requestBoardSnapshotRefresh({ queueIfBusy: false })
+}
+
+const unsubscribeBoardInvalidation = subscribeBoardInvalidation(
+  currentUser.value?.userId,
+  () => requestBoardSnapshotRefresh()
+)
+
 const environmentPatchFieldLabel = (field: EnvironmentVariablePatchResult['suppliedFields'][number]) => {
   if (field === 'value') return t('app.variableValue')
   if (field === 'trust') return t('app.sourceLabel')
@@ -4116,7 +4165,7 @@ const refreshSpecifications = async (): Promise<boolean> => {
 }
 
 const retryBoardDataLoad = async () => {
-  await refreshBoardSnapshot()
+  await requestBoardSnapshotRefresh({ force: true })
   if (isBoardDataReady.value) {
     ElMessage.success(t('app.boardDataReloaded'))
   } else {
@@ -4132,7 +4181,7 @@ onMounted(async () => {
 
   hydrateFuzzNotificationState()
   const [boardLoaded, , layout, currentModelFingerprint] = await Promise.all([
-    refreshBoardSnapshot(),
+    requestBoardSnapshotRefresh({ force: true }),
     loadTaskInbox(false, { showLoading: false }),
     boardApi.getLayout().catch(() => null),
     fuzzingApi.getCurrentModelFingerprint().catch(() => null)
@@ -4178,6 +4227,8 @@ onMounted(async () => {
 
   if (boardLifecycleDisposed) return
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('focus', refreshBoardOnForeground)
+  document.addEventListener('visibilitychange', refreshBoardOnForeground)
 })
 
 
@@ -4963,6 +5014,9 @@ onBeforeUnmount(() => {
   void flushPendingBoardLayout({ silent: true })
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('resize', updateActionDockViewport)
+  window.removeEventListener('focus', refreshBoardOnForeground)
+  document.removeEventListener('visibilitychange', refreshBoardOnForeground)
+  unsubscribeBoardInvalidation()
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
   window.removeEventListener('pointermove', onCanvasMapPointerMove)
@@ -8814,7 +8868,9 @@ const handleFixApplied = (result: FixApplyResult) => {
 
     rules.value = result.rules
     syncRuleDerivedEdges()
-    ElMessage.warning(t('app.fixAppliedRefreshFallback'))
+    ElMessage.warning(t(result.verificationRechecked
+      ? 'app.fixAppliedRefreshFallbackRechecked'
+      : 'app.fixAppliedRefreshFallbackSignedEvidence'))
     return false
   })
   pendingFixRefreshPromise = refreshPromise

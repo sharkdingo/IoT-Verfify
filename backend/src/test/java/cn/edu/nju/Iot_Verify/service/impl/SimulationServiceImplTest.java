@@ -28,6 +28,7 @@ import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -80,6 +81,7 @@ class SimulationServiceImplTest {
     private SimulationTraceRepository simulationTraceRepository;
     @Mock private SimulationTaskRepository simulationTaskRepository;
     @Mock private UserRepository userRepository;
+    @Mock private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
     @Mock private SimulationTraceMapper simulationTraceMapper;
     @Mock private SimulationTaskMapper simulationTaskMapper;
     private TransactionTemplate transactionTemplate;
@@ -132,9 +134,11 @@ class SimulationServiceImplTest {
     private ThreadPoolTaskExecutor syncSimulationExecutor;
     private Method doSimulate;
     private long nextSimulationTraceId;
+    private final List<SimpleTransactionStatus> transactionStatuses = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
+        transactionStatuses.clear();
         nextSimulationTraceId = 1L;
         simulationTraceRepository = mock(SimulationTraceRepository.class, withSettings().defaultAnswer(invocation -> {
             if ("save".equals(invocation.getMethod().getName())
@@ -161,7 +165,12 @@ class SimulationServiceImplTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate);
+                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
+                chatExecutionLeaseGuard);
+        lenient().when(simulationTaskRepository.currentDatabaseTime())
+                .thenAnswer(invocation -> LocalDateTime.now());
+        lenient().when(simulationTaskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(1);
         lenient().when(userRepository.findByIdForUpdate(anyLong())).thenReturn(Optional.of(new UserPo()));
         lenient().when(userRepository.existsById(anyLong())).thenReturn(true);
         DeviceManifest templateSnapshot = DeviceManifest.builder().name("light").build();
@@ -196,7 +205,7 @@ class SimulationServiceImplTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                executor, syncSimulationExecutor, transactionTemplate);
+                executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -204,6 +213,7 @@ class SimulationServiceImplTest {
             @Override
             public TransactionStatus getTransaction(TransactionDefinition definition) {
                 lastTransactionStatus = new SimpleTransactionStatus();
+                transactionStatuses.add(lastTransactionStatus);
                 return lastTransactionStatus;
             }
 
@@ -400,7 +410,9 @@ class SimulationServiceImplTest {
                 .thenReturn(SimulationOutput.success("trace", "raw"));
         when(smvTraceParser.parseCounterexampleStates(any(), any(), anyList()))
                 .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
-        when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(simulationTaskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         // findById is still used by simulateAsync after startTaskIfStillPending to load the entity
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(9L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
@@ -409,7 +421,8 @@ class SimulationServiceImplTest {
         when(simulationTaskRepository.completeTaskIfRunning(
                 eq(9L), eq(SimulationTaskPo.TaskStatus.COMPLETED), any(LocalDateTime.class),
                 eq(1), anyLong(), isNull(), anyString(), anyString(), any(),
-                eq(SimulationTaskPo.TaskStatus.RUNNING))).thenReturn(1);
+                eq(SimulationTaskPo.TaskStatus.RUNNING),
+                anyString(), any(LocalDateTime.class))).thenReturn(1);
 
         service.simulateAsync(1L, 9L, simRequest(singleDevice(), List.of(), 10, false, 0, false));
 
@@ -427,7 +440,9 @@ class SimulationServiceImplTest {
                 .thenReturn(SimulationOutput.success("trace", "raw"));
         when(smvTraceParser.parseCounterexampleStates(any(), any(), anyList()))
                 .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
-        when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(simulationTaskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(12L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
                 .requestedSteps(10).createdAt(LocalDateTime.now()).build();
@@ -435,12 +450,13 @@ class SimulationServiceImplTest {
         when(simulationTaskRepository.completeTaskIfRunning(
                 eq(12L), eq(SimulationTaskPo.TaskStatus.COMPLETED), any(LocalDateTime.class),
                 eq(1), anyLong(), isNull(), anyString(), anyString(), any(),
-                eq(SimulationTaskPo.TaskStatus.RUNNING))).thenReturn(0);
+                eq(SimulationTaskPo.TaskStatus.RUNNING),
+                anyString(), any(LocalDateTime.class))).thenReturn(0);
 
         service.simulateAsync(1L, 12L, simRequest(singleDevice(), List.of(), 10, false, 0, false));
 
         assertEquals(200, readResultCode(fakeFile));
-        assertTrue(lastTransactionStatus.isRollbackOnly());
+        assertTrue(transactionStatuses.stream().anyMatch(SimpleTransactionStatus::isRollbackOnly));
         verify(simulationTraceRepository).save(any(SimulationTracePo.class));
     }
 
@@ -464,7 +480,8 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository).startTaskIfStillPending(
                 eq(11L), eq(SimulationTaskPo.TaskStatus.RUNNING),
                 any(LocalDateTime.class), eq(0), anyString(),
-                eq(SimulationTaskPo.TaskStatus.PENDING));
+                eq(SimulationTaskPo.TaskStatus.PENDING), anyString(),
+                any(LocalDateTime.class), any(LocalDateTime.class));
         // Verify early return: generation should never be reached.
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
@@ -659,7 +676,8 @@ class SimulationServiceImplTest {
         assertTrue(ex.getMessage().contains("Devices list cannot be empty"));
         verify(simulationTaskRepository).findById(12L);
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -670,7 +688,8 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("taskId"));
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -689,9 +708,11 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository).failTaskIfActive(
                 eq(16L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq("attackScenario.budget: Attack budget must be omitted or 0 when no attack scenario is selected"), anyString(), any(),
-                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generate(any(), any(), any(), any(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -711,12 +732,15 @@ class SimulationServiceImplTest {
 
         assertTrue(ex.getMessage().contains("busy"));
         verify(simulationTaskRepository).save(any(SimulationTaskPo.class));
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
         verify(simulationTaskRepository).failTaskIfActive(
                 eq(13L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -736,9 +760,11 @@ class SimulationServiceImplTest {
         verify(simulationTaskRepository).failTaskIfActive(
                 eq(14L), eq(SimulationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(simulationTaskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -762,7 +788,9 @@ class SimulationServiceImplTest {
                 .thenReturn(SimulationOutput.success("trace", "raw"));
         when(smvTraceParser.parseCounterexampleStates(any(), any(), anyList()))
                 .thenReturn(List.of(new TraceStateDto(), new TraceStateDto()));
-        when(simulationTaskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(simulationTaskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         SimulationTaskPo task = SimulationTaskPo.builder()
                 .id(15L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
                 .requestedSteps(10).createdAt(LocalDateTime.now()).build();
@@ -799,6 +827,29 @@ class SimulationServiceImplTest {
         assertEquals("testdevice", requestJson.path("devices").get(0).path("varName").asText());
         assertEquals("testdevice", requestJson.path("rules").get(0).path("conditions").get(0).path("deviceName").asText());
         assertEquals(1, requestJson.path("devices").size());
+    }
+
+    @Test
+    void queuedSimulationCannotStartAfterItsLeaseIsLost() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        SimulationServiceImpl capturingService = serviceWithSimulationExecutor(capturingExecutor);
+
+        capturingService.simulateAsync(
+                1L, 151L, simRequest(singleDevice(), List.of(makeRule()), 10, false, 0, false));
+        assertNotNull(capturingExecutor.capturedTask());
+
+        capturingService.maintainTaskLeases();
+        capturingExecutor.capturedTask().run();
+
+        verify(simulationTaskRepository).renewOwnedActiveLease(
+                eq(151L), anyString(), any(LocalDateTime.class), any(LocalDateTime.class),
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)));
+        verify(simulationTaskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
+        verify(smvGenerator, never()).generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
+                anyBoolean(), any(), any(), anyMap());
     }
 
     // ==================== simulate (public) tests ====================
@@ -1078,6 +1129,7 @@ class SimulationServiceImplTest {
 
         service.deleteSimulation(1L, 5L);
 
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
         verify(simulationTaskRepository).deleteByUserIdAndSimulationTraceId(1L, 5L);
         verify(simulationTraceRepository).delete(Objects.requireNonNull(po));
     }
@@ -1094,35 +1146,26 @@ class SimulationServiceImplTest {
     // ==================== terminal-state progress tests ====================
 
     @Test
-    void cleanupStaleTasks_setsProgressTo100() throws Exception {
-        SimulationTaskPo running = SimulationTaskPo.builder()
-                .id(50L).userId(1L).status(SimulationTaskPo.TaskStatus.RUNNING)
-                .requestedSteps(10).createdAt(LocalDateTime.now()).build();
-        SimulationTaskPo pending = SimulationTaskPo.builder()
-                .id(51L).userId(1L).status(SimulationTaskPo.TaskStatus.PENDING)
-                .requestedSteps(5).createdAt(LocalDateTime.now()).build();
+    void maintainTaskLeases_recoversExpiredTasksWithoutScanningAndSavingAllActiveRows() {
+        when(simulationTaskRepository.failExpiredActiveTasks(
+                eq(SimulationTaskPo.TaskStatus.FAILED),
+                any(LocalDateTime.class),
+                anyString(),
+                anyString(),
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
+                any(LocalDateTime.class)))
+                .thenReturn(2);
 
-        when(simulationTaskRepository.findByStatusIn(
-                List.of(SimulationTaskPo.TaskStatus.RUNNING, SimulationTaskPo.TaskStatus.PENDING)))
-                .thenReturn(List.of(running, pending));
+        service.maintainTaskLeases();
 
-        // @PostConstruct is not invoked by plain constructor — call via reflection
-        SimulationServiceImpl freshService = new SimulationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
-                simulationTraceRepository, simulationTaskRepository, userRepository,
-                simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                simulationTaskExecutor, syncSimulationExecutor, transactionTemplate);
-        Method cleanup = SimulationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
-        cleanup.setAccessible(true);
-        cleanup.invoke(freshService);
-
-        assertEquals(SimulationTaskPo.TaskStatus.FAILED, running.getStatus());
-        assertEquals(100, running.getProgress());
-        assertNotNull(running.getCompletedAt());
-
-        assertEquals(SimulationTaskPo.TaskStatus.FAILED, pending.getStatus());
-        assertEquals(100, pending.getProgress());
-        assertNotNull(pending.getCompletedAt());
+        verify(simulationTaskRepository).failExpiredActiveTasks(
+                eq(SimulationTaskPo.TaskStatus.FAILED),
+                any(LocalDateTime.class),
+                anyString(),
+                anyString(),
+                eq(List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING)),
+                any(LocalDateTime.class));
+        verify(simulationTaskRepository, never()).save(any(SimulationTaskPo.class));
     }
 
     @Test
@@ -1141,6 +1184,7 @@ class SimulationServiceImplTest {
 
         assertTrue(result.isCancellationAccepted());
         assertEquals("CANCELLED", result.getTaskStatus());
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
         verify(simulationTaskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(SimulationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class), anyList());
         assertFalse(wasSimulationTaskSaveCalled());
@@ -1156,7 +1200,8 @@ class SimulationServiceImplTest {
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(simulationTaskRepository.completeTaskIfRunning(
                 eq(70L), any(), any(), anyInt(), any(),
-                any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class)))
                 .thenReturn(0);
 
         Method completeTask = SimulationServiceImpl.class.getDeclaredMethod(
@@ -1167,7 +1212,8 @@ class SimulationServiceImplTest {
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(simulationTaskRepository).completeTaskIfRunning(
                 eq(70L), any(), any(), anyInt(), any(),
-                any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class));
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasSimulationTaskSaveCalled());
     }
@@ -1181,7 +1227,7 @@ class SimulationServiceImplTest {
 
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(simulationTaskRepository.failTaskIfActive(
-                eq(71L), any(), any(), any(), any(), any(), any()))
+                eq(71L), any(), any(), any(), any(), any(), any(), anyString(), any(LocalDateTime.class)))
                 .thenReturn(0);
 
         Method failTask = SimulationServiceImpl.class.getDeclaredMethod(
@@ -1191,7 +1237,7 @@ class SimulationServiceImplTest {
 
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(simulationTaskRepository).failTaskIfActive(
-                eq(71L), any(), any(), any(), any(), any(), any());
+                eq(71L), any(), any(), any(), any(), any(), any(), anyString(), any(LocalDateTime.class));
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasSimulationTaskSaveCalled());
     }

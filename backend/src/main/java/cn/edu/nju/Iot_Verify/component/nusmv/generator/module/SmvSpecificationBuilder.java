@@ -43,14 +43,26 @@ public class SmvSpecificationBuilder {
     public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
                                boolean isAttack, int attackBudget,
                                Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy) {
+        return buildNegated(specs, negatedSpecIndex, isAttack, attackBudget,
+                deviceSmvMap, enablePrivacy, SmvGenerationContext.noop());
+    }
+
+    public String buildNegated(List<SpecificationDto> specs, int negatedSpecIndex,
+                               boolean isAttack, int attackBudget,
+                               Map<String, DeviceSmvData> deviceSmvMap, boolean enablePrivacy,
+                               SmvGenerationContext context) {
         if (specs == null || specs.isEmpty() || negatedSpecIndex < 0 || negatedSpecIndex >= specs.size()) {
             log.warn("buildNegated: invalid negatedSpecIndex={} for specs size={}", negatedSpecIndex,
                     specs == null ? 0 : specs.size());
-            return "";
+            throw SmvGenerationException.specificationError(String.valueOf(negatedSpecIndex),
+                    "the violated specification index is outside the submitted snapshot");
         }
 
         SpecificationDto spec = specs.get(negatedSpecIndex);
-        if (spec == null) return "";
+        if (spec == null) {
+            throw SmvGenerationException.specificationError(String.valueOf(negatedSpecIndex),
+                    "the violated specification snapshot is null");
+        }
 
         StringBuilder content = new StringBuilder();
         content.append("\n-- Negated specification (index ").append(negatedSpecIndex).append(")");
@@ -58,10 +70,12 @@ public class SmvSpecificationBuilder {
         try {
             String negatedSpec = generateNegatedSpec(spec, isAttack, attackBudget, deviceSmvMap);
             content.append("\n\t").append(negatedSpec);
+            recordEmittedSpec(context, spec, negatedSpec);
         } catch (InvalidConditionException e) {
             log.warn("Failed to negate spec at index {}: {}", negatedSpecIndex, e.getMessage());
-            content.append("\n\tCTLSPEC TRUE -- negation failed: ").append(
-                    e.getMessage() != null ? e.getMessage().replaceAll("[\\r\\n]+", " ") : "unknown");
+            throw SmvGenerationException.specificationError(
+                    spec.getId() != null ? spec.getId() : String.valueOf(negatedSpecIndex),
+                    e.getMessage() != null ? e.getMessage() : "negation failed");
         }
 
         return content.toString();
@@ -111,10 +125,7 @@ public class SmvSpecificationBuilder {
             case "7": // safety: AG !(body) → EF(body), where body includes trust/attack expressions
                 return "CTLSPEC EF(" + buildSafetyBody(spec, deviceSmvMap, isAttack, attackBudget) + ")";
             default:
-                // Symmetric with generateCtlSpec: fail closed & visible instead of silently
-                // treating an unknown template as AG(A). buildNegated() catches this and emits
-                // "CTLSPEC TRUE -- negation failed", so an invalid template can never be
-                // silently negated into a passing property.
+                // Symmetric with generateCtlSpec: fail closed instead of guessing AG(A).
                 throw new InvalidConditionException("unsupported templateId '" + templateId
                         + "'; allowed values are 1, 2, 3, 4, 5, 6, 7");
         }

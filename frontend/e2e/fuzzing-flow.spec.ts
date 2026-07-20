@@ -13,6 +13,8 @@ type FuzzTask = {
   explorationMode: 'BOARD_SNAPSHOT' | 'PAPER_COMPATIBLE'
   status: string
   runId?: number | null
+  createdAt: string
+  completedAt?: string | null
 }
 
 type FuzzRun = {
@@ -212,6 +214,8 @@ test.describe('bounded counterexample exploration', () => {
 
       const task = await waitForTask(request, auth, accepted.id)
       expect(task.status).toBe('COMPLETED')
+      expect(task.completedAt).toEqual(expect.any(String))
+      expect(Date.parse(task.completedAt!)).toBeGreaterThanOrEqual(Date.parse(task.createdAt))
       const runId = task.runId || task.id
       const run = await unwrap<FuzzRun>(await request.get(`${apiBaseURL}/api/fuzz/runs/${runId}`, {
         headers: authHeaders(auth)
@@ -396,6 +400,8 @@ test.describe('bounded counterexample exploration', () => {
       expect(paperAccepted.explorationMode).toBe('PAPER_COMPATIBLE')
       const paperTask = await waitForTask(request, auth, paperAccepted.id)
       expect(paperTask.status).toBe('COMPLETED')
+      expect(paperTask.completedAt).toEqual(expect.any(String))
+      expect(Date.parse(paperTask.completedAt!)).toBeGreaterThanOrEqual(Date.parse(paperTask.createdAt))
       const paperRun = await unwrap<FuzzRun>(await request.get(
         `${apiBaseURL}/api/fuzz/runs/${paperTask.runId || paperTask.id}`,
         { headers: authHeaders(auth) }

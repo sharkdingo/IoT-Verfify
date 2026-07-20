@@ -19,7 +19,7 @@ public interface FixService {
     FaultLocalizationResultDto localizeFault(Long userId, Long traceId);
 
     /**
-     * Attempt to fix a violation with optional preferred parameter ranges keyed by ParameterAdjustment.targetId
+     * Attempt to fix a violation with optional preferred parameter ranges keyed by ParameterTarget.targetId.
      * (may invoke NuSMV multiple times).
      */
     FixResultDto fix(Long userId, Long traceId, List<String> strategies, Map<String, PreferredRange> preferredRanges);

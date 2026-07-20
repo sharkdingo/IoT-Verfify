@@ -20,7 +20,6 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -176,6 +175,8 @@ public class RuleFixer {
                 .enablePrivacy(enablePrivacy)
                 .maxAttempts(maxAttempts)
                 .preferredRanges(preferredRanges)
+                .counterexampleInitialState(states == null || states.isEmpty() ? null : states.get(0))
+                .requireCounterexampleReplay(true)
                 .deadline(Instant.now().plusMillis(fixConfig.getFixTimeoutMs()))
                 .build();
 
@@ -207,6 +208,9 @@ public class RuleFixer {
                         "The violated specification could not be resolved from the trace context."));
                 continue;
             }
+            ctx.clearStrategyGenerationFailure(strategyName);
+            ctx.clearStrategySolverFailure(strategyName);
+            ctx.clearStrategyNoResult(strategyName);
             FixSuggestionDto suggestion = strategy.tryFix(ctx);
             if (suggestion != null) {
                 suggestions.add(suggestion);
@@ -214,13 +218,22 @@ public class RuleFixer {
                         suggestion.isVerified() ? "VERIFIED" : "NOT_VERIFIED",
                         suggestion.isVerified()
                                 ? "A concrete suggestion passed forward verification on the complete generated model."
-                                : "A candidate was generated but did not pass forward verification."));
+                                : "A candidate was generated but did not pass forward verification.", ctx));
             } else if (ctx.isExpired()) {
                 strategyAttempts.add(attempt(strategyName, "TIMED_OUT",
-                        "The automatic-fix time limit expired while this strategy was running; its search was incomplete."));
+                        "The automatic-fix time limit expired while this strategy was running; its search was incomplete.", ctx));
+            } else if (ctx.strategyGenerationFailure(strategyName) != null) {
+                strategyAttempts.add(attempt(strategyName, "FAILED_MODEL_GENERATION",
+                        ctx.strategyGenerationFailure(strategyName), ctx));
+            } else if (ctx.strategySolverFailure(strategyName) != null) {
+                strategyAttempts.add(attempt(strategyName, "FAILED_SOLVER_EXECUTION",
+                        ctx.strategySolverFailure(strategyName), ctx));
+            } else if (ctx.strategyNoResult(strategyName) != null) {
+                FixContext.StrategyNoResult noResult = ctx.strategyNoResult(strategyName);
+                strategyAttempts.add(attempt(strategyName, noResult.status(), noResult.reason(), ctx));
             } else {
                 strategyAttempts.add(attempt(strategyName, "NO_VERIFIED_SUGGESTION",
-                        "The strategy was attempted but produced no suggestion that passed forward verification."));
+                        "The strategy was attempted but produced no suggestion that passed forward verification.", ctx));
             }
         }
 
@@ -248,27 +261,16 @@ public class RuleFixer {
                     + "snapshot; parameter and condition strategies were skipped)");
         }
 
-        // UX-2: Detect unused preferred range selections without exposing internal locator keys.
+        // A selection is used when it matches an eligible target, regardless of whether that
+        // constrained search eventually produces a verified suggestion.
         List<PreferredRangeSelection> unusedSelections = new ArrayList<>();
         if (preferredRanges != null && !preferredRanges.isEmpty()) {
-            Set<String> usedTargetIds = new LinkedHashSet<>();
-            for (FixSuggestionDto s : suggestions) {
-                if (s.getParameterAdjustments() != null) {
-                    for (var adj : s.getParameterAdjustments()) {
-                        String targetId = adj.getTargetId();
-                        if (targetId == null || targetId.isBlank()) {
-                            targetId = PreferredRangeSelection.targetIdFor(traceId, adj.getRuleIndex(), adj.getConditionIndex());
-                        }
-                        if (PreferredRangeSelection.isValidTargetId(targetId)) {
-                            usedTargetIds.add(targetId);
-                        }
-                    }
-                }
-            }
+            Set<String> matchedTargetIds = ctx.matchedPreferredRangeTargetIdsSnapshot();
             for (Map.Entry<String, PreferredRange> entry : preferredRanges.entrySet()) {
                 String targetId = entry.getKey();
                 PreferredRange range = entry.getValue();
-                if (!usedTargetIds.contains(targetId) && PreferredRangeSelection.isValidTargetId(targetId) && range != null) {
+                if (!matchedTargetIds.contains(targetId)
+                        && PreferredRangeSelection.isValidTargetId(targetId) && range != null) {
                     unusedSelections.add(PreferredRangeSelection.builder()
                             .targetId(targetId)
                             .lower(range.getLower())
@@ -277,7 +279,7 @@ public class RuleFixer {
                 }
             }
             if (!unusedSelections.isEmpty()) {
-                summaryBuilder.append(" Note: some preferred range selections were not used in any parameter fix suggestion.");
+                summaryBuilder.append(" Note: some preferred range selections matched no eligible parameter target.");
             }
         }
 
@@ -297,15 +299,25 @@ public class RuleFixer {
                 .sourceModelComplete(true)
                 .summary(summaryBuilder.toString())
                 .warnings(warnings)
+                .parameterTargets(ctx.parameterTargetsSnapshot())
                 .unusedPreferredRangeSelections(unusedSelections)
                 .build();
     }
 
     private static FixStrategyAttemptDto attempt(String strategy, String status, String reason) {
+        return attempt(strategy, status, reason, null);
+    }
+
+    private static FixStrategyAttemptDto attempt(
+            String strategy, String status, String reason, FixContext ctx) {
+        FixContext.StrategySearchProgress progress = ctx != null
+                ? ctx.strategySearchProgress(strategy) : null;
         return FixStrategyAttemptDto.builder()
                 .strategy(strategy)
                 .status(status)
                 .reason(reason)
+                .attemptsUsed(progress != null ? progress.attemptsUsed() : null)
+                .attemptLimit(progress != null ? progress.attemptLimit() : null)
                 .build();
     }
 

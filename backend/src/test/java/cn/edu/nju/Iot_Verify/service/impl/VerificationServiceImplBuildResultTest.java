@@ -33,6 +33,7 @@ import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
@@ -81,6 +82,7 @@ class VerificationServiceImplBuildResultTest {
     @Mock private NusmvExecutor nusmvExecutor;
     @Mock private NusmvConfig nusmvConfig;
     @Mock private VerificationTaskRepository taskRepository;
+    @Mock private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
     @Mock private TraceRepository traceRepository;
     @Mock private TraceMapper traceMapper;
     @Mock private UserRepository userRepository;
@@ -151,7 +153,11 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate);
+                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
+                chatExecutionLeaseGuard);
+        lenient().when(taskRepository.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
+        lenient().when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(1);
         lenient().when(userRepository.findByIdForUpdate(anyLong())).thenReturn(Optional.of(new UserPo()));
         lenient().when(userRepository.existsById(anyLong())).thenReturn(true);
         lenient().when(taskRepository.save(any(VerificationTaskPo.class))).thenAnswer(invocation -> {
@@ -187,7 +193,7 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                executor, syncVerificationExecutor, transactionTemplate);
+                executor, syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard);
     }
 
     private VerificationServiceImpl serviceWithTransactionTemplate(TransactionTemplate transactionTemplate) {
@@ -195,7 +201,8 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate);
+                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
+                chatExecutionLeaseGuard);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -572,7 +579,8 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("Specs list cannot be empty"));
         verify(taskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -583,7 +591,8 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(ex.getMessage().contains("taskId"));
         verify(taskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -661,9 +670,11 @@ class VerificationServiceImplBuildResultTest {
                 eq(16L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE),
                 eq("attackScenario.budget: Attack budget must be omitted or 0 when no attack scenario is selected"), anyString(), any(),
-                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(taskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -760,6 +771,7 @@ class VerificationServiceImplBuildResultTest {
         assertEquals(17L, taskId);
         assertNotNull(capturingExecutor.capturedTask());
         verify(taskRepository).save(any(VerificationTaskPo.class));
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
         verify(smvGenerator, never()).generate(anyLong(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any());
     }
 
@@ -783,9 +795,11 @@ class VerificationServiceImplBuildResultTest {
                 eq(12L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE),
                 eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(taskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -806,9 +820,11 @@ class VerificationServiceImplBuildResultTest {
                 eq(13L), eq(VerificationTaskPo.TaskStatus.FAILED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE),
                 eq("Server busy, please try again later"), anyString(), any(),
-                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
+                anyString(), any(LocalDateTime.class));
         verify(taskRepository, never()).startTaskIfStillPending(
-                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any());
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
     }
 
     @Test
@@ -831,7 +847,9 @@ class VerificationServiceImplBuildResultTest {
                 .thenReturn(generateResult(smv, List.of(spec)));
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
-        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(taskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         VerificationTaskPo task = VerificationTaskPo.builder()
                 .id(14L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
                 .createdAt(LocalDateTime.now()).build();
@@ -876,6 +894,31 @@ class VerificationServiceImplBuildResultTest {
     }
 
     @Test
+    void queuedVerificationCannotStartAfterItsLeaseIsLost() throws Exception {
+        CapturingThreadPoolTaskExecutor capturingExecutor = new CapturingThreadPoolTaskExecutor();
+        VerificationServiceImpl capturingService = serviceWithVerificationExecutor(capturingExecutor);
+        VerificationRequestDto request = makeRequest(
+                singleDevice(), List.of(makeRule()), List.of(makeEffectiveSpec("lease-spec")),
+                false, 0, false);
+
+        capturingService.verifyAsync(1L, 141L, request);
+        assertNotNull(capturingExecutor.capturedTask());
+
+        capturingService.maintainTaskLeases();
+        capturingExecutor.capturedTask().run();
+
+        verify(taskRepository).renewOwnedActiveLease(
+                eq(141L), anyString(), any(LocalDateTime.class), any(LocalDateTime.class),
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)));
+        verify(taskRepository, never()).startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class));
+        verify(smvGenerator, never()).generateWithResolvedDeviceModel(
+                anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(),
+                anyBoolean(), any(), any(), anyMap());
+    }
+
+    @Test
     void verifyAsync_success_writesResultJson() throws Exception {
         File smv = createTempModelFile();
         when(smvGenerator.generateWithEnvironment(anyLong(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt(), anyBoolean(), any(), any()))
@@ -883,7 +926,9 @@ class VerificationServiceImplBuildResultTest {
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", true, null))));
 
-        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(taskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         // findById is still used by verifyAsync after startTaskIfStillPending to load the entity
         VerificationTaskPo task = VerificationTaskPo.builder()
                 .id(7L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
@@ -1031,7 +1076,9 @@ class VerificationServiceImplBuildResultTest {
         when(nusmvExecutor.execute(any(File.class)))
                 .thenReturn(NusmvResult.success("output", List.of(new SpecCheckResult("expr", false, null))));
 
-        when(taskRepository.startTaskIfStillPending(anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any())).thenReturn(1);
+        when(taskRepository.startTaskIfStillPending(
+                anyLong(), any(), any(LocalDateTime.class), anyInt(), anyString(), any(),
+                anyString(), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(1);
         VerificationTaskPo task = VerificationTaskPo.builder()
                 .id(9L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
                 .createdAt(LocalDateTime.now()).build();
@@ -1043,7 +1090,8 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository).completeTaskIfRunning(
                 eq(9L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(),
                 eq(VerificationOutcome.VIOLATED), eq(1), eq(0), eq(0),
-                any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class));
     }
 
     @Test
@@ -1068,7 +1116,8 @@ class VerificationServiceImplBuildResultTest {
         verify(taskRepository).startTaskIfStillPending(
                 eq(11L), eq(VerificationTaskPo.TaskStatus.RUNNING),
                 any(LocalDateTime.class), eq(0), anyString(),
-                eq(VerificationTaskPo.TaskStatus.PENDING));
+                eq(VerificationTaskPo.TaskStatus.PENDING), anyString(),
+                any(LocalDateTime.class), any(LocalDateTime.class));
         // Verify early return: findById for task loading should NOT be called after abort.
         // (updateTaskProgress may call findById(11L) before the atomic check, so we only
         // assert generate() was never reached.)
@@ -1134,35 +1183,28 @@ class VerificationServiceImplBuildResultTest {
     // ==================== terminal-state progress tests ====================
 
     @Test
-    void cleanupStaleTasks_setsProgressTo100() throws Exception {
-        VerificationTaskPo running = VerificationTaskPo.builder()
-                .id(50L).userId(1L).status(VerificationTaskPo.TaskStatus.RUNNING)
-                .createdAt(LocalDateTime.now()).build();
-        VerificationTaskPo pending = VerificationTaskPo.builder()
-                .id(51L).userId(1L).status(VerificationTaskPo.TaskStatus.PENDING)
-                .createdAt(LocalDateTime.now()).build();
+    void maintainTaskLeases_recoversExpiredTasksWithoutScanningAndSavingAllActiveRows() {
+        when(taskRepository.failExpiredActiveTasks(
+                eq(VerificationTaskPo.TaskStatus.FAILED),
+                any(LocalDateTime.class),
+                eq(VerificationOutcome.INCONCLUSIVE),
+                anyString(),
+                anyString(),
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
+                any(LocalDateTime.class)))
+                .thenReturn(2);
 
-        when(taskRepository.findByStatusIn(
-                List.of(VerificationTaskPo.TaskStatus.RUNNING, VerificationTaskPo.TaskStatus.PENDING)))
-                .thenReturn(List.of(running, pending));
+        service.maintainTaskLeases();
 
-        // @PostConstruct is not invoked by plain constructor — call via reflection
-        VerificationServiceImpl freshService = new VerificationServiceImpl(
-                smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
-                taskRepository, traceRepository, traceMapper, userRepository,
-                specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                verificationTaskExecutor, syncVerificationExecutor, transactionTemplate);
-        Method cleanup = VerificationServiceImpl.class.getDeclaredMethod("cleanupStaleTasks");
-        cleanup.setAccessible(true);
-        cleanup.invoke(freshService);
-
-        assertEquals(VerificationTaskPo.TaskStatus.FAILED, running.getStatus());
-        assertEquals(100, running.getProgress());
-        assertNotNull(running.getCompletedAt());
-
-        assertEquals(VerificationTaskPo.TaskStatus.FAILED, pending.getStatus());
-        assertEquals(100, pending.getProgress());
-        assertNotNull(pending.getCompletedAt());
+        verify(taskRepository).failExpiredActiveTasks(
+                eq(VerificationTaskPo.TaskStatus.FAILED),
+                any(LocalDateTime.class),
+                eq(VerificationOutcome.INCONCLUSIVE),
+                anyString(),
+                anyString(),
+                eq(List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING)),
+                any(LocalDateTime.class));
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
     }
 
     @Test
@@ -1182,6 +1224,7 @@ class VerificationServiceImplBuildResultTest {
 
         assertTrue(result.isCancellationAccepted());
         assertEquals("CANCELLED", result.getTaskStatus());
+        verify(chatExecutionLeaseGuard).requireCurrentExecutionLease();
         verify(taskRepository).cancelTaskIfStillActive(
                 eq(60L), eq(VerificationTaskPo.TaskStatus.CANCELLED), any(LocalDateTime.class),
                 eq(VerificationOutcome.INCONCLUSIVE), anyList());
@@ -1197,7 +1240,8 @@ class VerificationServiceImplBuildResultTest {
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(taskRepository.completeTaskIfRunning(
                 eq(70L), any(), any(), any(VerificationOutcome.class), anyInt(),
-                anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class)))
                 .thenReturn(0);
 
         Method completeTask = VerificationServiceImpl.class.getDeclaredMethod(
@@ -1224,7 +1268,8 @@ class VerificationServiceImplBuildResultTest {
                         + "\"formulaPreview\":\"CTL AG(\\\"Hall sensor\\\".state = \\\"active\\\")\","
                         + "\"formulaKind\":\"CTL\",\"outcome\":\"SATISFIED\","
                         + "\"expression\":\"expr\"}]"),
-                any(), eq("[]"), any(), any(), any(), any());
+                any(), eq("[]"), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class));
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasTaskSaveCalled());
     }
@@ -1252,7 +1297,8 @@ class VerificationServiceImplBuildResultTest {
                 eq(72L), eq(VerificationTaskPo.TaskStatus.COMPLETED), any(LocalDateTime.class),
                 eq(VerificationOutcome.VIOLATED), eq(1), eq(0), eq(0),
                 any(), any(), any(), any(), isNull(), any(),
-                eq(VerificationTaskPo.TaskStatus.RUNNING))).thenReturn(0);
+                eq(VerificationTaskPo.TaskStatus.RUNNING),
+                anyString(), any(LocalDateTime.class))).thenReturn(0);
 
         Method method = VerificationServiceImpl.class.getDeclaredMethod(
                 "completeTaskAndSaveTraces",
@@ -1277,7 +1323,8 @@ class VerificationServiceImplBuildResultTest {
 
         // Atomic UPDATE returns 0 — task was already cancelled in DB
         when(taskRepository.failTaskIfActive(
-                eq(71L), any(), any(), any(), any(), any(), any(), any()))
+                eq(71L), any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class)))
                 .thenReturn(0);
 
         Method failTask = VerificationServiceImpl.class.getDeclaredMethod(
@@ -1287,7 +1334,8 @@ class VerificationServiceImplBuildResultTest {
 
         // Atomic UPDATE was called (returns 0 = no rows affected = already cancelled)
         verify(taskRepository).failTaskIfActive(
-                eq(71L), any(), any(), any(), any(), any(), any(), any());
+                eq(71L), any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any(LocalDateTime.class));
         // save() should NOT be called — atomic UPDATE replaces it
         assertFalse(wasTaskSaveCalled());
     }

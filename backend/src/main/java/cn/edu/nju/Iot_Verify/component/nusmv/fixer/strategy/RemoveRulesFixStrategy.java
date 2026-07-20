@@ -8,10 +8,12 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixSuggestionDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
+import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigInteger;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -54,11 +56,27 @@ public class RemoveRulesFixStrategy implements FixStrategy {
             return null;
         }
 
-        // Deduplicate fault rule indices
-        List<Integer> faultIndices = faultRules.stream()
-                .map(FaultRuleDto::getRuleIndex)
-                .distinct()
-                .collect(Collectors.toList());
+        // A lower-priority rule may be dormant in this particular trace and take over after the
+        // localized rule is removed. Include the same spec-related expansion used by the other
+        // strategies so minimal removal combinations can account for those backup automations.
+        Set<Integer> candidateIndices = new LinkedHashSet<>();
+        int violatedSpecIndex = ctx.getViolatedSpecIndex();
+        if (ctx.getSpecs() != null && violatedSpecIndex >= 0
+                && violatedSpecIndex < ctx.getSpecs().size()) {
+            SpecificationDto violatedSpec = ctx.getSpecs().get(violatedSpecIndex);
+            candidateIndices.addAll(FixStrategyUtils.expandRuleIndices(
+                    faultRules, allRules, violatedSpec, ctx.getDeviceSmvMap()));
+        } else {
+            faultRules.stream()
+                    .map(FaultRuleDto::getRuleIndex)
+                    .filter(index -> index != null && index >= 0 && index < allRules.size())
+                    .forEach(candidateIndices::add);
+        }
+        List<Integer> faultIndices = new ArrayList<>(candidateIndices);
+        if (faultIndices.isEmpty()) {
+            return null;
+        }
+        ctx.initializeStrategySearch(NAME, maxAttempts);
 
         int attempts = 0;
 
@@ -87,7 +105,19 @@ public class RemoveRulesFixStrategy implements FixStrategy {
         }
 
         log.info("RemoveRulesFixStrategy exhausted {} attempts without finding a fix", attempts);
+        if (!ctx.isExpired() && combinationCount(faultIndices.size())
+                .compareTo(BigInteger.valueOf(attempts)) > 0) {
+            ctx.recordStrategyNoResult(NAME, "SEARCH_BUDGET_EXHAUSTED",
+                    "Rule-removal search consumed " + attempts + " of " + maxAttempts
+                            + " allowed attempts before all candidate combinations were checked.");
+        }
         return null;
+    }
+
+    private static BigInteger combinationCount(int candidateCount) {
+        return candidateCount <= 0
+                ? BigInteger.ZERO
+                : BigInteger.ONE.shiftLeft(candidateCount).subtract(BigInteger.ONE);
     }
 
     /**
@@ -100,6 +130,7 @@ public class RemoveRulesFixStrategy implements FixStrategy {
         if (depth == count) {
             if (attempts >= maxAttempts || ctx.isExpired()) return attempts;
             attempts++;
+            ctx.addStrategyAttempts(NAME, 1);
 
             List<Integer> combo = new ArrayList<>();
             for (int idx : result) combo.add(faultIndices.get(idx));
@@ -108,7 +139,8 @@ public class RemoveRulesFixStrategy implements FixStrategy {
             log.info("Fix attempt {}/{}: removing rule indices {} ({} rules remaining)",
                     attempts, maxAttempts, combo, remainingRules.size());
 
-            boolean allPass = FixStrategyUtils.forwardVerify(smvGenerator, nusmvExecutor, ctx, remainingRules);
+            boolean allPass = FixStrategyUtils.forwardVerify(
+                    smvGenerator, nusmvExecutor, ctx, remainingRules, NAME);
             if (allPass) {
                 // Store the winning combo indices back into result for caller
                 for (int i = 0; i < count; i++) result[i] = faultIndices.get(result[i]);

@@ -210,7 +210,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             LocalDateTime renewedUntil = now.plus(TASK_LEASE_DURATION);
             for (LocalFuzzExecution execution : List.copyOf(localExecutions.values())) {
                 int renewed = taskRepository.renewOwnedActiveLease(
-                        execution.taskId, workerId, renewedUntil, ACTIVE_STATUSES);
+                        execution.taskId, workerId, now, renewedUntil, ACTIVE_STATUSES);
                 if (renewed == 0) {
                     execution.requestStop();
                 }
@@ -368,10 +368,11 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                         "Board changed after the random-state input preview; refresh the preview and retry");
             }
             String modelInputSnapshotJson = serializeFrozenSnapshot(snapshot, "request");
+            LocalDateTime createdAt = databaseNow();
             FuzzTaskPo task = FuzzTaskPo.builder()
                     .userId(userId)
                     .status(FuzzTaskPo.TaskStatus.PENDING)
-                    .createdAt(LocalDateTime.now())
+                    .createdAt(createdAt)
                     .progress(0)
                     .progressStage(TaskProgressStage.QUEUED)
                     .targetSpecIdsJson(JsonUtils.toJson(request.targetSpecIds()))
@@ -384,7 +385,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     .modelSnapshotJson(JsonUtils.toJson(modelSnapshot))
                     .findingCount(0)
                     .workerId(workerId)
-                    .leaseExpiresAt(databaseNow().plus(TASK_LEASE_DURATION))
+                    .leaseExpiresAt(createdAt.plus(TASK_LEASE_DURATION))
                     .build();
             return taskRepository.save(Objects.requireNonNull(task)).getId();
         });
@@ -438,13 +439,15 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
             updateTaskProgress(taskId, 0, TaskProgressStage.STARTING);
             if (isTaskCancelled(taskId)) return;
 
-            LocalDateTime startedAt = LocalDateTime.now();
-            LocalDateTime leaseExpiresAt = databaseNow().plus(TASK_LEASE_DURATION);
+            LocalDateTime currentTime = databaseNow();
+            LocalDateTime startedAt = currentTime;
+            LocalDateTime leaseExpiresAt = currentTime.plus(TASK_LEASE_DURATION);
             int started = taskRepository.startTaskIfStillPending(
                     taskId,
                     FuzzTaskPo.TaskStatus.RUNNING,
                     startedAt,
                     workerId,
+                    currentTime,
                     leaseExpiresAt,
                     serializeCheckLogs(List.of("Counterexample search task started")),
                     FuzzTaskPo.TaskStatus.PENDING);
@@ -477,7 +480,7 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
 
             if (cancelled.getAsBoolean() || result != null
                     && result.outcome() == FuzzEngineOutcome.CANCELLED) {
-                atomicCancelTask(taskId, LocalDateTime.now());
+                atomicCancelTask(taskId, currentTaskTime());
                 return;
             }
 
@@ -591,13 +594,16 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                 return false;
             }
 
+            taskRepository.findByIdForUpdate(task.getId());
+            LocalDateTime evidenceCreatedAt = databaseNow();
+            findings.forEach(finding -> finding.setCreatedAt(evidenceCreatedAt));
             findingRepository.saveAllAndFlush(findings);
             if (isTaskCancelled(task.getId()) || Thread.currentThread().isInterrupted()) {
                 status.setRollbackOnly();
                 return false;
             }
 
-            LocalDateTime completedAt = LocalDateTime.now();
+            LocalDateTime completedAt = databaseNow();
             Long processingTimeMs = task.getStartedAt() == null ? null
                     : Duration.between(task.getStartedAt(), completedAt).toMillis();
             List<String> logs = List.of(
@@ -619,7 +625,9 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     limitationsJson,
                     findings.size(),
                     serializeCheckLogs(logs),
-                    FuzzTaskPo.TaskStatus.RUNNING);
+                    FuzzTaskPo.TaskStatus.RUNNING,
+                    workerId,
+                    completedAt);
             if (updated == 0) {
                 status.setRollbackOnly();
                 return false;
@@ -631,7 +639,6 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     private List<FuzzFindingPo> toFindingEntities(Long userId,
                                                   Long taskId,
                                                   FuzzEngineResult result) {
-        LocalDateTime createdAt = LocalDateTime.now();
         List<FuzzFindingPo> entities = new ArrayList<>();
         long aggregateEvidenceBytes = 0L;
         for (FuzzFinding finding : result.findings()) {
@@ -666,7 +673,6 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
                     .inputEventsJson(inputEventsJson)
                     .seed(result.effectiveSeed())
                     .stateCount(finding.states().size())
-                    .createdAt(createdAt)
                     .build());
         }
         return entities;
@@ -1466,29 +1472,40 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     private void failTaskById(Long taskId, String message) {
-        taskRepository.failTaskIfActive(
-                taskId,
-                FuzzTaskPo.TaskStatus.FAILED,
-                LocalDateTime.now(),
-                null,
-                truncateOutput(message),
-                serializeCheckLogs(List.of(message)),
-                ACTIVE_STATUSES);
+        transactionTemplate.executeWithoutResult(status -> {
+            taskRepository.findByIdForUpdate(taskId);
+            LocalDateTime completedAt = databaseNow();
+            taskRepository.failTaskIfActive(
+                    taskId,
+                    FuzzTaskPo.TaskStatus.FAILED,
+                    completedAt,
+                    null,
+                    truncateOutput(message),
+                    serializeCheckLogs(List.of(message)),
+                    ACTIVE_STATUSES,
+                    workerId,
+                    completedAt);
+        });
     }
 
     private void failTask(FuzzTaskPo task, String message) {
         if (task == null) return;
-        LocalDateTime completedAt = LocalDateTime.now();
-        Long processingTimeMs = task.getStartedAt() == null ? null
-                : Duration.between(task.getStartedAt(), completedAt).toMillis();
-        taskRepository.failTaskIfActive(
-                task.getId(),
-                FuzzTaskPo.TaskStatus.FAILED,
-                completedAt,
-                processingTimeMs,
-                truncateOutput(message),
-                serializeCheckLogs(List.of(message)),
-                ACTIVE_STATUSES);
+        transactionTemplate.executeWithoutResult(status -> {
+            taskRepository.findByIdForUpdate(task.getId());
+            LocalDateTime completedAt = databaseNow();
+            Long processingTimeMs = task.getStartedAt() == null ? null
+                    : Duration.between(task.getStartedAt(), completedAt).toMillis();
+            taskRepository.failTaskIfActive(
+                    task.getId(),
+                    FuzzTaskPo.TaskStatus.FAILED,
+                    completedAt,
+                    processingTimeMs,
+                    truncateOutput(message),
+                    serializeCheckLogs(List.of(message)),
+                    ACTIVE_STATUSES,
+                    workerId,
+                    completedAt);
+        });
     }
 
     private boolean isCancelledOrTerminal(Long taskId) {
@@ -1564,8 +1581,13 @@ public class FuzzServiceImpl extends AbstractAsyncTaskService<FuzzTaskPo> implem
     }
 
     @Override
+    protected LocalDateTime currentTaskTime() {
+        return databaseNow();
+    }
+
+    @Override
     protected int atomicUpdateProgress(Long taskId, int progress, TaskProgressStage stage) {
-        return taskRepository.updateProgressIfActive(taskId, progress, stage);
+        return taskRepository.updateProgressIfActive(taskId, progress, stage, workerId, databaseNow());
     }
 
     @Override

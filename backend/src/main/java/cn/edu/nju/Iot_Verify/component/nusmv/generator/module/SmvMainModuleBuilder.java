@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -90,7 +91,8 @@ public class SmvMainModuleBuilder {
         if (ctx == null || ctx.config() == null) return false;
         ParameterizationConfig c = ctx.config();
         return (c.getParameterizedThresholds() != null && !c.getParameterizedThresholds().isEmpty())
-                || (c.getConditionLambdas() != null && !c.getConditionLambdas().isEmpty());
+                || (c.getConditionLambdas() != null && !c.getConditionLambdas().isEmpty())
+                || (c.getCandidateConditionValues() != null && !c.getCandidateConditionValues().isEmpty());
     }
 
     private static void appendParameterizationFrozenVars(StringBuilder content, ParamCtx ctx) {
@@ -108,12 +110,52 @@ public class SmvMainModuleBuilder {
                 content.append("\n\t").append(lambdaName).append(": boolean;");
             }
         }
+        if (c.getCandidateConditionValues() != null) {
+            for (ParameterizationConfig.ConditionValueInfo valueInfo
+                    : c.getCandidateConditionValues().values()) {
+                content.append("\n\t").append(valueInfo.getFrozenVarName()).append(": ");
+                List<String> values = valueInfo.getValues();
+                if (values != null && !values.isEmpty()) {
+                    Set<String> normalizedValues = values.stream()
+                            .filter(Objects::nonNull)
+                            .map(value -> value.replace(" ", ""))
+                            .collect(Collectors.toCollection(LinkedHashSet::new));
+                    if (normalizedValues.size() == 2
+                            && normalizedValues.stream().anyMatch("TRUE"::equalsIgnoreCase)
+                            && normalizedValues.stream().anyMatch("FALSE"::equalsIgnoreCase)) {
+                        content.append("boolean;");
+                    } else {
+                        content.append("{").append(String.join(", ", normalizedValues)).append("};");
+                    }
+                } else if (valueInfo.getLowerBound() != null && valueInfo.getUpperBound() != null) {
+                    content.append(valueInfo.getLowerBound()).append("..")
+                            .append(valueInfo.getUpperBound()).append(";");
+                } else {
+                    throw SmvGenerationException.invalidBuilderInput(
+                            "SmvMainModuleBuilder",
+                            "candidate condition value domain",
+                            "must declare enum values or numeric bounds");
+                }
+            }
+        }
     }
 
     private static void appendParameterizationInvars(StringBuilder content, ParamCtx ctx) {
         if (ctx == null || ctx.config() == null || ctx.config().getExclusionInvars() == null) return;
         for (String invar : ctx.config().getExclusionInvars()) {
             content.append("\nINVAR ").append(invar).append(";");
+        }
+    }
+
+    private static void appendParameterizationInitialState(StringBuilder content, ParamCtx ctx) {
+        if (ctx == null || ctx.config() == null
+                || ctx.config().getInitialStateConstraints() == null) {
+            return;
+        }
+        for (String constraint : ctx.config().getInitialStateConstraints()) {
+            if (constraint != null && !constraint.isBlank()) {
+                content.append("\nINIT ").append(constraint).append(";");
+            }
         }
     }
 
@@ -274,6 +316,8 @@ public class SmvMainModuleBuilder {
             }
         }
 
+        appendParameterizationInitialState(content, paramCtx);
+
         Map<String, String> envVarInitValues = resolveEnvironmentPoolInitValues(
                 environmentVariables, environmentDomains);
 
@@ -355,6 +399,15 @@ public class SmvMainModuleBuilder {
             if (config.getConditionLambdas() != null) {
                 for (String lambdaName : config.getConditionLambdas().values()) {
                     registerMainIdentifier(identifiers, lambdaName, "generated fix condition lambda");
+                }
+            }
+            if (config.getCandidateConditionValues() != null) {
+                for (ParameterizationConfig.ConditionValueInfo valueInfo
+                        : config.getCandidateConditionValues().values()) {
+                    if (valueInfo != null) {
+                        registerMainIdentifier(identifiers, valueInfo.getFrozenVarName(),
+                                "generated fix condition value");
+                    }
                 }
             }
         }
@@ -889,6 +942,15 @@ public class SmvMainModuleBuilder {
                 ParameterizationConfig.ParamInfo paramInfo = cfg.getParameterizedThresholds().get(paramKey);
                 if (paramInfo != null) {
                     rhsValue = paramInfo.getFrozenVarName();
+                }
+            }
+            // §5.2: Candidate clauses keep their relation while NuSMV chooses the free value Y.
+            if (ruleIdx != null && cfg != null && cfg.getCandidateConditionValues() != null) {
+                String paramKey = "r" + ruleIdx + "_c" + condIdx;
+                ParameterizationConfig.ConditionValueInfo valueInfo =
+                        cfg.getCandidateConditionValues().get(paramKey);
+                if (valueInfo != null) {
+                    rhsValue = valueInfo.getFrozenVarName();
                 }
             }
             String expr = buildRuleRelationExpr(lhsExpr, normalizedRel, rhsValue);

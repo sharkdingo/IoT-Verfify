@@ -447,6 +447,8 @@ describe('board mutation response contracts', () => {
         strategy: 'remove',
         description: 'Remove the conflicting rule',
         verified: true,
+        parameterAdjustments: [],
+        conditionAdjustments: [],
         removedRuleDescriptions: ['Old rule']
       },
       previousRuleCount: 2,
@@ -474,6 +476,8 @@ describe('board mutation response contracts', () => {
       strategy: 'remove',
       description: 'Remove the conflicting rule',
       verified: true,
+      parameterAdjustments: [],
+      conditionAdjustments: [],
       removedRuleDescriptions: ['Old rule']
     })
 
@@ -493,6 +497,7 @@ describe('board mutation response contracts', () => {
         strategy: 'condition',
         description: 'Adjust a condition',
         verified: true,
+        parameterAdjustments: [],
         conditionAdjustments: [{
           action: 'remove',
           attribute: 'motion',
@@ -500,7 +505,8 @@ describe('board mutation response contracts', () => {
           description: 'Remove the motion event from the automation.',
           ruleDescription: 'Motion turns on the light',
           deviceLabel: 'Hall sensor'
-        }]
+        }],
+        removedRuleDescriptions: []
       },
       previousRuleCount: 1,
       currentRuleCount: 1,
@@ -513,7 +519,9 @@ describe('board mutation response contracts', () => {
       strategy: 'condition',
       description: 'Adjust a condition',
       verified: true,
-      conditionAdjustments: []
+      parameterAdjustments: [],
+      conditionAdjustments: [],
+      removedRuleDescriptions: []
     })).rejects.toMatchObject({
       code: BOARD_RESPONSE_INCOMPLETE_CODE
     })

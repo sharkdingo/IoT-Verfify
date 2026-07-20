@@ -22,6 +22,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ChatControllerTest {
@@ -42,6 +43,7 @@ class ChatControllerTest {
     @Test
     void chat_executorRejected_throwsServiceUnavailable() {
         ChatRequestDto request = request("s1", "hello");
+        when(chatService.beginStreamRequest(1L, "s1")).thenReturn("execution-s1");
         doThrow(new RejectedExecutionException("pool saturated"))
                 .when(executor).execute(any(Runnable.class));
 
@@ -49,11 +51,13 @@ class ChatControllerTest {
                 () -> controller.chat(1L, request));
 
         assertTrue(ex.getMessage().contains("busy"));
+        verify(chatService).endStreamRequest(1L, "s1", "execution-s1");
     }
 
     @Test
     void chat_executorAccepted_dispatchesToChatService() {
         ChatRequestDto request = request("s1", "hello");
+        when(chatService.beginStreamRequest(1L, "s1")).thenReturn("execution-s1");
         doAnswer(invocation -> {
             Runnable runnable = invocation.getArgument(0, Runnable.class);
             runnable.run();
@@ -64,7 +68,8 @@ class ChatControllerTest {
 
         assertNotNull(emitter);
         verify(chatService).processStreamChat(
-                eq(1L), eq("s1"), eq("turn-s1"), eq("hello"), same(emitter));
+                eq(1L), eq("s1"), eq("execution-s1"), eq("turn-s1"), eq("hello"), same(emitter));
+        verify(chatService).endStreamRequest(1L, "s1", "execution-s1");
     }
 
     @Test

@@ -84,6 +84,89 @@ const saveEmptyBoard = async (request: APIRequestContext, auth: AuthUser) => {
   expect(response.ok(), await response.text()).toBeTruthy()
 }
 
+const addOccupancySensor = (scene: any, temperatureValue: string) => {
+  scene.templates.push({
+    name: 'Occupancy Sensor',
+    manifest: {
+      Name: 'Occupancy Sensor',
+      Description: 'Stable occupancy input for condition repair',
+      InternalVariables: [{
+        Name: 'occupied',
+        IsInside: true,
+        FalsifiableWhenCompromised: false,
+        Values: ['present', 'absent'],
+        Trust: 'trusted',
+        Privacy: 'public'
+      }],
+      Modes: [],
+      InitState: '',
+      WorkingStates: [],
+      Transitions: [],
+      APIs: []
+    }
+  })
+  scene.devices.push({
+    id: 'occupancy_1',
+    templateName: 'Occupancy Sensor',
+    label: 'Living-room Occupancy Sensor',
+    position: { x: 90, y: 320 },
+    width: 176,
+    height: 128,
+    variables: [{ name: 'occupied', value: 'absent', trust: 'trusted' }]
+  })
+  scene.environmentVariables.find((row: any) => row.name === 'temperature').value = temperatureValue
+}
+
+const configureRedundantUnsafeHeatingScene = (scene: any) => {
+  addOccupancySensor(scene, '30')
+  scene.rules = [{
+    name: 'Unsafe primary heating rule',
+    sources: [{
+      fromId: 'temperature_1',
+      fromApi: 'temperature',
+      itemType: 'variable',
+      relation: '>=',
+      value: '28'
+    }],
+    toId: 'ac_1',
+    toApi: 'heat'
+  }, {
+    name: 'Unsafe redundant secondary heating rule',
+    sources: [{
+      fromId: 'temperature_1',
+      fromApi: 'temperature',
+      itemType: 'variable',
+      relation: '>=',
+      value: '29'
+    }],
+    toId: 'ac_1',
+    toApi: 'heat'
+  }, {
+    name: 'At or below 35, turn heating off',
+    sources: [{
+      fromId: 'temperature_1',
+      fromApi: 'temperature',
+      itemType: 'variable',
+      relation: '<=',
+      value: '35'
+    }],
+    toId: 'ac_1',
+    toApi: 'off'
+  }]
+  scene.specs = [{
+    templateId: '3',
+    aConditions: [{
+      deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+    }, {
+      deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+    }, {
+      deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
+    }],
+    ifConditions: [],
+    thenConditions: []
+  }]
+}
+
 const waitForTemplateOption = async (page: Page, templateName: string) => {
   await page.waitForFunction((name) => {
     const select = document.querySelector<HTMLSelectElement>('[data-testid="single-device-template"]')
@@ -223,6 +306,141 @@ test.describe('board full-stack NuSMV user flow', () => {
     }
   ] as const
 
+  const targetedRepairScenarios = [
+    {
+      name: 'coupled climate thresholds',
+      baseFile: 'default-climate-conflict-scene.json',
+      strategy: 'parameter',
+      counts: { devices: 2, environment: 2, rules: 2, specs: 2 },
+      configure: (scene: any) => {
+        scene.rules = [{
+          name: 'When temperature is at least 28, heat the room',
+          sources: [{
+            fromId: 'temperature_1',
+            fromApi: 'temperature',
+            itemType: 'variable',
+            relation: '>=',
+            value: '28'
+          }],
+          toId: 'ac_1',
+          toApi: 'heat'
+        }, {
+          name: 'Otherwise, turn the air conditioner off',
+          sources: [{
+            fromId: 'temperature_1',
+            fromApi: 'temperature',
+            itemType: 'variable',
+            relation: '<',
+            value: '35'
+          }],
+          toId: 'ac_1',
+          toApi: 'off'
+        }]
+        scene.specs = [{
+          templateId: '4',
+          aConditions: [],
+          ifConditions: [{
+            deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+          }],
+          thenConditions: [{
+            deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'off'
+          }]
+        }, {
+          templateId: '4',
+          aConditions: [],
+          ifConditions: [{
+            deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '>=', value: '35'
+          }],
+          thenConditions: [{
+            deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
+          }]
+        }]
+      },
+      assertSuggestion: (suggestion: any, fix: any) => {
+        expect(fix.parameterTargets.length).toBeGreaterThan(0)
+        expect(suggestion.parameterAdjustments).toEqual(expect.arrayContaining([
+          expect.objectContaining({ attribute: 'temperature', originalValue: '28', newValue: '35' })
+        ]))
+      }
+    },
+    {
+      name: 'unoccupied-room heating safety',
+      baseFile: 'default-climate-conflict-scene.json',
+      strategy: 'condition',
+      counts: { devices: 3, environment: 2, rules: 1, specs: 1 },
+      configure: (scene: any) => {
+        addOccupancySensor(scene, '17')
+        scene.rules = [{
+          name: 'When it is cold, heat the room',
+          sources: [{
+            fromId: 'temperature_1',
+            fromApi: 'temperature',
+            itemType: 'variable',
+            relation: '<=',
+            value: '18'
+          }],
+          toId: 'ac_1',
+          toApi: 'heat'
+        }]
+        scene.specs = [{
+          templateId: '3',
+          aConditions: [{
+            deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+          }, {
+            deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
+          }],
+          ifConditions: [],
+          thenConditions: []
+        }]
+      },
+      assertSuggestion: (suggestion: any, fix: any) => {
+        expect(fix.parameterTargets).toEqual([])
+        expect(suggestion.conditionAdjustments).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'add',
+            attribute: 'occupied',
+            targetType: 'variable',
+            relation: '=',
+            value: 'present'
+          })
+        ]))
+      }
+    }
+  ] as const
+
+  const coordinatedRepairScenarios = [
+    {
+      strategy: 'parameter',
+      repairedRuleCount: 3,
+      assertSuggestion: (suggestion: any) => {
+        expect(suggestion.parameterAdjustments).toHaveLength(2)
+        expect(suggestion.parameterAdjustments.every((adjustment: any) =>
+          adjustment.attribute === 'temperature' && Number(adjustment.newValue) >= 36)).toBe(true)
+      }
+    },
+    {
+      strategy: 'condition',
+      repairedRuleCount: 3,
+      assertSuggestion: (suggestion: any) => {
+        expect(suggestion.conditionAdjustments).toHaveLength(2)
+        expect(suggestion.conditionAdjustments.every((adjustment: any) =>
+          adjustment.action === 'add'
+            && adjustment.attribute === 'occupied'
+            && adjustment.value === 'present')).toBe(true)
+      }
+    },
+    {
+      strategy: 'remove',
+      repairedRuleCount: 1,
+      assertSuggestion: (suggestion: any) => {
+        expect(suggestion.removedRuleDescriptions).toEqual([
+          'Unsafe primary heating rule',
+          'Unsafe redundant secondary heating rule'
+        ])
+      }
+    }
+  ] as const
+
   for (const scenario of additionalDefaultScenarios) {
     test(`checks the ${scenario.name} default-template scenario end to end`, async ({ page, request }) => {
       const auth = await createAuthenticatedUser(request)
@@ -342,6 +560,385 @@ test.describe('board full-stack NuSMV user flow', () => {
       }
     })
   }
+
+  for (const scenario of targetedRepairScenarios) {
+    test(`finds and applies a ${scenario.strategy} repair for ${scenario.name}`, async ({ page, request }) => {
+      const auth = await createAuthenticatedUser(request)
+      await saveEmptyBoard(request, auth)
+      await openWorkspace(page, auth)
+
+      const basePath = path.resolve(process.cwd(), '..', 'docs', 'examples', scenario.baseFile)
+      const scene = JSON.parse(fs.readFileSync(basePath, 'utf8'))
+      scenario.configure(scene)
+      await page.getByTestId('scene-import-file').setInputFiles({
+        name: `fix-${scenario.strategy}-scenario.json`,
+        mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify(scene))
+      })
+      await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+        .getByRole('button', { name: 'Replace in full' })
+        .click()
+
+      await waitForApi<any[]>(request, auth, '/api/board/nodes',
+        value => value.length === scenario.counts.devices)
+      await waitForApi<any[]>(request, auth, '/api/board/environment',
+        value => value.length === scenario.counts.environment)
+      await waitForApi<any[]>(request, auth, '/api/board/rules',
+        value => value.length === scenario.counts.rules)
+      await waitForApi<any[]>(request, auth, '/api/board/specs',
+        value => value.length === scenario.counts.specs)
+
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-mode-sync').click()
+      const baselineResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const baseline = await unwrap<any>((await baselineResponsePromise) as any)
+      expect(baseline).toMatchObject({
+        outcome: 'VIOLATED',
+        modelComplete: true,
+        disabledRuleCount: 0,
+        skippedSpecCount: 0,
+        modelSnapshot: { specificationCount: scenario.counts.specs }
+      })
+      expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(1)
+      await page.getByTestId('close-verification-result').click()
+
+      const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces', rows =>
+        rows.some(trace => trace.isAttack === false && trace.states?.length >= 2))
+      const trace = traces.find(row => row.isAttack === false && row.states?.length >= 2)
+      expect(trace).toBeTruthy()
+
+      const fixResponse = await request.post(fixRequestUrl(trace.id), {
+        headers: authHeaders(auth),
+        data: { strategies: [scenario.strategy] }
+      })
+      const fix = await unwrap<any>(fixResponse)
+      expect(fix).toMatchObject({
+        traceId: trace.id,
+        violatedSpecId: expect.not.stringMatching(/^UNKNOWN_SPEC$/),
+        fixable: true,
+        sourceModelComplete: true,
+        sourceDisabledRuleCount: 0,
+        sourceSkippedSpecCount: 0,
+        strategyAttempts: [{ strategy: scenario.strategy, status: 'VERIFIED' }]
+      })
+      const suggestion = fix.suggestions.find((candidate: any) =>
+        candidate.strategy === scenario.strategy && candidate.verified === true)
+      expect(suggestion).toBeTruthy()
+      scenario.assertSuggestion(suggestion, fix)
+
+      const applyResponse = await request.post(
+        `${apiBaseURL}/api/verify/traces/${trace.id}/fix/apply`,
+        {
+          headers: authHeaders(auth),
+          data: {
+            strategy: suggestion.strategy,
+            suggestion,
+            suggestionToken: suggestion.suggestionToken
+          }
+        }
+      )
+      const applied = await unwrap<any>(applyResponse)
+      expect(applied).toMatchObject({
+        applied: true,
+        strategy: scenario.strategy,
+        previousRuleCount: scenario.counts.rules,
+        currentRuleCount: scenario.counts.rules
+      })
+      expect(applied.verificationRechecked || applied.verificationEvidenceReused).toBe(true)
+
+      await page.reload()
+      await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-mode-sync').click()
+      const repairedResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const repaired = await unwrap<any>((await repairedResponsePromise) as any)
+      expect(repaired).toMatchObject({
+        outcome: 'SATISFIED',
+        modelComplete: true,
+        disabledRuleCount: 0,
+        skippedSpecCount: 0,
+        modelSnapshot: { specificationCount: scenario.counts.specs }
+      })
+      expect(repaired.specResults).toHaveLength(scenario.counts.specs)
+      expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
+    })
+  }
+
+  for (const scenario of coordinatedRepairScenarios) {
+    test(`persists every item in a coordinated ${scenario.strategy} repair`, async ({ page, request }) => {
+      const auth = await createAuthenticatedUser(request)
+      await saveEmptyBoard(request, auth)
+      await openWorkspace(page, auth)
+
+      const basePath = path.resolve(
+        process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json')
+      const scene = JSON.parse(fs.readFileSync(basePath, 'utf8'))
+      configureRedundantUnsafeHeatingScene(scene)
+      await page.getByTestId('scene-import-file').setInputFiles({
+        name: `coordinated-${scenario.strategy}-scenario.json`,
+        mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify(scene))
+      })
+      await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+        .getByRole('button', { name: 'Replace in full' })
+        .click()
+
+      await waitForApi<any[]>(request, auth, '/api/board/nodes', rows => rows.length === 3)
+      await waitForApi<any[]>(request, auth, '/api/board/environment', rows => rows.length === 2)
+      await waitForApi<any[]>(request, auth, '/api/board/rules', rows => rows.length === 3)
+      await waitForApi<any[]>(request, auth, '/api/board/specs', rows => rows.length === 1)
+
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-mode-sync').click()
+      const baselineResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const baseline = await unwrap<any>((await baselineResponsePromise) as any)
+      expect(baseline).toMatchObject({
+        outcome: 'VIOLATED',
+        modelComplete: true,
+        disabledRuleCount: 0,
+        skippedSpecCount: 0,
+        modelSnapshot: { specificationCount: 1 }
+      })
+      expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(1)
+      await page.getByTestId('close-verification-result').click()
+
+      const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces', rows =>
+        rows.some(trace => trace.isAttack === false
+          && trace.violatedSpec?.templateId === '3'
+          && trace.states?.length >= 2))
+      const trace = traces.find(row => row.isAttack === false
+        && row.violatedSpec?.templateId === '3'
+        && row.states?.length >= 2)
+      expect(trace).toBeTruthy()
+
+      const fixResponse = await request.post(fixRequestUrl(trace.id), {
+        headers: authHeaders(auth),
+        data: { strategies: [scenario.strategy] }
+      })
+      const fix = await unwrap<any>(fixResponse)
+      expect(fix).toMatchObject({
+        traceId: trace.id,
+        fixable: true,
+        sourceModelComplete: true,
+        strategyAttempts: [{ strategy: scenario.strategy, status: 'VERIFIED' }]
+      })
+      const suggestion = fix.suggestions.find((candidate: any) =>
+        candidate.strategy === scenario.strategy && candidate.verified === true)
+      expect(suggestion).toBeTruthy()
+      scenario.assertSuggestion(suggestion)
+
+      const applyResponse = await request.post(
+        `${apiBaseURL}/api/verify/traces/${trace.id}/fix/apply`,
+        {
+          headers: authHeaders(auth),
+          data: {
+            strategy: suggestion.strategy,
+            suggestion,
+            suggestionToken: suggestion.suggestionToken
+          }
+        }
+      )
+      const applied = await unwrap<any>(applyResponse)
+      expect(applied).toMatchObject({
+        applied: true,
+        strategy: scenario.strategy,
+        verificationEvidenceReused: true,
+        previousRuleCount: 3,
+        currentRuleCount: scenario.repairedRuleCount
+      })
+      scenario.assertSuggestion(applied.appliedSuggestion)
+
+      await waitForApi<any[]>(request, auth, '/api/board/rules',
+        rows => rows.length === scenario.repairedRuleCount)
+      await page.reload()
+      await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+      await page.getByTestId('open-verification-panel').click()
+      await page.getByTestId('verification-mode-sync').click()
+      const repairedResponsePromise = page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+      await page.getByTestId('run-verification').click()
+      const repaired = await unwrap<any>((await repairedResponsePromise) as any)
+      expect(repaired).toMatchObject({
+        outcome: 'SATISFIED',
+        modelComplete: true,
+        disabledRuleCount: 0,
+        skippedSpecCount: 0,
+        modelSnapshot: { specificationCount: 1 }
+      })
+      expect(repaired.specResults).toHaveLength(1)
+      expect(repaired.specResults[0].outcome).toBe('SATISFIED')
+    })
+  }
+
+  test('returns all three verified repairs for one combined counterexample', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await saveEmptyBoard(request, auth)
+    await openWorkspace(page, auth)
+
+    const basePath = path.resolve(process.cwd(), '..', 'docs', 'examples', 'default-climate-conflict-scene.json')
+    const scene = JSON.parse(fs.readFileSync(basePath, 'utf8'))
+    addOccupancySensor(scene, '30')
+    scene.rules = [{
+      name: 'Unsafe early heat rule',
+      sources: [{
+        fromId: 'temperature_1', fromApi: 'temperature', itemType: 'variable', relation: '>=', value: '28'
+      }],
+      toId: 'ac_1',
+      toApi: 'heat'
+    }, {
+      name: 'At or below 35, turn the air conditioner off',
+      sources: [{
+        fromId: 'temperature_1', fromApi: 'temperature', itemType: 'variable', relation: '<=', value: '35'
+      }],
+      toId: 'ac_1',
+      toApi: 'off'
+    }, {
+      name: 'At least 36, retain required heating',
+      sources: [{
+        fromId: 'temperature_1', fromApi: 'temperature', itemType: 'variable', relation: '>=', value: '36'
+      }],
+      toId: 'ac_1',
+      toApi: 'heat'
+    }]
+    scene.specs = [{
+      templateId: '3',
+      aConditions: [{
+        deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+      }, {
+        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<', value: '35'
+      }, {
+        deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
+      }],
+      ifConditions: [],
+      thenConditions: []
+    }, {
+      templateId: '4',
+      aConditions: [],
+      ifConditions: [{
+        deviceId: 'occupancy_1', targetType: 'variable', key: 'occupied', relation: '=', value: 'absent'
+      }, {
+        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '<=', value: '35'
+      }],
+      thenConditions: [{
+        deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'off'
+      }]
+    }, {
+      templateId: '4',
+      aConditions: [],
+      ifConditions: [{
+        deviceId: 'temperature_1', targetType: 'variable', key: 'temperature', relation: '>=', value: '36'
+      }],
+      thenConditions: [{
+        deviceId: 'ac_1', targetType: 'mode', key: 'HvacMode', relation: '=', value: 'heat'
+      }]
+    }]
+
+    await page.getByTestId('scene-import-file').setInputFiles({
+      name: 'fix-combined-three-strategy-scenario.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(scene))
+    })
+    await page.getByRole('dialog', { name: 'Confirm Full Scene Replacement' })
+      .getByRole('button', { name: 'Replace in full' })
+      .click()
+    await waitForApi<any[]>(request, auth, '/api/board/nodes', rows => rows.length === 3)
+    await waitForApi<any[]>(request, auth, '/api/board/rules', rows => rows.length === 3)
+    await waitForApi<any[]>(request, auth, '/api/board/specs', rows => rows.length === 3)
+
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const baselineResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const baseline = await unwrap<any>((await baselineResponsePromise) as any)
+    expect(baseline).toMatchObject({
+      outcome: 'VIOLATED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 3 }
+    })
+    expect(baseline.specResults.filter((result: any) => result.outcome === 'VIOLATED')).toHaveLength(2)
+    await page.getByTestId('close-verification-result').click()
+
+    const traces = await waitForApi<any[]>(request, auth, '/api/verify/traces', rows =>
+      rows.filter(trace => trace.isAttack === false && trace.states?.length >= 2).length >= 2)
+    const neverTrace = traces.find(trace => trace.isAttack === false
+      && trace.violatedSpec?.templateId === '3'
+      && trace.states?.length >= 2)
+    expect(neverTrace).toBeTruthy()
+
+    const strategies = ['parameter', 'condition', 'remove'] as const
+    const fixResponse = await request.post(fixRequestUrl(neverTrace.id), {
+      headers: authHeaders(auth),
+      data: { strategies }
+    })
+    const fix = await unwrap<any>(fixResponse)
+    expect(fix).toMatchObject({
+      traceId: neverTrace.id,
+      fixable: true,
+      sourceModelComplete: true,
+      sourceDisabledRuleCount: 0,
+      sourceSkippedSpecCount: 0
+    })
+    expect(fix.strategyAttempts).toEqual(strategies.map(strategy =>
+      expect.objectContaining({ strategy, status: 'VERIFIED' })))
+    expect(fix.suggestions).toHaveLength(3)
+
+    const parameter = fix.suggestions.find((suggestion: any) => suggestion.strategy === 'parameter')
+    const condition = fix.suggestions.find((suggestion: any) => suggestion.strategy === 'condition')
+    const removal = fix.suggestions.find((suggestion: any) => suggestion.strategy === 'remove')
+    expect(parameter.parameterAdjustments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ originalValue: '28', newValue: '37' })
+    ]))
+    expect(condition.conditionAdjustments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'add', attribute: 'occupied', value: 'present' })
+    ]))
+    expect(removal.removedRuleDescriptions).toEqual(['Unsafe early heat rule'])
+
+    const applyResponse = await request.post(
+      `${apiBaseURL}/api/verify/traces/${neverTrace.id}/fix/apply`,
+      {
+        headers: authHeaders(auth),
+        data: {
+          strategy: parameter.strategy,
+          suggestion: parameter,
+          suggestionToken: parameter.suggestionToken
+        }
+      }
+    )
+    const applied = await unwrap<any>(applyResponse)
+    expect(applied).toMatchObject({
+      applied: true,
+      strategy: 'parameter',
+      previousRuleCount: 3,
+      currentRuleCount: 3
+    })
+
+    await page.reload()
+    await expect(page.getByTestId('board-root')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('open-verification-panel').click()
+    await page.getByTestId('verification-mode-sync').click()
+    const repairedResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/verify')
+    await page.getByTestId('run-verification').click()
+    const repaired = await unwrap<any>((await repairedResponsePromise) as any)
+    expect(repaired).toMatchObject({
+      outcome: 'SATISFIED',
+      modelComplete: true,
+      disabledRuleCount: 0,
+      skippedSpecCount: 0,
+      modelSnapshot: { specificationCount: 3 }
+    })
+    expect(repaired.specResults).toHaveLength(3)
+    expect(repaired.specResults.every((result: any) => result.outcome === 'SATISFIED')).toBe(true)
+  })
 
   test('imports devices from pasted JSON and selected CSV with precise preview validation', async ({ page, request }) => {
     const auth = await createAuthenticatedUser(request)

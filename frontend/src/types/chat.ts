@@ -7,6 +7,7 @@ export interface ChatSession {
     title: string | null
     createdAt?: string
     updatedAt: string
+    active: boolean
 }
 
 export interface ChatSessionActivity {

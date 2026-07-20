@@ -194,6 +194,39 @@ class SmvGeneratorFixesTest {
     }
 
     @Test
+    @DisplayName("Parameterized main module emits every pinned initial-state constraint as INIT")
+    void mainBuilder_parameterizedInitialState_emitsInitConstraints() {
+        DeviceManifest manifest = DeviceManifest.builder()
+                .modes(List.of("Power"))
+                .workingStates(List.of(
+                        DeviceManifest.WorkingState.builder().name("off").trust("trusted").build(),
+                        DeviceManifest.WorkingState.builder().name("on").trust("trusted").build()))
+                .build();
+        DeviceSmvData smv = buildSmvData("light_1", "Light",
+                List.of("Power"), Map.of("Power", List.of("off", "on")),
+                List.of(), manifest);
+        ParameterizationConfig config = ParameterizationConfig.builder()
+                .conditionLambdas(Map.of("r0_c0", "lambda_r0_c0"))
+                .initialStateConstraints(List.of(
+                        "light_1.Power = on",
+                        "light_1.trust_Power_on = trusted"))
+                .build();
+
+        String model = mainBuilder.buildParameterized(
+                1L,
+                List.of(device("light_1", "Light")),
+                List.of(),
+                Map.of("light_1", smv),
+                false,
+                0,
+                false,
+                config);
+
+        assertTrue(model.contains("\nINIT light_1.Power = on;"), model);
+        assertTrue(model.contains("\nINIT light_1.trust_Power_on = trusted;"), model);
+    }
+
+    @Test
     @DisplayName("Trace probes record the ordered rule branch that drives the next state")
     void mainBuilder_ruleExecutionProbes_areDeterministicAndRespectCasePriority() {
         DeviceManifest sensorManifest = DeviceManifest.builder()

@@ -36,6 +36,8 @@ chat:
   execution:
     max-tool-rounds: ${CHAT_MAX_TOOL_ROUNDS:64}
     max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
+    lease-ttl-ms: ${CHAT_EXECUTION_LEASE_TTL_MS:30000}
+    lease-heartbeat-ms: ${CHAT_EXECUTION_LEASE_HEARTBEAT_MS:10000}
 
 iot-verify:
   ai:

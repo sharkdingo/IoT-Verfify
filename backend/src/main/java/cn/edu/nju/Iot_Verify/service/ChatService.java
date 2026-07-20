@@ -12,9 +12,10 @@ public interface ChatService {
     ChatSessionResponseDto createSession(Long userId);
     List<ChatMessageResponseDto> getHistory(Long userId, String sessionId);
     void deleteSession(Long userId, String sessionId);
-    void beginStreamRequest(Long userId, String sessionId);
-    void endStreamRequest(Long userId, String sessionId);
+    String beginStreamRequest(Long userId, String sessionId);
+    void endStreamRequest(Long userId, String sessionId, String executionId);
     void requestStreamStop(Long userId, String sessionId);
     ChatSessionActivityDto getSessionActivity(Long userId, String sessionId);
-    void processStreamChat(Long userId, String sessionId, String turnId, String content, SseEmitter emitter);
+    void processStreamChat(Long userId, String sessionId, String executionId,
+                           String turnId, String content, SseEmitter emitter);
 }

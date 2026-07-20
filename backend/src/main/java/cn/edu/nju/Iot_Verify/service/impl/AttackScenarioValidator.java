@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackSurface;
+import cn.edu.nju.Iot_Verify.component.nusmv.generator.AttackScenarioSurfaceValidator;
 import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackScenarioDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -10,8 +11,6 @@ import cn.edu.nju.Iot_Verify.util.DeviceNameNormalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.List;
 import java.util.Set;
 
@@ -53,29 +52,12 @@ final class AttackScenarioValidator {
             return;
         }
 
-        Map<Long, Integer> ruleIdCounts = new HashMap<>();
-        if (rules != null) {
-            for (RuleDto rule : rules) {
-                if (rule != null && rule.getId() != null) {
-                    ruleIdCounts.merge(rule.getId(), 1, Integer::sum);
-                }
-            }
-        }
-        List<AttackPointDto> points = safeScenario.getPoints() != null
-                ? safeScenario.getPoints() : List.of();
-        for (int index = 0; index < points.size(); index++) {
-            AttackPointDto point = points.get(index);
-            if (point.getKind() == AttackPointDto.Kind.DEVICE
-                    && !safeSurface.includesDevice(point.getDeviceId())) {
-                throw new ValidationException("attackScenario.points[" + index + "].deviceId",
-                        "Selected device is not a behavior-changing attack point in this run");
-            }
-            if (point.getKind() == AttackPointDto.Kind.AUTOMATION_LINK
-                    && ruleIdCounts.getOrDefault(point.getRuleId(), 0) != 1) {
-                throw new ValidationException("attackScenario.points[" + index + "].ruleId",
-                        "Selected automation link must reference exactly one submitted persisted rule");
-            }
-        }
+        AttackScenarioSurfaceValidator.firstExactSelectionViolation(safeScenario, safeSurface, rules)
+                .ifPresent(violation -> {
+                    throw new ValidationException(
+                            "attackScenario.points[" + violation.pointIndex() + "]." + violation.field(),
+                            violation.message());
+                });
     }
 
     private static AttackScenarioDto canonicalize(AttackScenarioDto scenario,

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.ai.state;
 
 import cn.edu.nju.Iot_Verify.po.AiSessionStatePo;
 import cn.edu.nju.Iot_Verify.repository.AiSessionStateRepository;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -24,6 +27,8 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
 
     private final AiSessionStateRepository repository;
     private final ObjectMapper objectMapper;
+    private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
     public Optional<Snapshot> get(Long userId, String sessionId, Kind kind, Instant now) {
@@ -60,14 +65,17 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
         RuntimeException lastFailure = null;
         for (int attempt = 0; attempt < WRITE_ATTEMPTS; attempt++) {
             try {
-                AiSessionStatePo state = repository.findById(stateKey).orElseGet(AiSessionStatePo::new);
-                state.setStateKey(stateKey);
-                state.setUserId(userId);
-                state.setSessionId(sessionId);
-                state.setStateKind(kind);
-                state.setPayloadJson(payloadJson);
-                state.setExpiresAt(expiresAt);
-                repository.saveAndFlush(state);
+                transactionTemplate.executeWithoutResult(status -> {
+                    requireCurrentExecutionLease();
+                    AiSessionStatePo state = repository.findById(stateKey).orElseGet(AiSessionStatePo::new);
+                    state.setStateKey(stateKey);
+                    state.setUserId(userId);
+                    state.setSessionId(sessionId);
+                    state.setStateKind(kind);
+                    state.setPayloadJson(payloadJson);
+                    state.setExpiresAt(expiresAt);
+                    repository.saveAndFlush(state);
+                });
                 return;
             } catch (OptimisticLockingFailureException | DataIntegrityViolationException e) {
                 lastFailure = e;
@@ -78,23 +86,38 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
 
     @Override
     public boolean remove(Long userId, String sessionId, Kind kind, long expectedVersion) {
-        return repository.deleteByStateKeyAndVersion(
-                stateKey(userId, sessionId, kind), expectedVersion) == 1;
+        return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+            requireCurrentExecutionLease();
+            return repository.deleteByStateKeyAndVersion(
+                    stateKey(userId, sessionId, kind), expectedVersion) == 1;
+        }));
     }
 
     @Override
     public void remove(Long userId, String sessionId, Kind kind) {
-        repository.deleteState(userId, requireSession(sessionId), requireKind(kind));
+        transactionTemplate.executeWithoutResult(status -> {
+            requireCurrentExecutionLease();
+            repository.deleteState(userId, requireSession(sessionId), requireKind(kind));
+        });
     }
 
     @Override
     public void removeSession(Long userId, String sessionId) {
-        repository.deleteSession(requireUser(userId), requireSession(sessionId));
+        transactionTemplate.executeWithoutResult(status -> {
+            requireCurrentExecutionLease();
+            repository.deleteSession(requireUser(userId), requireSession(sessionId));
+        });
     }
 
     @Override
     public void removeUser(Long userId) {
-        repository.deleteUser(requireUser(userId));
+        TransactionTemplate independentTransaction = new TransactionTemplate(
+                transactionTemplate.getTransactionManager());
+        independentTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        independentTransaction.executeWithoutResult(status -> {
+            requireCurrentExecutionLease();
+            repository.deleteUser(requireUser(userId));
+        });
     }
 
     @Scheduled(fixedDelayString = "${iot-verify.ai.session-state-cleanup-ms:60000}")
@@ -107,6 +130,10 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
 
     private String stateKey(Long userId, String sessionId, Kind kind) {
         return requireKind(kind).name() + ":" + requireUser(userId) + ":" + requireSession(sessionId);
+    }
+
+    private void requireCurrentExecutionLease() {
+        chatExecutionLeaseGuard.requireCurrentExecutionLease();
     }
 
     private Long requireUser(Long userId) {

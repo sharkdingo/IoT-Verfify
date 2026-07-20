@@ -4,8 +4,9 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-18. Source: `frontend/src/api/`,
-`frontend/src/types/`, `frontend/src/router/index.ts`.
+Verified against code on 2026-07-20. Source: `frontend/src/api/`,
+`frontend/src/types/`, `frontend/src/components/ChatView.vue`,
+`frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
 ---
 
@@ -166,6 +167,18 @@ Its methods return already-unwrapped values. Non-exhaustive:
   response cannot overwrite a newer local action. This is frontend response ordering,
   not a claim that separate ordinary REST calls form one transaction; only one batch
   replacement request is atomic as a group.
+  Every successful axios mutation of Board semantics and every completed assistant Board
+  refresh publishes a same-user `BroadcastChannel` invalidation. Receiving tabs enqueue one
+  coalesced full semantic snapshot refresh through that same mutation queue; an invalidation
+  received while hidden or while another refresh is running remains pending. Visibility and
+  focus refreshes remain as the compatibility/recovery path when `BroadcastChannel` is not
+  available. This reconciles device, template, Environment Pool, rule, and specification
+  changes made in another tab without overwriting the current tab's pending mutation;
+  initial mount, manual retry, and invalidation reads all use the same coordinator. A delayed
+  initial response must complete before the pending invalidation fetch begins, so it cannot
+  arrive after and overwrite a newer cross-tab snapshot.
+  persisted canvas/panel layout remains a separate concern. Read-only POST checks such as
+  rule duplicate/similarity validation do not publish invalidations.
   The UI generates an opaque stable `DeviceNode.id` independently of the user-visible
   label. Renaming a device therefore never changes rule/spec identity, and labels are
   compared case-insensitively without applying NuSMV normalization rules to what the
@@ -487,6 +500,11 @@ Board layout and visual shell rules:
   canvas, canvas map, history panel, mini task indicator, simulation/verification
   panels, recommendation panels, and trace/simulation timelines. Real-browser tests
   should use these instead of localized text.
+- `AppErrorBoundary` contains route-view and lazily mounted assistant render failures in
+  separate subtrees. Its localized fallback offers a subtree retry and an explicit full-page
+  reload; changing routes resets the boundary. Do not move both surfaces behind one boundary,
+  because an assistant failure must not remove the Board and a route failure must not prevent
+  recovery controls from rendering.
 - Recommendation panels must use i18n keys for labels, counts, empty states, and action
   buttons. They are opened in real-browser tests under both English and Chinese locales.
   Rule/spec/device recommendation calls pass the active locale as `language`; backend
@@ -771,6 +789,20 @@ the bounded original user objective supplied by the backend; it does not expose 
 reasoning. The record remains attached to that message and is persisted with the terminal
 assistant row. History reload replaces the local response only when that row has the same
 `turnId`, so an older completed turn cannot erase the current request.
+
+`getSessionList` also returns `ChatSession.active`. `ChatView` refreshes this list whenever
+the panel becomes visible and whenever the document returns to the foreground. With no
+selected conversation it automatically opens the first active session. Selecting a row
+already marked active starts activity polling and locks mutations before history loading,
+so a slow or failed history request cannot briefly unlock known-running work; rows without
+that signal perform the dedicated activity check. This is an authoritative activity
+reattachment rather than an SSE replay: the UI shows that server work is still running,
+exposes the real stop endpoint, and keeps mutations locked. Once activity becomes idle it
+reloads the terminal assistant row (including the persisted trace) and reconciles the
+Board/run history. Terminal history/session refresh still runs when Board reconciliation
+fails; the reconciliation retry remains visible and locked, but the completed assistant
+record is not hidden behind an unrelated Board refresh failure. Session-list activity dots
+make runs started in another tab visible without waiting for a conflicting action to fail.
 
 The chat stop control first calls `requestSessionStop`, then aborts the SSE response. It
 cannot undo a backend tool call that already started, but the backend still persists a

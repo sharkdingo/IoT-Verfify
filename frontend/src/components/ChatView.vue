@@ -209,6 +209,8 @@ const messages = ref<ChatMessage[]>([]);
 const inputValue = ref('');
 const isStreaming = ref(false);
 const isSettlingStream = ref(false);
+const isMonitoringRemoteExecution = ref(false);
+const remoteActivityCheckFailed = ref(false);
 const streamProgress = ref<StreamProgress | null>(null);
 const streamProgressEvents = ref<StreamProgress[]>([]);
 const streamElapsedSeconds = ref(0);
@@ -219,7 +221,8 @@ const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
 const isLoadingHistory = ref(false);
 const isAssistantBusy = computed(() =>
-    isStreaming.value || isSettlingStream.value || reconciliationRequired.value);
+    isStreaming.value || isSettlingStream.value || isMonitoringRemoteExecution.value
+    || reconciliationRequired.value);
 const isLoading = computed(() => isAssistantBusy.value || isLoadingHistory.value);
 const TOOL_LABEL_KEYS: Record<string, string> = {
   add_device: 'app.chat.toolLabels.addDevice',
@@ -425,6 +428,8 @@ let sessionListRequestEpoch = 0;
 let settlementPromise: Promise<ChatLogoutPreparation> | null = null;
 let settlementAbortController: AbortController | null = null;
 let reconciliationPromise: Promise<boolean> | null = null;
+let activityMonitorEpoch = 0;
+let activityMonitorAbortController: AbortController | null = null;
 const chatPosition = ref<{ left: number; top: number; width: number; height: number } | null>(null);
 const dragState = ref<{
   pointerId: number;
@@ -720,8 +725,7 @@ const startListening = () => {
 
 // 监听 visible 变化，执行相应逻辑
 watch(visible, (newVal) => {
-  // 仅当首次打开且无会话时加载，避免重复请求
-  if (newVal && sessions.value.length === 0) initSessions();
+  if (newVal) void initSessions();
   if (newVal) {
     refreshBoardContext();
     const nextGeometry = chatPosition.value
@@ -808,14 +812,101 @@ const retryAuthoritativeReconciliation = async () => {
   await reconcileAuthoritativeState(true);
 };
 
-const initSessions = async () => {
+const updateSessionActivity = (sessionId: string, active: boolean) => {
+  const session = sessions.value.find(item => item.id === sessionId);
+  if (session) session.active = active;
+};
+
+const waitForActivityPoll = (signal: AbortSignal) => new Promise<void>(resolve => {
+  const timer = window.setTimeout(done, 1000);
+  function done() {
+    window.clearTimeout(timer);
+    signal.removeEventListener('abort', done);
+    resolve();
+  }
+  if (signal.aborted) {
+    done();
+    return;
+  }
+  signal.addEventListener('abort', done, { once: true });
+});
+
+const stopSessionActivityMonitor = () => {
+  activityMonitorEpoch += 1;
+  activityMonitorAbortController?.abort();
+  activityMonitorAbortController = null;
+  isMonitoringRemoteExecution.value = false;
+  remoteActivityCheckFailed.value = false;
+};
+
+const monitorSessionActivity = (sessionId: string, knownActive = false) => {
+  if (!sessionId || (isStreaming.value && activeStreamSessionId.value === sessionId)) return;
+  stopSessionActivityMonitor();
+  const monitorEpoch = ++activityMonitorEpoch;
+  const controller = new AbortController();
+  activityMonitorAbortController = controller;
+  if (knownActive) {
+    activeStreamSessionId.value = sessionId;
+    activeStreamTurnId.value = '';
+    isMonitoringRemoteExecution.value = true;
+    updateSessionActivity(sessionId, true);
+  }
+
+  void (async () => {
+    let consecutiveFailures = 0;
+    while (!controller.signal.aborted && monitorEpoch === activityMonitorEpoch) {
+      try {
+        const activity = await getSessionActivity(sessionId, { signal: controller.signal });
+        if (controller.signal.aborted || monitorEpoch !== activityMonitorEpoch) return;
+        updateSessionActivity(sessionId, activity.active);
+        if (!activity.active) {
+          if (isMonitoringRemoteExecution.value && activeStreamSessionId.value === sessionId) {
+            await settleActiveRequest(false);
+          }
+          return;
+        }
+        if (currentSessionId.value !== sessionId) return;
+        consecutiveFailures = 0;
+        remoteActivityCheckFailed.value = false;
+        activeStreamSessionId.value = sessionId;
+        activeStreamTurnId.value = '';
+        isMonitoringRemoteExecution.value = true;
+      } catch (error: any) {
+        if (controller.signal.aborted || monitorEpoch !== activityMonitorEpoch) return;
+        if (error?.response?.status === 404) {
+          updateSessionActivity(sessionId, false);
+          if (activeStreamSessionId.value === sessionId) await settleActiveRequest(false);
+          return;
+        }
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) remoteActivityCheckFailed.value = true;
+        console.warn('[Chat] Could not refresh authoritative session activity:', error);
+      }
+      await waitForActivityPoll(controller.signal);
+    }
+  })();
+};
+
+const initSessions = async (reattachActive = true) => {
   const requestEpoch = ++sessionListRequestEpoch;
   isLoadingSessions.value = true;
   sessionListLoadFailed.value = false;
   try {
     const res = await getSessionList();
     if (!Array.isArray(res)) throw new Error('Session list response is not an array');
-    if (requestEpoch === sessionListRequestEpoch) sessions.value = res;
+    if (requestEpoch === sessionListRequestEpoch) {
+      sessions.value = res;
+      if (reattachActive && !isStreaming.value && !activeStreamSessionId.value) {
+        const activeSession = res.find(session => session.active);
+        if (activeSession) {
+          if (!currentSessionId.value) {
+            void handleSelectSession(activeSession.id, true);
+          } else if (currentSessionId.value === activeSession.id) {
+            monitorSessionActivity(activeSession.id, true);
+          }
+        }
+      }
+    }
   } catch (e) {
     if (requestEpoch === sessionListRequestEpoch) sessionListLoadFailed.value = true;
     console.error('加载会话列表失败:', e);
@@ -887,8 +978,11 @@ const handleDelete = async (sessionId: string) => {
   }
 };
 
-const handleSelectSession = async (sessionId: string) => {
-  if (currentSessionId.value === sessionId) return;
+const handleSelectSession = async (sessionId: string, knownActive = false) => {
+  if (currentSessionId.value === sessionId) {
+    if (!isAssistantBusy.value) monitorSessionActivity(sessionId, knownActive);
+    return;
+  }
 
   // A browser abort does not cancel a synchronous backend tool call. Wait until the
   // server confirms the old session is idle before showing another conversation.
@@ -902,6 +996,7 @@ const handleSelectSession = async (sessionId: string) => {
   const requestEpoch = ++historyRequestEpoch;
   const controller = new AbortController();
   historyAbortController.value = controller;
+  if (knownActive) monitorSessionActivity(sessionId, true);
 
   // 移动端体验优化：选中后收起侧边栏
   if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
@@ -915,6 +1010,7 @@ const handleSelectSession = async (sessionId: string) => {
       content: m.content ? m.content.replace('CallEnd|>', '') : ''
     }));
     scrollToBottom(true);
+    if (!knownActive) monitorSessionActivity(sessionId);
   } catch (e: any) {
     if (requestEpoch !== historyRequestEpoch) return;
     if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
@@ -996,11 +1092,14 @@ const settleActiveRequest = (
   if (settlementPromise) return settlementPromise;
   const sessionId = activeStreamSessionId.value || currentSessionId.value;
   const turnId = activeStreamTurnId.value;
+  const wasMonitoringRemoteExecution = isMonitoringRemoteExecution.value
+      && activeStreamSessionId.value === sessionId;
   if (!abortController.value && !activeStreamSessionId.value) {
     if (!reconciliationRequired.value) return Promise.resolve('ready');
     return reconcileAuthoritativeState().then(
         reconciled => reconciled ? 'ready' : 'reconciliation-failed');
   }
+  if (wasMonitoringRemoteExecution) stopSessionActivityMonitor();
 
   const stopRequested = showCancelledMessage && Boolean(activeStreamSessionId.value || currentSessionId.value);
   if (stopRequested && sessionId) {
@@ -1030,6 +1129,11 @@ const settleActiveRequest = (
         const idle = await waitForSessionIdle(sessionId, controller.signal);
         if (!idle) {
           retainActiveSession = true;
+          if (wasMonitoringRemoteExecution) {
+            monitorSessionActivity(sessionId, true);
+            ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+            return 'reconciliation-failed';
+          }
           reconciliationRequired.value = true;
           ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
           return 'reconciliation-failed';
@@ -1043,10 +1147,6 @@ const settleActiveRequest = (
       }
 
       const reconciled = await reconcileAuthoritativeState();
-      if (!reconciled) return 'reconciliation-failed';
-      if (outcome === 'outcome-unknown') {
-        ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
-      }
 
       try {
         if (currentSessionId.value === sessionId) {
@@ -1060,16 +1160,21 @@ const settleActiveRequest = (
             ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
           }
         }
-        await initSessions();
+        await initSessions(false);
       } catch (error) {
         console.error('[Chat] Failed to reload chat history after settlement:', error);
         ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
+      }
+      if (!reconciled) return 'reconciliation-failed';
+      if (outcome === 'outcome-unknown') {
+        ElMessage.warning(t('app.chat.stopOutcomeUnknown'));
       }
       return outcome;
     } finally {
       if (!retainActiveSession && activeStreamSessionId.value === sessionId) {
         activeStreamSessionId.value = '';
         activeStreamTurnId.value = '';
+        updateSessionActivity(sessionId, false);
       }
       isSettlingStream.value = false;
       if (settlementAbortController === controller) settlementAbortController = null;
@@ -1088,6 +1193,10 @@ const prepareForLogout = async (): Promise<ChatLogoutPreparation> =>
 
 defineExpose({ prepareForLogout });
 
+const handleDocumentVisibilityChange = () => {
+  if (!document.hidden && visible.value) void initSessions();
+};
+
 onMounted(() => {
   if (visible.value) {
     refreshBoardContext();
@@ -1095,10 +1204,12 @@ onMounted(() => {
     nextTick(clampExistingChatPosition);
   }
   window.addEventListener('resize', clampExistingChatPosition);
+  document.addEventListener('visibilitychange', handleDocumentVisibilityChange);
 });
 
 onUnmounted(() => {
   abortActiveTransport(false);
+  stopSessionActivityMonitor();
   settlementAbortController?.abort();
   settlementAbortController = null;
   chatStore.setStreaming(false);
@@ -1110,6 +1221,7 @@ onUnmounted(() => {
   stopPanelDrag();
   stopPanelResize();
   window.removeEventListener('resize', clampExistingChatPosition);
+  document.removeEventListener('visibilitychange', handleDocumentVisibilityChange);
 });
 
 const handleSend = async () => {
@@ -1373,7 +1485,7 @@ const scrollToBottom = (force = false) => {
               type="button"
               class="session-list-state session-list-retry"
               data-testid="chat-session-list-retry"
-              @click="initSessions"
+              @click="initSessions()"
             >
               <span>{{ t('app.chat.loadSessionsFailed') }}</span>
               <span class="session-list-retry__action">{{ t('app.chat.retryLoadSessions') }}</span>
@@ -1392,12 +1504,19 @@ const scrollToBottom = (force = false) => {
                 :class="['session-item', { active: currentSessionId === session.id }]"
                 role="button"
                 tabindex="0"
-                @click="handleSelectSession(session.id)"
-                @keydown.enter.prevent="handleSelectSession(session.id)"
-                @keydown.space.prevent="handleSelectSession(session.id)"
+                @click="handleSelectSession(session.id, session.active)"
+                @keydown.enter.prevent="handleSelectSession(session.id, session.active)"
+                @keydown.space.prevent="handleSelectSession(session.id, session.active)"
             >
               <MessageOutlined class="item-icon"/>
               <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
+              <span
+                v-if="session.active"
+                class="session-active-indicator"
+                data-testid="chat-session-active"
+                :aria-label="t('app.chat.sessionActive')"
+                :title="t('app.chat.sessionActive')"
+              ></span>
               <button
                 type="button"
                 class="delete-btn-wrapper"
@@ -1503,6 +1622,22 @@ const scrollToBottom = (force = false) => {
             <div v-else-if="isSettlingStream" class="thinking-state" role="status" aria-live="polite">
               <RobotOutlined class="thinking-avatar" />
               <span>{{ t('app.chat.waitingForServerToStop') }}</span>
+              <div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
+            </div>
+            <div
+              v-else-if="isMonitoringRemoteExecution"
+              class="remote-execution-state"
+              data-testid="chat-remote-execution"
+              role="status"
+              aria-live="polite"
+            >
+              <RobotOutlined class="thinking-avatar" />
+              <div>
+                <strong>{{ t('app.chat.remoteExecutionTitle') }}</strong>
+                <p>{{ remoteActivityCheckFailed
+                  ? t('app.chat.remoteExecutionActivityUnavailable')
+                  : t('app.chat.remoteExecutionMessage') }}</p>
+              </div>
               <div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span></div>
             </div>
             <div
@@ -1699,12 +1834,16 @@ const scrollToBottom = (force = false) => {
                 </div>
                 <div class="right-tools">
                   <button
-                    v-if="isStreaming"
+                    v-if="isStreaming || isMonitoringRemoteExecution"
                     type="button"
                     class="action-btn stop"
                     data-testid="chat-stop"
-                    :aria-label="t('app.chat.stopResponse')"
-                    :title="t('app.chat.stopResponse')"
+                    :aria-label="t(isMonitoringRemoteExecution
+                      ? 'app.chat.stopRemoteExecution'
+                      : 'app.chat.stopResponse')"
+                    :title="t(isMonitoringRemoteExecution
+                      ? 'app.chat.stopRemoteExecution'
+                      : 'app.chat.stopResponse')"
                     @click="handleStop"
                   ><StopOutlined/></button>
                   <button
@@ -1935,6 +2074,15 @@ const scrollToBottom = (force = false) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-active-indicator {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--chat-success);
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--chat-success) 18%, transparent);
 }
 
 .delete-btn-wrapper {
@@ -2381,6 +2529,25 @@ const scrollToBottom = (force = false) => {
   gap: 0.55rem;
   color: var(--chat-muted);
   font-size: 0.8rem;
+}
+
+.remote-execution-state {
+  max-width: 48rem;
+  margin: 0.75rem auto;
+  padding: 0.7rem 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  border-top: 1px solid color-mix(in srgb, var(--chat-accent) 42%, var(--chat-border));
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-accent) 42%, var(--chat-border));
+  color: var(--chat-text);
+  font-size: 0.8rem;
+}
+
+.remote-execution-state p {
+  margin: 0.2rem 0 0;
+  color: var(--chat-muted);
 }
 
 .reconciliation-state {

@@ -55,13 +55,13 @@ public class FixViolationTool extends AbstractAiTool {
         props.put("preferredRangeSelections", Map.of(
                 "type", "array",
                 "description", "Optional preferred value ranges chosen from concrete parameter-adjustment targets. "
-                        + "Each item identifies the target by the opaque targetId copied from a ParameterAdjustment "
+                        + "Each item identifies the target by the opaque targetId copied from parameterTargets "
                         + "returned for the same trace/fix context "
                         + "plus 32-bit integer lower/upper bounds.",
                 "items", Map.of(
                         "type", "object",
                         "properties", Map.of(
-                                "targetId", Map.of("type", "string", "description", "targetId copied from the selected ParameterAdjustment"),
+                                "targetId", Map.of("type", "string", "description", "targetId copied from the selected ParameterTarget"),
                                 "lower", Map.of("type", "integer", "description", "Lower bound (inclusive)"),
                                 "upper", Map.of("type", "integer", "description", "Upper bound (inclusive)")
                         ),
@@ -213,6 +213,9 @@ public class FixViolationTool extends AbstractAiTool {
             }
             if (result.getSuggestions() != null && !result.getSuggestions().isEmpty()) {
                 summary.put("suggestions", result.getSuggestions());
+            }
+            if (result.getParameterTargets() != null && !result.getParameterTargets().isEmpty()) {
+                summary.put("parameterTargets", result.getParameterTargets());
             }
             if (result.getUnusedPreferredRangeSelections() != null
                     && !result.getUnusedPreferredRangeSelections().isEmpty()) {

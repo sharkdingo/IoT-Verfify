@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.fixer.strategy;
 
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvData;
+import cn.edu.nju.Iot_Verify.component.nusmv.fixer.parameterize.ParameterizationConfig;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.model.AttackPointDto;
@@ -17,21 +18,81 @@ import static org.junit.jupiter.api.Assertions.*;
 class FixStrategyUtilsTest {
 
     @Test
-    void preservesExactAutomationLinkSelection_requiresEverySelectedRuleExactlyOnce() {
+    void commandFingerprint_distinguishesContentPayloadsForTheSameAction() {
+        Map<String, DeviceSmvData> devices = buildDeviceMap("display", "camera", "hub");
+        RuleDto showPhoto = RuleDto.builder()
+                .command(RuleDto.Command.builder()
+                        .deviceName("display").action("show")
+                        .contentDevice("camera").content("photo").build())
+                .build();
+        RuleDto showLog = RuleDto.builder()
+                .command(RuleDto.Command.builder()
+                        .deviceName("display").action("show")
+                        .contentDevice("hub").content("log").build())
+                .build();
+
+        assertNotEquals(
+                FixStrategyUtils.commandFingerprint(showPhoto, devices),
+                FixStrategyUtils.commandFingerprint(showLog, devices));
+    }
+
+    @Test
+    void candidateRulesPersistable_usesTheBoardExactDuplicateSemantics() {
+        RuleDto first = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("temperature_1").targetType("variable")
+                        .attribute("temperature").relation(">=").value("36").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("heat").build())
+                .build();
+        RuleDto duplicateWithAlias = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("temperature_1").targetType("variable")
+                        .attribute("temperature").relation("GTE").value("36").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("heat").build())
+                .build();
+        RuleDto distinctThreshold = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("temperature_1").targetType("variable")
+                        .attribute("temperature").relation(">=").value("37").build()))
+                .command(RuleDto.Command.builder().deviceName("ac_1").action("heat").build())
+                .build();
+
+        assertFalse(FixStrategyUtils.candidateRulesPersistable(List.of(first, duplicateWithAlias)));
+        assertTrue(FixStrategyUtils.candidateRulesPersistable(List.of(first, distinctThreshold)));
+    }
+
+    @Test
+    void preservesExactAttackSelection_requiresEverySelectedPointToRemainEffectful() {
         AttackScenarioDto exactLink = AttackScenarioDto.exactPoints(List.of(
                 AttackPointDto.automationLink(7L)));
 
-        assertTrue(FixStrategyUtils.preservesExactAutomationLinkSelection(
-                exactLink, List.of(RuleDto.builder().id(7L).build())));
-        assertFalse(FixStrategyUtils.preservesExactAutomationLinkSelection(
-                exactLink, List.of(RuleDto.builder().id(8L).build())));
-        assertFalse(FixStrategyUtils.preservesExactAutomationLinkSelection(
+        assertTrue(FixStrategyUtils.preservesExactAttackSelection(
+                exactLink, List.of(RuleDto.builder().id(7L).build()), Map.of()));
+        assertFalse(FixStrategyUtils.preservesExactAttackSelection(
+                exactLink, List.of(RuleDto.builder().id(8L).build()), Map.of()));
+        assertFalse(FixStrategyUtils.preservesExactAttackSelection(
                 exactLink, List.of(
                         RuleDto.builder().id(7L).build(),
-                        RuleDto.builder().id(7L).build())));
-        assertTrue(FixStrategyUtils.preservesExactAutomationLinkSelection(
+                        RuleDto.builder().id(7L).build()), Map.of()));
+
+        Map<String, DeviceSmvData> devices = buildDeviceMap("light_1", "sensor_1");
+        RuleDto commandTarget = RuleDto.builder()
+                .id(7L)
+                .command(RuleDto.Command.builder().deviceName("light_1").action("on").build())
+                .build();
+        AttackScenarioDto exactDevice = AttackScenarioDto.exactPoints(List.of(
+                AttackPointDto.device("light_1")));
+        assertTrue(FixStrategyUtils.preservesExactAttackSelection(
+                exactDevice, List.of(commandTarget), devices));
+        assertFalse(FixStrategyUtils.preservesExactAttackSelection(
+                exactDevice, List.of(), devices),
+                "removing the last command to a selected target must not disable its attack variable");
+
+        devices.get("sensor_1").getVariables().get(0).setFalsifiableWhenCompromised(true);
+        assertTrue(FixStrategyUtils.preservesExactAttackSelection(
                 AttackScenarioDto.exactPoints(List.of(AttackPointDto.device("sensor_1"))),
-                List.of()));
+                List.of(), devices),
+                "a selected falsifiable-reading device remains effectful without command rules");
     }
 
     // ======================== E2: expandRuleIndices ========================
@@ -171,6 +232,31 @@ class FixStrategyUtilsTest {
     }
 
     @Test
+    void expandRuleIndices_includesRulesSharingEnvironmentalDomain() {
+        Map<String, DeviceSmvData> deviceMap = new LinkedHashMap<>(buildDeviceMap(
+                "heater", "sensor", "fan"));
+        DeviceManifest.InternalVariable temperature = DeviceManifest.InternalVariable.builder()
+                .name("temperature").isInside(false).lowerBound(0).upperBound(100).build();
+        deviceMap.get("heater").setImpactedVariables(List.of("temperature"));
+        deviceMap.get("heater").getImpactedEnvironmentVariables().put("temperature", temperature);
+        deviceMap.get("sensor").getEnvVariables().put("temperature", temperature);
+
+        RuleDto sharedDomainRule = RuleDto.builder()
+                .conditions(List.of(RuleDto.Condition.builder()
+                        .deviceName("sensor").targetType("variable").attribute("temperature")
+                        .relation(">").value("30").build()))
+                .command(RuleDto.Command.builder().deviceName("fan").action("on").build())
+                .build();
+        SpecificationDto spec = buildSpec(
+                buildSpecCond("heater", "state", null, "=", "on"));
+
+        Set<Integer> result = FixStrategyUtils.expandRuleIndices(
+                null, List.of(sharedDomainRule), spec, deviceMap);
+
+        assertEquals(Set.of(0), result);
+    }
+
+    @Test
     void expandRuleIndices_ignoresSpecDeviceLabelWhenDeviceIdIsUnknown() {
         RuleDto rule = RuleDto.builder()
                 .conditions(List.of(RuleDto.Condition.builder()
@@ -245,6 +331,55 @@ class FixStrategyUtilsTest {
         assertEquals(1, candidates.size());
         assertEquals("temperature", candidates.get(0).getAttribute());
         assertEquals(">", candidates.get(0).getRelation());
+    }
+
+    @Test
+    void candidateConditionValueInfo_exposesDiscreteVariableDomainForFreeValue() {
+        DeviceManifest.InternalVariable occupied = DeviceManifest.InternalVariable.builder()
+                .name("occupied")
+                .values(List.of("TRUE", "FALSE"))
+                .build();
+        DeviceSmvData sensor = new DeviceSmvData();
+        sensor.setVarName("occupancy_1");
+        sensor.setVariables(List.of(occupied));
+
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("occupancy_1")
+                .targetType("variable")
+                .attribute("occupied")
+                .relation("=")
+                .value("FALSE")
+                .build();
+
+        ParameterizationConfig.ConditionValueInfo info =
+                FixStrategyUtils.candidateConditionValueInfo(
+                        candidate, Map.of("occupancy_1", sensor), "condition_value_r0_c1");
+
+        assertNotNull(info);
+        assertEquals("condition_value_r0_c1", info.getFrozenVarName());
+        assertEquals(List.of("TRUE", "FALSE"), info.getValues());
+        assertNull(info.getLowerBound());
+        assertNull(info.getUpperBound());
+    }
+
+    @Test
+    void candidateConditionValueInfo_exposesNumericVariableBounds() {
+        RuleDto.Condition candidate = RuleDto.Condition.builder()
+                .deviceName("sensor")
+                .targetType("variable")
+                .attribute("temperature")
+                .relation("<=")
+                .value("18")
+                .build();
+
+        ParameterizationConfig.ConditionValueInfo info =
+                FixStrategyUtils.candidateConditionValueInfo(
+                        candidate, buildDeviceMap("sensor"), "condition_value_r0_c1");
+
+        assertNotNull(info);
+        assertEquals(0, info.getLowerBound());
+        assertEquals(100, info.getUpperBound());
+        assertTrue(info.getValues().isEmpty());
     }
 
     @Test
@@ -356,8 +491,12 @@ class FixStrategyUtilsTest {
     }
 
     @Test
-    void extractCandidateConditions_skipsApiTrustPrivacy() {
+    void extractCandidateConditions_supportsPositiveApiAndSkipsTrustPrivacy() {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+        deviceMap.get("sensor").setManifest(DeviceManifest.builder()
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turnOn").signal(true).startState("").build()))
+                .build());
 
         RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
         SpecificationDto spec = buildSpec(
@@ -368,7 +507,11 @@ class FixStrategyUtilsTest {
         List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
                 spec, rule, deviceMap, 5);
 
-        assertTrue(candidates.isEmpty());
+        assertEquals(1, candidates.size());
+        assertEquals("api", candidates.get(0).getTargetType());
+        assertEquals("turnOn", candidates.get(0).getAttribute());
+        assertNull(candidates.get(0).getRelation());
+        assertNull(candidates.get(0).getValue());
     }
 
     @Test
@@ -376,10 +519,10 @@ class FixStrategyUtilsTest {
         Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
 
         RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
-        // 10 variable conditions
+        // Distinct free-value shapes; repeated literals of one shape are intentionally deduplicated.
         List<SpecConditionDto> conds = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            conds.add(buildSpecCond("sensor", "variable", "temperature", ">", String.valueOf(20 + i)));
+        for (String relation : List.of(">", ">=", "<", "<=")) {
+            conds.add(buildSpecCond("sensor", "variable", "temperature", relation, "30"));
         }
         SpecificationDto spec = new SpecificationDto();
         spec.setId("s1");
@@ -432,6 +575,68 @@ class FixStrategyUtilsTest {
                 spec, rule, deviceMap, 5);
 
         assertEquals(1, candidates.size(), "dedup should produce only 1 candidate");
+    }
+
+    @Test
+    void extractCandidateConditions_deduplicatesFreeValueShapesAcrossPolicyLiterals() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+        RuleDto rule = RuleDto.builder().conditions(new ArrayList<>()).build();
+        SpecificationDto spec = buildSpec(
+                buildSpecCond("sensor", "variable", "temperature", ">", "30"),
+                buildSpecCond("sensor", "variable", "temperature", ">", "40"));
+
+        List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
+                spec, rule, deviceMap, 5);
+
+        assertEquals(1, candidates.size(),
+                "a free-Y condition shape must consume only one candidate slot");
+    }
+
+    @Test
+    void extractCandidateConditions_doesNotAddFreeValueShapeAlreadyPresentInRule() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("sensor");
+        RuleDto rule = RuleDto.builder().conditions(List.of(RuleDto.Condition.builder()
+                .deviceName("sensor").targetType("variable").attribute("temperature")
+                .relation(">").value("35").build())).build();
+
+        List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("sensor", "variable", "temperature", ">", "30")),
+                rule, deviceMap, 5);
+
+        assertTrue(candidates.isEmpty());
+    }
+
+    @Test
+    void extractCandidateConditions_prunesCommandOutcomeFromFreeModeDomain() {
+        Map<String, DeviceSmvData> deviceMap = buildDeviceMap("camera");
+        DeviceSmvData camera = deviceMap.get("camera");
+        camera.getModeStates().put("default", new ArrayList<>(List.of("off", "on", "takingphoto")));
+        camera.setStates(List.of("off", "on", "takingphoto"));
+        camera.setManifest(DeviceManifest.builder()
+                .name("Camera")
+                .apis(List.of(DeviceManifest.API.builder()
+                        .name("turn on")
+                        .startState("_")
+                        .endState("on")
+                        .signal(true)
+                        .build()))
+                .build());
+        RuleDto rule = RuleDto.builder()
+                .conditions(new ArrayList<>())
+                .command(RuleDto.Command.builder().deviceName("camera").action("turn on").build())
+                .build();
+
+        List<RuleDto.Condition> candidates = FixStrategyUtils.extractCandidateConditions(
+                buildSpec(buildSpecCond("camera", "mode", "default", "=", "on")),
+                rule, deviceMap, 5);
+
+        assertEquals(1, candidates.size(),
+                "a single unsafe policy literal must not discard the entire free-Y candidate");
+        ParameterizationConfig.ConditionValueInfo valueInfo =
+                FixStrategyUtils.candidateConditionValueInfo(
+                        candidates.get(0), rule, deviceMap, "condition_value_r0_c1");
+        assertNotNull(valueInfo);
+        assertEquals(List.of("off", "takingphoto"), valueInfo.getValues());
     }
 
     @Test

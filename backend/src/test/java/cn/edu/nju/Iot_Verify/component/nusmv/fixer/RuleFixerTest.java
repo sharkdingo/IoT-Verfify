@@ -4,6 +4,9 @@ import cn.edu.nju.Iot_Verify.component.nusmv.fixer.localize.FaultLocalizer;
 import cn.edu.nju.Iot_Verify.configure.FixConfig;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultRuleDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
+import cn.edu.nju.Iot_Verify.dto.fix.ParameterTarget;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRange;
+import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import org.junit.jupiter.api.Test;
@@ -139,6 +142,113 @@ class RuleFixerTest {
         assertFalse(result.getSummary().contains("violatedSpecId"));
         assertFalse(result.getSummary().contains("'0'"));
         assertTrue(result.getSummary().contains("saved verification snapshot"));
+    }
+
+    @Test
+    void fix_modelGenerationFailureIsNotReportedAsNoVerifiedSuggestion() {
+        FixStrategy paramStrategy = mockStrategy("parameter", true);
+        when(paramStrategy.tryFix(any())).thenAnswer(invocation -> {
+            FixContext context = invocation.getArgument(0);
+            context.recordStrategyGenerationFailure(
+                    "parameter", "The counterexample initial state is incomplete.");
+            return null;
+        });
+        RuleFixer fixer = new RuleFixer(faultLocalizer, List.of(paramStrategy), fixConfig());
+        when(faultLocalizer.localize(any(), any(), any()))
+                .thenReturn(List.of(FaultRuleDto.builder().ruleIndex(0).build()));
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_0");
+
+        FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
+                List.of(RuleDto.builder().build()), List.of(), List.of(spec),
+                Map.of(), 1L, false, 0, false, List.of("parameter"), 20, null);
+
+        assertEquals("FAILED_MODEL_GENERATION", result.getStrategyAttempts().get(0).getStatus());
+        assertEquals("The counterexample initial state is incomplete.",
+                result.getStrategyAttempts().get(0).getReason());
+    }
+
+    @Test
+    void fix_solverFailureIsNotReportedAsNoVerifiedSuggestionAndIncludesProgress() {
+        FixStrategy parameterStrategy = mockStrategy("parameter", true);
+        when(parameterStrategy.tryFix(any())).thenAnswer(invocation -> {
+            FixContext context = invocation.getArgument(0);
+            context.initializeStrategySearch("parameter", 7);
+            context.addStrategyAttempts("parameter", 3);
+            context.recordStrategySolverFailure("parameter", "NuSMV returned incomplete output.");
+            return null;
+        });
+        RuleFixer fixer = new RuleFixer(faultLocalizer, List.of(parameterStrategy), fixConfig());
+        when(faultLocalizer.localize(any(), any(), any()))
+                .thenReturn(List.of(FaultRuleDto.builder().ruleIndex(0).build()));
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_0");
+
+        FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
+                List.of(RuleDto.builder().build()), List.of(), List.of(spec),
+                Map.of(), 1L, false, 0, false, List.of("parameter"), 7, null);
+
+        assertEquals("FAILED_SOLVER_EXECUTION", result.getStrategyAttempts().get(0).getStatus());
+        assertEquals(3, result.getStrategyAttempts().get(0).getAttemptsUsed());
+        assertEquals(7, result.getStrategyAttempts().get(0).getAttemptLimit());
+    }
+
+    @Test
+    void fix_budgetExhaustionRemainsDistinctFromCompleteNoResult() {
+        FixStrategy removeStrategy = mockStrategy("remove", false);
+        when(removeStrategy.tryFix(any())).thenAnswer(invocation -> {
+            FixContext context = invocation.getArgument(0);
+            context.initializeStrategySearch("remove", 2);
+            context.addStrategyAttempts("remove", 2);
+            context.recordStrategyNoResult("remove", "SEARCH_BUDGET_EXHAUSTED",
+                    "Unchecked combinations remain.");
+            return null;
+        });
+        RuleFixer fixer = new RuleFixer(faultLocalizer, List.of(removeStrategy), fixConfig());
+        when(faultLocalizer.localize(any(), any(), any()))
+                .thenReturn(List.of(FaultRuleDto.builder().ruleIndex(0).build()));
+
+        FixResultDto result = fixer.fix(1L, "UNKNOWN_SPEC", List.of(),
+                List.of(RuleDto.builder().build()), List.of(), List.of(),
+                Map.of(), 1L, false, 0, false, List.of("remove"), 2, null);
+
+        assertEquals("SEARCH_BUDGET_EXHAUSTED", result.getStrategyAttempts().get(0).getStatus());
+        assertEquals(2, result.getStrategyAttempts().get(0).getAttemptsUsed());
+        assertEquals(2, result.getStrategyAttempts().get(0).getAttemptLimit());
+    }
+
+    @Test
+    void fix_preferredRangeMatchedWithoutSuggestionIsUsedAndTargetRemainsDiscoverable() {
+        String targetId = PreferredRangeSelection.targetIdFor(1L, 0, 0);
+        FixStrategy parameterStrategy = mockStrategy("parameter", true);
+        when(parameterStrategy.tryFix(any())).thenAnswer(invocation -> {
+            FixContext context = invocation.getArgument(0);
+            context.registerParameterTarget(ParameterTarget.builder()
+                    .targetId(targetId)
+                    .attribute("temperature")
+                    .relation(">")
+                    .originalValue("30")
+                    .lowerBound(0)
+                    .upperBound(50)
+                    .description("temperature target")
+                    .build());
+            context.markPreferredRangeTargetMatched(targetId);
+            return null;
+        });
+        RuleFixer fixer = new RuleFixer(faultLocalizer, List.of(parameterStrategy), fixConfig());
+        when(faultLocalizer.localize(any(), any(), any()))
+                .thenReturn(List.of(FaultRuleDto.builder().ruleIndex(0).build()));
+        SpecificationDto spec = new SpecificationDto();
+        spec.setId("spec_0");
+
+        FixResultDto result = fixer.fix(1L, "spec_0", List.of(),
+                List.of(RuleDto.builder().build()), List.of(), List.of(spec),
+                Map.of(), 1L, false, 0, false, List.of("parameter"), 20,
+                Map.of(targetId, new PreferredRange(20, 40)));
+
+        assertTrue(result.getUnusedPreferredRangeSelections().isEmpty());
+        assertEquals(1, result.getParameterTargets().size());
+        assertEquals(targetId, result.getParameterTargets().get(0).getTargetId());
     }
 
     @Test

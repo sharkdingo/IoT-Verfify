@@ -18,7 +18,8 @@ import java.util.List;
  */
 @Entity
 @Table(name = "verification_task", indexes = {
-        @Index(name = "idx_verification_task_user_id", columnList = "user_id")
+        @Index(name = "idx_verification_task_user_id", columnList = "user_id"),
+        @Index(name = "idx_verification_task_active_lease", columnList = "status,lease_expires_at")
 })
 @Data
 @NoArgsConstructor
@@ -120,6 +121,14 @@ public class VerificationTaskPo implements TaskView {
     @Enumerated(EnumType.STRING)
     @Column(name = "progress_stage", length = 40)
     private TaskProgressStage progressStage;
+
+    @Column(name = "worker_id", length = 36)
+    @JsonIgnore
+    private String workerId;
+
+    @Column(name = "lease_expires_at")
+    @JsonIgnore
+    private LocalDateTime leaseExpiresAt;
 
     @Override
     public boolean isTerminalStatus() {

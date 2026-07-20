@@ -40,6 +40,47 @@ class ParameterAdjustStrategyNusmvWitnessIntegrationTest {
         assertFalseSpecExposesLambda(nusmv, "EF((lambda = 1) & EG(!s))", "ef_nested_eg_false.smv");
     }
 
+    @Test
+    void parameterizedModelAcceptsPinnedInitialStateAndExposesFrozenVar() throws Exception {
+        String nusmv = findNusmvExecutable();
+        requireNusmvInCi(nusmv);
+        Assumptions.assumeTrue(nusmv != null, "NuSMV executable not found");
+
+        Path model = tempDir.resolve("parameterized_pinned_initial_state.smv");
+        Files.writeString(model, """
+                MODULE Device
+                VAR
+                  Power : {off, on};
+                ASSIGN
+                  init(Power) := {off, on};
+                  next(Power) := Power;
+
+                MODULE main
+                FROZENVAR
+                  lambda : boolean;
+                VAR
+                  light_1 : Device;
+                INIT light_1.Power = on;
+                CTLSPEC EF(light_1.Power = off | lambda)
+                """, StandardCharsets.US_ASCII);
+
+        Process process = new ProcessBuilder(nusmv, model.toString())
+                .redirectErrorStream(true)
+                .start();
+        boolean finished = process.waitFor(Duration.ofSeconds(10).toMillis(), TimeUnit.MILLISECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+        }
+        assertTrue(finished, "NuSMV did not finish within timeout");
+
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, process.exitValue(), output);
+        requireNusmvVersionFromModelRun(output);
+        assertTrue(output.toLowerCase().contains("is false"), output);
+        assertTrue(output.matches("(?s).*light_1\\.Power\\s*=\\s*on.*"), output);
+        assertTrue(output.matches("(?is).*lambda\\s*=\\s*false.*"), output);
+    }
+
     private void requireNusmvInCi(String nusmv) {
         if (nusmv != null) {
             return;

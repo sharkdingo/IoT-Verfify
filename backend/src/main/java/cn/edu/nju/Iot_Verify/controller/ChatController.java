@@ -61,21 +61,21 @@ public class ChatController {
         String turnId = request.getTurnId() == null || request.getTurnId().isBlank()
                 ? UUID.randomUUID().toString()
                 : request.getTurnId().trim();
-        chatService.beginStreamRequest(userId, request.getSessionId());
+        String executionId = chatService.beginStreamRequest(userId, request.getSessionId());
         try {
             executor.execute(() -> {
                 try {
                     chatService.processStreamChat(
-                            userId, request.getSessionId(), turnId, request.getContent(), emitter);
+                            userId, request.getSessionId(), executionId, turnId, request.getContent(), emitter);
                 } catch (Exception e) {
                     log.error("Error processing chat request for userId={}", userId, e);
                     emitter.completeWithError(e);
                 } finally {
-                    chatService.endStreamRequest(userId, request.getSessionId());
+                    chatService.endStreamRequest(userId, request.getSessionId(), executionId);
                 }
             });
         } catch (RejectedExecutionException e) {
-            chatService.endStreamRequest(userId, request.getSessionId());
+            chatService.endStreamRequest(userId, request.getSessionId(), executionId);
             log.warn("Chat request rejected: executor is saturated, userId={}, sessionId={}", userId, request.getSessionId());
             throw new ServiceUnavailableException("Chat service is busy, please retry later", e);
         }

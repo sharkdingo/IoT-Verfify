@@ -5,8 +5,10 @@ import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskSummaryProjection;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzTaskProgressProjection;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,10 +20,11 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
+public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long>, DatabaseClockRepository {
 
-    @Query(value = "SELECT CURRENT_TIMESTAMP", nativeQuery = true)
-    LocalDateTime currentDatabaseTime();
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM FuzzTaskPo t WHERE t.id = :taskId")
+    Optional<FuzzTaskPo> findByIdForUpdate(@Param("taskId") Long taskId);
 
     Optional<FuzzTaskPo> findByIdAndUserId(Long id, Long userId);
 
@@ -85,11 +88,13 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
     @Query("UPDATE FuzzTaskPo t SET t.status = :running, t.startedAt = :startedAt, "
          + "t.progress = 0, t.checkLogsJson = :checkLogsJson, "
          + "t.leaseExpiresAt = :leaseExpiresAt "
-         + "WHERE t.id = :taskId AND t.status = :pending AND t.workerId = :workerId")
+         + "WHERE t.id = :taskId AND t.status = :pending AND t.workerId = :workerId "
+         + "AND t.leaseExpiresAt > :currentTime")
     int startTaskIfStillPending(@Param("taskId") Long taskId,
                                 @Param("running") FuzzTaskPo.TaskStatus running,
                                 @Param("startedAt") LocalDateTime startedAt,
                                 @Param("workerId") String workerId,
+                                @Param("currentTime") LocalDateTime currentTime,
                                 @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt,
                                 @Param("checkLogsJson") String checkLogsJson,
                                 @Param("pending") FuzzTaskPo.TaskStatus pending);
@@ -98,9 +103,10 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
     @Modifying(clearAutomatically = true)
     @Query("UPDATE FuzzTaskPo t SET t.leaseExpiresAt = :leaseExpiresAt "
          + "WHERE t.id = :taskId AND t.workerId = :workerId "
-         + "AND t.status IN (:activeStatuses)")
+         + "AND t.status IN (:activeStatuses) AND t.leaseExpiresAt > :currentTime")
     int renewOwnedActiveLease(@Param("taskId") Long taskId,
                               @Param("workerId") String workerId,
+                              @Param("currentTime") LocalDateTime currentTime,
                               @Param("leaseExpiresAt") LocalDateTime leaseExpiresAt,
                               @Param("activeStatuses") List<FuzzTaskPo.TaskStatus> activeStatuses);
 
@@ -138,7 +144,8 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
          + "t.findingCount = :findingCount, t.errorMessage = NULL, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL, "
          + "t.checkLogsJson = :checkLogsJson "
-         + "WHERE t.id = :taskId AND t.status = :running")
+         + "WHERE t.id = :taskId AND t.status = :running "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int completeTaskIfRunning(@Param("taskId") Long taskId,
                               @Param("completed") FuzzTaskPo.TaskStatus completed,
                               @Param("completedAt") LocalDateTime completedAt,
@@ -152,7 +159,9 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
                               @Param("limitationsJson") String limitationsJson,
                               @Param("findingCount") Integer findingCount,
                               @Param("checkLogsJson") String checkLogsJson,
-                              @Param("running") FuzzTaskPo.TaskStatus running);
+                              @Param("running") FuzzTaskPo.TaskStatus running,
+                              @Param("workerId") String workerId,
+                              @Param("currentTime") LocalDateTime currentTime);
 
     @Transactional
     @Modifying(clearAutomatically = true)
@@ -160,14 +169,17 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
          + "t.processingTimeMs = :processingTimeMs, t.progress = 100, "
          + "t.errorMessage = :errorMessage, t.checkLogsJson = :checkLogsJson, "
          + "t.workerId = NULL, t.leaseExpiresAt = NULL "
-         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses)")
+         + "WHERE t.id = :taskId AND t.status IN (:activeStatuses) "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int failTaskIfActive(@Param("taskId") Long taskId,
                          @Param("failed") FuzzTaskPo.TaskStatus failed,
                          @Param("completedAt") LocalDateTime completedAt,
                          @Param("processingTimeMs") Long processingTimeMs,
                          @Param("errorMessage") String errorMessage,
                          @Param("checkLogsJson") String checkLogsJson,
-                         @Param("activeStatuses") List<FuzzTaskPo.TaskStatus> activeStatuses);
+                         @Param("activeStatuses") List<FuzzTaskPo.TaskStatus> activeStatuses,
+                         @Param("workerId") String workerId,
+                         @Param("currentTime") LocalDateTime currentTime);
 
     @Transactional
     @Modifying(clearAutomatically = true)
@@ -182,7 +194,10 @@ public interface FuzzTaskRepository extends JpaRepository<FuzzTaskPo, Long> {
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE FuzzTaskPo t SET t.progress = :progress, t.progressStage = :stage "
-         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING')")
+         + "WHERE t.id = :taskId AND t.status IN ('PENDING', 'RUNNING') "
+         + "AND t.workerId = :workerId AND t.leaseExpiresAt > :currentTime")
     int updateProgressIfActive(@Param("taskId") Long taskId, @Param("progress") int progress,
-                               @Param("stage") TaskProgressStage stage);
+                               @Param("stage") TaskProgressStage stage,
+                               @Param("workerId") String workerId,
+                               @Param("currentTime") LocalDateTime currentTime);
 }

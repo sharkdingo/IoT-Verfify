@@ -15,6 +15,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
@@ -32,12 +33,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.lang.NonNull;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.lang.reflect.Method;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -89,6 +94,7 @@ class ChatServiceImplToolLoopControlTest {
     private LlmMessageCodec messageCodec;
     private TransactionTemplate transactionTemplate;
     private ChatExecutionConfig chatExecutionConfig;
+    private final List<Integer> transactionPropagations = new ArrayList<>();
 
     private ChatServiceImpl service;
     private Method executeToolLoopMethod;
@@ -98,15 +104,24 @@ class ChatServiceImplToolLoopControlTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        transactionTemplate = new TransactionTemplate() {
+        transactionPropagations.clear();
+        transactionTemplate = new TransactionTemplate(new PlatformTransactionManager() {
             @Override
-            public void executeWithoutResult(@NonNull Consumer<TransactionStatus> action) {
-                action.accept(mock(TransactionStatus.class));
+            public TransactionStatus getTransaction(@NonNull TransactionDefinition definition) {
+                transactionPropagations.add(definition.getPropagationBehavior());
+                return new SimpleTransactionStatus();
             }
-        };
+
+            @Override
+            public void commit(@NonNull TransactionStatus status) {}
+
+            @Override
+            public void rollback(@NonNull TransactionStatus status) {}
+        });
 
         messageCodec = new LlmMessageCodec(new ObjectMapper());
         chatExecutionConfig = new ChatExecutionConfig();
+        lenient().when(sessionRepo.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(UserPo.builder().id(1L).build()));
         ChatSessionPo defaultSession = new ChatSessionPo();
@@ -747,15 +762,17 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.beginStreamRequest(1L, "s1");
+        String executionId = service.beginStreamRequest(1L, "s1");
+        transactionPropagations.clear();
         service.requestLocalUserExecutionStop(1L);
-        service.processStreamChat(1L, "s1", "hello", emitter);
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
 
         verify(emitter).complete();
         verify(messageRepo, never()).saveAndFlush(any());
         verifyNoInteractions(llmChatService, aiToolManager);
         verify(destructiveActionGuard).clearUser(1L);
-        service.endStreamRequest(1L, "s1");
+        assertTrue(transactionPropagations.contains(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
@@ -767,7 +784,7 @@ class ChatServiceImplToolLoopControlTest {
         UserPo user = UserPo.builder().id(1L).build();
         when(userRepository.findByIdForUpdate(1L))
                 .thenReturn(Optional.of(user), Optional.empty());
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         org.mockito.Mockito.doAnswer(invocation -> {
             @SuppressWarnings("unchecked")
@@ -777,7 +794,8 @@ class ChatServiceImplToolLoopControlTest {
         }).when(llmChatService).streamReply(anyList(), any(), any());
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "hello", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null && "user".equals(msg.getRole())));
@@ -796,8 +814,8 @@ class ChatServiceImplToolLoopControlTest {
         });
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.beginStreamRequest(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verify(aiToolManager, never()).execute(any(), any());
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
@@ -806,7 +824,7 @@ class ChatServiceImplToolLoopControlTest {
                         && msg.getExecutionStatus() == ChatExecutionStatus.DISCONNECTED));
         verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null && "tool".equals(msg.getRole())));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
@@ -819,8 +837,8 @@ class ChatServiceImplToolLoopControlTest {
         });
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.beginStreamRequest(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verify(aiToolManager, never()).execute(any(), any());
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
@@ -828,20 +846,96 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
                         && msg.getContent().contains("user stopped")));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
     void executionLease_isVisibleAndExclusiveAcrossServiceInstances() {
         ChatServiceImpl otherInstance = newService();
 
-        service.beginStreamRequest(1L, "s1");
+        String executionId = service.beginStreamRequest(1L, "s1");
 
         assertTrue(otherInstance.getSessionActivity(1L, "s1").isActive());
         assertThrows(ChatSessionBusyException.class,
                 () -> otherInstance.beginStreamRequest(1L, "s1"));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
         assertFalse(otherInstance.getSessionActivity(1L, "s1").isActive());
+    }
+
+    @Test
+    void executionLeaseMaintenanceRenewsLongRunningRequestsAndSweepsExpiredRows() {
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        chatExecutionConfig.setLeaseTtlMs(60_000);
+        LocalDateTime initialDatabaseTime = LocalDateTime.of(2026, 7, 20, 12, 0);
+        when(sessionRepo.currentDatabaseTime())
+                .thenReturn(initialDatabaseTime, initialDatabaseTime.plusSeconds(1));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        assertEquals(executionId, session.getActiveExecutionId());
+        LocalDateTime previousExpiry = session.getActiveExecutionExpiresAt();
+        when(sessionRepo.renewActiveExecutionLease(
+                eq("s1"), eq(1L), eq(executionId), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenAnswer(invocation -> {
+                    session.setActiveExecutionExpiresAt(invocation.getArgument(4));
+                    return 1;
+                });
+        when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenReturn(2);
+
+        service.maintainExecutionLeases();
+
+        assertTrue(session.getActiveExecutionExpiresAt().isAfter(previousExpiry));
+        verify(sessionRepo).clearExpiredExecutionLeases(any(LocalDateTime.class));
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void executionLeaseMaintenanceDropsAStaleLocalRegistrationAfterLeaseLoss() {
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        String executionId = service.beginStreamRequest(1L, "s1");
+        String expiredExecutionId = session.getActiveExecutionId();
+        session.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
+        when(sessionRepo.renewActiveExecutionLease(
+                eq("s1"), eq(1L), eq(expiredExecutionId), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(0);
+        when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenAnswer(invocation -> {
+            session.setActiveExecutionId(null);
+            session.setActiveExecutionExpiresAt(null);
+            session.setExecutionStopRequested(false);
+            session.setExecutionUserStopRequested(false);
+            return 1;
+        });
+
+        service.maintainExecutionLeases();
+        String replacementExecutionId = service.beginStreamRequest(1L, "s1");
+
+        assertTrue(service.getSessionActivity(1L, "s1").isActive());
+        assertFalse(expiredExecutionId.equals(session.getActiveExecutionId()));
+        service.endStreamRequest(1L, "s1", executionId);
+        assertTrue(service.getSessionActivity(1L, "s1").isActive());
+        assertEquals(replacementExecutionId, session.getActiveExecutionId());
+        service.endStreamRequest(1L, "s1", replacementExecutionId);
+    }
+
+    @Test
+    void queuedWorkerCannotStartAfterItsExecutionLeaseWasLost() {
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        String executionId = service.beginStreamRequest(1L, "s1");
+        session.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
+        when(sessionRepo.renewActiveExecutionLease(
+                eq("s1"), eq(1L), eq(executionId), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(0);
+        when(sessionRepo.clearExpiredExecutionLeases(any(LocalDateTime.class))).thenAnswer(invocation -> {
+            session.setActiveExecutionId(null);
+            session.setActiveExecutionExpiresAt(null);
+            return 1;
+        });
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        service.maintainExecutionLeases();
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
+
+        verify(emitter).complete();
+        verify(messageRepo, never()).saveAndFlush(any());
+        verifyNoInteractions(llmChatService, aiToolManager);
     }
 
     @Test
@@ -854,15 +948,16 @@ class ChatServiceImplToolLoopControlTest {
             return toolCallResult("list_rules", "{}");
         });
 
-        service.beginStreamRequest(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", mock(SseEmitter.class));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "please list rules", mock(SseEmitter.class));
 
         verify(aiToolManager, never()).execute(any(), any());
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
@@ -876,8 +971,9 @@ class ChatServiceImplToolLoopControlTest {
             return "{\"rules\":[]}";
         });
 
-        service.beginStreamRequest(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", mock(SseEmitter.class));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "please list rules", mock(SseEmitter.class));
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
@@ -888,16 +984,42 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
                         && msg.getContent().contains("1 step(s) returned usable results")));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
+    }
+
+    @Test
+    void processStreamChat_whenLeaseIsReplacedDuringToolCall_rejectsOldExecutionWrites() {
+        ChatSessionPo session = sessionRepo.findByIdAndUserId("s1", 1L).orElseThrow();
+        when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
+        when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(toolCallResult("list_rules", "{}"));
+        when(aiToolManager.execute("list_rules", "{}")).thenAnswer(invocation -> {
+            session.setActiveExecutionId("replacement-execution");
+            session.setActiveExecutionExpiresAt(LocalDateTime.now().plusMinutes(1));
+            return "{\"rules\":[]}";
+        });
+
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "please list rules", mock(SseEmitter.class));
+
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null && "tool".equals(msg.getRole())));
+        verify(messageRepo, never()).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
+                msg -> msg != null
+                        && "assistant".equals(msg.getRole())
+                        && msg.getExecutionStatus() != null));
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
     void processStreamChat_whenQueuedRequestWasAlreadyStopped_persistsAuditWithoutCallingModel() {
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.beginStreamRequest(1L, "s1");
+        String executionId = service.beginStreamRequest(1L, "s1");
         service.requestStreamStop(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verifyNoInteractions(llmChatService, aiToolManager);
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
@@ -905,7 +1027,7 @@ class ChatServiceImplToolLoopControlTest {
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED));
         verify(emitter).complete();
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
@@ -925,15 +1047,15 @@ class ChatServiceImplToolLoopControlTest {
         }).when(llmChatService).streamReply(anyList(), any(), any());
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.beginStreamRequest(1L, "s1");
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
                         && "assistant".equals(msg.getRole())
                         && msg.getExecutionStatus() == ChatExecutionStatus.STOPPED
                         && msg.getContent().contains("The user stopped")));
-        service.endStreamRequest(1L, "s1");
+        service.endStreamRequest(1L, "s1", executionId);
     }
 
     @Test
@@ -943,14 +1065,15 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         session.setTitle("New Chat");
 
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         doThrow(ServiceUnavailableException.aiService(new RuntimeException("Invalid UTF-8 middle byte 0xe3")))
                 .when(llmChatService).streamReply(anyList(), any(), any());
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "hello", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
 
         verify(emitter, org.mockito.Mockito.atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
@@ -967,7 +1090,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setId("s1");
         session.setUserId(1L);
         session.setTitle("New Chat");
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -979,7 +1102,9 @@ class ChatServiceImplToolLoopControlTest {
         doThrow(ServiceUnavailableException.aiService(new RuntimeException("provider unavailable")))
                 .when(llmChatService).streamReply(anyList(), any(), any());
 
-        service.processStreamChat(1L, "s1", "list rules", mock(SseEmitter.class));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "list rules", mock(SseEmitter.class));
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
@@ -994,7 +1119,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setId("s1");
         session.setUserId(1L);
         session.setTitle("New Chat");
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -1009,7 +1134,9 @@ class ChatServiceImplToolLoopControlTest {
             return null;
         }).when(llmChatService).streamReply(anyList(), any(), any());
 
-        service.processStreamChat(1L, "s1", "请列出规则", mock(SseEmitter.class));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "请列出规则", mock(SseEmitter.class));
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
@@ -1030,7 +1157,9 @@ class ChatServiceImplToolLoopControlTest {
             return null;
         }).when(llmChatService).streamReply(anyList(), any(), any());
 
-        service.processStreamChat(1L, "s1", "turn-1", "hello", mock(SseEmitter.class));
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "hello", mock(SseEmitter.class));
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null && "user".equals(msg.getRole()) && "turn-1".equals(msg.getTurnId())));
@@ -1069,7 +1198,8 @@ class ChatServiceImplToolLoopControlTest {
             return null;
         }).when(emitter).complete();
 
-        service.processStreamChat(1L, "s1", "hello", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
 
         verify(messageRepo, org.mockito.Mockito.times(1)).saveAndFlush(
                 org.mockito.ArgumentMatchers.argThat(message ->
@@ -1077,15 +1207,11 @@ class ChatServiceImplToolLoopControlTest {
     }
 
     @Test
-    void processStreamChat_whenSessionMissing_shouldSendSseErrorFrame() throws Exception {
-        when(sessionRepo.findByIdAndUserId("missing", 1L)).thenReturn(Optional.empty());
+    void beginStreamRequest_whenSessionMissing_shouldRejectBeforeDispatch() {
+        when(sessionRepo.findByIdAndUserIdForUpdate("missing", 1L)).thenReturn(Optional.empty());
 
-        SseEmitter emitter = mock(SseEmitter.class);
-
-        service.processStreamChat(1L, "missing", "hello", emitter);
-
-        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
-        verify(emitter).complete();
+        assertThrows(ResourceNotFoundException.class,
+                () -> service.beginStreamRequest(1L, "missing"));
         verifyNoInteractions(aiToolManager);
     }
 
@@ -1096,7 +1222,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         session.setTitle("New Chat");
 
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -1117,7 +1243,8 @@ class ChatServiceImplToolLoopControlTest {
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verify(llmChatService).streamReply(anyList(), any(), any());
         verify(emitter, org.mockito.Mockito.atLeast(2)).send(any(SseEmitter.SseEventBuilder.class));
@@ -1145,7 +1272,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setTitle("New Chat");
 
         String arguments = "{\"id\":\"air_conditioner\",\"confirmed\":false}";
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -1161,7 +1288,9 @@ class ChatServiceImplToolLoopControlTest {
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "删除设备 Air Conditioner", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "删除设备 Air Conditioner", emitter);
 
         verify(messageRepo).saveAndFlush(org.mockito.ArgumentMatchers.argThat(
                 msg -> msg != null
@@ -1181,7 +1310,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         session.setTitle("New Chat");
 
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         List<LlmToolSpec> completeCatalog = List.of(
                 toolSpec("board_overview"),
@@ -1210,7 +1339,8 @@ class ChatServiceImplToolLoopControlTest {
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "hello", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "hello", emitter);
 
         verify(destructiveActionGuard, never()).clearSession(1L, "s1");
         assertEquals(completeCatalog, plannedTools.get());
@@ -1232,7 +1362,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         session.setTitle("New Chat");
 
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -1255,7 +1385,9 @@ class ChatServiceImplToolLoopControlTest {
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "please list rules across all pages", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(
+                1L, "s1", executionId, "turn-1", "please list rules across all pages", emitter);
 
         verify(aiToolManager, org.mockito.Mockito.times(6)).execute(eq("list_rules"), anyString());
         verify(llmChatService).streamReply(anyList(), any(), any());
@@ -1275,7 +1407,7 @@ class ChatServiceImplToolLoopControlTest {
         session.setUserId(1L);
         session.setTitle("New Chat");
 
-        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        useSession(session);
         when(messageRepo.findTop80BySessionIdOrderByCreatedAtDesc("s1")).thenReturn(List.of());
         when(aiToolManager.getAllToolDefinitions()).thenReturn(List.of());
         when(llmChatService.chatWithTools(anyList(), anyList()))
@@ -1290,7 +1422,8 @@ class ChatServiceImplToolLoopControlTest {
 
         SseEmitter emitter = mock(SseEmitter.class);
 
-        service.processStreamChat(1L, "s1", "please list rules", emitter);
+        String executionId = service.beginStreamRequest(1L, "s1");
+        service.processStreamChat(1L, "s1", executionId, "turn-1", "please list rules", emitter);
 
         verify(aiToolManager, org.mockito.Mockito.times(3)).execute("list_rules", "{}");
         verify(llmChatService).streamReply(anyList(), any(), any());
@@ -1303,6 +1436,11 @@ class ChatServiceImplToolLoopControlTest {
                         && !msg.getContent().contains("5-round planning limit")
                         && msg.getExecutionStatus() == ChatExecutionStatus.PARTIAL));
         verify(emitter).complete();
+    }
+
+    private void useSession(ChatSessionPo session) {
+        when(sessionRepo.findByIdAndUserId("s1", 1L)).thenReturn(Optional.of(session));
+        when(sessionRepo.findByIdAndUserIdForUpdate("s1", 1L)).thenReturn(Optional.of(session));
     }
 
     private Object invokeToolLoop(AtomicBoolean disconnected, Set<StreamResponseDto.CommandDto> commandSet) throws Exception {

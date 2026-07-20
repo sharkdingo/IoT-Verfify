@@ -169,7 +169,18 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
         TaskProgressState next = new TaskProgressState(clamped, requiredStage);
         TaskProgressState previous = taskProgress.put(requiredTaskId, next);
         if (!Objects.equals(previous, next)) {
-            atomicUpdateProgress(requiredTaskId, clamped, requiredStage);
+            int updated = atomicUpdateProgress(requiredTaskId, clamped, requiredStage);
+            if (updated == 0) {
+                if (previous == null) {
+                    taskProgress.remove(requiredTaskId, next);
+                } else {
+                    taskProgress.replace(requiredTaskId, next, previous);
+                }
+                requestLocalExecutionStop(requiredTaskId);
+                log.info("{} {} lost its active worker lease while updating progress", taskResourceType,
+                        requiredTaskId);
+                return;
+            }
         }
         log.debug("{} {} progress: {}% - {}", taskResourceType, requiredTaskId, progress, requiredStage);
     }
@@ -216,7 +227,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
         boolean markerWasPresent = cancelledTasks.contains(taskId);
         cancelledTasks.add(taskId);
         try {
-            int updated = atomicCancelTask(taskId, LocalDateTime.now());
+            int updated = atomicCancelTask(taskId, currentTaskTime());
             if (updated == 0) {
                 T currentTask = findTaskByIdAndUserId(taskId, userId)
                         .orElseThrow(() -> new ResourceNotFoundException(taskResourceType, taskId));
@@ -276,7 +287,7 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
      */
     protected void handleCancellation(T task) {
         log.info("Handling cancellation for {}: {}", taskResourceType, task.getId());
-        int updated = atomicCancelTask(task.getId(), LocalDateTime.now());
+        int updated = atomicCancelTask(task.getId(), currentTaskTime());
         if (updated == 0) {
             log.info("{} {} already finished (COMPLETED/FAILED), skipping cancel", taskResourceType, task.getId());
         }
@@ -294,6 +305,11 @@ public abstract class AbstractAsyncTaskService<T extends TaskView>
      * @return 影响行数（0 表示任务已不在可取消状态）
      */
     protected abstract int atomicCancelTask(Long taskId, LocalDateTime completedAt);
+
+    /** Shared persisted clock for terminal task timestamps. */
+    protected LocalDateTime currentTaskTime() {
+        return LocalDateTime.now();
+    }
 
     /**
      * 原子更新任务进度（仅当任务仍在活跃状态时）。

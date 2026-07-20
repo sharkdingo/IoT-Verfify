@@ -38,6 +38,14 @@ public class ParameterizationConfig {
     private Map<String, String> conditionLambdas = new LinkedHashMap<>();
 
     /**
+     * §5.2: Free values for candidate conditions.
+     * Key = "r{ruleIdx}_c{condIdx}", value = the candidate value domain and FROZENVAR name.
+     * Existing rule conditions are never included here.
+     */
+    @Builder.Default
+    private Map<String, ConditionValueInfo> candidateConditionValues = new LinkedHashMap<>();
+
+    /**
      * Index of the violated spec in the specs list; this spec will be negated (¬ρ).
      */
     private int negatedSpecIndex;
@@ -47,6 +55,13 @@ public class ParameterizationConfig {
      */
     @Builder.Default
     private List<String> exclusionInvars = new ArrayList<>();
+
+    /**
+     * INIT constraints copied from the original counterexample's first complete state.
+     * These constrain candidate discovery only; forward verification never receives them.
+     */
+    @Builder.Default
+    private List<String> initialStateConstraints = new ArrayList<>();
 
     /**
      * Metadata for a parameterized numeric threshold (§5.1).
@@ -62,5 +77,18 @@ public class ParameterizationConfig {
         private int upperBound;
         /** Original threshold value in the rule condition */
         private String originalValue;
+    }
+
+    /** Metadata for a parameterized candidate-condition value (§5.2's free value Y). */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ConditionValueInfo {
+        private String frozenVarName;
+        @Builder.Default
+        private List<String> values = new ArrayList<>();
+        private Integer lowerBound;
+        private Integer upperBound;
     }
 }

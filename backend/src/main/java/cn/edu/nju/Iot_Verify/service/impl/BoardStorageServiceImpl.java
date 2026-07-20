@@ -49,6 +49,7 @@ import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.po.*;
 import cn.edu.nju.Iot_Verify.repository.*;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.util.RuleSemanticSignature;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
@@ -61,6 +62,7 @@ import cn.edu.nju.Iot_Verify.util.mapper.BoardLayoutMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.DeviceTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -96,6 +98,12 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private final DeviceTemplateMapper deviceTemplateMapper;
     private final DeviceTemplateSchemaValidator deviceTemplateSchemaValidator;
     private final UserRepository userRepository;
+    private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+
+    @Autowired
+    void setChatExecutionLeaseGuard(ChatExecutionLeaseGuard chatExecutionLeaseGuard) {
+        this.chatExecutionLeaseGuard = chatExecutionLeaseGuard;
+    }
 
     /**
      * The in-process user lock prevents same-instance read-modify-write races. Every write
@@ -123,6 +131,9 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private void requireActiveUserForWrite(Long userId) {
         if (userId == null || userRepository.findByIdForUpdate(userId).isEmpty()) {
             throw UnauthorizedException.invalidToken();
+        }
+        if (chatExecutionLeaseGuard != null) {
+            chatExecutionLeaseGuard.requireCurrentExecutionLease();
         }
     }
 

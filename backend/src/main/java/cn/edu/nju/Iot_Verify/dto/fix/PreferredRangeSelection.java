@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
 /**
  * User/API-facing target for a preferred parameter-adjustment range.
  *
- * <p>Clients select an opaque {@code targetId} returned on a {@link ParameterAdjustment}.
+ * <p>Clients select an opaque {@code targetId} returned on a {@link ParameterTarget}.
  * The fixer matches this id against currently available parameter-adjustment targets; REST/AI
  * callers no longer type zero-based indices or {@code r*_c*} locator keys.</p>
  */

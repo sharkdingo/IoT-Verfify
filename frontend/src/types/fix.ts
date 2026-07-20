@@ -34,26 +34,30 @@ export interface FaultLocalizationResult {
 
 export type FixStrategyName = 'parameter' | 'condition' | 'remove'
 
-// §5.1 参数调整结果
-export interface ParameterAdjustment {
+// Numeric condition available for trace-scoped preferred-range selection.
+export interface ParameterTarget {
   targetId: string
   attribute: string
   relation: string
   originalValue: string
-  newValue: string
   lowerBound: number
   upperBound: number
   description: string
+}
+
+// §5.1 参数调整结果
+export interface ParameterAdjustment extends ParameterTarget {
+  newValue: string
 }
 
 // §5.2 条件调整结果
 export interface ConditionAdjustment {
   action: 'remove' | 'keep' | 'add'
   attribute: string
-  targetType?: RuleSourceItemType
+  targetType: RuleSourceItemType
   description: string
-  ruleDescription?: string
-  deviceLabel?: string
+  ruleDescription: string
+  deviceLabel: string
   relation?: string
   value?: string
 }
@@ -63,9 +67,9 @@ export interface FixSuggestion {
   suggestionToken?: string
   strategy: FixStrategyName
   description: string
-  parameterAdjustments?: ParameterAdjustment[]
-  conditionAdjustments?: ConditionAdjustment[]
-  removedRuleDescriptions?: string[]
+  parameterAdjustments: ParameterAdjustment[]
+  conditionAdjustments: ConditionAdjustment[]
+  removedRuleDescriptions: string[]
   verified: boolean
 }
 
@@ -73,9 +77,13 @@ export type FixStrategyAttemptStatus =
   | 'VERIFIED'
   | 'NOT_VERIFIED'
   | 'NO_VERIFIED_SUGGESTION'
+  | 'FAILED_MODEL_GENERATION'
+  | 'FAILED_SOLVER_EXECUTION'
+  | 'SEARCH_BUDGET_EXHAUSTED'
   | 'TIMED_OUT'
   | 'SKIPPED_TIMEOUT'
   | 'SKIPPED_NO_SPEC'
+  | 'SKIPPED_NO_PARAMETERIZABLE_VALUES'
   | 'SKIPPED_NO_FAULT_RULES'
   | 'SKIPPED_INCOMPLETE_SOURCE_MODEL'
   | 'SKIPPED_UNSUPPORTED'
@@ -84,6 +92,8 @@ export interface FixStrategyAttempt {
   strategy: FixStrategyName
   status: FixStrategyAttemptStatus
   reason: string
+  attemptsUsed?: number | null
+  attemptLimit?: number | null
 }
 
 export type TemplateSnapshotComparison = 'NOT_CHECKED' | 'UNCHANGED' | 'CHANGED' | 'UNAVAILABLE'
@@ -103,7 +113,8 @@ export interface FixResult {
   templateSnapshotComparison: TemplateSnapshotComparison
   summary: string
   warnings: string[]
-  unusedPreferredRangeSelections?: PreferredRangeSelection[]
+  parameterTargets: ParameterTarget[]
+  unusedPreferredRangeSelections: PreferredRangeSelection[]
 }
 
 // 修复请求（可选）

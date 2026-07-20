@@ -10,7 +10,7 @@ inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 `Result<Map<String, Object>>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-18. Source: component/aitool/, component/ai/.
+Verified against code on 2026-07-20. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -558,10 +558,12 @@ mutates persisted rules and must pass the server-side drift/recompute checks des
 in [auto-fix.md](../architecture/auto-fix.md).
 For parameter-fix steering, the tool accepts `preferredRangeSelections[]` items with
 `{ targetId, lower, upper }`, where `targetId` is copied from a returned
-trace-scoped `ParameterAdjustment.targetId` from the same fix context. The older internal
+trace-scoped `parameterTargets[].targetId` from the same fix context. Eligible numeric
+targets are returned even when the first parameter search finds no verified suggestion,
+so a later tool call can narrow the range without inventing an internal locator. The older internal
 rule/condition locator map and zero-based selectors are not part of the tool schema;
 unsupported fields are rejected instead of being accepted or ignored.
-The response also includes `strategyAttempts`, technical `warnings`,
+The response also includes `strategyAttempts`, `parameterTargets`, technical `warnings`,
 `sourceModelComplete`, `sourceDisabledRuleCount`, `sourceSkippedSpecCount`, itemized
 `sourceGenerationIssues`, and the stable `templateSnapshotComparison` status. Every
 requested strategy gets an explicit attempted/skipped status. A trace from an incomplete generated model, or one without explicit completeness

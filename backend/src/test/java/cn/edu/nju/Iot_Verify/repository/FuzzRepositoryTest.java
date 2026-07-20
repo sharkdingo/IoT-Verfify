@@ -5,6 +5,9 @@ import cn.edu.nju.Iot_Verify.dto.fuzz.FuzzOutcome;
 import cn.edu.nju.Iot_Verify.dto.model.TaskProgressStage;
 import cn.edu.nju.Iot_Verify.po.FuzzFindingPo;
 import cn.edu.nju.Iot_Verify.po.FuzzTaskPo;
+import cn.edu.nju.Iot_Verify.po.SimulationTaskPo;
+import cn.edu.nju.Iot_Verify.po.VerificationTaskPo;
+import cn.edu.nju.Iot_Verify.dto.verification.VerificationOutcome;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.projection.FuzzFindingSummaryProjection;
@@ -35,6 +38,8 @@ class FuzzRepositoryTest {
     @Autowired private FuzzFindingRepository findingRepository;
     @Autowired private ChatSessionRepository chatSessionRepository;
     @Autowired private ChatMessageRepository chatMessageRepository;
+    @Autowired private VerificationTaskRepository verificationTaskRepository;
+    @Autowired private SimulationTaskRepository simulationTaskRepository;
 
     @Test
     void currentDatabaseTimeProvidesTheSharedLeaseClock() {
@@ -43,6 +48,188 @@ class FuzzRepositoryTest {
         LocalDateTime after = LocalDateTime.now().plusSeconds(2);
 
         assertTrue(!databaseTime.isBefore(before) && !databaseTime.isAfter(after));
+    }
+
+    @Test
+    void verificationAndSimulationRecoveryOnlyFailsExpiredLeases() {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime activeUntil = now.plusMinutes(2);
+        List<VerificationTaskPo.TaskStatus> verificationActive = List.of(
+                VerificationTaskPo.TaskStatus.PENDING,
+                VerificationTaskPo.TaskStatus.RUNNING);
+        List<SimulationTaskPo.TaskStatus> simulationActive = List.of(
+                SimulationTaskPo.TaskStatus.PENDING,
+                SimulationTaskPo.TaskStatus.RUNNING);
+
+        VerificationTaskPo expiredVerification = verificationTaskRepository.saveAndFlush(
+                VerificationTaskPo.builder()
+                        .userId(21L)
+                        .status(VerificationTaskPo.TaskStatus.PENDING)
+                        .createdAt(now.minusMinutes(3))
+                        .progress(0)
+                        .workerId("old-verification-worker")
+                        .leaseExpiresAt(now.minusSeconds(1))
+                        .build());
+        VerificationTaskPo activeVerification = verificationTaskRepository.saveAndFlush(
+                VerificationTaskPo.builder()
+                        .userId(21L)
+                        .status(VerificationTaskPo.TaskStatus.PENDING)
+                        .createdAt(now)
+                        .progress(0)
+                        .workerId("active-verification-worker")
+                        .leaseExpiresAt(activeUntil)
+                        .build());
+
+        assertEquals(0, verificationTaskRepository.renewOwnedActiveLease(
+                expiredVerification.getId(), "old-verification-worker", now,
+                activeUntil, verificationActive));
+        assertEquals(1, verificationTaskRepository.failExpiredActiveTasks(
+                VerificationTaskPo.TaskStatus.FAILED,
+                now,
+                VerificationOutcome.INCONCLUSIVE,
+                "expired",
+                "[]",
+                verificationActive,
+                now));
+        assertEquals(VerificationTaskPo.TaskStatus.FAILED,
+                verificationTaskRepository.findById(expiredVerification.getId()).orElseThrow().getStatus());
+        assertEquals(VerificationTaskPo.TaskStatus.PENDING,
+                verificationTaskRepository.findById(activeVerification.getId()).orElseThrow().getStatus());
+        assertEquals(0, verificationTaskRepository.startTaskIfStillPending(
+                activeVerification.getId(), VerificationTaskPo.TaskStatus.RUNNING, now,
+                0, "[]", VerificationTaskPo.TaskStatus.PENDING,
+                "wrong-worker", now, activeUntil));
+        assertEquals(1, verificationTaskRepository.startTaskIfStillPending(
+                activeVerification.getId(), VerificationTaskPo.TaskStatus.RUNNING, now,
+                0, "[]", VerificationTaskPo.TaskStatus.PENDING,
+                "active-verification-worker", now, activeUntil));
+
+        SimulationTaskPo expiredSimulation = simulationTaskRepository.saveAndFlush(
+                SimulationTaskPo.builder()
+                        .userId(22L)
+                        .status(SimulationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now.minusMinutes(3))
+                        .startedAt(now.minusMinutes(3))
+                        .requestedSteps(5)
+                        .progress(50)
+                        .workerId("old-simulation-worker")
+                        .leaseExpiresAt(now.minusSeconds(1))
+                        .build());
+        SimulationTaskPo activeSimulation = simulationTaskRepository.saveAndFlush(
+                SimulationTaskPo.builder()
+                        .userId(22L)
+                        .status(SimulationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now)
+                        .startedAt(now)
+                        .requestedSteps(5)
+                        .progress(50)
+                        .workerId("active-simulation-worker")
+                        .leaseExpiresAt(activeUntil)
+                        .build());
+
+        assertEquals(0, simulationTaskRepository.renewOwnedActiveLease(
+                expiredSimulation.getId(), "old-simulation-worker", now,
+                activeUntil, simulationActive));
+        assertEquals(1, simulationTaskRepository.failExpiredActiveTasks(
+                SimulationTaskPo.TaskStatus.FAILED,
+                now,
+                "expired",
+                "[]",
+                simulationActive,
+                now));
+        assertEquals(SimulationTaskPo.TaskStatus.FAILED,
+                simulationTaskRepository.findById(expiredSimulation.getId()).orElseThrow().getStatus());
+        assertEquals(SimulationTaskPo.TaskStatus.RUNNING,
+                simulationTaskRepository.findById(activeSimulation.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void expiredWorkersCannotCommitTerminalTaskResultsBeforeRecoveryRuns() {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime expiredAt = now.minusSeconds(1);
+
+        VerificationTaskPo verification = verificationTaskRepository.saveAndFlush(
+                VerificationTaskPo.builder()
+                        .userId(41L)
+                        .status(VerificationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now.minusMinutes(1))
+                        .startedAt(now.minusMinutes(1))
+                        .progress(90)
+                        .workerId("expired-verification-worker")
+                        .leaseExpiresAt(expiredAt)
+                        .build());
+        assertEquals(0, verificationTaskRepository.completeTaskIfRunning(
+                verification.getId(), VerificationTaskPo.TaskStatus.COMPLETED, now,
+                VerificationOutcome.SATISFIED, 0, 0, 0,
+                "[]", "[]", "[]", "", null, 1L,
+                VerificationTaskPo.TaskStatus.RUNNING,
+                "expired-verification-worker", now));
+        assertEquals(0, verificationTaskRepository.failTaskIfActive(
+                verification.getId(), VerificationTaskPo.TaskStatus.FAILED, now,
+                VerificationOutcome.INCONCLUSIVE, "late failure", "[]", 1L,
+                List.of(VerificationTaskPo.TaskStatus.PENDING, VerificationTaskPo.TaskStatus.RUNNING),
+                "expired-verification-worker", now));
+
+        SimulationTaskPo simulation = simulationTaskRepository.saveAndFlush(
+                SimulationTaskPo.builder()
+                        .userId(42L)
+                        .status(SimulationTaskPo.TaskStatus.RUNNING)
+                        .createdAt(now.minusMinutes(1))
+                        .startedAt(now.minusMinutes(1))
+                        .requestedSteps(5)
+                        .progress(90)
+                        .workerId("expired-simulation-worker")
+                        .leaseExpiresAt(expiredAt)
+                        .build());
+        assertEquals(0, simulationTaskRepository.completeTaskIfRunning(
+                simulation.getId(), SimulationTaskPo.TaskStatus.COMPLETED, now,
+                5, 99L, null, "[]", "[]", 1L,
+                SimulationTaskPo.TaskStatus.RUNNING,
+                "expired-simulation-worker", now));
+        assertEquals(0, simulationTaskRepository.failTaskIfActive(
+                simulation.getId(), SimulationTaskPo.TaskStatus.FAILED, now,
+                "late failure", "[]", 1L,
+                List.of(SimulationTaskPo.TaskStatus.PENDING, SimulationTaskPo.TaskStatus.RUNNING),
+                "expired-simulation-worker", now));
+
+        FuzzTaskPo fuzz = taskForLease("expired-fuzz-worker", expiredAt);
+        fuzz.setStatus(FuzzTaskPo.TaskStatus.RUNNING);
+        fuzz.setStartedAt(now.minusMinutes(1));
+        fuzz = taskRepository.saveAndFlush(fuzz);
+        assertEquals(0, taskRepository.completeTaskIfRunning(
+                fuzz.getId(), FuzzTaskPo.TaskStatus.COMPLETED, now, 1L,
+                FuzzOutcome.BUDGET_EXHAUSTED, 7L, 1, 1L, 1L,
+                "{\"eligibleSpecIds\":[],\"ineligibleSpecs\":[],\"requestedSpecCount\":0,\"eligibleSpecCount\":0}",
+                "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING,
+                "expired-fuzz-worker", now));
+        assertEquals(0, taskRepository.failTaskIfActive(
+                fuzz.getId(), FuzzTaskPo.TaskStatus.FAILED, now, 1L,
+                "late failure", "[]",
+                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING),
+                "expired-fuzz-worker", now));
+
+        assertEquals(VerificationTaskPo.TaskStatus.RUNNING,
+                verificationTaskRepository.findById(verification.getId()).orElseThrow().getStatus());
+        assertEquals(SimulationTaskPo.TaskStatus.RUNNING,
+                simulationTaskRepository.findById(simulation.getId()).orElseThrow().getStatus());
+        assertEquals(FuzzTaskPo.TaskStatus.RUNNING,
+                taskRepository.findById(fuzz.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void expiredWorkersCannotUpdateProgress() {
+        LocalDateTime now = LocalDateTime.now();
+        FuzzTaskPo task = taskForLease("expired-progress-worker", now.minusSeconds(1));
+        task.setStatus(FuzzTaskPo.TaskStatus.RUNNING);
+        task.setProgress(10);
+        task = taskRepository.saveAndFlush(task);
+
+        assertEquals(0, taskRepository.updateProgressIfActive(
+                task.getId(), 80, TaskProgressStage.PERSISTING_RESULT,
+                "expired-progress-worker", now));
+        FuzzTaskPo persisted = taskRepository.findById(task.getId()).orElseThrow();
+        assertEquals(10, persisted.getProgress());
+        assertEquals(FuzzTaskPo.TaskStatus.RUNNING, persisted.getStatus());
     }
 
     @Test
@@ -99,10 +286,11 @@ class FuzzRepositoryTest {
 
         assertEquals(1, taskRepository.startTaskIfStillPending(
                 task.getId(), FuzzTaskPo.TaskStatus.RUNNING, LocalDateTime.now(),
-                "worker-a", leaseExpiresAt, "[]",
+                "worker-a", LocalDateTime.now(), leaseExpiresAt, "[]",
                 FuzzTaskPo.TaskStatus.PENDING));
         assertEquals(1, taskRepository.updateProgressIfActive(
-                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES));
+                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES,
+                "worker-a", LocalDateTime.now()));
         FuzzTaskPo taskWithProgress = taskRepository.findById(task.getId()).orElseThrow();
         assertEquals(50, taskWithProgress.getProgress());
         assertEquals(TaskProgressStage.EXPLORING_CANDIDATES, taskWithProgress.getProgressStage());
@@ -110,12 +298,14 @@ class FuzzRepositoryTest {
                 task.getId(), FuzzTaskPo.TaskStatus.COMPLETED, LocalDateTime.now(), 10L,
                 FuzzOutcome.BUDGET_EXHAUSTED, 7L, 100, 500L, 10L,
                 "{\"eligibleSpecIds\":[],\"ineligibleSpecs\":[],\"requestedSpecCount\":0,\"eligibleSpecCount\":0}",
-                "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING));
+                "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING,
+                "worker-a", LocalDateTime.now()));
         assertEquals(0, taskRepository.cancelTaskIfStillActive(
                 task.getId(), FuzzTaskPo.TaskStatus.CANCELLED, LocalDateTime.now(),
                 List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
         assertEquals(0, taskRepository.updateProgressIfActive(
-                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES));
+                task.getId(), 50, TaskProgressStage.EXPLORING_CANDIDATES,
+                "worker-a", LocalDateTime.now()));
         assertEquals(FuzzExplorationMode.BOARD_SNAPSHOT,
                 taskRepository.findById(task.getId()).orElseThrow().getExplorationMode());
 
@@ -140,12 +330,14 @@ class FuzzRepositoryTest {
         assertEquals(0, taskRepository.failTaskIfActive(
                 cancelledTask.getId(), FuzzTaskPo.TaskStatus.FAILED, LocalDateTime.now(), 1L,
                 "late failure", "[]",
-                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
+                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING),
+                "worker-a", LocalDateTime.now()));
         assertEquals(0, taskRepository.completeTaskIfRunning(
                 cancelledTask.getId(), FuzzTaskPo.TaskStatus.COMPLETED, LocalDateTime.now(), 1L,
                 FuzzOutcome.BUDGET_EXHAUSTED, 7L, 1, 1L, 1L,
                 "{\"eligibleSpecIds\":[],\"ineligibleSpecs\":[],\"requestedSpecCount\":0,\"eligibleSpecCount\":0}",
-                "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING));
+                "[]", 0, "[]", FuzzTaskPo.TaskStatus.RUNNING,
+                "worker-a", LocalDateTime.now()));
         assertEquals(FuzzExplorationMode.PAPER_COMPATIBLE,
                 taskRepository.findById(cancelledTask.getId()).orElseThrow().getExplorationMode());
 
@@ -186,7 +378,10 @@ class FuzzRepositoryTest {
         FuzzTaskPo expired = taskRepository.save(taskForLease("worker-dead", now.minusSeconds(1)));
 
         assertEquals(1, taskRepository.renewOwnedActiveLease(
-                owned.getId(), "worker-a", now.plusMinutes(2),
+                owned.getId(), "worker-a", now, now.plusMinutes(2),
+                List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
+        assertEquals(0, taskRepository.renewOwnedActiveLease(
+                expired.getId(), "worker-dead", now, now.plusMinutes(2),
                 List.of(FuzzTaskPo.TaskStatus.PENDING, FuzzTaskPo.TaskStatus.RUNNING)));
         assertEquals(1, taskRepository.failExpiredActiveTasks(
                 FuzzTaskPo.TaskStatus.FAILED,

@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.dto.fix.PreferredRangeSelection;
 import cn.edu.nju.Iot_Verify.dto.fix.FixResultDto;
+import cn.edu.nju.Iot_Verify.dto.fix.ParameterTarget;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -117,6 +118,15 @@ class FixViolationToolTest {
                 .suggestions(java.util.List.of())
                 .strategyAttempts(java.util.List.of())
                 .warnings(java.util.List.of())
+                .parameterTargets(java.util.List.of(ParameterTarget.builder()
+                        .targetId(PreferredRangeSelection.targetIdFor(1L, 0, 0))
+                        .attribute("temperature")
+                        .relation(">")
+                        .originalValue("30")
+                        .lowerBound(0)
+                        .upperBound(50)
+                        .description("Cooling rule temperature")
+                        .build()))
                 .summary("No forward-verified suggestion was found; no Board change was applied.")
                 .build());
 
@@ -124,6 +134,8 @@ class FixViolationToolTest {
 
         assertFalse(node.has("violatedSpecId"));
         assertTrue(node.path("message").asText().contains("no Board change was applied"));
+        assertEquals(1, node.path("parameterTargets").size());
+        assertFalse(node.path("parameterTargets").get(0).has("ruleIndex"));
     }
 
     @Test

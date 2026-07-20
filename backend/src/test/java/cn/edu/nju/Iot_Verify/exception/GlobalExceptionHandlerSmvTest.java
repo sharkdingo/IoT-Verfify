@@ -131,6 +131,20 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleFixApplyPreflightUnavailable_shouldExposeStableReasonCode() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleFixApplyPreflightUnavailableException(
+                        new FixApplyPreflightUnavailableException("Comparison unavailable"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(503, body.getCode());
+        assertEquals(FixApplyPreflightUnavailableException.REASON_CODE,
+                body.getData().get("reasonCode"));
+    }
+
+    @Test
     void handleFuzzTaskStorageQuotaExceeded_shouldReturnStable429Details() {
         ResponseEntity<Result<Map<String, Object>>> response =
                 handler.handleFuzzTaskStorageQuotaExceededException(
