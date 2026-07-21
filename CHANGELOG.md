@@ -27,6 +27,12 @@ history into a technical spec. The spec content itself now lives under
   have explicit capacity limits.
 
 #### Fixed
+- Aligned interactive recommendation and automatic-fix request-id validation across DTOs,
+  controllers, and execution services, and preserved accepted chat turns when a successful
+  HTTP response later exposes no readable SSE body.
+- Added visible feedback when explicit chat-session creation fails or returns an incomplete
+  response, kept the mobile session list open on failure, and removed duplicate serialization
+  of large portable scenes during export.
 - Stopped an old synchronous or assistant worker when its Redis admission lease is lost or
   remains unconfirmed through its TTL, preventing it from overlapping a replacement worker.
 - Replaced line-based NuSMV process output reads with fixed-size byte draining, so one

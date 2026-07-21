@@ -103,6 +103,11 @@ class InteractiveAiExecutionServiceTest {
     }
 
     @Test
+    void acceptsTheSameRequestIdCharactersAsTheControllerContract() {
+        assertDoesNotThrow(() -> service.execute(1L, "request.v1:part", () -> null));
+    }
+
+    @Test
     void cancel_keepsUserAdmissionUntilInterruptIgnoringProviderActuallyReturns() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch releaseProvider = new CountDownLatch(1);

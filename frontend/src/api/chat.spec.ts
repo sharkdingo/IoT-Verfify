@@ -203,13 +203,15 @@ describe('chat stream lifecycle semantics', () => {
   it('classifies a missing response body without exposing its English parser message as UI text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: null }))
     const onError = vi.fn()
+    const onAccepted = vi.fn()
 
     await expect(sendStreamChat(
       'session-1',
       'hello',
-      { onMessage: vi.fn(), onError }
+      { onMessage: vi.fn(), onError, onAccepted }
     )).rejects.toMatchObject({ kind: 'MISSING_BODY' })
 
+    expect(onAccepted).toHaveBeenCalledOnce()
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'MISSING_BODY' }))
   })
 
@@ -227,7 +229,7 @@ describe('chat stream lifecycle semantics', () => {
     )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
   })
 
-  it('reports transport acceptance only after a successful response body exists', async () => {
+  it('reports transport acceptance before parsing a successful stream', async () => {
     const reader = { read: vi.fn().mockResolvedValue({ done: true, value: undefined }) }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

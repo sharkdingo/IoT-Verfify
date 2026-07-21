@@ -179,11 +179,13 @@ export const sendStreamChat = async (
             });
         }
 
+        // A successful HTTP response means the backend claimed the chat slot and
+        // persisted the request, even if a proxy/browser cannot expose the body.
+        callbacks.onAccepted?.();
+
         if (!response.body) {
             throw new ChatStreamError('No response body', { kind: 'MISSING_BODY' });
         }
-
-        callbacks.onAccepted?.();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');

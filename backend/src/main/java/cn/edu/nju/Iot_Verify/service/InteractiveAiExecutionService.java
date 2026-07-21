@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.service;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
 import lombok.extern.slf4j.Slf4j;
@@ -104,8 +105,10 @@ public class InteractiveAiExecutionService {
 
     private String validateRequestId(String requestId) {
         String value = requestId == null ? "" : requestId.trim();
-        if (!value.matches("[A-Za-z0-9_-]{8,80}")) {
-            throw new BadRequestException("requestId must contain 8-80 URL-safe characters.");
+        if (value.length() < RequestLimits.MIN_REQUEST_ID_LENGTH
+                || value.length() > RequestLimits.MAX_REQUEST_ID_LENGTH
+                || !value.matches(RequestLimits.REQUEST_ID_PATTERN)) {
+            throw new BadRequestException("requestId must contain 8-80 characters and use only letters, digits, ., _, :, or -.");
         }
         return value;
     }

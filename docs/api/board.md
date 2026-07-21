@@ -750,12 +750,17 @@ These delegate to AI tools (see [ai-tools.md](ai-tools.md)). They return
 `Result<Map<String, Object>>`; an AI-tool error is translated to the matching HTTP
 status by `throwIfToolError`.
 
+Every standalone recommendation request requires an opaque `requestId` containing 8–80
+characters. It starts with an ASCII letter or digit and otherwise accepts letters, digits,
+`.`, `_`, `:`, and `-`; the same rule applies to request bodies, query parameters, status
+paths, and cancellation paths.
+
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
 | POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
 | POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
-| POST | `/api/board/devices/recommend` | Required `requestId` query parameter (8–80 URL-safe characters) plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter (8–80 URL-safe characters) plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means a tracked task accepted interruption |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |

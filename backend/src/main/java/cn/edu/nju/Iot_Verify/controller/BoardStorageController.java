@@ -370,9 +370,9 @@ public class BoardStorageController {
     public Result<RecommendationResponseDto<DeviceRecommendationDto>> recommendDevices(
             @CurrentUser Long userId,
             @RequestParam
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId,
             @NotNull @Valid @RequestBody DeviceRecommendationRequestDto requestBody) {
 
@@ -513,9 +513,9 @@ public class BoardStorageController {
     public Result<ScenarioRecommendationResponseDto> recommendScenario(
             @CurrentUser Long userId,
             @RequestParam
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId,
             @NotNull @Valid @RequestBody ScenarioRecommendationRequestDto requestBody) {
 
@@ -547,9 +547,9 @@ public class BoardStorageController {
     public Result<Boolean> cancelRecommendation(
             @CurrentUser Long userId,
             @PathVariable
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveAiExecutionService.cancel(userId, requestId));
     }
@@ -558,9 +558,9 @@ public class BoardStorageController {
     public Result<InteractiveOperationStatusDto> getRecommendationStatus(
             @CurrentUser Long userId,
             @PathVariable
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveAiExecutionService.getStatus(userId, requestId));
     }

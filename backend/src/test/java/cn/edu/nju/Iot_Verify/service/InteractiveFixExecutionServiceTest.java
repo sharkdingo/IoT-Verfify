@@ -117,6 +117,11 @@ class InteractiveFixExecutionServiceTest {
     }
 
     @Test
+    void acceptsTheSameRequestIdCharactersAsTheControllerContract() {
+        assertDoesNotThrow(() -> service.execute(1L, "request.v1:part", () -> null));
+    }
+
+    @Test
     void cancel_beforeStartRemovesQueuedWorkWithoutInvokingChecker() throws Exception {
         CountDownLatch workerStarted = new CountDownLatch(1);
         CountDownLatch releaseWorker = new CountDownLatch(1);

@@ -388,10 +388,13 @@ and failed states and offers an explicit retry after a failed list request. Befo
 first response chunk arrives, the assistant's pending status is rendered inside one
 compact assistant bubble rather than as an empty message followed by detached status
 text.
-The client treats a successful HTTP response with a readable SSE body as transport
-acceptance. A pre-stream `400`, `409`, `429`, or `503` removes optimistic user and
-assistant placeholders, restores an ordinary text draft, and leaves protected-action
-confirmation state intact; a rejected request therefore never appears as persisted history.
+The client treats any successful HTTP response as transport acceptance because the backend
+has already claimed the execution slot and persisted the request before returning the SSE
+response. A missing or unreadable response body remains a localized stream error, but it
+does not roll back a request that may still be running. A pre-stream `400`, `409`, `429`, or
+`503` removes optimistic user and assistant placeholders, restores an ordinary text draft,
+and leaves protected-action confirmation state intact; a rejected request therefore never
+appears as persisted history.
 
 Backend-supplied safety notices and fallback explanations follow the language of the
 current user message for Chinese and English conversations. This applies to no-write

@@ -886,7 +886,7 @@ was later removed.
 ### `POST /api/verify/traces/{id}/fix` — fix suggestions
 
 May invoke NuSMV multiple times (bounded by `FIX_TIMEOUT_MS`, see
-[configuration.md](../getting-started/configuration.md)). A URL-safe `requestId` query parameter
+[configuration.md](../getting-started/configuration.md)). An opaque `requestId` query parameter
 is required so the client can cancel this exact search through
 `DELETE /api/verify/fix-requests/{requestId}`. It contains 8–80 characters, begins with an
 ASCII letter or digit, and otherwise accepts letters, digits, `.`, `_`, `:`, and `-`.

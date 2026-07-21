@@ -792,10 +792,11 @@ the bounded original user objective supplied by the backend; it does not expose 
 reasoning. The record remains attached to that message and is persisted with the terminal
 assistant row. History reload replaces the local response only when that row has the same
 `turnId`, so an older completed turn cannot erase the current request.
-The wrapper invokes `onAccepted` only after a successful HTTP response exposes a readable
-SSE body. A rejection before that point removes optimistic placeholders and restores the
-ordinary text draft; accepted streams retain their local outcome until authoritative
-history settlement decides whether a terminal row exists.
+The wrapper invokes `onAccepted` as soon as the HTTP response succeeds, because the backend
+has already persisted and admitted the request at that point. A later missing-body or SSE
+parse failure is treated as an accepted-stream failure: local state is retained until
+authoritative history settlement decides whether a terminal row exists. An HTTP rejection
+before acceptance removes optimistic placeholders and restores the ordinary text draft.
 
 `getSessionList` also returns `ChatSession.active`. `ChatView` refreshes this list whenever
 the panel becomes visible and whenever the document returns to the foreground. With no

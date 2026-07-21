@@ -27,7 +27,10 @@ public final class RequestLimits {
     public static final int MAX_TEMPLATE_APIS = 100;
     public static final int MAX_TEMPLATE_CONTENTS = 100;
     public static final int MAX_TASK_EXCLUSIONS = 100;
+    public static final int MIN_REQUEST_ID_LENGTH = 8;
     public static final int MAX_REQUEST_ID_LENGTH = 80;
+    /** Request IDs are opaque client correlation keys, never user-facing free text. */
+    public static final String REQUEST_ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._:-]*$";
     public static final int MAX_IDENTIFIER_LENGTH = 200;
     public static final int MAX_VALUE_LENGTH = 1000;
     public static final int MAX_DESCRIPTION_LENGTH = 4000;

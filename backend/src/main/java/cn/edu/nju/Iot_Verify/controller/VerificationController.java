@@ -211,9 +211,9 @@ public class VerificationController {
             @CurrentUser Long userId,
             @PathVariable Long id,
             @RequestParam
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId,
             @Valid @RequestBody(required = false) FixRequestDto request) {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
@@ -234,9 +234,9 @@ public class VerificationController {
     public Result<Boolean> cancelFixRequest(
             @CurrentUser Long userId,
             @PathVariable
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveFixExecutionService.cancel(userId, requestId));
     }
@@ -245,9 +245,9 @@ public class VerificationController {
     public Result<InteractiveOperationStatusDto> getFixRequestStatus(
             @CurrentUser Long userId,
             @PathVariable
-            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+            @Size(min = RequestLimits.MIN_REQUEST_ID_LENGTH, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
                     message = "Request ID must contain 8 to 80 characters")
-            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            @Pattern(regexp = RequestLimits.REQUEST_ID_PATTERN,
                     message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveFixExecutionService.getStatus(userId, requestId));
     }

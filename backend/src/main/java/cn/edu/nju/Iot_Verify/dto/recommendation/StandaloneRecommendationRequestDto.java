@@ -8,6 +8,10 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import static cn.edu.nju.Iot_Verify.dto.RequestLimits.MAX_REQUEST_ID_LENGTH;
+import static cn.edu.nju.Iot_Verify.dto.RequestLimits.MIN_REQUEST_ID_LENGTH;
+import static cn.edu.nju.Iot_Verify.dto.RequestLimits.REQUEST_ID_PATTERN;
+
 @Data
 public class StandaloneRecommendationRequestDto {
     @Min(1)
@@ -29,7 +33,9 @@ public class StandaloneRecommendationRequestDto {
     private String userRequirement = "";
 
     @NotBlank(message = "requestId is required")
-    @Size(min = 8, max = 80, message = "requestId must contain 8-80 characters")
-    @Pattern(regexp = "^[A-Za-z0-9_-]+$", message = "requestId must be URL-safe")
+    @Size(min = MIN_REQUEST_ID_LENGTH, max = MAX_REQUEST_ID_LENGTH,
+            message = "requestId must contain 8-80 characters")
+    @Pattern(regexp = REQUEST_ID_PATTERN,
+            message = "requestId must start with a letter or digit and contain only letters, digits, ., _, :, or -")
     private String requestId;
 }

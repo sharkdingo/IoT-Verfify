@@ -3775,8 +3775,9 @@ const buildSceneExport = (): PortableSceneFile => {
   return portable
 }
 
-const downloadJsonFile = (filename: string, payload: unknown) => {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+const downloadJsonFile = (filename: string, payload: string | PortableSceneFile) => {
+  const serialized = typeof payload === 'string' ? payload : (JSON.stringify(payload, null, 2) ?? 'null')
+  const blob = new Blob([serialized], { type: 'application/json;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -3803,7 +3804,7 @@ const exportScene = () => {
     return
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  downloadJsonFile(`iot-verify-scene-${timestamp}.json`, scene)
+  downloadJsonFile(`iot-verify-scene-${timestamp}.json`, serialized)
   ElMessage.success(t('app.sceneExportStarted', {
     devices: scene.devices.length,
     variables: scene.environmentVariables.length,

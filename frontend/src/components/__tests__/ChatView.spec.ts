@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
+import { ElMessage } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '@/assets/i18n'
@@ -91,6 +92,43 @@ describe('ChatView', () => {
     expect(item.text()).not.toContain('New Chat')
 
     wrapper.unmount()
+  })
+
+  it('shows localized feedback when an explicit new-session request is rejected', async () => {
+    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    chatApi.createSession.mockRejectedValue(new Error('session limit reached'))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await flushPromises()
+
+      expect(errorMessage).toHaveBeenCalledWith('创建会话失败')
+    } finally {
+      wrapper.unmount()
+      errorMessage.mockRestore()
+    }
+  })
+
+  it('treats an incomplete new-session response as a visible failure', async () => {
+    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    chatApi.createSession.mockResolvedValue({})
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    try {
+      await flushPromises()
+      await wrapper.get('.new-chat-btn').trigger('click')
+      await flushPromises()
+
+      expect(errorMessage).toHaveBeenCalledWith('创建会话失败')
+      expect(wrapper.findAll('[data-testid^="chat-session-session-"]')).toHaveLength(0)
+    } finally {
+      wrapper.unmount()
+      errorMessage.mockRestore()
+    }
   })
 
   it('submits protected approval as a structured command from the confirmation button', async () => {

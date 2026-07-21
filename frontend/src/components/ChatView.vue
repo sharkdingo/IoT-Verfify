@@ -956,7 +956,7 @@ const initSessions = async (reattachActive = true) => {
   }
 };
 
-const handleCreateSession = async (signal?: AbortSignal) => {
+const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true) => {
   try {
     const session = await createSession(signal);
     if (session && session.id) {
@@ -966,9 +966,10 @@ const handleCreateSession = async (signal?: AbortSignal) => {
       sessions.value.unshift(session);
       return session.id;
     }
-    return null;
+    throw new Error('Chat session response is incomplete');
   } catch (e) {
     console.error('创建会话失败:', e);
+    if (notifyOnFailure) ElMessage.error(t('app.chat.createSessionFailed'));
     return null;
   }
 };
@@ -976,7 +977,8 @@ const handleCreateSession = async (signal?: AbortSignal) => {
 const onNewChatClick = async () => {
   if (await settleActiveRequest(false) !== 'ready') return;
   const newId = await handleCreateSession();
-  if (newId) await handleSelectSession(newId);
+  if (!newId) return;
+  await handleSelectSession(newId);
   // 新建对话后自动收起侧边栏（移动端友好）
   if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
 };
@@ -1365,7 +1367,7 @@ const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCo
     let targetSessionId = currentSessionId.value;
     // 自动创建新会话
     if (!targetSessionId) {
-      const newId = await handleCreateSession(controller.signal);
+      const newId = await handleCreateSession(controller.signal, false);
       if (requestEpoch !== streamRequestEpoch) return;
       if (!newId) throw new Error(t('app.chat.createSessionFailed'));
       targetSessionId = newId;

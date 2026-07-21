@@ -32,4 +32,15 @@ class RecommendationRequestValidationTest {
         request.setUserRequirement("x".repeat(RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH + 1));
         assertFalse(validator.validate(request).isEmpty());
     }
+
+    @Test
+    void standaloneRequestId_usesTheSharedInteractiveRequestContract() {
+        StandaloneRecommendationRequestDto request = new StandaloneRecommendationRequestDto();
+        request.setRequestId("request.v1:part");
+
+        assertTrue(validator.validate(request).isEmpty());
+
+        request.setRequestId("request/v1");
+        assertFalse(validator.validate(request).isEmpty());
+    }
 }
