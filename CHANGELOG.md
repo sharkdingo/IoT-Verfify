@@ -27,6 +27,8 @@ history into a technical spec. The spec content itself now lives under
   have explicit capacity limits.
 
 #### Fixed
+- Updated pinned GitHub Actions dependencies to their Node.js 24-based releases, removing
+  the hosted-runner deprecation warnings while retaining immutable commit pinning.
 - Made missing NuSMV model validation deterministic before artifact locking, keeping the
   Linux and Windows test paths aligned while retaining the post-lock race check. CI and E2E
   account probes now use credentials that match the current registration contract.
