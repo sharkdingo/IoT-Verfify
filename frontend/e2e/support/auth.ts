@@ -91,7 +91,7 @@ export const createTestAccountCredentials = (
   const phonePrefix = options.phonePrefix || '139'
   return {
     phone: `${phonePrefix}${String(randomInt(0, 100_000_000)).padStart(8, '0')}`,
-    password: 'Pass1234',
+    password: 'Pass1234!!',
     username: `${usernamePrefix}${randomBytes(8).toString('hex')}`.slice(0, 20)
   }
 }

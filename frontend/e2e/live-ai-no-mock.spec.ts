@@ -86,8 +86,9 @@ test.describe('live AI full-stack audit', () => {
     expect(historyResponse.ok(), await historyResponse.text()).toBeTruthy()
     const historyBody = await historyResponse.json()
     expect(historyBody.code, JSON.stringify(historyBody)).toBe(200)
-    expect(historyBody.data.some((message: any) => message.role === 'user')).toBeTruthy()
-    expect(historyBody.data.some((message: any) =>
+    expect(Array.isArray(historyBody.data?.messages), JSON.stringify(historyBody)).toBeTruthy()
+    expect(historyBody.data.messages.some((message: any) => message.role === 'user')).toBeTruthy()
+    expect(historyBody.data.messages.some((message: any) =>
       message.role === 'assistant' && String(message.content || '').trim().length > 0)).toBeTruthy()
   })
 })
