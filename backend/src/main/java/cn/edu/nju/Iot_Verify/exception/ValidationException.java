@@ -41,7 +41,8 @@ public class ValidationException extends BaseException {
     }
 
     public static ValidationException invalidPassword() {
-        return new ValidationException("password", "Password must be 6-20 characters");
+        return new ValidationException(
+                "password", "Password must be 10-64 characters and at most 72 UTF-8 bytes");
     }
 
     public static ValidationException invalidUsername() {

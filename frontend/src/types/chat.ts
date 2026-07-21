@@ -15,6 +15,19 @@ export interface ChatSessionActivity {
     active: boolean
 }
 
+export type ChatConfirmationKind = 'DESTRUCTIVE' | 'DEFAULT_TEMPLATE_RESET' | 'SCENE_REPLACEMENT'
+export type ChatConfirmationAction = 'CONFIRM' | 'CANCEL'
+
+export interface ChatConfirmationCommand {
+    action: ChatConfirmationAction
+    kind: ChatConfirmationKind
+}
+
+export interface ChatPendingConfirmation {
+    sessionId: string
+    kinds: ChatConfirmationKind[]
+}
+
 // Matches backend ChatMessageResponseDto.
 export interface ChatMessage {
     id?: number
@@ -27,6 +40,12 @@ export interface ChatMessage {
     executionTrace?: StreamProgress[]
     executionElapsedSeconds?: number
     executionStatus?: 'COMPLETED' | 'AWAITING_CONFIRMATION' | 'PARTIAL' | 'STOPPED' | 'DISCONNECTED' | 'FAILED'
+}
+
+export interface ChatHistoryPage {
+    messages: ChatMessage[]
+    nextBeforeId: number | null
+    hasMore: boolean
 }
 
 export interface StreamCommand {

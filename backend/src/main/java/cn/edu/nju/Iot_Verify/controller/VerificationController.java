@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.controller;
 
 import cn.edu.nju.Iot_Verify.component.model.ModelRequestParser;
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.fix.FaultLocalizationResultDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyRequestDto;
 import cn.edu.nju.Iot_Verify.dto.fix.FixApplyResultDto;
@@ -23,8 +24,12 @@ import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
+import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -32,6 +37,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
 
 /**
  * 验证控制器
@@ -46,6 +52,7 @@ public class VerificationController {
     private final FixService fixService;
     private final InteractiveFixExecutionService interactiveFixExecutionService;
     private final ModelRequestParser modelRequestParser;
+    private final UserOperationGuard userOperationGuard;
 
     /**
      * 同步验证（立即返回结果）
@@ -55,10 +62,14 @@ public class VerificationController {
             @CurrentUser Long userId,
             @RequestBody JsonNode body) {
 
-        VerificationRequestDto request = modelRequestParser.parseVerification(body);
-        VerificationResultDto result = verificationService.verify(userId, request);
-
-        return Result.success(result);
+        try (var lease = userOperationGuard.acquire(
+                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
+            lease.requireActive();
+            VerificationRequestDto request = modelRequestParser.parseVerification(body);
+            Result<VerificationResultDto> result = Result.success(verificationService.verify(userId, request));
+            lease.requireActive();
+            return result;
+        }
     }
 
     /** Create an asynchronous run and return the authoritative task snapshot. */
@@ -79,7 +90,9 @@ public class VerificationController {
     @GetMapping("/tasks")
     public Result<List<VerificationTaskSummaryDto>> getTasks(
             @CurrentUser Long userId,
-            @RequestParam(name = "excludeTaskIds", required = false) List<Long> excludeTaskIds) {
+            @RequestParam(name = "excludeTaskIds", required = false)
+            @Size(max = RequestLimits.MAX_TASK_EXCLUSIONS, message = "At most 100 task IDs can be excluded")
+            List<@Positive(message = "Excluded task IDs must be positive") Long> excludeTaskIds) {
         return Result.success(verificationService.getTasks(userId, excludeTaskIds));
     }
 
@@ -197,27 +210,45 @@ public class VerificationController {
     public Result<FixResultDto> fix(
             @CurrentUser Long userId,
             @PathVariable Long id,
-            @RequestParam String requestId,
+            @RequestParam
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId,
             @Valid @RequestBody(required = false) FixRequestDto request) {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
         var preferredRanges = (request != null) ? preferredRangesFromRequest(request) : null;
-        return interactiveFixExecutionService.execute(userId, requestId,
-                () -> Result.success(fixService.fix(
-                        userId, id, strategies, preferredRanges,
-                        stage -> interactiveFixExecutionService.markStage(userId, requestId, stage))));
+        try (var lease = userOperationGuard.acquire(
+                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
+            lease.requireActive();
+            Result<FixResultDto> result = interactiveFixExecutionService.execute(userId, requestId,
+                    () -> Result.success(fixService.fix(
+                            userId, id, strategies, preferredRanges,
+                            stage -> interactiveFixExecutionService.markStage(userId, requestId, stage))));
+            lease.requireActive();
+            return result;
+        }
     }
 
     @DeleteMapping("/fix-requests/{requestId}")
     public Result<Boolean> cancelFixRequest(
             @CurrentUser Long userId,
-            @PathVariable String requestId) {
+            @PathVariable
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveFixExecutionService.cancel(userId, requestId));
     }
 
     @GetMapping("/fix-requests/{requestId}")
     public Result<InteractiveOperationStatusDto> getFixRequestStatus(
             @CurrentUser Long userId,
-            @PathVariable String requestId) {
+            @PathVariable
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveFixExecutionService.getStatus(userId, requestId));
     }
 

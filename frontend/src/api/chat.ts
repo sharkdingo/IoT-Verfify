@@ -1,6 +1,15 @@
 // src/api/chat.ts - Chat API
 import api from '@/api/http'
-import type { ChatMessage, ChatSession, ChatSessionActivity, StreamCommand, StreamProgress } from "@/types/chat"
+import type {
+    ChatConfirmationCommand,
+    ChatHistoryPage,
+    ChatMessage,
+    ChatPendingConfirmation,
+    ChatSession,
+    ChatSessionActivity,
+    StreamCommand,
+    StreamProgress
+} from "@/types/chat"
 import { useAuth } from '@/stores/auth'
 import { router } from '@/router'
 
@@ -49,9 +58,30 @@ export const createSession = async (signal?: AbortSignal): Promise<ChatSession> 
   return unpack<ChatSession>(response);
 }
 
-export const getSessionHistory = async (sessionId: string, signal?: AbortSignal): Promise<ChatMessage[]> => {
-  const response = await api.get<any>(`/chat/sessions/${sessionId}/messages`, { signal });
-  return unpack<ChatMessage[]>(response);
+export const getSessionHistory = async (
+    sessionId: string,
+    options: AbortSignal | { signal?: AbortSignal; beforeId?: number | null; limit?: number } = {}
+): Promise<ChatHistoryPage> => {
+  const normalized: { signal?: AbortSignal; beforeId?: number | null; limit?: number } =
+      typeof AbortSignal !== 'undefined' && options instanceof AbortSignal
+          ? { signal: options }
+          : options as { signal?: AbortSignal; beforeId?: number | null; limit?: number };
+  const params: Record<string, number> = {};
+  if (normalized.beforeId != null) params.beforeId = normalized.beforeId;
+  if (normalized.limit != null) params.limit = normalized.limit;
+  const config: { signal?: AbortSignal; params?: Record<string, number> } = { signal: normalized.signal };
+  if (Object.keys(params).length > 0) config.params = params;
+  const response = await api.get<any>(`/chat/sessions/${encodeURIComponent(sessionId)}/messages`, config);
+  const raw = unpack<ChatHistoryPage | ChatMessage[]>(response);
+  if (Array.isArray(raw)) {
+    return { messages: raw, nextBeforeId: null, hasMore: false };
+  }
+  if (!raw || !Array.isArray(raw.messages)
+      || (raw.nextBeforeId !== null && typeof raw.nextBeforeId !== 'number')
+      || typeof raw.hasMore !== 'boolean') {
+    throw new Error('Chat history response is incomplete');
+  }
+  return raw;
 }
 
 export const requestSessionStop = async (sessionId: string): Promise<void> => {
@@ -77,6 +107,18 @@ export const getSessionActivity = async (
   return activity;
 }
 
+export const getPendingConfirmation = async (
+    sessionId: string,
+    signal?: AbortSignal
+): Promise<ChatPendingConfirmation> => {
+  const response = await api.get<any>(`/chat/sessions/${sessionId}/confirmation`, { signal });
+  const pending = unpack<ChatPendingConfirmation>(response);
+  if (!pending || pending.sessionId !== sessionId || !Array.isArray(pending.kinds)) {
+    throw new Error('Chat pending-confirmation response is incomplete');
+  }
+  return pending;
+}
+
 export const sendStreamChat = async (
     sessionId: string,
     content: string,
@@ -84,11 +126,13 @@ export const sendStreamChat = async (
         onMessage: (text: string) => void
         onCommand?: (cmd: StreamCommand) => void;
         onProgress?: (progress: StreamProgress) => void;
+        onAccepted?: () => void;
         onError?: (err: any) => void
         onFinish?: () => void
     },
     controller?: AbortController,
-    turnId?: string
+    turnId?: string,
+    confirmation?: ChatConfirmationCommand
 ) => {
     try {
         const { getToken, logout } = useAuth();
@@ -106,7 +150,12 @@ export const sendStreamChat = async (
         const response = await fetch(`${API_BASE}/api/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ sessionId, content, ...(turnId ? { turnId } : {}) }),
+            body: JSON.stringify({
+                sessionId,
+                content,
+                ...(turnId ? { turnId } : {}),
+                ...(confirmation ? { confirmation } : {})
+            }),
             signal: controller?.signal
         });
 
@@ -133,6 +182,8 @@ export const sendStreamChat = async (
         if (!response.body) {
             throw new ChatStreamError('No response body', { kind: 'MISSING_BODY' });
         }
+
+        callbacks.onAccepted?.();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');

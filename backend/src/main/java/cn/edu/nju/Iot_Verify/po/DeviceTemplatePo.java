@@ -30,7 +30,7 @@ public class DeviceTemplatePo {
     private String name;
 
     @Lob
-    @Column(name = "manifest_json", columnDefinition = "TEXT")
+    @Column(name = "manifest_json", columnDefinition = "LONGTEXT")
     private String manifestJson;
 
     @Builder.Default

@@ -12,6 +12,7 @@ import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
+import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +37,7 @@ class VerificationControllerFixTest {
     @Mock private FixService fixService;
     @Mock private InteractiveFixExecutionService interactiveFixExecutionService;
     @Mock private ModelRequestParser modelRequestParser;
+    @Mock private UserOperationGuard userOperationGuard;
 
     private VerificationController controller;
     private Validator validator;
@@ -43,7 +45,11 @@ class VerificationControllerFixTest {
     @BeforeEach
     void setUp() {
         controller = new VerificationController(
-                verificationService, fixService, interactiveFixExecutionService, modelRequestParser);
+                verificationService, fixService, interactiveFixExecutionService, modelRequestParser,
+                userOperationGuard);
+        UserOperationGuard.Lease lease = mock(UserOperationGuard.Lease.class);
+        lenient().when(userOperationGuard.acquire(anyLong(), any(), anyInt(), any()))
+                .thenReturn(lease);
         lenient().when(interactiveFixExecutionService.execute(
                         anyLong(), anyString(), org.mockito.ArgumentMatchers.<Callable<Object>>any()))
                 .thenAnswer(invocation -> invocation.<Callable<Object>>getArgument(2).call());

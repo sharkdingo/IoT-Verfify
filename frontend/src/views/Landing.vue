@@ -155,7 +155,9 @@ const validateRegister = () => {
 
   if (!registerForm.password) {
     formErrors.registerPassword = t('auth.passwordRequired')
-  } else if (registerForm.password.length < 6 || registerForm.password.length > 20) {
+  } else if (registerForm.password.length < 10
+      || registerForm.password.length > 64
+      || new TextEncoder().encode(registerForm.password).length > 72) {
     formErrors.registerPassword = t('auth.passwordLength')
   }
 
@@ -178,6 +180,19 @@ const validateRegister = () => {
     })
   }
   return valid
+}
+
+const authRequestErrorMessage = (error: any, fallback: string) => {
+  const data = error?.response?.data?.data
+  if (error?.response?.status === 429
+    && typeof data?.reasonCode === 'string'
+    && data.reasonCode.startsWith('AUTH_')) {
+    const seconds = Number(data.retryAfterSeconds)
+    return Number.isInteger(seconds) && seconds > 0
+      ? t('auth.rateLimitReached', { seconds })
+      : t('auth.rateLimitReachedGeneric')
+  }
+  return localizedErrorMessage(error, fallback, locale.value)
 }
 
 const handleLogin = async () => {
@@ -207,7 +222,7 @@ const handleLogin = async () => {
       await focusRequestError()
     }
   } catch (error: any) {
-    requestError.value = localizedErrorMessage(error, t('auth.loginFailed'), locale.value)
+    requestError.value = authRequestErrorMessage(error, t('auth.loginFailed'))
     await focusRequestError()
   } finally {
     loading.value = false
@@ -242,7 +257,7 @@ const handleRegister = async () => {
       await focusRequestError()
     }
   } catch (error: any) {
-    requestError.value = localizedErrorMessage(error, t('auth.registerFailed'), locale.value)
+    requestError.value = authRequestErrorMessage(error, t('auth.registerFailed'))
     await focusRequestError()
   } finally {
     loading.value = false

@@ -778,7 +778,7 @@ public class FixServiceImpl implements FixService {
             Map<String, DeviceManifest> verificationTemplateSnapshots,
             Map<String, DeviceManifest> currentTemplateSnapshots) {
         if (verificationTemplateSnapshots == null || verificationTemplateSnapshots.isEmpty()
-                || currentTemplateSnapshots == null || currentTemplateSnapshots.isEmpty()) {
+                || currentTemplateSnapshots == null) {
             return TemplateSnapshotComparison.UNAVAILABLE;
         }
         boolean drifted = !verificationTemplateSnapshots.keySet().equals(currentTemplateSnapshots.keySet())

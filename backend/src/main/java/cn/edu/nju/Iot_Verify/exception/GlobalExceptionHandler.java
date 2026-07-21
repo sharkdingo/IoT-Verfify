@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -28,6 +29,35 @@ import java.util.Objects;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(AuthRateLimitException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleAuthRateLimitException(
+            AuthRateLimitException e) {
+        log.warn("Authentication rate limit reached for scope={}", e.getScope());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("reasonCode", e.getReasonCode());
+        data.put("scope", e.getScope());
+        data.put("retryAfterSeconds", e.getRetryAfterSeconds());
+        Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
+        body.setData(data);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(e.getRetryAfterSeconds()))
+                .body(body);
+    }
+
+    @ExceptionHandler(UserOperationBusyException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleUserOperationBusyException(
+            UserOperationBusyException e) {
+        log.warn("User operation limit reached for kind={} scope={}", e.getOperationKind(), e.getScope());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("reasonCode", e.getReasonCode());
+        data.put("operationKind", e.getOperationKind());
+        data.put("scope", e.getScope());
+        data.put("limit", e.getLimit());
+        Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
+        body.setData(data);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+    }
 
     @ExceptionHandler(BaseException.class)
     public ResponseEntity<Result<Void>> handleBaseException(BaseException e) {

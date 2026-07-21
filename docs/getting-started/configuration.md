@@ -9,11 +9,12 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-19. Source:
+Verified against code on 2026-07-22. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
-`configure/ChatExecutionConfig`,
+`configure/ChatExecutionConfig`, `configure/NusmvConfig`, `configure/OperationAdmissionConfig`,
 `configure/ProductionSafetyCheck`,
+`security/RequestBodySizeFilter`, `security/AuthRateLimitGuard`, `service/UserOperationGuard`,
 `frontend/src/api/`, `frontend/.env.example`.
 
 ---
@@ -37,6 +38,8 @@ transaction instead of issuing implicit queries during HTTP serialization.
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
 | `SERVER_PORT` | `8080` | Backend HTTP port |
+| `IOT_VERIFY_MAX_REQUEST_BYTES` | `4194304` | Maximum JSON request-body size in bytes (4 MiB). Declared and chunked oversized requests return `413` before JSON binding. The body-buffering filter runs after Spring Security, so unauthorized protected requests are rejected before allocating the maximum body. The production reverse proxy should enforce the same or a stricter limit. |
+| `IOT_VERIFY_MAX_SCENE_REQUEST_BYTES` | `67108864` | Dedicated maximum for authenticated `POST /api/board/batch` scene replacement (64 MiB), allowing self-contained template snapshots and embedded icons to round-trip. All other JSON endpoints retain `IOT_VERIFY_MAX_REQUEST_BYTES`. The browser applies the same 64 MiB scene-file boundary. |
 
 `server.error.include-message` and `include-binding-errors` are fixed to `never` to
 prevent the Spring `/error` endpoint from leaking internal exception detail.
@@ -47,6 +50,17 @@ prevent the Spring `/error` endpoint from leaking internal exception detail.
 | :--- | :--- | :--- |
 | `JWT_SECRET` | `iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256` | HS256 signing key (≥256 bits). **Unsafe default — must be overridden in production.** |
 | `JWT_EXPIRATION` | `86400000` | Token lifetime in ms (24h) |
+| `AUTH_LOGIN_RATE_LIMIT_PER_MINUTE` | `10` | Maximum valid login requests per normalized account identifier and backend instance in a one-minute fixed window. |
+| `AUTH_REGISTER_RATE_LIMIT_PER_HOUR` | `5` | Maximum valid registration requests per phone number and backend instance in a one-hour fixed window. |
+| `AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE` | `120` | Higher source-IP ceiling across account identifiers, preventing identifier rotation without coupling ordinary users behind one NAT to the low account limit. |
+| `AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR` | `60` | Higher source-IP ceiling across phone numbers. |
+
+All four limits apply after DTO validation and before credential/database work. Excess
+attempts return structured `429` data (`reasonCode`, `scope`, `retryAfterSeconds`) plus a
+`Retry-After` header exposed through CORS. The guard is intentionally process-local;
+multi-instance deployments must also enforce a distributed ceiling at the TLS reverse
+proxy or API gateway. New passwords contain 10–64 characters and must encode to at most
+72 UTF-8 bytes, matching BCrypt's input boundary.
 
 ## Redis
 
@@ -59,9 +73,20 @@ if Redis is unavailable the app still starts, but logout revocation degrades.
 | `REDIS_PORT` | `6379` | |
 | `REDIS_PASSWORD` | *(empty)* | |
 | `REDIS_DATABASE` | `0` | Database index |
+| `OPERATION_ADMISSION_LEASE_HEARTBEAT_MS` | `30000` | Delay between token-checked renewals of active per-user verification/simulation/fix/chat admission leases. Range `1000..600000` ms. |
 
 Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 2`,
 `max-wait 2000ms`.
+
+Redis also coordinates per-user admission for synchronous formal work and assistant
+streams. One verification/simulation/fix operation and up to two assistant streams may
+run per user. Active Redis leases are renewed only while their owning in-process lease is
+open; renewal and release both compare the random owner token before changing the key.
+When Redis is unavailable, these limits remain enforced within each backend process but
+cannot coordinate across instances; request processing remains fail-open.
+An already-acquired lease tolerates transient renewal failures, but if ownership is
+explicitly lost or cannot be confirmed for a complete TTL, the owning worker is interrupted
+and the operation fails rather than overlapping a replacement worker.
 
 ## CORS
 
@@ -109,6 +134,10 @@ process that starts it.
 | `NUSMV_TIMEOUT_MS` | `120000` | Per-verification timeout (ms) |
 | `NUSMV_MAX_CONCURRENT` | `6` | Max concurrent NuSMV processes (semaphore) |
 | `NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS` | `10000` | Timeout to acquire a concurrency permit (ms) |
+| `NUSMV_MAX_OUTPUT_BYTES` | `4194304` | Maximum retained bytes for each NuSMV stdout/stderr stream. Pipes are still fully drained; excess output is replaced by a truncation marker. |
+| `NUSMV_TEMP_RETENTION_HOURS` | `24` | Maximum age of retained `nusmv_*` diagnostic directories under the JVM temporary directory. |
+| `NUSMV_MAX_RETAINED_TEMP_DIRECTORIES` | `200` | Maximum number of retained `nusmv_*` diagnostic directories. Active directories are protected by an OS file lock; among inactive directories, the oldest eligible entries are removed first after a 10-minute grace period. |
+| `NUSMV_TEMP_CLEANUP_MS` | `300000` | Fixed delay in milliseconds between diagnostic-directory cleanup passes; minimum 10000. |
 
 ## Auto-fix
 

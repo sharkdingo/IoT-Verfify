@@ -46,6 +46,7 @@ import type { ModelEnvironmentVariable } from '@/types/model'
 import { deviceLabelKey, reserveUniqueDeviceLabel } from '@/utils/canvas/nodeCreate'
 import { localizedErrorMessage } from '@/utils/userMessage'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
+import { REQUEST_LIMITS } from '@/constants/requestLimits'
 
 defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
@@ -265,6 +266,8 @@ type DeviceImportRow = {
 }
 
 const DEVICE_IMPORT_TEMPLATE_KEYS = new Set(['template', 'templatename', 'type'])
+const MAX_DEVICE_IMPORT_BYTES = 4 * 1024 * 1024
+const MAX_TEMPLATE_IMPORT_BYTES = 512 * 1024
 const DEVICE_IMPORT_NAME_KEYS = new Set(['name', 'label', 'devicename'])
 const DEVICE_IMPORT_TEMPLATE_ALIASES = ['template', 'templateName', 'type'] as const
 const DEVICE_IMPORT_NAME_ALIASES = ['name', 'label', 'deviceName'] as const
@@ -962,6 +965,13 @@ const generateConditionId = () => {
 
 // Open condition dialog for adding/editing
 const openConditionDialog = (side: SpecSide, index: number = -1) => {
+  if (index < 0 && getConditionsForSide(side).length >= REQUEST_LIMITS.specificationConditions) {
+    ElMessage.warning(t('app.itemLimitReached', {
+      resource: t('app.specificationConditions'),
+      limit: REQUEST_LIMITS.specificationConditions
+    }))
+    return
+  }
   editingConditionSide.value = side
   editingConditionIndex.value = index
   
@@ -1752,6 +1762,10 @@ const handleDeviceImportFile = async (event: Event) => {
   const file = target.files?.[0]
   if (!file) return
   try {
+    if (file.size > MAX_DEVICE_IMPORT_BYTES) {
+      ElMessage.error({ message: t('app.importFileTooLarge', { size: '4 MiB' }), type: 'error' })
+      return
+    }
     importDeviceForm.text = await file.text()
   } catch (error) {
     console.error('Failed to read device import file:', error)
@@ -1852,6 +1866,12 @@ const handleImportTemplate = async (event: Event) => {
   }
   const file = target.files?.[0]
   if (!file) return
+
+  if (file.size > MAX_TEMPLATE_IMPORT_BYTES) {
+    ElMessage.error({ message: t('app.importFileTooLarge', { size: '512 KiB' }), type: 'error' })
+    target.value = ''
+    return
+  }
 
   let manifest: DeviceTemplate['manifest']
   let requestedName: string

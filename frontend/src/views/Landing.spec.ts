@@ -99,6 +99,29 @@ describe('Landing authentication usability', () => {
     wrapper.unmount()
   })
 
+  it('localizes structured authentication rate-limit feedback', async () => {
+    authApi.login.mockRejectedValueOnce({
+      response: {
+        status: 429,
+        data: {
+          data: {
+            reasonCode: 'AUTH_LOGIN_RATE_LIMIT_REACHED',
+            retryAfterSeconds: 17
+          }
+        }
+      }
+    })
+    const { wrapper } = await mountLanding()
+
+    await wrapper.get('input[autocomplete="username"]').setValue('alice')
+    await wrapper.get('input[autocomplete="current-password"]').setValue('wrong-password')
+    await wrapper.get('#login-panel').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('.auth-request-error').text()).toContain('17 秒')
+    wrapper.unmount()
+  })
+
   it('provides a discoverable exit from the authentication panel', async () => {
     const { router, wrapper } = await mountLanding()
 

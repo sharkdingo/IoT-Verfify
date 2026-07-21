@@ -8,7 +8,7 @@ Responses are wrapped in the standard `Result<T>` envelope (authoritative defini
 [overview.md](overview.md)). The `data` shapes below are what appears under that
 envelope's `data` field.
 
-Verified against code on 2026-07-20. Source:
+Verified against code on 2026-07-22. Source:
 `controller/VerificationController.java`, `controller/SimulationController.java`,
 and the DTOs under `dto/verification/`, `dto/simulation/`, `dto/device/`,
 `dto/rule/`, `dto/spec/`, `dto/trace/`, `dto/fix/`.
@@ -36,10 +36,10 @@ errors; model/template semantic mismatches discovered after parsing return `422`
 
 | Field | Type | Required | Default | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | Device instances |
-| `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | Board-level environment pool overrides. Names must be unique. A missing item or a `null` value/trust/privacy field uses the referenced template default; an explicit blank or invalid field is rejected before defaults are merged |
-| `rules` | `RuleDto[]` | no | `[]` | Automation rules. A persisted positive `id` is optional correlation identity for user-facing triggered-rule/link snapshots; it does not change model behavior |
-| `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | Specifications to check |
+| `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | 1–100 device instances; each device accepts at most 100 variable and 100 privacy overrides |
+| `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | At most 200 Board-level environment pool overrides. Names must be unique. A missing item or a `null` value/trust/privacy field uses the referenced template default; an explicit blank or invalid field is rejected before defaults are merged |
+| `rules` | `RuleDto[]` | no | `[]` | At most 100 automation rules. A persisted positive `id` is optional correlation identity for user-facing triggered-rule/link snapshots; it does not change model behavior |
+| `specs` | `SpecificationDto[]` | yes (`@NotEmpty`) | — | 1–100 specifications to check |
 | `attackScenario` | `AttackScenarioDto` | no | `{ mode: "NONE", budget: 0, points: [] }` | Per-run attack selection, independent from persistent trust labels. Verification accepts `NONE`, `EXACT_POINTS`, or `ANY_UP_TO_BUDGET`. Exact mode requires `1..50` explicit points and no budget. Exhaustive mode requires budget `1..50`, no explicit points, and a budget no greater than the current behavior-changing attack surface. |
 | `enablePrivacy` | `boolean` | no | `false` | Adds privacy-label variables and enlarges state space. Any privacy condition in a submitted specification makes the effective value `true`, even if the caller omitted or set this field to `false`; responses return the effective value |
 
@@ -47,6 +47,13 @@ errors; model/template semantic mismatches discovered after parsing return `422`
 > violation is detected.
 > Verification requires at least one specification for both synchronous and asynchronous
 > requests. Use the simulation endpoint for no-spec state exploration.
+
+Each user may run only one synchronous verification, simulation, or automatic-fix search
+at a time. Redis coordinates the admission across backend instances; when Redis is down,
+the same rule remains process-local. A conflicting request returns `429` before model
+parsing or NuSMV execution with `data.reasonCode=USER_FORMAL_OPERATION_BUSY`, plus
+`operationKind`, coordination `scope`, and `limit`. Async endpoints retain their separate
+stored/active task quotas.
 
 `AttackScenarioDto.points` contains either `{ kind: "DEVICE", deviceId }`, where
 `deviceId` is the normalized model-boundary device id, or
@@ -209,7 +216,7 @@ publishing stale evidence and keeps creation/completion ordering valid even for 
 
 Optional query parameter: `excludeTaskIds=1,2,3`. Use it when the frontend is already
 polling specific task ids through `GET /api/verify/tasks/{id}` and wants the inbox
-summary refresh to skip those same tasks.
+summary refresh to skip those same tasks. The list accepts at most 100 positive ids.
 
 **Response**: `VerificationTaskSummaryDto[]`, ordered by `createdAt` descending.
 
@@ -484,7 +491,7 @@ requests without passing through board storage.
 | Field | Type | Notes |
 | :--- | :--- | :--- |
 | `id` | `Long` | Null for unsaved rules |
-| `conditions` | `Condition[]` | `@NotEmpty` |
+| `conditions` | `Condition[]` | `@NotEmpty`; at most 50 conditions |
 | `command` | `Command` | `@NotNull` |
 | `ruleString` | `String` | Human-readable form |
 | `createdAt` | `LocalDateTime` | |
@@ -523,9 +530,9 @@ any API, not only signal APIs.
 | `templateLabel` | `String` | `@NotBlank`, ≤255 chars |
 | `formula` | `String` | Optional display formula preview/cache persisted with board specs; ignored for verification semantics |
 | `devices` | `DeviceRefDto[]` | Selected-device metadata (`@NotNull`, max 50); persisted as JSON only when saved through board storage |
-| `aConditions` | `SpecConditionDto[]` | `@NotNull`; serialized as `aConditions` |
-| `ifConditions` | `SpecConditionDto[]` | `@NotNull` |
-| `thenConditions` | `SpecConditionDto[]` | `@NotNull` |
+| `aConditions` | `SpecConditionDto[]` | `@NotNull`; at most 50; serialized as `aConditions` |
+| `ifConditions` | `SpecConditionDto[]` | `@NotNull`; at most 50 |
+| `thenConditions` | `SpecConditionDto[]` | `@NotNull`; at most 50 |
 
 `SpecConditionDto`:
 
@@ -683,9 +690,9 @@ with that option silently disabled.
 
 | Field | Type | Required | Default | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | |
-| `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | Same unique-name, omitted/null-default, and explicit-blank rejection contract as verification |
-| `rules` | `RuleDto[]` | no | `[]` | |
+| `devices` | `DeviceVerificationDto[]` | yes (`@NotEmpty`) | — | 1–100 devices; per-device override limits match verification |
+| `environmentVariables` | `BoardEnvironmentVariableDto[]` | no | `[]` | At most 200; same unique-name, omitted/null-default, and explicit-blank rejection contract as verification |
+| `rules` | `RuleDto[]` | no | `[]` | At most 100, with at most 50 conditions per rule |
 | `steps` | `int` (1–100) | no | `10` | Number of simulation steps |
 | `attackScenario` | `AttackScenarioDto` | no | `NONE` | Simulation accepts only `NONE` or `EXACT_POINTS`. It never chooses compromised devices or links randomly, and rejects budget-based exhaustive selection. |
 | `enablePrivacy` | `boolean` | no | `false` | |
@@ -763,7 +770,7 @@ recovered as `FAILED`.
 
 Optional query parameter: `excludeTaskIds=1,2,3`. Use it when the frontend is already
 polling specific task ids through `GET /api/simulate/tasks/{id}` and wants the inbox
-summary refresh to skip those same tasks.
+summary refresh to skip those same tasks. The list accepts at most 100 positive ids.
 
 **Response**: `SimulationTaskSummaryDto[]`, ordered by `createdAt` descending.
 
@@ -881,7 +888,8 @@ was later removed.
 May invoke NuSMV multiple times (bounded by `FIX_TIMEOUT_MS`, see
 [configuration.md](../getting-started/configuration.md)). A URL-safe `requestId` query parameter
 is required so the client can cancel this exact search through
-`DELETE /api/verify/fix-requests/{requestId}`.
+`DELETE /api/verify/fix-requests/{requestId}`. It contains 8–80 characters, begins with an
+ASCII letter or digit, and otherwise accepts letters, digits, `.`, `_`, `:`, and `-`.
 
 While the search is active, `GET /api/verify/fix-requests/{requestId}` returns
 `InteractiveOperationStatusDto` as `{ requestId, state, stage, elapsedMs }`. The final
@@ -895,7 +903,7 @@ timers or hidden model reasoning.
 
 | Field | Type | Default | Notes |
 | :--- | :--- | :--- | :--- |
-| `strategies` | `String[]` | `["parameter","condition","remove"]` when omitted | Exact, non-empty, duplicate-free strategy order when supplied. Values are limited to `parameter`, `condition`, and `remove`. An explicit empty/invalid list is rejected rather than replaced by defaults. `remove` permanently deletes suggested automation rules; it is not a reversible enable/disable toggle |
+| `strategies` | `String[]` | `["parameter","condition","remove"]` when omitted | Exact, duplicate-free order of 1–3 strategies when supplied. Values are limited to `parameter`, `condition`, and `remove`. An explicit empty/invalid list is rejected rather than replaced by defaults. `remove` permanently deletes suggested automation rules; it is not a reversible enable/disable toggle |
 | `preferredRangeSelections` | `PreferredRangeSelection[]` | `null` | Optional ranges selected from `FixResultDto.parameterTargets[].targetId`. Each item is `{ targetId, lower, upper }`; all fields are required, `targetId` is an opaque trace-scoped selector copied from a returned target, `lower`/`upper` are integers, and `lower <= upper` |
 
 Clients should build `preferredRangeSelections` from selectable `parameterTargets`
@@ -1029,9 +1037,9 @@ still matches the verification context.
   (device removed, template deleted, manifest unparseable) rejects with `400` ("re-run verification"),
   while an infrastructure error that leaves drift *unconfirmable* (e.g. template repository unavailable)
   rejects with `503` ("retry later") rather than misattributing it to a board change.
-  These application-generated, proven-pre-write `503` responses include
-  `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE`. Clients treat any unclassified `503`
-  as an uncertain mutation response and reconcile the current rule snapshot before retrying.
+  The specialized, proven-pre-write `503` mapping is defined in the
+  [API error mapping](overview.md#error-and-status-codes). Clients treat any unclassified `503` as
+  an uncertain mutation response and reconcile the current rule snapshot before retrying.
   Verification flags (`isAttack`/`attackBudget`/`enablePrivacy`) are per-request and not persisted for
   re-proving, so re-run verification after changing them.
 

@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvGenerator;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.SmvRelationUtils;
 import cn.edu.nju.Iot_Verify.component.nusmv.generator.data.DeviceSmvDataFactory;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardLayoutDto;
@@ -160,6 +161,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         synchronized (getUserWriteLock(userId)) {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
+                requireTotalCapacity("devices", safeList(nodes).size(), RequestLimits.MAX_DEVICES);
                 List<DeviceNodeDto> canonicalNodes = canonicalizeNodeTemplateNames(userId, nodes);
                 validateBoardReferences(userId, canonicalNodes, getRulesInternal(userId), getSpecsInternal(userId));
                 return saveNodesInternal(userId, canonicalNodes);
@@ -179,6 +181,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 }
 
                 List<DeviceNodeDto> current = new ArrayList<>(getNodesInternal(userId));
+                requireAdditionalCapacity(
+                        "devices", current.size(), nodes.size(), RequestLimits.MAX_DEVICES);
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 List<DeviceNodeDto> next = new ArrayList<>(current);
                 next.addAll(nodes);
@@ -193,6 +197,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                         ? patchEnvironmentVariablesInternal(
                                 userId, savedNodes, environmentVariablePatches).getEnvironmentVariables()
                         : getEnvironmentVariablesInternal(userId);
+                requireTotalCapacity("environment variables", savedEnvironment.size(),
+                        RequestLimits.MAX_ENVIRONMENT_VARIABLES);
                 Set<String> createdIds = nodes.stream()
                         .map(DeviceNodeDto::getId)
                         .filter(Objects::nonNull)
@@ -718,6 +724,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
             return transactionTemplate.execute(status -> {
                 requireActiveUserForWrite(userId);
                 List<DeviceNodeDto> current = new ArrayList<>(getNodesInternal(userId));
+                requireAdditionalCapacity("devices", current.size(), 1, RequestLimits.MAX_DEVICES);
                 List<BoardEnvironmentVariableDto> previousEnvironment = getEnvironmentVariablesInternal(userId);
                 DeviceNodeDto createdDraft = Objects.requireNonNull(
                         nodeFactory.apply(List.copyOf(current)), "node factory result must not be null");
@@ -729,6 +736,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 validateBoardReferences(userId, canonicalNodes, currentRules, currentSpecs);
                 List<DeviceNodeDto> savedNodes = saveNodesInternal(userId, canonicalNodes);
                 List<BoardEnvironmentVariableDto> savedEnvironment = getEnvironmentVariablesInternal(userId);
+                requireTotalCapacity("environment variables", savedEnvironment.size(),
+                        RequestLimits.MAX_ENVIRONMENT_VARIABLES);
                 DeviceNodeDto created = requireNode(savedNodes, createdDraft.getId());
                 return DeviceMutationResultDto.builder()
                         .operation("created")
@@ -774,6 +783,8 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 requireActiveUserForWrite(userId);
                 List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
                 List<SpecificationDto> existing = new ArrayList<>(getSpecsInternal(userId));
+                requireAdditionalCapacity(
+                        "specifications", existing.size(), 1, RequestLimits.MAX_SPECS);
                 existing.add(spec);
                 validateBoardReferences(userId, currentNodes, null, existing);
                 List<SpecificationDto> saved = saveSpecsInternal(userId, existing, currentNodes);
@@ -1129,6 +1140,13 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         if (batch.getSpecs() == null) {
             errors.put("specs", "Scene replacement must explicitly provide the complete specs collection");
         }
+        addCollectionLimitError(errors, "nodes", batch.getNodes(), RequestLimits.MAX_DEVICES);
+        addCollectionLimitError(errors, "environmentVariables", batch.getEnvironmentVariables(),
+                RequestLimits.MAX_ENVIRONMENT_VARIABLES);
+        addCollectionLimitError(errors, "rules", batch.getRules(), RequestLimits.MAX_RULES);
+        addCollectionLimitError(errors, "specs", batch.getSpecs(), RequestLimits.MAX_SPECS);
+        addCollectionLimitError(errors, "templateSnapshots", batch.getTemplateSnapshots(),
+                RequestLimits.MAX_TEMPLATES);
         if (!errors.isEmpty()) {
             throw new ValidationException(errors);
         }
@@ -3283,6 +3301,29 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         return value != null && !value.isBlank();
     }
 
+    private void requireAdditionalCapacity(String resource, int current, int additional, int maximum) {
+        long requested = (long) current + Math.max(0, additional);
+        if (requested > maximum) {
+            throw new BadRequestException(
+                    "The Board supports at most " + maximum + " " + resource
+                            + "; delete existing items before adding more.");
+        }
+    }
+
+    private void requireTotalCapacity(String resource, int total, int maximum) {
+        if (total > maximum) {
+            throw new BadRequestException(
+                    "The Board supports at most " + maximum + " " + resource + ".");
+        }
+    }
+
+    private void addCollectionLimitError(
+            Map<String, String> errors, String field, Collection<?> values, int maximum) {
+        if (values != null && values.size() > maximum) {
+            errors.put(field, "At most " + maximum + " items are allowed");
+        }
+    }
+
     @Override
     public CollectionMutationResultDto<RuleDto> addRule(Long userId, RuleDto rule) {
         synchronized (getUserWriteLock(userId)) {
@@ -3291,6 +3332,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 RuleDto canonicalRule = canonicalizeRuleRelationsForStorage(rule);
                 canonicalRule.setId(null); // new rule, let DB assign ID
                 List<RuleDto> nextRules = new ArrayList<>(getRulesInternal(userId));
+                requireAdditionalCapacity("rules", nextRules.size(), 1, RequestLimits.MAX_RULES);
                 nextRules.add(canonicalRule);
                 List<DeviceNodeDto> currentNodes = getNodesInternal(userId);
                 validateNoIdenticalRules(nextRules, currentNodes);
@@ -3510,6 +3552,9 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         DeviceTemplateDto safeDto = Objects.requireNonNull(dto, "template dto must not be null");
         if (safeDto.getManifest() == null) {
             throw new BadRequestException("Template manifest is required");
+        }
+        if (deviceTemplateRepo.countByUserId(userId) >= RequestLimits.MAX_TEMPLATES) {
+            throw new BadRequestException("At most 100 device types can be stored per user.");
         }
 
         String rawName = safeDto.getName() != null ? safeDto.getName().trim() : null;
@@ -3848,6 +3893,10 @@ public class BoardStorageServiceImpl implements BoardStorageService {
                 .toList();
 
         Map<String, String> validationErrors = new LinkedHashMap<>();
+        if (prospectiveTemplates.size() > RequestLimits.MAX_TEMPLATES) {
+            validationErrors.put("templates",
+                    "Resetting bundled defaults would exceed the limit of 100 device types. Delete unused custom types first.");
+        }
         try {
             validateBoardReferences(userId, nodes, rules, specs, prospectiveManifests);
         } catch (ValidationException e) {

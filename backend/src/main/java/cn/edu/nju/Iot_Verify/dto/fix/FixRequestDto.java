@@ -15,7 +15,8 @@ import java.util.List;
 @Data
 public class FixRequestDto {
     /** Strategies to attempt. Null/omitted uses the default order; an explicit list is exact. */
-    @Size(min = 1, message = "strategies must be non-empty when provided; omit it to use defaults")
+    @Size(min = 1, max = 3,
+            message = "strategies must contain 1-3 items when provided; omit it to use defaults")
     private List<
             @NotBlank(message = "strategy item must not be blank")
             @Pattern(regexp = "parameter|condition|remove",
@@ -26,6 +27,7 @@ public class FixRequestDto {
      * Optional preferred ranges chosen from concrete parameter-adjustment targets.
      * The controller converts these selections to the fixer's internal locator map.
      */
+    @Size(max = 100, message = "At most 100 preferred range selections are allowed")
     private List<@Valid @NotNull(message = "preferredRangeSelections item must not be null")
             PreferredRangeSelection> preferredRangeSelections;
 

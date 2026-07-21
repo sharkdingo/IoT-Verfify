@@ -46,4 +46,20 @@ public class NusmvConfig {
      */
     @Positive
     private long acquirePermitTimeoutMs = 10000;
+
+    /** Maximum retained stdout/stderr bytes per NuSMV stream. The process is still fully drained. */
+    @Min(1024)
+    private int maxOutputBytes = 4 * 1024 * 1024;
+
+    /** Maximum age of retained nusmv_* debug directories. */
+    @Min(1)
+    private int tempRetentionHours = 24;
+
+    /** Maximum number of retained nusmv_* directories across all users. */
+    @Min(1)
+    private int maxRetainedTempDirectories = 200;
+
+    /** Delay between retained-artifact cleanup passes. */
+    @Min(10000)
+    private long tempCleanupMs = 300000;
 }

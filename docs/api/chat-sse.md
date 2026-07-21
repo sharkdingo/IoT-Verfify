@@ -4,7 +4,7 @@ Contract for `/api/chat` — session management plus the streaming completion en
 Session endpoints use the standard `Result<T>` envelope ([overview.md](overview.md));
 the streaming endpoint does **not** — it is an SSE stream.
 
-Verified against code on 2026-07-20. Source: `controller/ChatController.java`,
+Verified against code on 2026-07-22. Source: `controller/ChatController.java`,
 `service/impl/ChatServiceImpl.java`, `dto/chat/`.
 
 ---
@@ -15,8 +15,9 @@ Verified against code on 2026-07-20. Source: `controller/ChatController.java`,
 | :--- | :--- | :--- | :--- |
 | GET | `/api/chat/sessions` | → `ChatSessionResponseDto[]` | List the user's sessions |
 | POST | `/api/chat/sessions` | → `ChatSessionResponseDto` | Create a session (no body) |
-| GET | `/api/chat/sessions/{sessionId}/messages` | → `ChatMessageResponseDto[]` | Message history |
+| GET | `/api/chat/sessions/{sessionId}/messages?beforeId=&limit=50` | → `ChatHistoryPageDto` | Bounded message history, newest page first |
 | GET | `/api/chat/sessions/{sessionId}/activity` | → `ChatSessionActivityDto { sessionId, active }` | Authoritative cross-instance check for whether a request is still active for the session |
+| GET | `/api/chat/sessions/{sessionId}/confirmation` | → `ChatPendingConfirmationDto { sessionId, kinds }` | Server-authoritative protected-action kinds waiting for an explicit UI decision |
 | POST | `/api/chat/sessions/{sessionId}/stop` | → `null` | Idempotently request that the active response stop; already-started writes are not rolled back |
 | DELETE | `/api/chat/sessions/{sessionId}` | → `null` | Delete a session |
 
@@ -27,6 +28,14 @@ an already-running session from the list response.
 `title=null` means the session has no user-derived title yet; clients render their own
 localized "new conversation" label. Persistence placeholders such as `New Chat` are not
 part of the user-facing contract and are normalized to `null` when reading older rows.
+At most 100 sessions are stored per user. Creation beyond that limit returns `400` and asks
+the user to delete an old session; the list endpoint is correspondingly bounded to the 100
+most recently updated sessions.
+`ChatHistoryPageDto` is `{ messages: ChatMessageResponseDto[], nextBeforeId: Long | null,
+hasMore: boolean }`. `limit` defaults to 50 and accepts `1..100`; `beforeId` is the positive
+message-id cursor returned by the preceding page. The service scans at most 2,000 raw rows
+per request while hiding internal tool messages, so a tool-heavy turn cannot turn one history
+read into an unbounded allocation.
 `ChatMessageResponseDto`: `{ id: Long, sessionId: String, role: String, content:
 String, turnId?: String, createdAt, executionTrace?: ProgressDto[], executionElapsedSeconds?: Integer,
 executionStatus?: "COMPLETED" | "AWAITING_CONFIRMATION" | "PARTIAL" | "STOPPED" |
@@ -68,6 +77,23 @@ The same scheduled pass clears expired lease ids and stop flags. A crashed or re
 worker therefore releases its session after at most one TTL instead of leaving it busy for
 hours, while a healthy execution can run past any single lease window. Normal completion
 and queue rejection still clear the lease immediately.
+
+Across sessions, each user may run at most two assistant streams at once. Redis
+coordinates this admission across backend instances; if Redis is unavailable, the same
+limit is enforced within each process. A token-checked heartbeat renews every live Redis
+admission lease, so a healthy stream can run beyond its initial two-hour safety TTL without
+another instance admitting a replacement. Controller cleanup releases the in-process slot
+in a `finally` path even when database execution-lease cleanup fails. Excess requests return
+`429` before a stream starts.
+If token renewal proves that ownership was replaced, or Redis remains unavailable through
+the complete lease TTL, the old worker is interrupted and its controller rechecks the lease
+before returning a result. A brief Redis outage remains fail-open as documented in the
+configuration reference, but an expired unconfirmed worker is not allowed to run indefinitely
+beside a replacement.
+
+The admission response includes `data.reasonCode=USER_CHAT_OPERATION_BUSY`, operation
+kind, coordination scope, and limit. The frontend renders this as a wait-for-other-session
+message instead of exposing the backend's English diagnostic.
 
 Permanent account deletion is stronger than ordinary per-session activity handling. The backend
 marks every persisted execution lease for that user as stopped and completes locally bound
@@ -133,10 +159,9 @@ than a normal task limit. Either guard preserves earlier commits, emits a visibl
 event, and still runs the streaming final-answer model with an instruction to identify
 completed, failed, and unfinished work accurately.
 
-Account deletion first commits the account and domain-row removal, then stops local chat
-transport and clears confirmation, draft, and continuation state. Durable AI-state deletion
-uses an independent transaction because Spring invokes this cleanup from `afterCommit`; each
-cleanup category is isolated so a failure in one does not suppress the others.
+Account deletion removes confirmation, draft, continuation, chat history, and the account
+inside the same database transaction. Only after commit does it stop local chat transport
+and revoke the current token. A rollback therefore restores all durable account state.
 
 `requiresUserConfirmation=true` is a generic no-write boundary, not only a deletion
 preview. The planning loop stops immediately for destructive previews and for proposed
@@ -185,17 +210,19 @@ successful confirmation can be followed by the remaining requested tools even wh
 chat detail fell outside the history window.
 
 Protected destructive previews (deletions and bundled-default reset) additionally return
-an opaque `impactToken`. The backend
-keeps one pending protected action per authenticated user and chat session, bound to the tool,
-target, and canonical digest of the visible preview. Confirmation is target-aware rather
-than position-aware: ordinary questions or changed instructions may intervene without
-discarding the preview. When one or more action kinds are pending, the configured model
-classifies the latest message semantically as confirmed, cancelled, ambiguous, or unrelated,
-without a keyword/regex phrase table. The classifier receives only the server-known live
-kinds plus the latest message; it cannot create a new pending action or change its target.
-Invalid or unavailable classifier output authorizes nothing. A message may confirm one
-specific action and add remaining work, while a generic reply across several plausible
-pending kinds remains ambiguous.
+an opaque `impactToken`. The backend keeps one pending protected action per authenticated
+user and chat session, bound to the tool, target, and canonical digest of the visible
+preview. Confirmation is target-aware rather than position-aware: ordinary questions or
+changed instructions may intervene without discarding the preview.
+
+Protected authority never comes from model interpretation of ordinary text. The client
+reads `GET /api/chat/sessions/{sessionId}/confirmation`, renders an explicit decision for
+each returned kind, and sends the selected `kind` plus `CONFIRM` or `CANCEL` in the next
+stream request's structured `confirmation` field. The accepted kinds are `DESTRUCTIVE`,
+`DEFAULT_TEMPLATE_RESET`, and `SCENE_REPLACEMENT`. The backend requires that exact kind to
+still be pending for the authenticated session; an invented, stale, or mismatched command
+authorizes no write. Natural-language classification remains available only for
+non-destructive choice prompts and cannot create or consume protected authority.
 The token is valid for 15 minutes and is consumed once
 before mutation; a second tool call in the same model response cannot reuse it. Wrong,
 expired, cross-session, cross-user, changed-preview, and replayed tokens return a no-write
@@ -217,9 +244,10 @@ retrying. With `mutationMayHaveCommitted=false`, no mutation refresh is sent.
 
 | Field | Type | Rules |
 | :--- | :--- | :--- |
-| `sessionId` | `String` | Required |
+| `sessionId` | `String` | Required; ≤64 characters |
 | `content` | `String` | Required; ≤10000 characters |
 | `turnId` | `String` | Optional for compatibility; ≤64 characters. Current clients send a unique value used to associate the user message and terminal assistant record. The server generates one when omitted. |
+| `confirmation` | `ChatConfirmationCommandDto` | Optional explicit protected-action decision: `{ action: "CONFIRM" | "CANCEL", kind: "DESTRUCTIVE" | "DEFAULT_TEMPLATE_RESET" | "SCENE_REPLACEMENT" }`. It is accepted only when that kind is currently pending for the session. |
 
 If the chat thread pool is saturated the request is rejected with `503`
 (`ServiceUnavailableException`) before streaming starts. Errors that happen after the
@@ -360,6 +388,10 @@ and failed states and offers an explicit retry after a failed list request. Befo
 first response chunk arrives, the assistant's pending status is rendered inside one
 compact assistant bubble rather than as an empty message followed by detached status
 text.
+The client treats a successful HTTP response with a readable SSE body as transport
+acceptance. A pre-stream `400`, `409`, `429`, or `503` removes optimistic user and
+assistant placeholders, restores an ordinary text draft, and leaves protected-action
+confirmation state intact; a rejected request therefore never appears as persisted history.
 
 Backend-supplied safety notices and fallback explanations follow the language of the
 current user message for Chinese and English conversations. This applies to no-write

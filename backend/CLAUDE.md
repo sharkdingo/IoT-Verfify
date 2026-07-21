@@ -104,9 +104,18 @@ Deeper architecture: [../docs/architecture/overview.md](../docs/architecture/ove
   for identity. Display labels are readability snapshots only. Specification
   recommendation `templateId` values must stay constrained to `"1"` through `"7"`.
 - **Redis is fail-open**: logout revocation degrades silently if Redis is down; do not
-  make request flow hard-depend on it.
-- **Temp files are kept on purpose**: `cleanupTempFile()` is a no-op so `nusmv_*` dirs
-  (`model.smv`, `request.json`, `output.txt`, `result.json`) survive for debugging.
+  make request flow hard-depend on it. A distributed operation lease that is explicitly
+  lost or remains unconfirmed for its full TTL must stop its old worker; do not reduce a
+  lease heartbeat failure to logging only.
+- **NuSMV debug files use bounded retention**: `cleanupTempFile()` leaves a completed
+  `nusmv_*` directory available for diagnosis, while the scheduled artifact cleaner caps
+  both its age and the total retained directory count. Executors must hold the shared
+  artifact-registry lock before the model existence check and from capacity wait through
+  output completion. Process output must be drained in bounded byte chunks rather than
+  `readLine()`, because NuSMV can emit an unterminated line. Cleanup must hold the same exclusion from inactivity check through
+  recursive deletion so active directories are never removed. Do not remove the output
+  drain or bypass the limits documented in the
+  configuration reference.
 - **`ProductionSafetyCheck`** refuses to start under a `prod`/`production` profile if
   `JWT_SECRET` / `DB_PASSWORD` / `IOT_VERIFY_OPENAI_API_KEY` hold unsafe defaults.
 - **Attack behavior is capability-scoped.** Compromise may falsify only variables whose

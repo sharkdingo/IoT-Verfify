@@ -10,6 +10,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatHistoryPageDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
@@ -30,10 +31,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.data.domain.Pageable;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -42,6 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -262,8 +268,8 @@ class ChatServiceImplHistoryWindowTest {
         assistantReply.setRole("assistant");
         assistantReply.setContent("Done. The light is on.");
 
-        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("s4"))
-                .thenReturn(List.of(userMsg, assistantToolCall, toolResult, assistantFallback, assistantReply));
+        stubHistoryPage("s4", List.of(
+                userMsg, assistantToolCall, toolResult, assistantFallback, assistantReply));
         when(chatMapper.toChatMessageDtoList(anyList()))
                 .thenReturn(List.of(new ChatMessageResponseDto(), new ChatMessageResponseDto()));
 
@@ -297,8 +303,7 @@ class ChatServiceImplHistoryWindowTest {
         assistantReply.setRole("assistant");
         assistantReply.setContent("Done.");
 
-        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("s5"))
-                .thenReturn(List.of(userMsg, assistantLiteral, assistantReply));
+        stubHistoryPage("s5", List.of(userMsg, assistantLiteral, assistantReply));
         when(chatMapper.toChatMessageDtoList(anyList()))
                 .thenReturn(List.of(new ChatMessageResponseDto(), new ChatMessageResponseDto(), new ChatMessageResponseDto()));
 
@@ -344,8 +349,7 @@ class ChatServiceImplHistoryWindowTest {
         assistantReply.setContent("画布包含两个设备。");
         assistantReply.setCreatedAt(started.plusSeconds(12));
 
-        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("trace-history"))
-                .thenReturn(List.of(userMsg, assistantToolCall, toolResult, assistantReply));
+        stubHistoryPage("trace-history", List.of(userMsg, assistantToolCall, toolResult, assistantReply));
         ChatMessageResponseDto userDto = new ChatMessageResponseDto();
         userDto.setRole("user");
         ChatMessageResponseDto assistantDto = new ChatMessageResponseDto();
@@ -387,8 +391,7 @@ class ChatServiceImplHistoryWindowTest {
         assistantReply.setExecutionTraceJson(new ObjectMapper().writeValueAsString(persisted));
         assistantReply.setExecutionElapsedSeconds(43);
 
-        when(messageRepo.findBySessionIdOrderByCreatedAtAsc("exact-trace-history"))
-                .thenReturn(List.of(userMsg, assistantReply));
+        stubHistoryPage("exact-trace-history", List.of(userMsg, assistantReply));
         ChatMessageResponseDto userDto = new ChatMessageResponseDto();
         userDto.setRole("user");
         ChatMessageResponseDto assistantDto = new ChatMessageResponseDto();
@@ -415,7 +418,7 @@ class ChatServiceImplHistoryWindowTest {
         expired.setActiveExecutionExpiresAt(LocalDateTime.now().minusSeconds(1));
         ChatSessionResponseDto liveDto = new ChatSessionResponseDto();
         ChatSessionResponseDto expiredDto = new ChatSessionResponseDto();
-        when(sessionRepo.findByUserIdOrderByUpdatedAtDesc(1L)).thenReturn(List.of(live, expired));
+        when(sessionRepo.findTop100ByUserIdOrderByUpdatedAtDesc(1L)).thenReturn(List.of(live, expired));
         when(chatMapper.toChatSessionDtoList(List.of(live, expired)))
                 .thenReturn(List.of(liveDto, expiredDto));
 
@@ -423,6 +426,59 @@ class ChatServiceImplHistoryWindowTest {
 
         assertTrue(result.get(0).isActive());
         assertFalse(result.get(1).isActive());
+    }
+
+    @Test
+    void historyPageReturnsNewestVisibleMessagesWithAnOlderCursor() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("paged-history");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserId("paged-history", 1L)).thenReturn(Optional.of(session));
+        ChatMessagePo oldest = visibleMessage(1L, "user", "oldest");
+        ChatMessagePo middle = visibleMessage(2L, "assistant", "middle");
+        ChatMessagePo newest = visibleMessage(3L, "user", "newest");
+        when(messageRepo.findBySessionIdOrderByIdDesc(eq("paged-history"), any(Pageable.class)))
+                .thenReturn(List.of(newest, middle, oldest));
+        when(chatMapper.toChatMessageDtoList(anyList()))
+                .thenReturn(List.of(new ChatMessageResponseDto(), new ChatMessageResponseDto()));
+
+        ChatHistoryPageDto page = service.getHistoryPage(1L, "paged-history", null, 2);
+
+        assertEquals(2, page.getMessages().size());
+        assertTrue(page.isHasMore());
+        assertEquals(2L, page.getNextBeforeId());
+        verify(chatMapper).toChatMessageDtoList(chatMessageListCaptor.capture());
+        assertEquals(List.of("middle", "newest"), chatMessageListCaptor.getValue().stream()
+                .map(ChatMessagePo::getContent).toList());
+    }
+
+    @Test
+    void createSessionRejectsAnUnboundedCatalog() {
+        when(sessionRepo.countByUserId(1L)).thenReturn(100L);
+
+        assertThrows(cn.edu.nju.Iot_Verify.exception.BadRequestException.class,
+                () -> service.createSession(1L));
+        verify(sessionRepo, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    private ChatMessagePo visibleMessage(Long id, String role, String content) {
+        ChatMessagePo message = new ChatMessagePo();
+        message.setId(id);
+        message.setRole(role);
+        message.setContent(content);
+        return message;
+    }
+
+    private void stubHistoryPage(String sessionId, List<ChatMessagePo> chronological) {
+        long id = 1L;
+        for (ChatMessagePo message : chronological) {
+            if (message.getId() == null) message.setId(id);
+            id = Math.max(id + 1, message.getId() + 1);
+        }
+        List<ChatMessagePo> newestFirst = new ArrayList<>(chronological);
+        Collections.reverse(newestFirst);
+        when(messageRepo.findBySessionIdOrderByIdDesc(eq(sessionId), any(Pageable.class)))
+                .thenReturn(newestFirst);
     }
 
     @Test

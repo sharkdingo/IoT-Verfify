@@ -6,10 +6,10 @@ scenario into NuSMV. Request and response field tables live in
 [spec-templates.md](spec-templates.md); identity rules live in
 [device-identity.md](device-identity.md).
 
-Verified against code on 2026-07-18. Primary sources:
+Verified against code on 2026-07-22. Primary sources:
 `SmvGenerator`, `DeviceSmvDataFactory`, `SmvModelValidator`,
 `SmvDeviceModuleBuilder`, `SmvMainModuleBuilder`, `SmvSpecificationBuilder`, and
-`SmvTraceParser`.
+`SmvTraceParser`, `NusmvExecutor`, and `NusmvTempArtifactCleaner`.
 
 ## What the model means
 
@@ -461,6 +461,34 @@ NuSMV properties follow the main module. Auto-fix parameter search may additiona
 emit internal `param_*`/`lambda_*` frozen variables. Public fix requests use stable
 `targetId`/`adjustmentId`; users and AI tools do not submit those generated names or
 rule/condition indexes.
+
+## Execution artifacts and output bounds
+
+The executor continuously drains NuSMV output in fixed byte chunks so a full process pipe
+cannot deadlock and a single unterminated line cannot force an unbounded `readLine()`
+allocation. It retains at most the configured byte count for each stdout/stderr stream.
+Truncation retains a valid UTF-8 prefix, appends an explicit marker, and makes verification
+or simulation fail as incomplete before result/trace parsing. Completed `nusmv_*` directories retain
+`model.smv`, `request.json`, `output.txt`, and `result.json` for diagnosis, then a
+scheduled cleaner removes them by maximum age and oldest-first directory count. All
+executors acquire the directory lease before checking the model file or waiting for a
+concurrency permit, and hold an OS file lock through process/output completion. The cleaner
+holds that same local/OS exclusion continuously from its inactivity check through recursive
+deletion; there is no check/delete activation window. The sibling lock file also allows
+Windows to delete the protected directory while the lock remains open. Neither age retention
+nor count pressure can therefore remove an active model. Defaults and overrides are owned by the
+[configuration reference](../getting-started/configuration.md#nusmv).
+
+Candidate discovery for parameter and condition repair is intentionally narrower than
+ordinary verification. Its main module may add validated `INIT` constraints that reproduce
+the complete first state of the selected counterexample: device modes and local variables,
+shared environment values, trust/privacy labels, and concrete device/link attack choices.
+Only the candidate parameters remain free. Missing or out-of-domain replay data fails model
+generation closed, and failure to translate the selected negated specification is also a
+generation error rather than a trivially true fallback. These candidate-only constraints are
+removed for forward verification, which checks the proposed edit against the original full
+initial-state and attack-selection semantics. Strategy/search details are owned by
+[Automatic fix](auto-fix.md).
 
 ## Completeness and result interpretation
 

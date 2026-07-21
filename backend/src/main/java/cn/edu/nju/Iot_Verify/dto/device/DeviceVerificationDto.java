@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -23,6 +24,7 @@ import java.util.List;
 public class DeviceVerificationDto {
 
     @NotBlank(message = "Device varName is required")
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Device varName must be at most 200 characters")
     private String varName;
 
     /** Display-only instance label captured with the model request; never used for resolution. */
@@ -30,13 +32,17 @@ public class DeviceVerificationDto {
     private String deviceLabel;
 
     @NotBlank(message = "Template name is required")
+    @Size(max = 100, message = "Template name must be at most 100 characters")
     private String templateName;
 
+    @Size(max = RequestLimits.MAX_VALUE_LENGTH, message = "Device state must be at most 1000 characters")
     private String state;
 
     // 运行时验证状态
     private String currentStateTrust;
     private String currentStatePrivacy;
+    @Size(max = RequestLimits.MAX_DEVICE_VARIABLES, message = "At most 100 device variables can be verified")
     private List<@Valid @NotNull(message = "Variable item cannot be null") VariableStateDto> variables;
+    @Size(max = RequestLimits.MAX_DEVICE_PRIVACIES, message = "At most 100 device privacy states can be verified")
     private List<@Valid @NotNull(message = "Privacy item cannot be null") PrivacyStateDto> privacies;
 }

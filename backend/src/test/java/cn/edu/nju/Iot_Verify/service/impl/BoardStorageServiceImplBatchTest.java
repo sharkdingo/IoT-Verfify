@@ -133,6 +133,57 @@ class BoardStorageServiceImplBatchTest {
     }
 
     @Test
+    void saveBoardBatch_rechecksCollectionLimitsInsideTheServiceBoundary() {
+        BoardBatchDto oversized = new BoardBatchDto(
+                java.util.Collections.nCopies(101, new DeviceNodeDto()), List.of(), List.of(), List.of());
+
+        ValidationException error = assertThrows(
+                ValidationException.class, () -> service.saveBoardBatch(1L, oversized));
+
+        assertTrue(error.getErrors().containsKey("nodes"));
+        verify(nodeRepo, never()).deleteByUserId(anyLong());
+    }
+
+    @Test
+    void addNodes_rejectsWhenThePersistedBoardIsAlreadyAtCapacity() {
+        when(nodeRepo.findByUserId(1L))
+                .thenReturn(java.util.Collections.nCopies(100, new DeviceNodePo()));
+        when(deviceNodeMapper.toDto(any())).thenReturn(new DeviceNodeDto());
+
+        BadRequestException error = assertThrows(BadRequestException.class,
+                () -> service.addNodes(1L, List.of(new DeviceNodeDto()), List.of()));
+
+        assertTrue(error.getMessage().contains("at most 100 devices"));
+        verify(nodeRepo, never()).deleteByUserId(anyLong());
+    }
+
+    @Test
+    void addRule_rejectsWhenThePersistedBoardIsAlreadyAtCapacity() {
+        when(ruleRepo.findByUserIdOrderByExecutionOrderAscIdAsc(1L))
+                .thenReturn(java.util.Collections.nCopies(100, new RulePo()));
+        when(ruleMapper.toDto(any())).thenReturn(new RuleDto());
+
+        BadRequestException error = assertThrows(
+                BadRequestException.class, () -> service.addRule(1L, new RuleDto()));
+
+        assertTrue(error.getMessage().contains("at most 100 rules"));
+        verify(ruleRepo, never()).save(any());
+    }
+
+    @Test
+    void addSpec_rejectsWhenThePersistedBoardIsAlreadyAtCapacity() {
+        when(specRepo.findByUserId(1L))
+                .thenReturn(java.util.Collections.nCopies(100, new SpecificationPo()));
+        when(specificationMapper.toDto(any())).thenReturn(new SpecificationDto());
+
+        BadRequestException error = assertThrows(
+                BadRequestException.class, () -> service.addSpec(1L, new SpecificationDto()));
+
+        assertTrue(error.getMessage().contains("at most 100 specifications"));
+        verify(specRepo, never()).deleteByUserId(anyLong());
+    }
+
+    @Test
     void saveBoardBatch_staleConfirmationReturnsFreshImpactAndWritesNothing() {
         DeviceNodePo stored = new DeviceNodePo();
         DeviceNodeDto first = boardNode("device-1", "Sensor", "Hall sensor");

@@ -17,14 +17,19 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatMessageResponseDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatHistoryPageDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatConfirmationCommandDto;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatPendingConfirmationDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionResponseDto;
 import cn.edu.nju.Iot_Verify.dto.chat.ChatSessionActivityDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
 import cn.edu.nju.Iot_Verify.po.ChatSessionPo;
 import cn.edu.nju.Iot_Verify.repository.ChatMessageRepository;
@@ -43,6 +48,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -103,7 +109,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     @Transactional(readOnly = true)
     public List<ChatSessionResponseDto> getUserSessions(Long userId) {
         LocalDateTime now = databaseNow();
-        List<ChatSessionPo> sessions = sessionRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+        List<ChatSessionPo> sessions = sessionRepo.findTop100ByUserIdOrderByUpdatedAtDesc(userId);
         List<ChatSessionResponseDto> response = chatMapper.toChatSessionDtoList(sessions);
         for (int index = 0; index < response.size(); index++) {
             response.get(index).setActive(hasActiveExecutionLease(sessions.get(index), now));
@@ -115,6 +121,9 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
     @Transactional
     public ChatSessionResponseDto createSession(Long userId) {
         requireActiveUserForWrite(userId);
+        if (sessionRepo.countByUserId(userId) >= RequestLimits.MAX_CHAT_SESSIONS) {
+            throw new BadRequestException("At most 100 chat sessions can be stored per user. Delete an old session first.");
+        }
         ChatSessionPo session = new ChatSessionPo();
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
@@ -125,14 +134,82 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
 
     @Override
     @Transactional(readOnly = true)
-    public List<ChatMessageResponseDto> getHistory(Long userId, String sessionId) {
+    public ChatPendingConfirmationDto getPendingConfirmation(Long userId, String sessionId) {
         sessionRepo.findByIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
-        List<ChatMessagePo> allMessages = messageRepo.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<ChatConfirmationCommandDto.Kind> kinds = pendingProtectedKinds(userId, sessionId).stream()
+                .map(ChatServiceImpl::toCommandKind)
+                .toList();
+        return ChatPendingConfirmationDto.builder()
+                .sessionId(sessionId)
+                .kinds(kinds)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageResponseDto> getHistory(Long userId, String sessionId) {
+        return getHistoryPage(userId, sessionId, null, RequestLimits.MAX_CHAT_HISTORY_PAGE_SIZE)
+                .getMessages();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ChatHistoryPageDto getHistoryPage(Long userId, String sessionId, Long beforeId, int limit) {
+        sessionRepo.findByIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> ResourceNotFoundException.session(sessionId));
+        int pageSize = Math.min(RequestLimits.MAX_CHAT_HISTORY_PAGE_SIZE,
+                Math.max(1, limit));
+        int rawPageSize = Math.min(200, RequestLimits.MAX_CHAT_HISTORY_RAW_SCAN);
+        List<ChatMessagePo> newestFirst = new ArrayList<>();
+        Long cursor = beforeId;
+        boolean exhausted = false;
+        while (newestFirst.size() < RequestLimits.MAX_CHAT_HISTORY_RAW_SCAN) {
+            int remaining = Math.min(rawPageSize,
+                    RequestLimits.MAX_CHAT_HISTORY_RAW_SCAN - newestFirst.size());
+            List<ChatMessagePo> chunk = cursor == null
+                    ? messageRepo.findBySessionIdOrderByIdDesc(sessionId, PageRequest.of(0, remaining))
+                    : messageRepo.findBySessionIdAndIdLessThanOrderByIdDesc(
+                            sessionId, cursor, PageRequest.of(0, remaining));
+            if (chunk == null || chunk.isEmpty()) {
+                exhausted = true;
+                break;
+            }
+            newestFirst.addAll(chunk);
+            ChatMessagePo oldest = chunk.get(chunk.size() - 1);
+            cursor = oldest == null ? cursor : oldest.getId();
+            if (chunk.size() < remaining || oldest == null || oldest.getId() == null) {
+                exhausted = true;
+                break;
+            }
+            List<ChatMessagePo> scannedChronologically = new ArrayList<>(newestFirst);
+            java.util.Collections.reverse(scannedChronologically);
+            if (filterFrontendVisibleMessages(scannedChronologically).size() > pageSize) {
+                break;
+            }
+        }
+
+        List<ChatMessagePo> allMessages = new ArrayList<>(newestFirst);
+        java.util.Collections.reverse(allMessages);
         List<ChatMessagePo> visibleMessages = filterFrontendVisibleMessages(allMessages);
-        List<ChatMessageResponseDto> response = chatMapper.toChatMessageDtoList(visibleMessages);
-        attachPersistedExecutionTraces(allMessages, visibleMessages, response);
-        return response;
+        boolean hasMore = visibleMessages.size() > pageSize || !exhausted;
+        int fromIndex = Math.max(0, visibleMessages.size() - pageSize);
+        List<ChatMessagePo> selected = visibleMessages.subList(fromIndex, visibleMessages.size());
+        List<ChatMessageResponseDto> response = chatMapper.toChatMessageDtoList(selected);
+        attachPersistedExecutionTraces(allMessages, selected, response);
+        Long nextBeforeId = null;
+        if (hasMore) {
+            if (!selected.isEmpty()) {
+                nextBeforeId = selected.get(0).getId();
+            } else if (!allMessages.isEmpty()) {
+                nextBeforeId = allMessages.get(0).getId();
+            }
+        }
+        return ChatHistoryPageDto.builder()
+                .messages(response)
+                .nextBeforeId(nextBeforeId)
+                .hasMore(hasMore && nextBeforeId != null)
+                .build();
     }
 
     @Override
@@ -370,6 +447,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                   String executionId,
                                   String turnId,
                                   String content,
+                                  ChatConfirmationCommandDto confirmation,
                                   SseEmitter emitter) {
         String effectiveTurnId = turnId == null || turnId.isBlank()
                 ? UUID.randomUUID().toString()
@@ -407,7 +485,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 && continuationContext.pendingToolName() != null) {
             pendingKinds.add(ConfirmationKind.CHOICE);
         }
-        ConfirmationDecision confirmationDecision = chatConfirmationDetector.detect(content, pendingKinds);
+        ConfirmationDecision confirmationDecision = resolveConfirmation(content, confirmation, pendingKinds);
         UserContextHolder.setUserId(userId);
         UserContextHolder.setChatSessionId(sessionId);
         UserContextHolder.setChatExecutionId(executionId);
@@ -638,6 +716,50 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             }
             UserContextHolder.clear();
         }
+    }
+
+    private ConfirmationDecision resolveConfirmation(
+            String content,
+            ChatConfirmationCommandDto command,
+            EnumSet<ConfirmationKind> pendingKinds) {
+        if (command == null) {
+            return pendingKinds.size() == 1 && pendingKinds.contains(ConfirmationKind.CHOICE)
+                    ? chatConfirmationDetector.detect(content, pendingKinds)
+                    : ConfirmationDecision.none();
+        }
+        ConfirmationKind requestedKind = switch (command.getKind()) {
+            case DESTRUCTIVE -> ConfirmationKind.DESTRUCTIVE;
+            case DEFAULT_TEMPLATE_RESET -> ConfirmationKind.DEFAULT_TEMPLATE_RESET;
+            case SCENE_REPLACEMENT -> ConfirmationKind.SCENE_REPLACEMENT;
+        };
+        if (!pendingKinds.contains(requestedKind)) {
+            throw new BadRequestException(
+                    "The selected protected action is no longer pending. Refresh the conversation before confirming.");
+        }
+        return command.getAction() == ChatConfirmationCommandDto.Action.CONFIRM
+                ? ConfirmationDecision.confirmed(requestedKind)
+                : ConfirmationDecision.cancelled(requestedKind);
+    }
+
+    private EnumSet<ConfirmationKind> pendingProtectedKinds(Long userId, String sessionId) {
+        EnumSet<ConfirmationKind> kinds = EnumSet.noneOf(ConfirmationKind.class);
+        destructiveActionGuard.pendingContext(userId, sessionId).ifPresent(pending ->
+                kinds.add("reset_default_templates".equals(pending.toolName())
+                        ? ConfirmationKind.DEFAULT_TEMPLATE_RESET
+                        : ConfirmationKind.DESTRUCTIVE));
+        if (scenarioDraftStore.pendingApplication(userId, sessionId).isPresent()) {
+            kinds.add(ConfirmationKind.SCENE_REPLACEMENT);
+        }
+        return kinds;
+    }
+
+    private static ChatConfirmationCommandDto.Kind toCommandKind(ConfirmationKind kind) {
+        return switch (kind) {
+            case DESTRUCTIVE -> ChatConfirmationCommandDto.Kind.DESTRUCTIVE;
+            case DEFAULT_TEMPLATE_RESET -> ChatConfirmationCommandDto.Kind.DEFAULT_TEMPLATE_RESET;
+            case SCENE_REPLACEMENT -> ChatConfirmationCommandDto.Kind.SCENE_REPLACEMENT;
+            case CHOICE -> throw new IllegalArgumentException("Non-destructive choices are not protected confirmations");
+        };
     }
 
     private boolean synchronizeExecutionStop(Long userId,

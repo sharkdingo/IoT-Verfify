@@ -180,6 +180,36 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleUserOperationBusy_shouldReturnStableKindAndScope() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleUserOperationBusyException(
+                        new UserOperationBusyException(
+                                "FORMAL", "all backend instances", 1, "Formal operation busy"));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("USER_FORMAL_OPERATION_BUSY", body.getData().get("reasonCode"));
+        assertEquals("FORMAL", body.getData().get("operationKind"));
+        assertEquals(1, body.getData().get("limit"));
+    }
+
+    @Test
+    void handleAuthRateLimit_shouldReturnRetryHeaderAndStructuredData() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleAuthRateLimitException(
+                        new AuthRateLimitException("login", "ACCOUNT", 17));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        assertEquals("17", response.getHeaders().getFirst("Retry-After"));
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals("AUTH_LOGIN_RATE_LIMIT_REACHED", body.getData().get("reasonCode"));
+        assertEquals("ACCOUNT", body.getData().get("scope"));
+        assertEquals(17L, body.getData().get("retryAfterSeconds"));
+    }
+
+    @Test
     void handleHttpMessageNotReadable_shouldReturn400() {
         HttpMessageNotReadableException ex = new HttpMessageNotReadableException("bad json");
 

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.dto.auth;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.AssertTrue;
 import lombok.Data;
 
 @Data
@@ -17,6 +18,11 @@ public class RegisterRequestDto {
     private String username;
 
     @NotBlank(message = "Password is required")
-    @Size(min = 6, max = 20, message = "Password must be 6-20 characters")
+    @Size(min = 10, max = 64, message = "Password must be 10-64 characters")
     private String password;
+
+    @AssertTrue(message = "Password must not exceed 72 UTF-8 bytes")
+    public boolean isPasswordWithinBcryptLimit() {
+        return password == null || password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 72;
+    }
 }

@@ -107,6 +107,7 @@ import {
   selectedAttackPoints
 } from '@/utils/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
+import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
 import {
   FUZZ_RESPONSE_INCOMPLETE_CODE,
@@ -402,6 +403,39 @@ const reportEnvironmentChanges = (changes: EnvironmentVariableChange[] | null | 
 
 const SCENE_FILE_SCHEMA = 'iot-verify.board-scene'
 const SCENE_FILE_VERSION = 4
+const MAX_SCENE_IMPORT_BYTES = REQUEST_LIMITS.sceneBytes
+
+const ensureBoardItemCapacity = (
+  resource: 'devices' | 'rules' | 'specifications',
+  currentCount: number,
+  additionalCount: number,
+  maximum: number
+) => {
+  if (currentCount + additionalCount <= maximum) return true
+  ElMessage.warning(t('app.boardCapacityReached', {
+    resource: t(`app.${resource}`),
+    limit: maximum
+  }))
+  return false
+}
+
+const ensureNestedItemCapacity = (resource: string, count: number, maximum: number) => {
+  if (count <= maximum) return true
+  ElMessage.warning(t('app.itemLimitReached', { resource, limit: maximum }))
+  return false
+}
+
+const ensureDeviceRuntimeCapacity = (runtime?: DeviceRuntimeConfig) =>
+  ensureNestedItemCapacity(
+    t('app.deviceVariables'), runtime?.variables?.length || 0, REQUEST_LIMITS.deviceVariables
+  ) && ensureNestedItemCapacity(
+    t('app.devicePrivacies'), runtime?.privacies?.length || 0, REQUEST_LIMITS.devicePrivacies
+  )
+
+const assertSceneCollectionLimit = (value: unknown[], field: string, maximum: number) => {
+  if (value.length <= maximum) return
+  throw new Error(t('app.sceneImportCollectionTooLarge', { field, limit: maximum }))
+}
 
 type BoardSceneModel = {
   schema: typeof SCENE_FILE_SCHEMA
@@ -631,6 +665,7 @@ const updateActionDockViewport = () => {
 const layoutHydrated = ref(false)
 let layoutSaveErrorShown = false
 let panelStateTouchedBeforeLayout = false
+let canvasStateTouchedBeforeLayout = false
 
 const boardShellStyle = computed(() => ({
   '--board-control-width': `${boardPanels.control.collapsed ? 64 : boardPanels.control.width}px`,
@@ -891,6 +926,12 @@ const asyncTaskQuotaMessage = (
   return detailed
     ? t('app.asyncTaskStoredLimitReached', { count, limit })
     : t('app.asyncTaskStoredLimitGeneric')
+}
+
+const formalOperationBusyMessage = (error: any): string | null => {
+  if (Number(error?.response?.status) !== 429) return null
+  if (error?.response?.data?.data?.reasonCode !== 'USER_FORMAL_OPERATION_BUSY') return null
+  return t('app.formalOperationBusy')
 }
 
 const extractRecommendationErrorMessage = (error: any, fallback: string): string => {
@@ -1254,6 +1295,7 @@ const setCanvasZoom = (value: number, options: { preserveCenter?: boolean } = {}
   const nextZoom = clampZoom(value)
   if (!Number.isFinite(nextZoom)) return
   if (Math.abs(nextZoom - canvasZoom.value) < 0.001) return
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
 
   const center = options.preserveCenter ? getVisibleCanvasCenterWorld() : null
   canvasZoom.value = nextZoom
@@ -1275,11 +1317,13 @@ const handleCanvasMapZoomInput = (event: Event) => {
     if (input) input.value = String(canvasZoomPercent.value)
     return
   }
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   setCanvasZoom(value / 100, { preserveCenter: true })
 }
 
 const onBoardWheel = (e: WheelEvent) => {
   if (e.ctrlKey) {
+    if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
     if (e.deltaY > 0) {
       adjustCanvasZoom(-ZOOM_STEP)
     } else {
@@ -1295,6 +1339,7 @@ const onGlobalKeydown = (e: KeyboardEvent) => {
   if (e.ctrlKey) {
     if (['=', '+', '-', '0'].includes(e.key)) {
       e.preventDefault()
+      if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
 
       if (e.key === '=' || e.key === '+') {
         adjustCanvasZoom(ZOOM_STEP)
@@ -1326,6 +1371,7 @@ const onCanvasPointerMove = (e: PointerEvent) => {
   if (!isPanning) return
   const dx = e.clientX - panStart.x
   const dy = e.clientY - panStart.y
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   canvasPan.value = {
     x: panOrigin.x + dx,
     y: panOrigin.y + dy
@@ -1361,7 +1407,15 @@ const createDeviceInstanceAt = async (
   if (!ensureBoardDataReady(['nodes', 'templates'])) {
     throw new Error(t('app.boardDataLoadFailed'))
   }
+  if (!ensureDeviceRuntimeCapacity(runtime)) {
+    throw new Error('Device runtime capacity reached')
+  }
   return enqueueBoardMutation(async () => {
+    if (!ensureBoardItemCapacity(
+      'devices', getVisibleDeviceNodes().length, 1, REQUEST_LIMITS.devices
+    )) {
+      throw new Error('Board device capacity reached')
+    }
     const baseName = customName?.trim() || tpl.manifest.Name
     const uniqueLabel = getUniqueLabel(baseName, getVisibleDeviceNodes())
     if (uniqueLabel !== baseName) {
@@ -1561,11 +1615,15 @@ const handleAddRule = async (request: {
       try {
         const payload = request.rule
         if (!ensureBoardDataReady(['nodes', 'templates', 'rules'])) return
+        if (!ensureBoardItemCapacity('rules', rules.value.length, 1, REQUEST_LIMITS.rules)) return
         const { sources, toId, toApi } = payload
         if (!sources || !sources.length || !toId || !toApi) {
           ElMessage.warning(t('app.fillAllRuleFields'))
           return
         }
+        if (!ensureNestedItemCapacity(
+          t('app.ruleConditions'), sources.length, REQUEST_LIMITS.ruleConditions
+        )) return
         if (!assertRulesHaveTriggers([payload])) return
         if (!resolveNodeRef(toId)) return
 
@@ -1769,7 +1827,11 @@ const applyRecommendation = async (rec: RuleRecommendation, index: number) => {
     ElMessage.error(extractApiErrorMessage(error, t('app.failedToApplyRule')))
   }
   try {
+    if (!ensureBoardItemCapacity('rules', rules.value.length, 1, REQUEST_LIMITS.rules)) return
     const newRule = materializeRuleRecommendation(rec, 'rule_' + Date.now())
+    if (!ensureNestedItemCapacity(
+      t('app.ruleConditions'), newRule.sources.length, REQUEST_LIMITS.ruleConditions
+    )) return
     attemptedRule = newRule
 
     if (!assertRulesHaveTriggers([newRule])) {
@@ -2310,13 +2372,13 @@ const buildBoardLayoutPayload = (): BoardLayoutDto => {
 const applyBoardLayout = (layout?: BoardLayoutDto | null) => {
   if (!layout) return
 
-  if (layout.canvasPan) {
+  if (layout.canvasPan && !canvasStateTouchedBeforeLayout) {
     canvasPan.value = {
       x: Number.isFinite(layout.canvasPan.x) ? layout.canvasPan.x : 0,
       y: Number.isFinite(layout.canvasPan.y) ? layout.canvasPan.y : 0
     }
   }
-  if (typeof layout.canvasZoom === 'number') {
+  if (typeof layout.canvasZoom === 'number' && !canvasStateTouchedBeforeLayout) {
     canvasZoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, layout.canvasZoom))
   }
 
@@ -2830,6 +2892,7 @@ const normalizeScenePrivacy = (value: unknown, field: string): 'public' | 'priva
 const normalizeSceneVariables = (value: unknown, field: string) => {
   if (value === undefined || value === null) return undefined
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field }))
+  assertSceneCollectionLimit(value, field, REQUEST_LIMITS.deviceVariables)
   const seenNames = new Set<string>()
   const variables = value
     .map((item, index) => {
@@ -2865,6 +2928,7 @@ const normalizeSceneVariables = (value: unknown, field: string) => {
 const normalizeScenePrivacies = (value: unknown, field: string) => {
   if (value === undefined || value === null) return undefined
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field }))
+  assertSceneCollectionLimit(value, field, REQUEST_LIMITS.devicePrivacies)
   const seenNames = new Set<string>()
   const privacies = value
     .map((item, index) => {
@@ -2996,6 +3060,7 @@ const assertSceneDeviceRuntimeShape = (
 const normalizeSceneEnvironmentVariables = (value: unknown): ModelEnvironmentVariable[] => {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field: 'environmentVariables' }))
+  assertSceneCollectionLimit(value, 'environmentVariables', REQUEST_LIMITS.environmentVariables)
   const seenNames = new Set<string>()
   return value.map((item, index) => {
     const row = item as any
@@ -3038,6 +3103,7 @@ const normalizeSceneRuleSourceType = (value: unknown, field = 'rules.sources.ite
 const normalizeSceneRules = (value: unknown): RuleForm[] => {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field: 'rules' }))
+  assertSceneCollectionLimit(value, 'rules', REQUEST_LIMITS.rules)
   return value.map((item, index) => {
     const row = item as any
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
@@ -3046,6 +3112,7 @@ const normalizeSceneRules = (value: unknown): RuleForm[] => {
     rejectSceneInternalField(row, 'id')
     assertSceneAllowedFields(row, ['name', 'sources', 'toId', 'toApi', 'contentDevice', 'content'], `rules[${index}]`)
     const sources = Array.isArray(row.sources) ? row.sources : []
+    assertSceneCollectionLimit(sources, `rules[${index}].sources`, REQUEST_LIMITS.ruleConditions)
     if (sources.length === 0) throw new Error(t('app.sceneImportMissingField', { field: `rules[${index}].sources` }))
     const name = normalizeSceneString(row.name, `rules[${index}].name`)
     const toId = normalizeSceneString(row.toId, `rules[${index}].toId`)
@@ -3128,6 +3195,7 @@ const normalizeSceneSpecConditions = (
 ): SpecCondition[] => {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field }))
+  assertSceneCollectionLimit(value, field, REQUEST_LIMITS.specificationConditions)
   return value.map((item, index) => {
     const row = item as any
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
@@ -3183,6 +3251,7 @@ const normalizeSceneSpecConditions = (
 const normalizeSceneSpecs = (value: unknown): Specification[] => {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field: 'specs' }))
+  assertSceneCollectionLimit(value, 'specs', REQUEST_LIMITS.specifications)
   return value.map((item, index) => {
     const row = item as any
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
@@ -3232,6 +3301,7 @@ const normalizeSceneSpecs = (value: unknown): Specification[] => {
 const normalizeSceneTemplates = (value: unknown): DeviceTemplate[] => {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) throw new Error(t('app.sceneImportArrayRequired', { field: 'templates' }))
+  assertSceneCollectionLimit(value, 'templates', REQUEST_LIMITS.templates)
   return value.map((item, index) => {
     const row = item as any
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
@@ -3624,6 +3694,7 @@ const normalizeSceneFile = (raw: unknown): BoardSceneModel => {
       throw new Error(t('app.sceneImportArrayRequired', { field }))
     }
   }
+  assertSceneCollectionLimit(payload.devices, 'devices', REQUEST_LIMITS.devices)
   const templates = normalizeSceneTemplates(payload.templates)
   const devices = payload.devices.map((device: unknown, index: number) => normalizeSceneDevice(device, index))
   assertUniqueSceneDeviceIds(devices)
@@ -3723,6 +3794,12 @@ const exportScene = () => {
     scene = buildSceneExport()
   } catch (error) {
     ElMessage.error(getSceneErrorMessage(error))
+    return
+  }
+  const serialized = JSON.stringify(scene, null, 2)
+  const exportBytes = new Blob([serialized], { type: 'application/json;charset=utf-8' }).size
+  if (exportBytes > MAX_SCENE_IMPORT_BYTES) {
+    ElMessage.error(t('app.sceneExportTooLarge', { size: '64 MiB' }))
     return
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -4104,6 +4181,10 @@ const handleSceneImportFile = async (event: Event) => {
   const file = input?.files?.[0]
   if (!file) return
   try {
+    if (file.size > MAX_SCENE_IMPORT_BYTES) {
+      ElMessage.error(t('app.importFileTooLarge', { size: '64 MiB' }))
+      return
+    }
     const text = await file.text()
     let raw: unknown
     try {
@@ -4217,6 +4298,7 @@ onMounted(async () => {
       }
     }
   }
+  const layoutChangedBeforeHydration = panelStateTouchedBeforeLayout || canvasStateTouchedBeforeLayout
   if (isNarrowViewport()) {
     applyViewportPanelConstraints()
     void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
@@ -4224,6 +4306,12 @@ onMounted(async () => {
     applyBoardLayout(layout)
   }
   layoutHydrated.value = true
+  panelStateTouchedBeforeLayout = false
+  canvasStateTouchedBeforeLayout = false
+  if (layoutChangedBeforeHydration && !isNarrowViewport()) {
+    persistedWideLayout = buildBoardLayoutPayload()
+    void saveBoardLayout({ silent: true })
+  }
 
   if (boardLifecycleDisposed) return
   window.addEventListener('keydown', onGlobalKeydown)
@@ -4492,6 +4580,7 @@ const canvasMapPointFromEvent = (event: PointerEvent, rect?: DOMRect | null) => 
 const panCanvasToWorldCenter = (worldX: number, worldY: number) => {
   const frame = getVisibleCanvasFrame()
   if (!frame) return
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   canvasPan.value = {
     x: frame.left + frame.width / 2 - worldX * canvasZoom.value,
     y: frame.top + frame.height / 2 - worldY * canvasZoom.value
@@ -4536,6 +4625,7 @@ const focusCreatedDeviceNode = async (node?: DeviceNode | null) => {
 
 const focusRuleOnCanvas = async (ruleId?: string | null) => {
   if (!ruleId) return
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   focusedRuleId.value = ruleId
   focusedNodeId.value = null
   focusedSpecId.value = null
@@ -4603,6 +4693,7 @@ const navigateCanvasMap = (event: PointerEvent, rect?: DOMRect | null) => {
   if (!point) return
   const world = canvasMapPointToWorld(point.x, point.y)
   if (!world) return
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   panCanvasToWorldCenter(world.x, world.y)
 }
 
@@ -4669,6 +4760,7 @@ const fitNodesToCanvas = (targetNodes: DeviceNode[] = nodes.value) => {
 }
 
 const fitToContent = () => {
+  if (!layoutHydrated.value) canvasStateTouchedBeforeLayout = true
   fitNodesToCanvas(getVisibleDeviceNodes())
 }
 
@@ -4686,11 +4778,16 @@ const handleCreateDevice = async (data: {
     data.complete(false)
     return
   }
+  if (!ensureBoardItemCapacity('devices', getVisibleDeviceNodes().length, 1, REQUEST_LIMITS.devices)) {
+    data.complete(false)
+    return
+  }
   return enqueueBoardMutation(async () => {
     let saved = false
     let requestedNode: DeviceNode | null = null
     try {
       const { template, customName, runtime } = data
+      if (!ensureDeviceRuntimeCapacity(runtime)) return
       const requestedLabel = customName.trim()
       const uniqueLabel = getUniqueLabel(requestedLabel, getVisibleDeviceNodes())
       if (uniqueLabel !== requestedLabel) {
@@ -4759,8 +4856,18 @@ const handleCreateDevices = async (data: {
       data.complete(false)
       return
     }
+    if (!ensureBoardItemCapacity(
+      'devices', getVisibleDeviceNodes().length, items.length, REQUEST_LIMITS.devices
+    )) {
+      data.complete(false)
+      return
+    }
     if (items.some(item => !item?.template?.manifest?.Name || !item.customName?.trim())) {
       ElMessage.warning(t('app.deviceBatchContainsInvalidItems'))
+      data.complete(false)
+      return
+    }
+    if (items.some(item => !ensureDeviceRuntimeCapacity(item.runtime))) {
       data.complete(false)
       return
     }
@@ -4859,7 +4966,15 @@ const handleAddSpec = async (data: {
     await enqueueBoardMutation(async () => {
       try {
         if (!ensureBoardDataReady(['nodes', 'templates', 'specs'])) return
+        if (!ensureBoardItemCapacity(
+          'specifications', specifications.value.length, 1, REQUEST_LIMITS.specifications
+        )) return
         const { templateId, aConditions, ifConditions, thenConditions } = data
+        if (![aConditions, ifConditions, thenConditions].every(conditions =>
+          ensureNestedItemCapacity(
+            t('app.specificationConditions'), conditions?.length || 0,
+            REQUEST_LIMITS.specificationConditions
+          ))) return
         const specTemplate = defaultSpecTemplates.find(t => t.id === templateId)
         const templateLabel = specTemplate?.label || templateId
 
@@ -6055,6 +6170,9 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
     return
   }
   const templateId = rawTemplateId as SpecTemplateId
+  if (!ensureBoardItemCapacity(
+    'specifications', specifications.value.length, 1, REQUEST_LIMITS.specifications
+  )) return
   const conditionIdPrefix = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   let aConditions: SpecCondition[]
   let ifConditions: SpecCondition[]
@@ -6066,6 +6184,11 @@ const applySpecRecommendation = async (recommendation: SpecificationRecommendati
       recommendation.ifConditions, 'if', index => `${conditionIdPrefix}_if_${index}`)
     thenConditions = materializeSpecificationRecommendationConditions(
       recommendation.thenConditions, 'then', index => `${conditionIdPrefix}_then_${index}`)
+    if (![aConditions, ifConditions, thenConditions].every(conditions =>
+      ensureNestedItemCapacity(
+        t('app.specificationConditions'), conditions.length,
+        REQUEST_LIMITS.specificationConditions
+      ))) return
   } catch (error) {
     const field = error instanceof RecommendationCandidateError ? error.field : t('app.unknownModelItem')
     ElMessage.warning(t('app.recommendationInvalidFieldNoChange', { field }))
@@ -8732,6 +8855,10 @@ const asyncSimulationTask = ref<{
   status: ''
 })
 const asyncSimulationActive = ref(false)
+const synchronousVerificationRunning = computed(() =>
+  isVerifying.value && !asyncVerificationActive.value)
+const synchronousSimulationRunning = computed(() =>
+  isSimulating.value && !asyncSimulationActive.value)
 const cancellingSimulationTask = ref(false)
 const simulationCancelRequested = ref(false)
 
@@ -9556,6 +9683,10 @@ const handleSimulationTimelineClose = (visible: boolean) => {
 
 const handleVerify = async (): Promise<boolean> => {
   if (isVerifying.value) return false
+  if (!verificationForm.isAsync && synchronousSimulationRunning.value) {
+    ElMessage.warning(t('app.formalOperationBusy'))
+    return false
+  }
   if (isSceneReplacementInProgress.value) {
     ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
     return false
@@ -9650,7 +9781,8 @@ const handleVerify = async (): Promise<boolean> => {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = asyncTaskQuotaMessage(error, 'verification')
+    const message = formalOperationBusyMessage(error)
+      || asyncTaskQuotaMessage(error, 'verification')
       || extractApiErrorMessage(error, t('app.verificationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       verificationError.value = null
@@ -9881,6 +10013,10 @@ const handleSimulate = async (simConfig: {
   saveToHistory?: boolean
 }): Promise<boolean> => {
   if (isSimulating.value) return false
+  if (!simConfig.isAsync && synchronousVerificationRunning.value) {
+    ElMessage.warning(t('app.formalOperationBusy'))
+    return false
+  }
   if (isSceneReplacementInProgress.value) {
     ElMessage.warning({ message: t('app.sceneReplacementInProgress'), type: 'warning' })
     return false
@@ -10067,7 +10203,8 @@ const handleSimulate = async (simConfig: {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = asyncTaskQuotaMessage(error, 'simulation')
+    const message = formalOperationBusyMessage(error)
+      || asyncTaskQuotaMessage(error, 'simulation')
       || extractApiErrorMessage(error, t('app.simulationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       simulationError.value = null
@@ -11967,7 +12104,7 @@ const closeResultDialog = () => {
         <button
           @click="runVerification"
           data-testid="run-verification"
-          :disabled="isVerifying || Boolean(verificationRunBlockedReason)"
+          :disabled="isVerifying || (!verificationForm.isAsync && synchronousSimulationRunning) || Boolean(verificationRunBlockedReason)"
           :title="verificationRunBlockedReason || undefined"
           class="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
@@ -13552,7 +13689,7 @@ const closeResultDialog = () => {
         <button
           @click="runSimulation"
           data-testid="run-simulation"
-          :disabled="isSimulating || traceAnimationState.visible || simulationAnimationState.visible || Boolean(simulationRunBlockedReason)"
+          :disabled="isSimulating || (!simulationForm.isAsync && synchronousVerificationRunning) || traceAnimationState.visible || simulationAnimationState.visible || Boolean(simulationRunBlockedReason)"
           :title="simulationRunBlockedReason || undefined"
           class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:hover:scale-100"
         >

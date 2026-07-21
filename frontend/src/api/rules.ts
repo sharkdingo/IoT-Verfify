@@ -86,8 +86,9 @@ export const recommendRules = async (
   }
 
   try {
-    const response = await api.get<any>('/board/rules/recommend', {
-      params: { maxRecommendations, category, language, userRequirement, requestId },
+    const response = await api.post<any>('/board/rules/recommend', {
+      maxRecommendations, category, language, userRequirement, requestId
+    }, {
       signal: signal || ownedController!.signal,
       timeout: 0
     })

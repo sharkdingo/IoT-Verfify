@@ -105,10 +105,15 @@ const strategyOptions = computed(() => strategyOrder.map(value => ({
   icon: strategyIcons[value]
 })))
 
-const fixResponseErrorMessage = (error: any, fallback: string) =>
-  error?.code === FIX_RESPONSE_INCOMPLETE_CODE
+const fixResponseErrorMessage = (error: any, fallback: string) => {
+  if (error?.response?.status === 429
+    && error?.response?.data?.data?.reasonCode === 'USER_FORMAL_OPERATION_BUSY') {
+    return t('app.formalOperationBusy')
+  }
+  return error?.code === FIX_RESPONSE_INCOMPLETE_CODE
     ? t('app.fixResponseIncomplete')
     : localizedErrorMessage(error, fallback, locale.value)
+}
 
 const fixApplyErrorMessage = (error: any) => {
   const raw = error?.response?.data?.message || error?.message

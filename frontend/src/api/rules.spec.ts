@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./http', () => ({
   default: {
-    get: vi.fn()
+    post: vi.fn()
   }
 }))
 
@@ -35,14 +35,14 @@ describe('rule recommendation request ownership', () => {
   it('does not let an older request clear the controller owned by a newer request', async () => {
     let resolveFirst!: (value: unknown) => void
     let resolveSecond!: (value: unknown) => void
-    vi.mocked(http.get)
+    vi.mocked(http.post)
       .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve }))
 
     const first = recommendRules()
-    const firstSignal = vi.mocked(http.get).mock.calls[0][1]?.signal as AbortSignal
+    const firstSignal = vi.mocked(http.post).mock.calls[0][2]?.signal as AbortSignal
     const second = recommendRules()
-    const secondSignal = vi.mocked(http.get).mock.calls[1][1]?.signal as AbortSignal
+    const secondSignal = vi.mocked(http.post).mock.calls[1][2]?.signal as AbortSignal
 
     expect(firstSignal.aborted).toBe(true)
     expect(secondSignal.aborted).toBe(false)

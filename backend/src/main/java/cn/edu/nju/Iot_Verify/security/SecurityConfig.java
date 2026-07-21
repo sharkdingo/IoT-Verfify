@@ -45,6 +45,7 @@ public class SecurityConfig {
                 Arrays.stream(allowedOrigins.split(",")).map(String::trim).toList());
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Retry-After"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 

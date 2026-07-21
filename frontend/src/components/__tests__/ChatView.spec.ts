@@ -11,6 +11,7 @@ const chatApi = vi.hoisted(() => ({
   getSessionActivity: vi.fn(),
   getSessionHistory: vi.fn(),
   getSessionList: vi.fn(),
+  getPendingConfirmation: vi.fn(),
   requestSessionStop: vi.fn(),
   sendStreamChat: vi.fn()
 }))
@@ -55,6 +56,7 @@ describe('ChatView', () => {
     chatApi.getSessionList.mockResolvedValue([])
     chatApi.getSessionActivity.mockResolvedValue({ sessionId: 'session-1', active: false })
     chatApi.getSessionHistory.mockResolvedValue([])
+    chatApi.getPendingConfirmation.mockResolvedValue({ sessionId: 'session-1', kinds: [] })
     chatApi.deleteSession.mockResolvedValue(undefined)
     chatApi.requestSessionStop.mockResolvedValue(undefined)
   })
@@ -87,6 +89,74 @@ describe('ChatView', () => {
     const item = wrapper.get('[data-testid="chat-session-session-1"]')
     expect(item.text()).toContain('新对话')
     expect(item.text()).not.toContain('New Chat')
+
+    wrapper.unmount()
+  })
+
+  it('submits protected approval as a structured command from the confirmation button', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getPendingConfirmation.mockResolvedValue({
+      sessionId: 'session-1',
+      kinds: ['DESTRUCTIVE']
+    })
+    chatApi.sendStreamChat.mockResolvedValue(undefined)
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('.protected-confirmation__button.is-confirm').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.sendStreamChat).toHaveBeenCalledTimes(1)
+    expect(chatApi.sendStreamChat.mock.calls[0][5]).toEqual({
+      action: 'CONFIRM',
+      kind: 'DESTRUCTIVE'
+    })
+    expect(chatApi.sendStreamChat.mock.calls[0][1]).toContain('确认按钮')
+
+    wrapper.unmount()
+  })
+
+  it('renders every independently pending protected action in the flow layout', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getPendingConfirmation.mockResolvedValue({
+      sessionId: 'session-1',
+      kinds: ['DESTRUCTIVE', 'SCENE_REPLACEMENT']
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="chat-protected-confirmation"]')).toHaveLength(2)
+    expect(wrapper.get('.input-floating-area').element.previousElementSibling)
+      .toBe(wrapper.get('.messages-viewport').element)
+
+    wrapper.unmount()
+  })
+
+  it('shows a retry state instead of treating a confirmation lookup failure as empty', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getPendingConfirmation
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce({ sessionId: 'session-1', kinds: ['DESTRUCTIVE'] })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-confirmation-load-error"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="chat-confirmation-load-error"] button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-confirmation-load-error"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="chat-protected-confirmation"]')).toHaveLength(1)
 
     wrapper.unmount()
   })
@@ -392,6 +462,58 @@ describe('ChatView', () => {
     expect(chatApi.sendStreamChat.mock.calls[0][4]).toEqual(expect.any(String))
     expect(wrapper.text()).toContain('当前问题')
     expect(wrapper.text()).not.toContain('旧回答')
+
+    wrapper.unmount()
+  })
+
+  it('removes an optimistic turn and restores the draft when the server rejects before streaming', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.sendStreamChat.mockRejectedValue(new Error('busy'))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('不要留下虚假消息')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.msg-row')).toHaveLength(0)
+    expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value)
+      .toBe('不要留下虚假消息')
+
+    wrapper.unmount()
+  })
+
+  it('loads older history through the server cursor without replacing recent messages', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockResolvedValueOnce({
+        messages: [
+          { id: 2, role: 'user', content: '较新的问题' },
+          { id: 3, role: 'assistant', content: '较新的回答' }
+        ],
+        nextBeforeId: 2,
+        hasMore: true
+      })
+      .mockResolvedValueOnce({
+        messages: [{ id: 1, role: 'user', content: '最早的问题' }],
+        nextBeforeId: null,
+        hasMore: false
+      })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-load-older"]').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.getSessionHistory).toHaveBeenLastCalledWith('session-1', { beforeId: 2, limit: 50 })
+    expect(wrapper.text().indexOf('最早的问题')).toBeLessThan(wrapper.text().indexOf('较新的问题'))
+    expect(wrapper.find('[data-testid="chat-load-older"]').exists()).toBe(false)
 
     wrapper.unmount()
   })

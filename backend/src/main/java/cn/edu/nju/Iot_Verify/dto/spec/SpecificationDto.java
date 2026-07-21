@@ -1,6 +1,7 @@
 // src/main/java/cn/edu/nju/Iot_Verify/dto/spec/SpecificationDto.java
 package cn.edu.nju.Iot_Verify.dto.spec;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -41,14 +42,17 @@ public class SpecificationDto {
     @Valid
     @NotNull(message = "A-conditions cannot be null")
     @JsonProperty("aConditions")
+    @Size(max = RequestLimits.MAX_SPEC_CONDITIONS, message = "At most 50 A-conditions are allowed")
     private List<@Valid @NotNull(message = "A-condition item cannot be null") SpecConditionDto> aConditions = new ArrayList<>();
 
     @Valid
     @NotNull(message = "If-conditions cannot be null")
+    @Size(max = RequestLimits.MAX_SPEC_CONDITIONS, message = "At most 50 If-conditions are allowed")
     private List<@Valid @NotNull(message = "If-condition item cannot be null") SpecConditionDto> ifConditions = new ArrayList<>();
 
     @Valid
     @NotNull(message = "Then-conditions cannot be null")
+    @Size(max = RequestLimits.MAX_SPEC_CONDITIONS, message = "At most 50 Then-conditions are allowed")
     private List<@Valid @NotNull(message = "Then-condition item cannot be null") SpecConditionDto> thenConditions = new ArrayList<>();
 
     /** User-readable preview rebuilt from structured conditions; never parsed for verification. */

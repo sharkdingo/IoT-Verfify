@@ -5,7 +5,7 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-16. Source: `dto/Result.java`,
+Verified against code on 2026-07-21. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
 
@@ -80,11 +80,12 @@ equals the HTTP status. Domain exceptions and their statuses:
 | 403 | `ForbiddenException` | Authenticated but not allowed (e.g. another user's resource) |
 | 404 | `ResourceNotFoundException` | Resource does not exist |
 | 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
+| 413 | `RequestBodySizeFilter` | JSON request body exceeds the configured byte limit and is rejected before DTO binding |
 | 422 | `ValidationException` | Semantic validation failure |
-| 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException`, `AsyncTaskQuotaExceededException` | Per-user active or stored background-task limit reached; response data includes a stable reason code, task kind, quota type, current count, and limit |
+| 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException`, `AsyncTaskQuotaExceededException`, `UserOperationBusyException`, `AuthRateLimitException` | Per-user active/stored background-task limit, per-user synchronous-operation limit, or public authentication attempt limit reached. Operation admission returns `USER_FORMAL_OPERATION_BUSY` or `USER_CHAT_OPERATION_BUSY`; authentication limits return an `AUTH_*_RATE_LIMIT_REACHED` reason, scope, retry delay, and `Retry-After` header. |
 | 500 | `InternalServerException`, `SmvGenerationException`, `PersistedDataIntegrityException` (and uncaught) | Server-side failure or unusable persisted semantic data |
 | 502 | `BadGatewayException` | The configured AI provider replied, but its output could not be parsed as the requested structured result |
-| 503 | `ServiceUnavailableException` | Thread pool saturated / task rejected |
+| 503 | `ServiceUnavailableException`, `FixApplyPreflightUnavailableException` | Service temporarily unavailable or an automatic-fix apply preflight could not confirm model equality; the specialized fix rejection includes `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE` and is guaranteed to occur before the board write |
 | 504 | `SimulationExecutionException` | Synchronous simulation timed out before producing a usable model trace |
 
 Additional mappings: missing required query parameters, bean-validation failures (`@Valid`,

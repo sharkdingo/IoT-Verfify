@@ -23,6 +23,22 @@ server:
     include-message: never
     include-binding-errors: never
 
+iot-verify:
+  http:
+    max-request-bytes: ${IOT_VERIFY_MAX_REQUEST_BYTES:4194304}
+    max-scene-request-bytes: ${IOT_VERIFY_MAX_SCENE_REQUEST_BYTES:67108864}
+  ai:
+    session-state-cleanup-ms: ${AI_SESSION_STATE_CLEANUP_MS:60000}
+
+security:
+  auth-rate-limit:
+    login-per-minute: ${AUTH_LOGIN_RATE_LIMIT_PER_MINUTE:10}
+    register-per-hour: ${AUTH_REGISTER_RATE_LIMIT_PER_HOUR:5}
+    source-login-per-minute: ${AUTH_SOURCE_LOGIN_RATE_LIMIT_PER_MINUTE:120}
+    source-register-per-hour: ${AUTH_SOURCE_REGISTER_RATE_LIMIT_PER_HOUR:60}
+  operation-admission:
+    lease-heartbeat-ms: ${OPERATION_ADMISSION_LEASE_HEARTBEAT_MS:30000}
+
 llm:
   provider: ${LLM_PROVIDER:openai}
   api-key: ${IOT_VERIFY_OPENAI_API_KEY:your_api_key_here}
@@ -38,10 +54,6 @@ chat:
     max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
     lease-ttl-ms: ${CHAT_EXECUTION_LEASE_TTL_MS:30000}
     lease-heartbeat-ms: ${CHAT_EXECUTION_LEASE_HEARTBEAT_MS:10000}
-
-iot-verify:
-  ai:
-    session-state-cleanup-ms: ${AI_SESSION_STATE_CLEANUP_MS:60000}
 
 jwt:
   secret: ${JWT_SECRET:iot-verify-secret-key-must-be-at-least-256-bits-long-for-hs256}
@@ -69,6 +81,10 @@ nusmv:
   timeout-ms: ${NUSMV_TIMEOUT_MS:120000}
   max-concurrent: ${NUSMV_MAX_CONCURRENT:6}
   acquire-permit-timeout-ms: ${NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS:10000}
+  max-output-bytes: ${NUSMV_MAX_OUTPUT_BYTES:4194304}
+  temp-retention-hours: ${NUSMV_TEMP_RETENTION_HOURS:24}
+  max-retained-temp-directories: ${NUSMV_MAX_RETAINED_TEMP_DIRECTORIES:200}
+  temp-cleanup-ms: ${NUSMV_TEMP_CLEANUP_MS:300000}
 
 fix:
   max-attempts: ${FIX_MAX_ATTEMPTS:20}

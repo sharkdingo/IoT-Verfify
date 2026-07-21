@@ -1641,8 +1641,9 @@ export default {
         signal?: AbortSignal
     ): Promise<RecommendationResponse<SpecificationRecommendation>> => {
         return validateStandaloneRecommendationResponse<RecommendationResponse<SpecificationRecommendation>>(
-            unpack<unknown>(await api.get('/board/specs/recommend', {
-                params: { maxRecommendations, category, language, userRequirement, requestId },
+            unpack<unknown>(await api.post('/board/specs/recommend', {
+                maxRecommendations, category, language, userRequirement, requestId
+            }, {
                 signal,
                 ...SERVER_BOUNDED_REQUEST
             })),

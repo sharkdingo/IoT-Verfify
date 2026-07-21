@@ -1,6 +1,7 @@
 // src/main/java/cn/edu/nju/Iot_Verify/dto/board/BoardBatchDto.java
 package cn.edu.nju.Iot_Verify.dto.board;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -63,24 +65,29 @@ public class BoardBatchDto {
 
     @Valid
     @NotNull(message = "Complete scene nodes collection is required")
+    @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 nodes are allowed in a scene")
     private List<@Valid @NotNull(message = "Node item cannot be null") DeviceNodeDto> nodes;
 
     @Valid
     @NotNull(message = "Complete scene environmentVariables collection is required")
+    @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES, message = "At most 200 environment variables are allowed in a scene")
     private List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables;
 
     @Valid
     @NotNull(message = "Complete scene rules collection is required")
+    @Size(max = RequestLimits.MAX_RULES, message = "At most 100 rules are allowed in a scene")
     private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules;
 
     @Valid
     @NotNull(message = "Complete scene specs collection is required")
+    @Size(max = RequestLimits.MAX_SPECS, message = "At most 100 specifications are allowed in a scene")
     private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
 
     /** Request-only exact scene template dependency set; empty only for a scene with no devices. */
     @Valid
     @NotNull(message = "Complete scene templateSnapshots collection is required")
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @Size(max = RequestLimits.MAX_TEMPLATES, message = "At most 100 template snapshots are allowed in a scene")
     private List<@Valid @NotNull(message = "Template snapshot item cannot be null") DeviceTemplateDto> templateSnapshots;
 
     /** Request-only opaque token from the latest server replacement preview. */

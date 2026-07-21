@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,6 +17,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PrivacyStateDto {
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Privacy target name must be at most 200 characters")
     private String name;
+    @Size(max = 20, message = "Privacy label must be at most 20 characters")
     private String privacy;
 }

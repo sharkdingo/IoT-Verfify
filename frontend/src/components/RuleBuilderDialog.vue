@@ -8,6 +8,7 @@ import type { DeviceManifest, DeviceTemplate } from '../types/device'
 import type { RuleForm, RuleSourceItemType } from '../types/rule'
 import boardApi from '../api/board'
 import { duplicateRuleReasonKey, ruleSimilarityReasonKey } from '@/utils/rule'
+import { REQUEST_LIMITS } from '@/constants/requestLimits'
 
 const { t } = useI18n()
 
@@ -432,6 +433,13 @@ const rulePreview = computed(() => {
 const addSource = () => {
   // 添加源设备及其条件
   if (canAddSource.value && currentSource.itemType) {
+    if (ruleData.sources.length >= REQUEST_LIMITS.ruleConditions) {
+      ElMessage.warning(t('app.itemLimitReached', {
+        resource: t('app.ruleConditions'),
+        limit: REQUEST_LIMITS.ruleConditions
+      }))
+      return
+    }
     ruleData.sources.push({
       fromId: currentSource.fromId,
       fromApi: currentSource.itemType === 'state' ? 'state' : currentSource.fromApi,

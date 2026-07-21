@@ -7,7 +7,7 @@ import {
   MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined,
   UserOutlined, StopOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined,
-  CopyOutlined, ThunderboltOutlined, SafetyCertificateOutlined,
+  CopyOutlined, ThunderboltOutlined, SafetyCertificateOutlined, CheckOutlined,
   CodeOutlined, ExperimentOutlined, DownOutlined
 } from '@ant-design/icons-vue';
 
@@ -15,12 +15,23 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 
-import type { ChatLogoutPreparation, ChatMessage, ChatSession, StreamCommand, StreamProgress } from '@/types/chat';
+import type {
+  ChatConfirmationAction,
+  ChatConfirmationCommand,
+  ChatConfirmationKind,
+  ChatLogoutPreparation,
+  ChatMessage,
+  ChatHistoryPage,
+  ChatSession,
+  StreamCommand,
+  StreamProgress
+} from '@/types/chat';
 import {
   ChatStreamError,
   createSession,
   deleteSession,
   getSessionActivity,
+  getPendingConfirmation,
   getSessionHistory,
   getSessionList,
   requestSessionStop,
@@ -28,6 +39,7 @@ import {
 } from '@/api/chat';
 import { useChatStore } from '@/stores/chat';
 import { localizedTextOrFallback } from '@/utils/userMessage';
+import { REQUEST_LIMITS } from '@/constants/requestLimits';
 
 type BoardChatContext = {
   deviceCount?: number;
@@ -206,6 +218,8 @@ const isLoadingSessions = ref(false);
 const sessionListLoadFailed = ref(false);
 const currentSessionId = ref<string>('');
 const messages = ref<ChatMessage[]>([]);
+const pendingConfirmationKinds = ref<ChatConfirmationKind[]>([]);
+const pendingConfirmationLoadFailed = ref(false);
 const inputValue = ref('');
 const isStreaming = ref(false);
 const isSettlingStream = ref(false);
@@ -215,11 +229,15 @@ const streamProgress = ref<StreamProgress | null>(null);
 const streamProgressEvents = ref<StreamProgress[]>([]);
 const streamElapsedSeconds = ref(0);
 let streamElapsedTimer: ReturnType<typeof setInterval> | null = null;
+let confirmationRequestEpoch = 0;
 const reconciliationRequired = ref(false);
 const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
 const isLoadingHistory = ref(false);
+const isLoadingOlderHistory = ref(false);
+const historyHasMore = ref(false);
+const historyNextBeforeId = ref<number | null>(null);
 const isAssistantBusy = computed(() =>
     isStreaming.value || isSettlingStream.value || isMonitoringRemoteExecution.value
     || reconciliationRequired.value);
@@ -681,6 +699,7 @@ const formatStreamError = (error: unknown) => {
       case 'HTTP_ERROR':
         if (error.status === 403) return t('app.chat.authorizationFailed');
         if (error.status === 401) return t('app.chat.authenticationExpired');
+        if (error.status === 429) return t('app.chat.assistantOperationBusy');
         return t('app.chat.httpRequestFailed', { status: error.status ?? '?' });
       case 'SERVER_FRAME':
         return localizedTextOrFallback(error.message, t('app.chat.serverStreamError'), locale.value);
@@ -815,6 +834,28 @@ const retryAuthoritativeReconciliation = async () => {
 const updateSessionActivity = (sessionId: string, active: boolean) => {
   const session = sessions.value.find(item => item.id === sessionId);
   if (session) session.active = active;
+};
+
+const refreshPendingConfirmation = async (sessionId = currentSessionId.value, signal?: AbortSignal) => {
+  const requestEpoch = ++confirmationRequestEpoch;
+  if (!sessionId) {
+    pendingConfirmationKinds.value = [];
+    pendingConfirmationLoadFailed.value = false;
+    return;
+  }
+  try {
+    const pending = await getPendingConfirmation(sessionId, signal);
+    if (requestEpoch === confirmationRequestEpoch && currentSessionId.value === sessionId) {
+      pendingConfirmationKinds.value = pending.kinds;
+      pendingConfirmationLoadFailed.value = false;
+    }
+  } catch (error: any) {
+    if (signal?.aborted || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return;
+    if (requestEpoch === confirmationRequestEpoch && currentSessionId.value === sessionId) {
+      pendingConfirmationLoadFailed.value = true;
+    }
+    console.warn('[Chat] Could not refresh pending confirmation state:', error);
+  }
 };
 
 const waitForActivityPoll = (signal: AbortSignal) => new Promise<void>(resolve => {
@@ -966,6 +1007,10 @@ const handleDelete = async (sessionId: string) => {
       isLoadingHistory.value = false;
       currentSessionId.value = '';
       messages.value = [];
+      historyHasMore.value = false;
+      historyNextBeforeId.value = null;
+      pendingConfirmationKinds.value = [];
+      pendingConfirmationLoadFailed.value = false;
     }
     ElMessage.success(t('app.chat.sessionDeleted'));
   } catch (error: any) {
@@ -980,7 +1025,10 @@ const handleDelete = async (sessionId: string) => {
 
 const handleSelectSession = async (sessionId: string, knownActive = false) => {
   if (currentSessionId.value === sessionId) {
-    if (!isAssistantBusy.value) monitorSessionActivity(sessionId, knownActive);
+    if (!isAssistantBusy.value) {
+      monitorSessionActivity(sessionId, knownActive);
+      void refreshPendingConfirmation(sessionId);
+    }
     return;
   }
 
@@ -992,6 +1040,10 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
 
   currentSessionId.value = sessionId;
   messages.value = [];
+  historyHasMore.value = false;
+  historyNextBeforeId.value = null;
+  pendingConfirmationKinds.value = [];
+  pendingConfirmationLoadFailed.value = false;
   isLoadingHistory.value = true;
   const requestEpoch = ++historyRequestEpoch;
   const controller = new AbortController();
@@ -1002,13 +1054,10 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
   if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
 
   try {
-    const messagesData = await getSessionHistory(sessionId, controller.signal);
+    const historyPage = await getSessionHistory(sessionId, controller.signal);
     if (requestEpoch !== historyRequestEpoch || currentSessionId.value !== sessionId) return;
-    // 统一清洗历史消息中的脏数据
-    messages.value = messagesData.map(m => ({
-      ...m,
-      content: m.content ? m.content.replace('CallEnd|>', '') : ''
-    }));
+    applyHistoryPage(historyPage, false);
+    await refreshPendingConfirmation(sessionId, controller.signal);
     scrollToBottom(true);
     if (!knownActive) monitorSessionActivity(sessionId);
   } catch (e: any) {
@@ -1021,6 +1070,51 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
       isLoadingHistory.value = false;
       if (historyAbortController.value === controller) historyAbortController.value = null;
     }
+  }
+};
+
+const normalizeHistoryPage = (value: ChatHistoryPage | ChatMessage[]): ChatHistoryPage => {
+  if (Array.isArray(value)) return { messages: value, nextBeforeId: null, hasMore: false };
+  return value && Array.isArray(value.messages)
+      ? value
+      : { messages: [], nextBeforeId: null, hasMore: false };
+};
+
+const applyHistoryPage = (value: ChatHistoryPage | ChatMessage[], prepend: boolean) => {
+  const page = normalizeHistoryPage(value);
+  const cleaned = page.messages.map(m => ({
+      ...m,
+      content: m.content ? m.content.replace('CallEnd|>', '') : ''
+    }));
+  if (prepend) {
+    const existingIds = new Set(messages.value.map(message => message.id).filter(id => id != null));
+    messages.value = [...cleaned.filter(message => message.id == null || !existingIds.has(message.id)), ...messages.value];
+  } else {
+    messages.value = cleaned;
+  }
+  historyHasMore.value = page.hasMore && page.nextBeforeId != null;
+  historyNextBeforeId.value = page.nextBeforeId;
+};
+
+const loadOlderHistory = async () => {
+  const sessionId = currentSessionId.value;
+  const beforeId = historyNextBeforeId.value;
+  if (!sessionId || beforeId == null || !historyHasMore.value || isLoadingOlderHistory.value) return;
+  isLoadingOlderHistory.value = true;
+  const viewport = scrollRef.value;
+  const previousHeight = viewport?.scrollHeight ?? 0;
+  const previousTop = viewport?.scrollTop ?? 0;
+  try {
+    const page = await getSessionHistory(sessionId, { beforeId, limit: 50 });
+    if (currentSessionId.value !== sessionId) return;
+    applyHistoryPage(page, true);
+    await nextTick();
+    if (viewport) viewport.scrollTop = viewport.scrollHeight - previousHeight + previousTop;
+  } catch (error) {
+    console.warn('[Chat] Failed to load older history:', error);
+    ElMessage.warning(t('app.chat.historyLoadOlderFailed'));
+  } finally {
+    isLoadingOlderHistory.value = false;
   }
 };
 
@@ -1150,17 +1244,15 @@ const settleActiveRequest = (
 
       try {
         if (currentSessionId.value === sessionId) {
-          const history = await getSessionHistory(sessionId);
-          if (hasTerminalAssistantRecord(history, turnId)) {
-            messages.value = history.map(message => ({
-              ...message,
-              content: message.content ? message.content.replace('CallEnd|>', '') : ''
-            }));
+          const history = normalizeHistoryPage(await getSessionHistory(sessionId));
+          if (hasTerminalAssistantRecord(history.messages, turnId)) {
+            applyHistoryPage(history, false);
           } else {
             ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
           }
         }
         await initSessions(false);
+        await refreshPendingConfirmation(sessionId);
       } catch (error) {
         console.error('[Chat] Failed to reload chat history after settlement:', error);
         ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
@@ -1224,18 +1316,23 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleDocumentVisibilityChange);
 });
 
-const handleSend = async () => {
+const submitChatTurn = async (content: string, confirmation?: ChatConfirmationCommand) => {
   if (props.interactionLocked) {
     ElMessage.warning(t('app.chat.boardInteractionLocked'));
     return;
   }
-  const content = inputValue.value.trim();
   if (!content || isLoading.value) return;
+  if (content.length > REQUEST_LIMITS.chatContentCharacters) {
+    ElMessage.warning(t('app.chat.contentTooLong', {
+      limit: REQUEST_LIMITS.chatContentCharacters.toLocaleString()
+    }));
+    return;
+  }
   const turnId = typeof globalThis.crypto?.randomUUID === 'function'
       ? globalThis.crypto.randomUUID()
       : `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-  inputValue.value = '';
+  if (!confirmation) inputValue.value = '';
   messages.value.push({ role: 'user', content, turnId });
   scrollToBottom(true);
 
@@ -1247,6 +1344,7 @@ const handleSend = async () => {
   // 用于跟踪是否收到了任何内容
   let hasReceivedContent = false;
   let streamErrorHandled = false;
+  let requestAccepted = false;
   let aiMsgIndex = -1;
   streamProgressEvents.value = [];
   appendStreamProgress({ stage: 'CONTEXT_READY' });
@@ -1320,6 +1418,11 @@ const handleSend = async () => {
             msg.content += cleanChunk;
             scrollToBottom(false);
           },
+          onAccepted: () => {
+            if (requestEpoch !== streamRequestEpoch) return;
+            requestAccepted = true;
+            if (confirmation) pendingConfirmationKinds.value = [];
+          },
           onCommand: (cmd: StreamCommand) => {
             if (requestEpoch !== streamRequestEpoch) return;
             queueCommandExecution(cmd);
@@ -1343,13 +1446,18 @@ const handleSend = async () => {
           }
         },
         controller,
-        turnId
+        turnId,
+        confirmation
     );
+    requestAccepted = true;
   } catch (error) {
     if (requestEpoch !== streamRequestEpoch) return;
     console.error('[Chat] 发送消息失败:', error);
-    // 只有在没有收到内容时才显示错误提示
-    if (!streamErrorHandled && !hasReceivedContent) {
+    if (!requestAccepted) {
+      messages.value = messages.value.filter(message => message.turnId !== turnId);
+      if (!confirmation && !inputValue.value) inputValue.value = content;
+      ElMessage.error(t('app.chat.sendFailedWithReason', { reason: formatStreamError(error) }));
+    } else if (!streamErrorHandled && !hasReceivedContent) {
       ElMessage.error(t('app.chat.sendFailedWithReason', {
         reason: error instanceof Error ? error.message : String(error)
       }));
@@ -1375,26 +1483,29 @@ const handleSend = async () => {
         isSettlingStream.value = true;
         let retainActiveSession = false;
         try {
-          const idle = await waitForSessionIdle(completedSessionId);
-          if (!idle) {
-            retainActiveSession = true;
-            reconciliationRequired.value = true;
-            ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
-          } else if (currentSessionId.value === completedSessionId) {
-            try {
-              const history = await getSessionHistory(completedSessionId);
-              if (hasTerminalAssistantRecord(history, completedTurnId)) {
-                messages.value = history.map(message => ({
-                  ...message,
-                  content: message.content ? message.content.replace('CallEnd|>', '') : ''
-                }));
-              } else {
-                ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+          if (!requestAccepted) {
+            await initSessions();
+            await refreshPendingConfirmation(completedSessionId);
+          } else {
+            const idle = await waitForSessionIdle(completedSessionId);
+            if (!idle) {
+              retainActiveSession = true;
+              reconciliationRequired.value = true;
+              ElMessage.warning(t('app.chat.sessionStillRunningRetry'));
+            } else if (currentSessionId.value === completedSessionId) {
+              try {
+                const history = normalizeHistoryPage(await getSessionHistory(completedSessionId));
+                if (hasTerminalAssistantRecord(history.messages, completedTurnId)) {
+                  applyHistoryPage(history, false);
+                } else {
+                  ElMessage.warning(t('app.chat.historyTerminalRecordMissing'));
+                }
+                await initSessions();
+                await refreshPendingConfirmation(completedSessionId);
+              } catch (error) {
+                console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
+                ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
               }
-              await initSessions();
-            } catch (error) {
-              console.error('[Chat] Failed to reload authoritative history after stream completion:', error);
-              ElMessage.warning(t('app.chat.historyReloadAfterSettleFailed'));
             }
           }
         } catch (error) {
@@ -1414,6 +1525,29 @@ const handleSend = async () => {
       }
     }
   }
+};
+
+const handleSend = async () => {
+  await submitChatTurn(inputValue.value.trim());
+};
+
+const confirmationKindLabel = (kind: ChatConfirmationKind) =>
+    t(`app.chat.confirmationKinds.${kind}`);
+
+const handleProtectedConfirmation = async (
+    kind: ChatConfirmationKind,
+    action: ChatConfirmationAction
+) => {
+  if (isLoading.value || props.interactionLocked) return;
+  const content = action === 'CONFIRM'
+      ? t('app.chat.protectedConfirmationAccepted', { action: confirmationKindLabel(kind) })
+      : t('app.chat.protectedConfirmationCancelled', { action: confirmationKindLabel(kind) });
+  await submitChatTurn(content, { kind, action });
+};
+
+const retryPendingConfirmation = () => {
+  if (!currentSessionId.value || isLoading.value) return;
+  void refreshPendingConfirmation(currentSessionId.value);
 };
 
 const handleTaskClick = (text: string) => {
@@ -1584,7 +1718,25 @@ const scrollToBottom = (force = false) => {
             @pointerdown="startPanelResize"
           />
 
-          <div class="messages-viewport" ref="scrollRef">
+          <div
+            class="messages-viewport"
+            ref="scrollRef"
+          >
+            <div
+              v-if="messages.length > 0 && historyHasMore && !isLoadingHistory"
+              class="history-pagination"
+            >
+              <button
+                type="button"
+                class="history-pagination__button"
+                data-testid="chat-load-older"
+                :disabled="isLoadingOlderHistory"
+                @click="loadOlderHistory"
+              >
+                {{ isLoadingOlderHistory ? t('app.chat.loadingOlderHistory') : t('app.chat.loadOlderHistory') }}
+              </button>
+            </div>
+
             <div v-if="messages.length === 0" class="welcome-screen">
               <div class="brand-logo">
                 <div class="logo-inner">
@@ -1809,6 +1961,59 @@ const scrollToBottom = (force = false) => {
           </div>
 
           <div class="input-floating-area">
+            <div
+              v-if="pendingConfirmationLoadFailed"
+              class="protected-confirmation is-load-error"
+              data-testid="chat-confirmation-load-error"
+            >
+              <div class="protected-confirmation__copy">
+                <SafetyCertificateOutlined aria-hidden="true" />
+                <span>{{ t('app.chat.confirmationLoadFailed') }}</span>
+              </div>
+              <div class="protected-confirmation__actions">
+                <button
+                  type="button"
+                  class="protected-confirmation__button"
+                  :disabled="interactionLocked || isLoading"
+                  @click="retryPendingConfirmation"
+                >
+                  {{ t('app.retry') }}
+                </button>
+              </div>
+            </div>
+            <div
+              v-for="kind in pendingConfirmationKinds"
+              :key="kind"
+              class="protected-confirmation"
+              data-testid="chat-protected-confirmation"
+            >
+              <div class="protected-confirmation__copy">
+                <SafetyCertificateOutlined aria-hidden="true" />
+                <span>{{ t('app.chat.protectedConfirmationPrompt', {
+                  action: confirmationKindLabel(kind)
+                }) }}</span>
+              </div>
+              <div class="protected-confirmation__actions">
+                <button
+                  type="button"
+                  class="protected-confirmation__button is-cancel"
+                  :disabled="interactionLocked || isLoading"
+                  @click="handleProtectedConfirmation(kind, 'CANCEL')"
+                >
+                  <CloseOutlined />
+                  {{ t('app.cancel') }}
+                </button>
+                <button
+                  type="button"
+                  class="protected-confirmation__button is-confirm"
+                  :disabled="interactionLocked || isLoading"
+                  @click="handleProtectedConfirmation(kind, 'CONFIRM')"
+                >
+                  <CheckOutlined />
+                  {{ t('app.confirm') }}
+                </button>
+              </div>
+            </div>
             <div class="input-card">
               <textarea
                 v-model="inputValue"
@@ -1816,6 +2021,7 @@ const scrollToBottom = (force = false) => {
                 :placeholder="t('app.chat.inputPlaceholder')"
                 :disabled="interactionLocked || isLoading"
                 rows="2"
+                :maxlength="REQUEST_LIMITS.chatContentCharacters"
                 @keydown.ctrl.enter="handleSend"
                 class="modern-textarea"
               ></textarea>
@@ -2169,6 +2375,7 @@ const scrollToBottom = (force = false) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
   padding: 0.7rem 0.85rem;
   border-bottom: 1px solid var(--chat-border);
@@ -2263,7 +2470,7 @@ const scrollToBottom = (force = false) => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.9rem 1rem 8rem;
+  padding: 0.9rem 1rem 1rem;
   scroll-behavior: smooth;
 }
 
@@ -2404,6 +2611,28 @@ const scrollToBottom = (force = false) => {
   display: flex;
   gap: 0.65rem;
   margin: 0 auto 1rem;
+}
+
+.history-pagination {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto 0.8rem;
+}
+
+.history-pagination__button {
+  border: 0;
+  background: transparent;
+  color: var(--chat-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.35rem 0.55rem;
+}
+
+.history-pagination__button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .ai-row {
@@ -2845,12 +3074,76 @@ const scrollToBottom = (force = false) => {
 }
 
 .input-floating-area {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
   padding: 0.85rem 1rem 1rem;
   background: linear-gradient(to top, var(--chat-bg) 86%, transparent);
+}
+
+.protected-confirmation {
+  max-width: 48rem;
+  margin: 0 auto 0.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  border: 1px solid color-mix(in srgb, #dc2626 45%, var(--chat-border));
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, #fff1f2 88%, var(--chat-input-bg));
+  color: color-mix(in srgb, #991b1b 84%, var(--chat-text));
+  padding: 0.65rem 0.75rem;
+  box-shadow: 0 10px 28px rgba(127, 29, 29, 0.14);
+}
+
+.protected-confirmation.is-load-error {
+  border-color: color-mix(in srgb, #d97706 48%, var(--chat-border));
+  background: color-mix(in srgb, #fffbeb 88%, var(--chat-input-bg));
+  color: color-mix(in srgb, #92400e 84%, var(--chat-text));
+}
+
+.protected-confirmation__copy,
+.protected-confirmation__actions,
+.protected-confirmation__button {
+  display: flex;
+  align-items: center;
+}
+
+.protected-confirmation__copy {
+  min-width: 0;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.protected-confirmation__actions {
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+
+.protected-confirmation__button {
+  gap: 0.3rem;
+  border: 1px solid var(--chat-border);
+  border-radius: 0.45rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--chat-input-bg);
+  color: var(--chat-text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.protected-confirmation__button.is-confirm {
+  border-color: #b91c1c;
+  background: #b91c1c;
+  color: #fff;
+}
+
+.protected-confirmation__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .input-card {
@@ -3064,7 +3357,7 @@ const scrollToBottom = (force = false) => {
   }
 
   .messages-viewport {
-    padding: 0.75rem 0.75rem 7.25rem;
+    padding: 0.75rem;
   }
 
   .welcome-screen {
@@ -3148,7 +3441,7 @@ const scrollToBottom = (force = false) => {
   }
 
   .messages-viewport {
-    padding-bottom: 6.9rem;
+    padding-bottom: 0.75rem;
   }
 
   .brand-logo {

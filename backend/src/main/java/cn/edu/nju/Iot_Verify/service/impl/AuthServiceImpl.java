@@ -23,6 +23,7 @@ import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.AiSessionStateRepository;
 import cn.edu.nju.Iot_Verify.service.AuthService;
 import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
@@ -76,6 +77,7 @@ public class AuthServiceImpl implements AuthService {
     private final SpecificationRepository specificationRepository;
     private final TraceRepository traceRepository;
     private final VerificationTaskRepository verificationTaskRepository;
+    private final AiSessionStateRepository aiSessionStateRepository;
 
     @Override
     @Transactional
@@ -170,6 +172,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private void deleteUserOwnedData(Long userId) {
+        aiSessionStateRepository.deleteUser(userId);
         List<String> sessionIds = chatSessionRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
                 .map(session -> session.getId())
                 .filter(id -> id != null && !id.isBlank())

@@ -15,7 +15,7 @@ envelope (except the SSE endpoint `/api/chat/completions`) and authenticated end
 require `Authorization: Bearer <token>` — the authoritative definition of both lives in
 [overview.md](overview.md).
 
-Verified against code on 2026-07-18.
+Verified against code on 2026-07-22.
 
 ---
 
@@ -60,11 +60,11 @@ Verified against code on 2026-07-18.
 | POST | `/api/board/templates/{id}/delete` | Confirm deletion against the unchanged preview | `docs/api/board.md` |
 | GET | `/api/board/templates/defaults/reset-preview` | Preview exact default-type reset effects | `docs/api/board.md` |
 | POST | `/api/board/templates/defaults/reset` | Confirm and atomically apply the previewed default-type reset | `docs/api/board.md` |
-| GET | `/api/board/rules/recommend` | AI rule recommendations | `docs/api/board.md` |
+| POST | `/api/board/rules/recommend` | AI rule recommendations | `docs/api/board.md` |
 | POST | `/api/board/devices/recommend` | AI device recommendations | `docs/api/board.md` |
 | POST | `/api/board/rules/check-duplicate` | Deterministic duplicate-rule check used before saving a rule | `docs/api/board.md` |
 | POST | `/api/board/rules/check-similarity` | Explicit AI rule-similarity check available from `RuleBuilderDialog` | `docs/api/board.md` |
-| GET | `/api/board/specs/recommend` | AI specification recommendations | `docs/api/board.md` |
+| POST | `/api/board/specs/recommend` | AI specification recommendations | `docs/api/board.md` |
 | POST | `/api/board/scenario/recommend` | AI importable scene-draft recommendation | `docs/api/board.md` |
 | GET | `/api/board/recommendations/{requestId}` | Read the server-observed stage of an active or just-finished standalone recommendation | `docs/api/board.md` |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancel an in-flight standalone recommendation | `docs/api/board.md` |
@@ -135,8 +135,9 @@ Verified against code on 2026-07-18.
 | :--- | :--- | :--- | :--- |
 | GET | `/api/chat/sessions` | List chat sessions | `docs/api/chat-sse.md` |
 | POST | `/api/chat/sessions` | Create session | `docs/api/chat-sse.md` |
-| GET | `/api/chat/sessions/{sessionId}/messages` | Message history | `docs/api/chat-sse.md` |
+| GET | `/api/chat/sessions/{sessionId}/messages` | Cursor-paged message history (`beforeId`, `limit`) | `docs/api/chat-sse.md` |
 | GET | `/api/chat/sessions/{sessionId}/activity` | Check whether server work is still active for the session | `docs/api/chat-sse.md` |
+| GET | `/api/chat/sessions/{sessionId}/confirmation` | Read pending protected-action kinds for explicit UI confirmation | `docs/api/chat-sse.md` |
 | POST | `/api/chat/sessions/{sessionId}/stop` | Request an explicit stop for the active response; idempotent when idle | `docs/api/chat-sse.md` |
 | POST | `/api/chat/completions` | Send message — **SSE stream** (not `Result<T>`) | `docs/api/chat-sse.md` |
 | DELETE | `/api/chat/sessions/{sessionId}` | Delete session | `docs/api/chat-sse.md` |

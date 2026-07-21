@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-16. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-21. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -19,7 +19,7 @@ Public. Creates a user.
 | :--- | :--- | :--- |
 | `phone` | `String` | Required; must match `^1[3-9]\d{9}$` (mainland China mobile) |
 | `username` | `String` | Required; 3–20 characters; unique and can be used to log in |
-| `password` | `String` | Required; 6–20 characters |
+| `password` | `String` | Required; 10–64 characters and at most 72 UTF-8 bytes |
 
 **Response**: `AuthResponseDto` (under `data`)
 
@@ -37,6 +37,11 @@ the API does not return a usable-looking account with a partial or empty catalog
 definitions are parsed and schema-validated once per backend process, then instantiated for
 each new user inside the registration transaction. Clients should store `data.token` and enter
 the authenticated application directly; a second login request is not required.
+Login is rate-limited per normalized account identifier and registration per phone number,
+with separate higher source-IP ceilings so ordinary users behind one NAT do not share the
+low credential limit. Excess attempts return structured `429` data and `Retry-After`.
+The owning limits and multi-instance guidance live in the
+[configuration reference](../getting-started/configuration.md#authentication-jwt).
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/register \
@@ -54,8 +59,8 @@ Public. Returns a JWT token.
 
 | Field | Type | Rules |
 | :--- | :--- | :--- |
-| `identifier` | `String` | Required; phone number or username |
-| `password` | `String` | Required |
+| `identifier` | `String` | Required; phone number or username; at most 100 characters |
+| `password` | `String` | Required; at most 128 characters |
 
 **Response**: `AuthResponseDto` (under `data`)
 
@@ -113,8 +118,8 @@ lock or by the missing task row, so deleted accounts do not receive late history
 
 | Field | Type | Rules |
 | :--- | :--- | :--- |
-| `password` | `String` | Required; must match the current account password |
-| `confirmation` | `String` | Required; must exactly match the current `username` or `phone` |
+| `password` | `String` | Required; at most 128 characters and must match the current account password |
+| `confirmation` | `String` | Required; at most 100 characters and must exactly match the current `username` or `phone` |
 
 Password or confirmation mismatches return `400 Bad Request`; they do not revoke the
 current session. Missing/invalid authentication still returns `401 Unauthorized`.
@@ -136,7 +141,7 @@ current session. Missing/invalid authentication still returns `401 Unauthorized`
   therefore cannot attach to a missing parent or to another user's task.
 - Deletes the current user's board layout, device nodes, rules, specifications,
   device templates, verification traces/tasks, simulation traces/tasks, exploration
-  findings/tasks, and AI chat sessions/messages.
+  findings/tasks, AI continuation/confirmation/draft state, and AI chat sessions/messages.
 - Deletes the `app_user` row last.
 
 `JwtAuthenticationFilter` also checks that the token's user id still exists before

@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-20. Source: `frontend/src/api/`,
+Verified against code on 2026-07-22. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/components/ChatView.vue`,
 `frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
@@ -771,6 +771,9 @@ object of the same two. **Rule persistence is not here**: targeted `getRules`/`a
 Named exports. Session management (`getSessionList`, `createSession`,
 `getSessionHistory`, `getSessionActivity`, `requestSessionStop`, `deleteSession`) uses
 axios; **streaming does not**.
+`getSessionHistory` returns `{ messages, nextBeforeId, hasMore }`; the first call requests
+the newest bounded page, and `ChatView` passes `nextBeforeId` back as `beforeId` when the
+user loads older messages. Older pages are prepended while preserving scroll position.
 
 `sendStreamChat(...)` uses the native `fetch` API against
 `${VITE_API_BASE_URL || ''}/api/chat/completions` (relative by default, so it also goes
@@ -789,6 +792,10 @@ the bounded original user objective supplied by the backend; it does not expose 
 reasoning. The record remains attached to that message and is persisted with the terminal
 assistant row. History reload replaces the local response only when that row has the same
 `turnId`, so an older completed turn cannot erase the current request.
+The wrapper invokes `onAccepted` only after a successful HTTP response exposes a readable
+SSE body. A rejection before that point removes optimistic placeholders and restores the
+ordinary text draft; accepted streams retain their local outcome until authoritative
+history settlement decides whether a terminal row exists.
 
 `getSessionList` also returns `ChatSession.active`. `ChatView` refreshes this list whenever
 the panel becomes visible and whenever the document returns to the foreground. With no

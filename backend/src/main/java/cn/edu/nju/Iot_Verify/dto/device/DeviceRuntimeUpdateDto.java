@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -19,8 +20,8 @@ public class DeviceRuntimeUpdateDto {
     private String state;
     private String currentStateTrust;
     private String currentStatePrivacy;
-    @Size(max = 200, message = "At most 200 local variable values are allowed")
+    @Size(max = RequestLimits.MAX_DEVICE_VARIABLES, message = "At most 100 local variable values are allowed")
     private List<@Valid @NotNull(message = "Variable item cannot be null") VariableStateDto> variables;
-    @Size(max = 200, message = "At most 200 local sensitivity values are allowed")
+    @Size(max = RequestLimits.MAX_DEVICE_PRIVACIES, message = "At most 100 local sensitivity values are allowed")
     private List<@Valid @NotNull(message = "Privacy item cannot be null") PrivacyStateDto> privacies;
 }

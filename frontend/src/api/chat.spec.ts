@@ -27,7 +27,13 @@ vi.mock('@/api/http', () => ({
 }))
 
 import http from '@/api/http'
-import { getSessionActivity, getSessionHistory, requestSessionStop, sendStreamChat } from './chat'
+import {
+  getPendingConfirmation,
+  getSessionActivity,
+  getSessionHistory,
+  requestSessionStop,
+  sendStreamChat
+} from './chat'
 
 describe('chat stream lifecycle semantics', () => {
   beforeEach(() => {
@@ -84,6 +90,22 @@ describe('chat stream lifecycle semantics', () => {
     )
   })
 
+  it('loads server-authoritative pending protected-action kinds', async () => {
+    vi.mocked(http.get).mockResolvedValue({
+      data: { data: { sessionId: 'session-1', kinds: ['DESTRUCTIVE'] } }
+    })
+    const controller = new AbortController()
+
+    await expect(getPendingConfirmation('session-1', controller.signal)).resolves.toEqual({
+      sessionId: 'session-1',
+      kinds: ['DESTRUCTIVE']
+    })
+    expect(http.get).toHaveBeenCalledWith(
+      '/chat/sessions/session-1/confirmation',
+      { signal: controller.signal }
+    )
+  })
+
   it('sends an explicit idempotent stop request for the active session', async () => {
     vi.mocked(http.post).mockResolvedValue({ data: { data: null } })
 
@@ -115,6 +137,27 @@ describe('chat stream lifecycle semantics', () => {
       sessionId: 'session-1',
       content: 'hello',
       turnId: 'turn-1'
+    })
+  })
+
+  it('sends protected authority only through the structured confirmation field', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: null })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(sendStreamChat(
+      'session-1',
+      'I confirmed with the button',
+      { onMessage: vi.fn() },
+      undefined,
+      'turn-2',
+      { action: 'CONFIRM', kind: 'DESTRUCTIVE' }
+    )).rejects.toMatchObject({ kind: 'MISSING_BODY' })
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      sessionId: 'session-1',
+      content: 'I confirmed with the button',
+      turnId: 'turn-2',
+      confirmation: { action: 'CONFIRM', kind: 'DESTRUCTIVE' }
     })
   })
 
@@ -182,5 +225,22 @@ describe('chat stream lifecycle semantics', () => {
       'hello',
       { onMessage: vi.fn() }
     )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
+  })
+
+  it('reports transport acceptance only after a successful response body exists', async () => {
+    const reader = { read: vi.fn().mockResolvedValue({ done: true, value: undefined }) }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => reader }
+    }))
+    const onAccepted = vi.fn()
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn(), onAccepted }
+    )).rejects.toMatchObject({ kind: 'EMPTY_STREAM' })
+
+    expect(onAccepted).toHaveBeenCalledOnce()
   })
 })

@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-18. Source:
+Verified against code on 2026-07-22. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -43,10 +43,10 @@ The replacement commits or rolls back as one transaction.
 | GET | `/api/board/nodes/{nodeId}/deletion-preview` | → `DeviceDeletionResultDto` | Read-only authoritative preview of the device, every referencing rule/spec, and each Environment Pool item that would be removed |
 | POST | `/api/board/nodes/{nodeId}/delete` | `DeviceDeleteRequestDto` → `DeviceDeletionResultDto` | Delete one instance plus every previewed consequence atomically. The opaque `impactToken` from the latest preview must still match the complete server-calculated impact or the server returns `409` before writing. |
 | GET | `/api/board/environment` | → `BoardEnvironmentVariableDto[]` | Board-level environment pool; self-heals from current nodes/templates |
-| POST | `/api/board/environment` | `BoardEnvironmentVariableDto[]` → `EnvironmentMutationResultDto` | Atomically apply non-null, name-keyed field patches to values/trust/privacy required by current devices; omitted/null fields retain their current values |
+| POST | `/api/board/environment` | `BoardEnvironmentVariableDto[]` → `EnvironmentMutationResultDto` | Atomically apply at most 200 non-null, name-keyed field patches to values/trust/privacy required by current devices; omitted/null fields retain their current values |
 | GET | `/api/board/rules` | → `RuleDto[]` | List rules in effective execution order |
 | POST | `/api/board/rules` | `RuleDto` → `CollectionMutationResultDto<RuleDto>` | Create exactly one validated rule; request `id` is ignored and the server assigns identity |
-| PUT | `/api/board/rules/order` | `{ ruleIds: Long[] }` → `RuleDto[]` | Atomically replace execution order only. The request must contain every current rule id exactly once; stale or partial lists return `409` without writing. |
+| PUT | `/api/board/rules/order` | `{ ruleIds: Long[] }` → `RuleDto[]` | Atomically replace execution order only. The request accepts at most 100 ids and must contain every current rule id exactly once; stale or partial lists return `409` without writing. |
 | DELETE | `/api/board/rules/{ruleId}` | → `CollectionMutationResultDto<RuleDto>` | Delete exactly one rule or return `404` |
 | GET | `/api/board/specs` | → `SpecificationDto[]` | List specs in stable authored order |
 | POST | `/api/board/specs` | `SpecificationDto` → `CollectionMutationResultDto<SpecificationDto>` | Create exactly one validated specification |
@@ -55,6 +55,24 @@ The replacement commits or rolls back as one transaction.
 | POST | `/api/board/batch` | `BoardBatchDto` → `BoardBatchDto` | **Explicit atomic full-scene replacement** of complete `nodes` + `environmentVariables` + `rules` + `specs` plus exact `templateSnapshots`; requires the still-current preview `impactToken` |
 | GET | `/api/board/layout` | → `BoardLayoutDto` | Panel/canvas layout |
 | POST | `/api/board/layout` | `BoardLayoutDto` → `BoardLayoutDto` | |
+
+The persisted Board has hard totals of 100 devices, 100 rules, 100 specifications, and
+200 derived Environment Pool variables. Targeted creation locks the user row and checks
+the authoritative current total plus the proposed addition in the same transaction; it
+does not treat the per-request device limit as a reusable way around the Board total.
+A device addition that would derive more than 200 Environment Pool variables also rolls
+back. The Board UI blocks known over-capacity additions across dialogs, template drag/drop,
+recommendation application, and scene import before sending them. It also enforces the
+per-device override and per-rule/per-specification-group condition limits while authoring;
+the backend remains authoritative for stale or concurrent clients. Legacy data
+already above a limit is never truncated automatically: deletion remains available so the
+user can reduce it to the supported range before creating more items, reordering rules,
+running a complete model, or round-tripping a scene.
+
+Initial layout hydration never overwrites zoom, pan, or panel changes made while the layout
+request was in flight. If an early interaction occurred on a wide viewport, the client
+persists the resulting current layout after hydration, then clears the one-shot protection
+flags so later narrow/wide viewport restoration still works.
 
 ### `DeviceNodeDto`
 
@@ -76,7 +94,9 @@ The replacement commits or rolls back as one transaction.
 > [verification.md](verification.md).
 
 `DeviceBatchCreateRequestDto` is `{ devices, environmentVariablePatches }`; `devices`
-must be non-empty. `DeviceMutationResultDto` returns `operation`, `affectedDevices`,
+must contain 1–100 items, must keep the resulting Board at no more than 100 devices, and
+`environmentVariablePatches` may contain at most 200.
+`DeviceMutationResultDto` returns `operation`, `affectedDevices`,
 `currentNodes`, `environmentVariables`, `environmentChanges`, `currentSpecifications`,
 `previousLabel`, `updatedSpecificationCount`, and `currentCount`. Callers should use the
 returned current collections rather than assuming their local optimistic state won.
@@ -106,7 +126,8 @@ integer storage contract cannot save.
 `{ state, currentStateTrust, currentStatePrivacy, variables, privacies }`. It is a `PUT`,
 not a field patch. Omitting/nulling optional source/sensitivity overrides means use the
 selected template state's labels; omitting/nulling `variables` or `privacies` means no
-explicit local overrides. Stateful devices still require a legal `state`; no-mode
+explicit local overrides. Each collection accepts at most 100 items. Stateful devices
+still require a legal `state`; no-mode
 devices use no modeled state and may be stored with the canvas-only `Working` placeholder.
 Shared environment values are not part of this subresource.
 
@@ -224,8 +245,11 @@ The counts describe the authoritative server scene the user is about to replace,
 possibly stale local canvas.
 
 The subsequent batch requires non-null complete `nodes`, `environmentVariables`, `rules`,
-`specs`, and `templateSnapshots` arrays. There is no partial-update form of this endpoint;
-ordinary targeted endpoints own partial intent.
+`specs`, and `templateSnapshots` arrays. `nodes`, `rules`, `specs`, and
+`templateSnapshots` each accept at most 100 items; `environmentVariables` accepts at most
+200. The service repeats these limits for internal/AI callers rather than relying only on
+HTTP DTO validation. There is no partial-update form of this endpoint; ordinary targeted
+endpoints own partial intent.
 
 | Field | Direction | Meaning |
 | :--- | :--- | :--- |
@@ -285,6 +309,13 @@ same domain as targeted canvas writes and AI scene drafts: coordinates are finit
 `-1000000..1000000`, width is `80..2000`, and height is `60..2000`. An exported boundary
 value is therefore a valid import value; no narrower file-import range may crop or reject
 a valid saved canvas.
+
+The browser rejects portable scene files larger than 64 MiB before reading or exporting
+them, rejects targeted device-list imports larger than 4 MiB, and rejects device-template
+imports larger than 512 KiB. The backend uses the matching dedicated 64 MiB boundary only
+for authenticated `POST /api/board/batch`; every other JSON request retains the 4 MiB
+pre-binding limit. This lets a valid scene carry its referenced self-contained template
+snapshots and embedded icons without widening unrelated endpoints.
 
 Rule and specification array order is persisted explicitly. The database-only
 `rules.execution_order` and `specification.list_order` columns are written from the
@@ -506,6 +537,13 @@ them from a pre-migration backup or explicit legacy metadata before deleting the
 | `manifest` | `DeviceManifest` | Required |
 | `defaultTemplate` | `Boolean` | `true` for system-imported defaults, `false` for user-created/custom uploads; used by the UI for grouping and default-template reset |
 
+Each user may store at most 100 device types. The canonical manifest schema also bounds
+collection cardinality before semantic or NuSMV validation: 20 modes and 100 each for
+working states, per-state dynamics, internal variables, values, environment domains,
+impacted variables, transitions, APIs, and content items. Default reset performs the same
+projected-catalog check and reports a no-write blocker when restoring bundled definitions
+would exceed the catalog limit.
+
 Default reset is a two-step destructive command. The preview classifies every bundled
 type as `RESTORE_MISSING`, `REFRESH_DEFAULT`, or
 `REPLACE_CUSTOM_NAME_COLLISION`, and reports obsolete bundled types as
@@ -714,10 +752,10 @@ status by `throwIfToolError`.
 
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
-| GET | `/api/board/rules/recommend` | Required `requestId` plus `maxRecommendations` (default 5; integer `1..10`), `category`, `language`, and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
-| GET | `/api/board/specs/recommend` | Required `requestId` plus `maxRecommendations` (default 5; integer `1..10`), `category`, `language`, and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
-| POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
+| POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
+| POST | `/api/board/devices/recommend` | Required `requestId` query parameter (8–80 URL-safe characters) plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter (8–80 URL-safe characters) plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
 | DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means a tracked task accepted interruption |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |

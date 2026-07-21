@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
 import cn.edu.nju.Iot_Verify.dto.Result;
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.board.BoardBatchDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardReplacementPreviewDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardSemanticSnapshotDto;
@@ -43,6 +44,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.RuleRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioReadinessIssueDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.StandaloneRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.SpecificationRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.DuplicateRuleCheckResultDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -67,6 +69,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -180,7 +183,9 @@ public class BoardStorageController {
     @PostMapping("/environment")
     public Result<EnvironmentMutationResultDto> saveEnvironment(
             @CurrentUser Long userId,
-            @NotNull @Valid @RequestBody List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> variables) {
+            @NotNull @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES,
+                    message = "At most 200 environment variables can be updated at once")
+            @Valid @RequestBody List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> variables) {
         return Result.success(boardService.saveEnvironmentVariables(userId, variables));
     }
 
@@ -313,15 +318,18 @@ public class BoardStorageController {
      * @param category 分类筛选
      * @return 规则推荐列表
      */
-    @GetMapping("/rules/recommend")
+    @PostMapping("/rules/recommend")
     public Result<RecommendationResponseDto<RuleRecommendationDto>> recommendRules(
             @CurrentUser Long userId,
-            @RequestParam(defaultValue = "5") Integer maxRecommendations,
-            @Size(max = 100) @RequestParam(defaultValue = "all") String category,
-            @Size(max = 20) @RequestParam(defaultValue = "en") String language,
-            @Size(max = RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH)
-            @RequestParam(defaultValue = "") String userRequirement,
-            @RequestParam String requestId) {
+            @NotNull @Valid @RequestBody StandaloneRecommendationRequestDto requestBody) {
+        return recommendRules(userId,
+                requestBody.getMaxRecommendations(), requestBody.getCategory(), requestBody.getLanguage(),
+                requestBody.getUserRequirement(), requestBody.getRequestId());
+    }
+
+    Result<RecommendationResponseDto<RuleRecommendationDto>> recommendRules(
+            Long userId, Integer maxRecommendations, String category, String language,
+            String userRequirement, String requestId) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
@@ -361,7 +369,11 @@ public class BoardStorageController {
     @PostMapping("/devices/recommend")
     public Result<RecommendationResponseDto<DeviceRecommendationDto>> recommendDevices(
             @CurrentUser Long userId,
-            @RequestParam String requestId,
+            @RequestParam
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId,
             @NotNull @Valid @RequestBody DeviceRecommendationRequestDto requestBody) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
@@ -425,15 +437,18 @@ public class BoardStorageController {
      * @param category 分类筛选
      * @return 规约推荐列表
      */
-    @GetMapping("/specs/recommend")
+    @PostMapping("/specs/recommend")
     public Result<RecommendationResponseDto<SpecificationRecommendationDto>> recommendSpecs(
             @CurrentUser Long userId,
-            @RequestParam(defaultValue = "5") Integer maxRecommendations,
-            @Size(max = 100) @RequestParam(defaultValue = "all") String category,
-            @Size(max = 20) @RequestParam(defaultValue = "en") String language,
-            @Size(max = RecommendationLimits.MAX_USER_REQUIREMENT_LENGTH)
-            @RequestParam(defaultValue = "") String userRequirement,
-            @RequestParam String requestId) {
+            @NotNull @Valid @RequestBody StandaloneRecommendationRequestDto requestBody) {
+        return recommendSpecs(userId,
+                requestBody.getMaxRecommendations(), requestBody.getCategory(), requestBody.getLanguage(),
+                requestBody.getUserRequirement(), requestBody.getRequestId());
+    }
+
+    Result<RecommendationResponseDto<SpecificationRecommendationDto>> recommendSpecs(
+            Long userId, Integer maxRecommendations, String category, String language,
+            String userRequirement, String requestId) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
         try {
@@ -497,7 +512,11 @@ public class BoardStorageController {
     @PostMapping("/scenario/recommend")
     public Result<ScenarioRecommendationResponseDto> recommendScenario(
             @CurrentUser Long userId,
-            @RequestParam String requestId,
+            @RequestParam
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId,
             @NotNull @Valid @RequestBody ScenarioRecommendationRequestDto requestBody) {
 
         return interactiveAiExecutionService.execute(userId, requestId, () -> {
@@ -527,14 +546,22 @@ public class BoardStorageController {
     @DeleteMapping("/recommendations/{requestId}")
     public Result<Boolean> cancelRecommendation(
             @CurrentUser Long userId,
-            @PathVariable String requestId) {
+            @PathVariable
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveAiExecutionService.cancel(userId, requestId));
     }
 
     @GetMapping("/recommendations/{requestId}")
     public Result<InteractiveOperationStatusDto> getRecommendationStatus(
             @CurrentUser Long userId,
-            @PathVariable String requestId) {
+            @PathVariable
+            @Size(min = 8, max = RequestLimits.MAX_REQUEST_ID_LENGTH,
+                    message = "Request ID must contain 8 to 80 characters")
+            @Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    message = "Request ID contains unsupported characters") String requestId) {
         return Result.success(interactiveAiExecutionService.getStatus(userId, requestId));
     }
 

@@ -1,0 +1,161 @@
+package cn.edu.nju.Iot_Verify.service;
+
+import cn.edu.nju.Iot_Verify.exception.UserOperationBusyException;
+import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/** Per-user admission guard, distributed through Redis with a process-local fail-open fallback. */
+@Slf4j
+@Component
+public class UserOperationGuard {
+
+    private static final DefaultRedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            Long.class);
+    private static final DefaultRedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+            Long.class);
+
+    private final StringRedisTemplate redisTemplate;
+    private final ConcurrentMap<String, String> localSlots = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Lease> renewableLeases = new ConcurrentHashMap<>();
+
+    public UserOperationGuard(StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public Lease acquire(Long userId, Kind kind, int limit, Duration ttl) {
+        if (userId == null) throw new IllegalArgumentException("Operation admission requires a user");
+        int slots = Math.max(1, limit);
+        String token = UUID.randomUUID().toString();
+        boolean redisAvailable = true;
+        for (int slot = 0; slot < slots; slot++) {
+            String key = "iot-verify:operation:" + kind.name().toLowerCase() + ":" + userId + ":" + slot;
+            if (localSlots.putIfAbsent(key, token) != null) continue;
+            try {
+                Boolean acquired = redisTemplate.opsForValue().setIfAbsent(key, token, ttl);
+                if (Boolean.TRUE.equals(acquired)) {
+                    Lease lease = new Lease(key, token, true, ttl);
+                    renewableLeases.put(key, lease);
+                    return lease;
+                }
+                localSlots.remove(key, token);
+            } catch (RuntimeException e) {
+                redisAvailable = false;
+                log.warn("Redis operation admission is unavailable; using local guard for {}: {}", kind, e.toString());
+                return new Lease(key, token, false, ttl);
+            }
+        }
+        String scope = redisAvailable ? "all backend instances" : "this backend instance";
+        throw new UserOperationBusyException(
+                kind.name(), scope, slots,
+                "This user already has the maximum number of " + kind.label
+                        + " operations running across " + scope + ".");
+    }
+
+    @Scheduled(fixedDelayString = "#{@operationAdmissionConfig.leaseHeartbeatMs}")
+    public void renewActiveLeases() {
+        renewableLeases.values().forEach(Lease::renew);
+    }
+
+    public enum Kind {
+        FORMAL("formal verification, simulation, or fix"),
+        CHAT("assistant");
+
+        private final String label;
+
+        Kind(String label) {
+            this.label = label;
+        }
+    }
+
+    public final class Lease implements AutoCloseable {
+        private final String key;
+        private final String token;
+        private final boolean redisBacked;
+        private final long ttlMillis;
+        private volatile boolean closed;
+        private volatile boolean lost;
+        private volatile long lastConfirmedNanos = System.nanoTime();
+        private volatile Thread ownerThread = Thread.currentThread();
+
+        private Lease(String key, String token, boolean redisBacked, Duration ttl) {
+            this.key = key;
+            this.token = token;
+            this.redisBacked = redisBacked;
+            this.ttlMillis = Math.max(1, ttl.toMillis());
+        }
+
+        private synchronized void renew() {
+            if (closed || !redisBacked) return;
+            try {
+                Long renewed = redisTemplate.execute(
+                        RENEW_SCRIPT, java.util.List.of(key), token, Long.toString(ttlMillis));
+                if (!Long.valueOf(1L).equals(renewed)) {
+                    markLost("the distributed lease is no longer owned by this worker");
+                } else {
+                    lastConfirmedNanos = System.nanoTime();
+                }
+            } catch (RuntimeException e) {
+                long elapsed = System.nanoTime() - lastConfirmedNanos;
+                if (elapsed >= Duration.ofMillis(ttlMillis).toNanos()) {
+                    markLost("the distributed lease could not be renewed before its TTL expired");
+                } else {
+                    // Redis is deliberately fail-open; a short outage must not stop an in-flight request.
+                    log.warn("Could not renew distributed operation lease {}: {}", key, e.toString());
+                }
+            }
+        }
+
+        /** Rebind the lease to the worker thread that performs the actual operation (for SSE tasks). */
+        public synchronized void attachCurrentThread() {
+            requireActive();
+            ownerThread = Thread.currentThread();
+        }
+
+        public boolean isActive() {
+            return !closed && !lost;
+        }
+
+        public void requireActive() {
+            if (!isActive()) {
+                throw new ServiceUnavailableException(
+                        "The operation admission lease was lost; the operation was stopped to prevent duplicate execution.");
+            }
+        }
+
+        private synchronized void markLost(String reason) {
+            if (closed || lost) return;
+            lost = true;
+            renewableLeases.remove(key, this);
+            Thread thread = ownerThread;
+            if (thread != null && thread != Thread.currentThread()) {
+                thread.interrupt();
+            }
+            log.warn("Stopping operation after losing distributed lease {}: {}", key, reason);
+        }
+
+        @Override
+        public synchronized void close() {
+            if (closed) return;
+            closed = true;
+            renewableLeases.remove(key, this);
+            localSlots.remove(key, token);
+            if (!redisBacked) return;
+            try {
+                redisTemplate.execute(RELEASE_SCRIPT, java.util.List.of(key), token);
+            } catch (RuntimeException e) {
+                log.warn("Could not release distributed operation lease {}: {}", key, e.toString());
+            }
+        }
+    }
+}

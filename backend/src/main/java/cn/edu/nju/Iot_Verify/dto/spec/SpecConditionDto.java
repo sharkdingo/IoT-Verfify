@@ -1,8 +1,10 @@
 // src/main/java/cn/edu/nju/Iot_Verify/dto/spec/SpecConditionDto.java
 package cn.edu.nju.Iot_Verify.dto.spec;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 /**
@@ -18,6 +20,7 @@ import lombok.Data;
  */
 @Data
 public class SpecConditionDto {
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Condition ID must be at most 200 characters")
     private String id;
     @Pattern(regexp = "^(a|if|then)$", message = "Side must be one of: a, if, then")
     private String side;        // 'a' | 'if' | 'then'
@@ -26,7 +29,9 @@ public class SpecConditionDto {
      * requests use the normalized NuSMV varName. deviceLabel is display-only.
      */
     @NotBlank(message = "Device ID is required for spec condition")
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Device ID must be at most 200 characters")
     private String deviceId;
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Device label must be at most 200 characters")
     private String deviceLabel;
     /**
      * 目标类型: state | mode | variable | api | trust | privacy
@@ -36,6 +41,7 @@ public class SpecConditionDto {
              message = "targetType must be one of: state, mode, variable, api, trust, privacy")
     private String targetType;
     @NotBlank(message = "Key is required for spec condition")
+    @Size(max = RequestLimits.MAX_IDENTIFIER_LENGTH, message = "Condition key must be at most 200 characters")
     private String key;
     /**
      * Required only for trust/privacy. "state" means the label of the currently active
@@ -52,6 +58,7 @@ public class SpecConditionDto {
     )
     private String relation;
     @NotBlank(message = "Value is required for spec condition")
+    @Size(max = RequestLimits.MAX_VALUE_LENGTH, message = "Condition value must be at most 1000 characters")
     private String value;
 
 }

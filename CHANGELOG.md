@@ -15,6 +15,76 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-22
+
+#### Changed
+- Changed chat history to a cursor-paged contract with bounded raw-row scanning and an
+  in-panel "load older" workflow. Chat catalogs now retain at most 100 sessions per user,
+  while individual requests remain limited to 10,000 characters.
+- Added a dedicated 64 MiB authenticated scene-replacement boundary so portable scenes
+  can round-trip referenced template snapshots and embedded icons without widening the
+  4 MiB limit for unrelated JSON endpoints. Device-type catalogs and manifest arrays now
+  have explicit capacity limits.
+
+#### Fixed
+- Stopped an old synchronous or assistant worker when its Redis admission lease is lost or
+  remains unconfirmed through its TTL, preventing it from overlapping a replacement worker.
+- Replaced line-based NuSMV process output reads with fixed-size byte draining, so one
+  unterminated output line cannot allocate memory outside the configured retention bound.
+- Removed optimistic chat turns when the server rejects a request before SSE acceptance,
+  restored ordinary drafts, preserved pending protected confirmations, and added a
+  frontend/backend session-id and model-scalar validation boundary.
+- Bounded verification/simulation task exclusion lists and interactive fix request ids,
+  and aligned the frontend, backend, reverse-proxy example, tests, and API documentation
+  with the resulting contracts.
+
+### 2026-07-21
+
+#### Added
+- Added server-authoritative protected-action discovery and structured assistant
+  confirmation buttons. Destructive, bundled-default reset, and full-scene replacement
+  authority can no longer be inferred from model-classified natural language.
+- Added bounded HTTP/model collections, browser import sizes, NuSMV output retention and
+  diagnostic-directory cleanup, authentication attempt limits, stronger registration
+  password bounds, and Redis-coordinated per-user admission for synchronous formal work
+  and assistant streams.
+
+#### Changed
+- Changed standalone rule and specification recommendation requests from query-bearing
+  `GET` calls to typed JSON `POST` bodies, so user requirements are not exposed in URLs.
+- Updated the production reverse-proxy example to terminate TLS, redirect HTTP, enable
+  HSTS, forward HTTPS metadata, and enforce the same 4 MiB request limit as the backend.
+
+#### Fixed
+- Updated the real-backend recommendation journey for JSON `POST` requests; authentication
+  throttling now uses low per-account/phone limits plus higher source ceilings, returns
+  structured retry data through CORS, and no longer locks ordinary users behind one NAT
+  after a handful of unrelated attempts.
+- Completed frontend capacity enforcement for drag/drop, recommendation, nested-condition,
+  runtime-override, and scene-import paths. Early layout interactions are now persisted after
+  hydration and the one-shot protection flags no longer break later responsive restoration.
+- Added structured formal/chat admission reason codes and localized conflict feedback, kept
+  protected-action controls recoverable after a transient confirmation-state failure, and
+  held NuSMV artifact exclusion atomically from cleanup inspection through deletion.
+- Prevented delayed Board layout hydration from overwriting zoom or pan changes made while
+  the initial layout request was still in flight. Device-template manifests now use a
+  `LONGTEXT` column so valid 256 KiB icon payloads fit the persistence schema, and durable
+  assistant state is removed inside the account-deletion transaction.
+- Moved JSON body buffering behind authentication, applied public authentication throttling
+  after bounded DTO validation, and enforced Board-wide device/rule/spec/environment totals in the same transaction as
+  targeted creation, and kept legacy over-limit data deletable instead of truncating it.
+- Renewed active Redis per-user admission leases with owner-token checks and guaranteed
+  chat slot release even when database execution cleanup fails.
+- Protected active NuSMV diagnostic directories with cross-process file locks, and moved
+  assistant confirmation controls into the normal flex layout so multiple confirmations
+  and expanded input cannot cover conversation content.
+- Updated the frontend lockfile to patched dependency versions; `npm audit` now reports no
+  known vulnerabilities.
+- Classified an empty current Board template set as confirmed automatic-fix model drift
+  when the verification snapshot contains templates. Apply now rejects with `400` and asks
+  for a new verification instead of returning a retryable preflight `503`. The global API
+  error map and NuSMV candidate-generation contract are now synchronized with the code.
+
 ### 2026-07-20
 
 #### Added

@@ -23,6 +23,7 @@
     },
     "Modes": {
       "type": "array",
+      "maxItems": 20,
       "description": "Operating modes for multi-mode devices (e.g., ['ThermostatFanMode', 'ThermostatMode']). Because this schema validates raw manifests at the API/AI/default-template boundary, each mode must already be a valid NuSMV identifier before submission; use 'ThermostatMode' rather than 'Thermostat Mode'. Runtime NuSMV validation repeats normalization checks as a defensive semantic pass.",
       "items": {
         "type": "string",
@@ -55,6 +56,7 @@
     },
     "WorkingStates": {
       "type": "array",
+      "maxItems": 100,
       "description": "All possible working states of the device",
       "items": {
         "type": "object",
@@ -68,6 +70,7 @@
           },
           "Dynamics": {
             "type": "array",
+            "maxItems": 100,
             "description": "State-dependent variable effects. VariableName must be a local InternalVariable or a declared ImpactedVariable. Numeric domains require ChangeRate; enum/boolean domains require Value. One state may define each target at most once.",
             "items": {
               "type": "object",
@@ -120,6 +123,7 @@
     },
     "InternalVariables": {
       "type": "array",
+      "maxItems": 100,
       "description": "Device internal variables and environment variables",
       "items": {
         "type": "object",
@@ -170,6 +174,7 @@
           },
           "Values": {
             "type": "array",
+            "maxItems": 100,
             "description": "Enumerated values (mutually exclusive with LowerBound/UpperBound). Spaces in values will be removed by sanitizeSmvToken (e.g., 'fan only' -> 'fanonly').",
             "items": {
               "type": "string",
@@ -213,6 +218,7 @@
     },
     "EnvironmentDomains": {
       "type": "array",
+      "maxItems": 100,
       "description": "Domains/default labels for shared environment variables this template affects without necessarily reading. Each ImpactedVariables name must be defined here or by an IsInside=false InternalVariable in the same manifest.",
       "uniqueItems": true,
       "items": {
@@ -229,6 +235,7 @@
           "Privacy": {"type": "string", "enum": ["public", "private"]},
           "Values": {
             "type": "array",
+            "maxItems": 100,
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "uniqueItems": true
@@ -255,6 +262,7 @@
     },
     "ImpactedVariables": {
       "type": "array",
+      "maxItems": 100,
       "description": "List of environment variables this device can affect. Runtime validates as NuSMV identifiers (no spaces, no reserved words) via validateSmvIdentifier().",
       "uniqueItems": true,
       "items": {
@@ -282,6 +290,7 @@
     },
     "Transitions": {
       "type": "array",
+      "maxItems": 100,
       "description": "Condition-triggered autonomous device behavior with one state or variable effect. Multi-effect actions are rejected because the current formal model cannot preserve them atomically. User-consumable event pulses belong to APIs with Signal=true.",
       "items": {
         "type": "object",
@@ -354,6 +363,7 @@
     },
     "APIs": {
       "type": "array",
+      "maxItems": 100,
       "description": "Device commands/actions that automation rules can invoke. They change declared device state; they are not network endpoint definitions.",
       "items": {
         "type": "object",
@@ -417,6 +427,7 @@
     },
     "Contents": {
       "type": "array",
+      "maxItems": 100,
       "description": "Content/data items managed by the device (e.g., photos, data). Used for privacy checking in specifications.",
       "items": {
         "type": "object",

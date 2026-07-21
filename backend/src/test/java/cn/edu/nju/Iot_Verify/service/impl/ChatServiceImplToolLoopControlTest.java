@@ -13,7 +13,9 @@ import cn.edu.nju.Iot_Verify.component.aitool.AiToolManager;
 import cn.edu.nju.Iot_Verify.component.aitool.AiDestructiveActionGuard;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.AiScenarioDraftStore;
 import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
+import cn.edu.nju.Iot_Verify.dto.chat.ChatConfirmationCommandDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -40,10 +42,12 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -385,6 +389,57 @@ class ChatServiceImplToolLoopControlTest {
         assertTrue(context.content().contains("Replace the hall alarm"));
         assertTrue(context.content().contains("latest user message is authoritative"));
         assertTrue(context.content().contains("do not create another alarm"));
+    }
+
+    @Test
+    void protectedConfirmation_requiresStructuredCommandInsteadOfNaturalLanguage() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "resolveConfirmation",
+                String.class,
+                ChatConfirmationCommandDto.class,
+                EnumSet.class);
+        method.setAccessible(true);
+
+        ChatConfirmationDetector.ConfirmationDecision textOnly =
+                (ChatConfirmationDetector.ConfirmationDecision) method.invoke(
+                        service,
+                        "yes, delete it",
+                        null,
+                        EnumSet.of(ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE));
+        assertEquals(ChatConfirmationDetector.DecisionType.NONE, textOnly.type());
+
+        ChatConfirmationCommandDto command = new ChatConfirmationCommandDto();
+        command.setAction(ChatConfirmationCommandDto.Action.CONFIRM);
+        command.setKind(ChatConfirmationCommandDto.Kind.DESTRUCTIVE);
+        ChatConfirmationDetector.ConfirmationDecision explicit =
+                (ChatConfirmationDetector.ConfirmationDecision) method.invoke(
+                        service,
+                        "button confirmation",
+                        command,
+                        EnumSet.of(ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE));
+        assertEquals(ChatConfirmationDetector.DecisionType.CONFIRMED, explicit.type());
+        assertEquals(ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE, explicit.kind());
+    }
+
+    @Test
+    void protectedConfirmation_rejectsACommandForANonPendingKind() throws Exception {
+        Method method = ChatServiceImpl.class.getDeclaredMethod(
+                "resolveConfirmation",
+                String.class,
+                ChatConfirmationCommandDto.class,
+                EnumSet.class);
+        method.setAccessible(true);
+        ChatConfirmationCommandDto command = new ChatConfirmationCommandDto();
+        command.setAction(ChatConfirmationCommandDto.Action.CONFIRM);
+        command.setKind(ChatConfirmationCommandDto.Kind.SCENE_REPLACEMENT);
+
+        InvocationTargetException error = assertThrows(InvocationTargetException.class, () -> method.invoke(
+                service,
+                "button confirmation",
+                command,
+                EnumSet.of(ChatConfirmationDetector.ConfirmationKind.DESTRUCTIVE)));
+
+        assertTrue(error.getCause() instanceof BadRequestException);
     }
 
     @Test

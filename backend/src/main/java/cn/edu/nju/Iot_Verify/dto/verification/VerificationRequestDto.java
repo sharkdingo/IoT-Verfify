@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.verification;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.board.BoardEnvironmentVariableDto;
 import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
@@ -10,6 +11,7 @@ import com.fasterxml.jackson.annotation.JsonSetter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -27,6 +29,7 @@ public class VerificationRequestDto {
      */
     @Valid
     @NotEmpty(message = "Devices list cannot be empty")
+    @Size(max = RequestLimits.MAX_DEVICES, message = "At most 100 devices can be verified")
     private List<@Valid @NotNull(message = "Device item cannot be null") DeviceVerificationDto> devices;
 
     /**
@@ -34,12 +37,14 @@ public class VerificationRequestDto {
      * the actual scenario value comes from this shared pool.
      */
     @Valid
+    @Size(max = RequestLimits.MAX_ENVIRONMENT_VARIABLES, message = "At most 200 environment variables can be verified")
     private List<@Valid @NotNull(message = "Environment variable item cannot be null") BoardEnvironmentVariableDto> environmentVariables = new ArrayList<>();
 
     /**
      * 规则列表
      */
     @Valid
+    @Size(max = RequestLimits.MAX_RULES, message = "At most 100 rules can be verified")
     private List<@Valid @NotNull(message = "Rule item cannot be null") RuleDto> rules = new ArrayList<>();
 
     /**
@@ -48,6 +53,7 @@ public class VerificationRequestDto {
      */
     @Valid
     @NotEmpty(message = "Specs list cannot be empty")
+    @Size(max = RequestLimits.MAX_SPECS, message = "At most 100 specifications can be verified")
     private List<@Valid @NotNull(message = "Specification item cannot be null") SpecificationDto> specs;
     
     /** Per-run attack selection. Trust labels remain independent board/model inputs. */

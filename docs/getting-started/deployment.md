@@ -1,6 +1,6 @@
 # Production Deployment
 
-> Verified against code on 2026-07-05. Source: `backend/pom.xml`,
+> Verified against code on 2026-07-22. Source: `backend/pom.xml`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/configure/ProductionSafetyCheck.java`,
 > `frontend/package.json`, `frontend/src/api/`, `frontend/vite.config.ts`.
 
@@ -53,27 +53,67 @@ need an `/api` reverse proxy.
 
 ## Nginx reference configuration
 
-The web server serves the SPA bundle with a `try_files` fallback to `index.html` (so client-side routes resolve) and proxies `/api` to the backend on `localhost:8080`:
+The web server must terminate TLS, redirect HTTP to HTTPS, serve the SPA bundle with a
+`try_files` fallback to `index.html` (so client-side routes resolve), and proxy `/api`
+to the backend on `localhost:8080`:
 
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    client_max_body_size 4m;
 
     location / {
         root /var/www/iot-verify/dist;
         try_files $uri $uri/ /index.html;
     }
 
-    location /api {
+    # Portable scenes may include self-contained template snapshots and embedded icons.
+    location = /api/board/batch {
+        client_max_body_size 64m;
         proxy_pass http://localhost:8080;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8080;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
     }
 }
 ```
 
-Make sure the deployed frontend origin (for example `http://your-domain.com`) is present in `CORS_ORIGINS` on the backend.
+Replace the certificate paths with certificates issued for the host. Make sure the deployed frontend origin (for example `https://your-domain.com`) is present in `CORS_ORIGINS` on the backend.
+Restrict backend port `8080` to the local reverse proxy or a trusted private network.
+The application trusts Nginx's overwritten `X-Real-IP` for authentication rate limiting
+only when the immediate peer is loopback; it does not trust that header on direct requests.
+Keep the exact scene-batch location before the general `/api` location so its 64 MiB limit
+matches `IOT_VERIFY_MAX_SCENE_REQUEST_BYTES`, while unrelated API requests remain capped at
+4 MiB.
 
 ## Related
 

@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.dto.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -31,6 +32,7 @@ public class AttackScenarioDto {
     private Integer budget;
 
     @Valid
+    @Size(max = 50, message = "At most 50 attack points can be selected")
     @Builder.Default
     private List<AttackPointDto> points = new ArrayList<>();
 

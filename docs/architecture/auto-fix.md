@@ -10,7 +10,7 @@ repaired rules back to the board (see [Applying a suggestion](#applying-a-sugges
 API contract (`fault-rules`, `fix`, `fix/apply`) → [../api/verification.md](../api/verification.md).
 Spec formulas → [spec-templates.md](spec-templates.md).
 
-Verified against code on 2026-07-20. Source: `component/nusmv/fixer/` — `RuleFixer`,
+Verified against code on 2026-07-21. Source: `component/nusmv/fixer/` — `RuleFixer`,
 `localize/FaultLocalizer`, `strategy/{ParameterAdjustStrategy, ConditionAdjustStrategy,
 RemoveRulesFixStrategy, FixStrategyUtils, FixStrategyApplier}`, `BoardSemanticFingerprint`,
 `parameterize/{ParameterExtractor, CounterexampleInitialStateConstraints}`;
@@ -92,15 +92,9 @@ mode, state, and enum conditions are handled as condition-clause candidates rath
 parameter-adjustment targets. When no eligible target exists, the attempt is reported as
 `SKIPPED_NO_PARAMETERIZABLE_VALUES` instead of looking like a failed solver search.
 
-The parameterized discovery model adds validated `INIT` constraints for the original
-counterexample's complete first state: device modes and local values, environment values,
-mode/variable trust and privacy labels, device compromise choices, and automation-link
-choices. Only thresholds remain free. Invalid or incomplete replay data fails candidate
-generation closed: required fields are derived from the resolved device model and attack
-surface, so an absent device, value, property label, environment value, or attack choice
-cannot silently remain free. The negated specification also fails closed; translation errors never
-fall back to a trivially true placeholder property. Candidate generation rejects any
-model that disables a rule or skips a specification.
+The parameterized discovery model uses the candidate-only replay and fail-closed negation
+contract defined by the [NuSMV model](nusmv-model.md). Candidate generation also rejects
+any model that disables a rule or skips a specification.
 
 - `ParameterExtractor` reads solved numeric values. Policy-boundary hints are accepted only
   from the same resolved device or the same declared shared-environment domain; a same-named
@@ -327,9 +321,9 @@ still describes the model being changed:
   is reported as unknown and blocks with retryable `503`. `/fix` remains usable against
   the frozen model but adds an explicit warning for either confirmed drift or an
   unavailable comparison, so the degraded applicability is never silent.
-  Apply-side `503` responses proven to occur before the write carry
-  `data.reasonCode=FIX_APPLY_PREFLIGHT_UNAVAILABLE`; clients must not infer a no-write
-  result from an unclassified proxy or infrastructure `503`.
+  Apply-side `503` responses proven to occur before the write use the specialized mapping
+  defined in the [API error mapping](../api/overview.md#error-and-status-codes); clients must not
+  infer a no-write result from an unclassified proxy or infrastructure `503`.
 - **Board-rule drift** — the server's internal rule/condition positions are relative to
   the snapshot; apply aligns snapshot and current rules by index + an **order-preserving**
   fingerprint and rejects if rules were added/removed/edited/reordered, so a stale index

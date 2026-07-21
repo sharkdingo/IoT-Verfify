@@ -108,6 +108,9 @@ How the frontend calls the backend (real shapes, unwrapping, SSE):
   new assistant mutation, then reconcile board and run-history state. Match the reloaded
   terminal assistant row by `turnId`; never let an older completed turn replace the current
   local request.
+- **Chat history is cursor-paged.** Preserve `nextBeforeId`/`hasMore`, prepend older
+  pages without replacing recent messages, and remove optimistic turns only when the
+  SSE request was rejected before transport acceptance.
 
 ## Reference (link, don't duplicate)
 

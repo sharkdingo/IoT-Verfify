@@ -1147,11 +1147,13 @@ test.describe('board full-stack NuSMV user flow', () => {
     await rulePanel.locator('textarea').fill(detailedRuleRequirement)
     const ruleResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
-      return response.request().method() === 'GET'
-        && url.pathname === '/api/board/rules/recommend'
-        && url.searchParams.get('maxRecommendations') === '3'
-        && url.searchParams.get('category') === 'security'
-        && url.searchParams.get('userRequirement') === detailedRuleRequirement
+      if (response.request().method() !== 'POST'
+        || url.pathname !== '/api/board/rules/recommend') return false
+      const body = response.request().postDataJSON() as Record<string, unknown> | null
+      return body !== null
+        && body.maxRecommendations === 3
+        && body.category === 'security'
+        && body.userRequirement === detailedRuleRequirement
     })
     await page.getByTestId('generate-rule-recommendations').click()
     const ruleResponse = await ruleResponsePromise
@@ -1222,11 +1224,13 @@ test.describe('board full-stack NuSMV user flow', () => {
     await specPanel.locator('textarea').fill('privacy guard when motion is detected at night')
     const specResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
-      return response.request().method() === 'GET'
-        && url.pathname === '/api/board/specs/recommend'
-        && url.searchParams.get('maxRecommendations') === '2'
-        && url.searchParams.get('category') === 'privacy'
-        && url.searchParams.get('userRequirement') === 'privacy guard when motion is detected at night'
+      if (response.request().method() !== 'POST'
+        || url.pathname !== '/api/board/specs/recommend') return false
+      const body = response.request().postDataJSON() as Record<string, unknown> | null
+      return body !== null
+        && body.maxRecommendations === 2
+        && body.category === 'privacy'
+        && body.userRequirement === 'privacy guard when motion is detected at night'
     })
     await page.getByTestId('generate-spec-recommendations').click()
     const specResponse = await specResponsePromise

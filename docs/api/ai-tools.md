@@ -10,7 +10,7 @@ inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 `Result<Map<String, Object>>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-20. Source: component/aitool/, component/ai/.
+Verified against code on 2026-07-21. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -104,9 +104,12 @@ is reported separately as unconfirmed, never as a usable success.
 No-write previews and proposed alternatives carry `requiresUserConfirmation=true`, do
 not emit refresh commands, and stop the current tool loop so the model cannot approve its
 own deletion, reset, rename, or substitute choice. When protected work is pending, the
-configured model semantically classifies the latest message against only the action kinds
-the server says are live; malformed/unavailable classification authorizes nothing, and
-merely including `confirmed=true` in model-generated arguments is not authorization.
+client reads the server-authoritative pending kind and sends an explicit structured
+`CONFIRM` or `CANCEL` button command. Ordinary message text and model classification
+cannot authorize deletion, bundled-default reset, or full-scene replacement. The model
+may still classify only a non-destructive alternative choice; malformed/unavailable
+classification authorizes nothing, and merely including `confirmed=true` in
+model-generated arguments is never authorization.
 Each protected deletion or bundled-default reset preview issues a random, opaque
 `impactToken` bound on the server to the authenticated user, chat session, tool name,
 target, and canonical preview digest. A session holds at most one such pending protected

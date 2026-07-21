@@ -23,6 +23,7 @@ import cn.edu.nju.Iot_Verify.repository.SpecificationRepository;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
+import cn.edu.nju.Iot_Verify.repository.AiSessionStateRepository;
 import cn.edu.nju.Iot_Verify.service.DeviceTemplateService;
 import cn.edu.nju.Iot_Verify.service.AsyncTaskExecutionControl;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionControl;
@@ -78,6 +79,7 @@ class AuthServiceImplLogoutTest {
     @Mock private SpecificationRepository specificationRepository;
     @Mock private TraceRepository traceRepository;
     @Mock private VerificationTaskRepository verificationTaskRepository;
+    @Mock private AiSessionStateRepository aiSessionStateRepository;
 
     private AuthServiceImpl authService;
 
@@ -100,7 +102,7 @@ class AuthServiceImplLogoutTest {
                 deviceNodeRepository, deviceTemplateRepository, fuzzFindingRepository,
                 fuzzTaskRepository, ruleRepository,
                 simulationTaskRepository, simulationTraceRepository, specificationRepository,
-                traceRepository, verificationTaskRepository
+                traceRepository, verificationTaskRepository, aiSessionStateRepository
         );
     }
 

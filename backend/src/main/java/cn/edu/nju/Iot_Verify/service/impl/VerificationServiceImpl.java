@@ -1789,8 +1789,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     }
 
     private void cleanupTempFile(File file) {
-        // Keeping NuSMV model file for review: model.smv, request.json, output.txt, result.json
-        // Temp directories (nusmv_*) are retained for post-mortem debugging.
+        // The scheduled artifact cleaner bounds retained model/request/output/result directories.
     }
 
     private String syncVerificationExecutorSnapshot() {

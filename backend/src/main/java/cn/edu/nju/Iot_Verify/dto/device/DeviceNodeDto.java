@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.dto.device;
 
+import cn.edu.nju.Iot_Verify.dto.RequestLimits;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Max;
@@ -45,8 +46,10 @@ public class DeviceNodeDto {
     // 运行时状态（持久化需要，同时可用于从画布数据转换为验证数据）
     private String currentStateTrust;
     private String currentStatePrivacy;
-    private List<VariableStateDto> variables;
-    private List<PrivacyStateDto> privacies;
+    @Size(max = RequestLimits.MAX_DEVICE_VARIABLES, message = "At most 100 local variable values are allowed")
+    private List<@Valid @NotNull(message = "Variable item cannot be null") VariableStateDto> variables;
+    @Size(max = RequestLimits.MAX_DEVICE_PRIVACIES, message = "At most 100 local sensitivity values are allowed")
+    private List<@Valid @NotNull(message = "Privacy item cannot be null") PrivacyStateDto> privacies;
 
     @Data
     public static class Position {

@@ -1,11 +1,15 @@
 package cn.edu.nju.Iot_Verify.component.nusmv.executor;
 
+import cn.edu.nju.Iot_Verify.component.nusmv.NusmvTempArtifactRegistry;
 import cn.edu.nju.Iot_Verify.configure.NusmvConfig;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,10 +24,20 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class NusmvExecutor {
 
     private final NusmvConfig nusmvConfig;
+    private final NusmvTempArtifactRegistry tempArtifactRegistry;
+
+    @Autowired
+    public NusmvExecutor(NusmvConfig nusmvConfig, NusmvTempArtifactRegistry tempArtifactRegistry) {
+        this.nusmvConfig = nusmvConfig;
+        this.tempArtifactRegistry = tempArtifactRegistry;
+    }
+
+    public NusmvExecutor(NusmvConfig nusmvConfig) {
+        this(nusmvConfig, new NusmvTempArtifactRegistry());
+    }
 
     private static final int PROCESS_DESTROY_TIMEOUT_SECONDS = 5;
     private static final long READER_JOIN_TIMEOUT_MS = 5000;
@@ -54,10 +68,21 @@ public class NusmvExecutor {
     }
 
     private NusmvResult executeInternal(File smvFile, Long totalBudgetMs) throws InterruptedException {
-        if (smvFile == null || !smvFile.exists()) {
+        if (smvFile == null) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
         }
 
+        try (var ignored = tempArtifactRegistry.activate(smvFile)) {
+            if (!smvFile.exists()) {
+                return NusmvResult.error("NuSMV model file does not exist or is null");
+            }
+            return executeActiveModel(smvFile, totalBudgetMs);
+        } catch (IllegalStateException e) {
+            return NusmvResult.error(e.getMessage());
+        }
+    }
+
+    private NusmvResult executeActiveModel(File smvFile, Long totalBudgetMs) throws InterruptedException {
         long startedNanos = System.nanoTime();
         long configuredPermitTimeoutMs = Math.max(0, nusmvConfig.getAcquirePermitTimeoutMs());
         long permitTimeoutMs = totalBudgetMs == null
@@ -87,14 +112,10 @@ public class NusmvExecutor {
             process = processBuilder.start();
 
             final Process finalProcess = process;
-            StringBuilder outputBuilder = new StringBuilder();
+            BoundedOutputCollector outputBuilder = new BoundedOutputCollector(nusmvConfig.getMaxOutputBytes());
             Thread outputThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(finalProcess.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        outputBuilder.append(line).append("\n");
-                    }
+                try (InputStream output = finalProcess.getInputStream()) {
+                    drainOutput(output, outputBuilder);
                 } catch (IOException e) {
                     log.warn("Error reading NuSMV output: {}", e.getMessage());
                 }
@@ -120,7 +141,7 @@ public class NusmvExecutor {
             }
 
             int exitCode = process.exitValue();
-            String output = outputBuilder.toString();
+            String output = outputBuilder.text();
             log.debug("NuSMV exit code: {}, output length: {}", exitCode, output.length());
 
             // 将 NuSMV 输出保存到 smv 文件同目录下的 output.txt
@@ -128,6 +149,10 @@ public class NusmvExecutor {
 
             if (exitCode != 0) {
                 return NusmvResult.error("NuSMV exited with code " + exitCode + ": " + output);
+            }
+            if (outputBuilder.isTruncated()) {
+                return NusmvResult.error(
+                        "NuSMV output exceeded the configured retention limit; the result is incomplete");
             }
 
             // Parse per-spec results from output
@@ -272,10 +297,21 @@ public class NusmvExecutor {
         if (steps <= 0) {
             return SimulationOutput.error("Simulation steps must be positive, got: " + steps);
         }
-        if (smvFile == null || !smvFile.exists()) {
+        if (smvFile == null) {
             return SimulationOutput.error("NuSMV model file does not exist or is null");
         }
 
+        try (var ignored = tempArtifactRegistry.activate(smvFile)) {
+            if (!smvFile.exists()) {
+                return SimulationOutput.error("NuSMV model file does not exist or is null");
+            }
+            return executeActiveSimulation(smvFile, steps);
+        } catch (IllegalStateException e) {
+            return SimulationOutput.error(e.getMessage());
+        }
+    }
+
+    private SimulationOutput executeActiveSimulation(File smvFile, int steps) throws InterruptedException {
         boolean permitAcquired = acquireExecutionPermit();
         if (!permitAcquired) {
             return SimulationOutput.busy("NuSMV simulation is busy, please retry later");
@@ -295,17 +331,13 @@ public class NusmvExecutor {
             long timeout = getTimeout();
 
             final Process fp = process;
-            StringBuilder stdoutBuilder = new StringBuilder();
-            StringBuilder stderrBuilder = new StringBuilder();
+            BoundedOutputCollector stdoutBuilder = new BoundedOutputCollector(nusmvConfig.getMaxOutputBytes());
+            BoundedOutputCollector stderrBuilder = new BoundedOutputCollector(nusmvConfig.getMaxOutputBytes());
 
             // 独立线程读 stdout，防止管道缓冲区满导致死锁
             Thread stdoutThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(fp.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stdoutBuilder.append(line).append("\n");
-                    }
+                try (InputStream output = fp.getInputStream()) {
+                    drainOutput(output, stdoutBuilder);
                 } catch (IOException e) {
                     log.warn("Error reading NuSMV stdout: {}", e.getMessage());
                 }
@@ -313,12 +345,8 @@ public class NusmvExecutor {
 
             // 独立线程读 stderr
             Thread stderrThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(fp.getErrorStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stderrBuilder.append(line).append("\n");
-                    }
+                try (InputStream output = fp.getErrorStream()) {
+                    drainOutput(output, stderrBuilder);
                 } catch (IOException e) {
                     log.warn("Error reading NuSMV stderr: {}", e.getMessage());
                 }
@@ -350,8 +378,8 @@ public class NusmvExecutor {
                 return SimulationOutput.error("NuSMV simulation output reader did not finish in time");
             }
 
-            String rawOutput = stdoutBuilder.toString();
-            String stderrOutput = stderrBuilder.toString();
+            String rawOutput = stdoutBuilder.text();
+            String stderrOutput = stderrBuilder.text();
 
             // 保存原始输出到文件（与批处理模式一致）
             saveOutputToFile(smvFile, rawOutput);
@@ -372,6 +400,10 @@ public class NusmvExecutor {
                     summary += " stdout: " + rawOutput.substring(0, Math.min(rawOutput.length(), 1000));
                 }
                 return SimulationOutput.error(summary);
+            }
+            if (stdoutBuilder.isTruncated() || stderrBuilder.isTruncated()) {
+                return SimulationOutput.error(
+                        "NuSMV simulation output exceeded the configured retention limit; the trace is incomplete");
             }
 
             // 从输出中提取模拟轨迹
@@ -459,6 +491,14 @@ public class NusmvExecutor {
         }
         String normalized = trace.toString().stripTrailing();
         return normalized.isBlank() ? null : normalized;
+    }
+
+    static void drainOutput(InputStream input, BoundedOutputCollector collector) throws IOException {
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            collector.append(buffer, 0, read);
+        }
     }
 
     /**
@@ -575,6 +615,55 @@ public class NusmvExecutor {
         }
         String result = trace.toString().trim();
         return result.isEmpty() ? null : result;
+    }
+
+    static final class BoundedOutputCollector {
+        private static final String TRUNCATION_MARKER = "\n... (NuSMV output truncated)\n";
+        private static final int MARKER_BYTES = TRUNCATION_MARKER.getBytes(StandardCharsets.UTF_8).length;
+
+        private final int payloadLimit;
+        private final ByteArrayOutputStream content = new ByteArrayOutputStream();
+        private boolean truncated;
+
+        BoundedOutputCollector(int maxBytes) {
+            this.payloadLimit = Math.max(0, maxBytes - MARKER_BYTES);
+        }
+
+        void appendLine(String line) {
+            byte[] value = (line + '\n').getBytes(StandardCharsets.UTF_8);
+            append(value, 0, value.length);
+        }
+
+        void append(byte[] value, int offset, int length) {
+            if (truncated || length <= 0) return;
+            int remaining = payloadLimit - content.size();
+            int retained = Math.min(remaining, length);
+            if (retained > 0) {
+                content.write(value, offset, retained);
+            }
+            if (retained < length) truncated = true;
+        }
+
+        String text() {
+            String decoded = decodeUtf8Prefix(content.toByteArray());
+            return truncated ? decoded + TRUNCATION_MARKER : decoded;
+        }
+
+        boolean isTruncated() {
+            return truncated;
+        }
+
+        private String decodeUtf8Prefix(byte[] bytes) {
+            try {
+                return StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.IGNORE)
+                        .onUnmappableCharacter(CodingErrorAction.IGNORE)
+                        .decode(ByteBuffer.wrap(bytes))
+                        .toString();
+            } catch (CharacterCodingException e) {
+                throw new IllegalStateException("Could not decode retained NuSMV output", e);
+            }
+        }
     }
 
     /**

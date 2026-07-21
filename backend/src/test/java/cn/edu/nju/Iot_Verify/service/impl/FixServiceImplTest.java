@@ -434,6 +434,20 @@ class FixServiceImplTest {
     }
 
     @Test
+    void fix_currentTemplateSetEmpty_reportsConfirmedDrift() {
+        setupTraceContextWithCreatedAt(
+                LocalDateTime.of(2025, 1, 1, 0, 0),
+                FixResultDto.builder().fixable(false).summary("Original summary.").build());
+        currentTemplateManifests = Map.of();
+
+        FixResultDto result = fixService.fix(1L, 1L, null, null);
+
+        assertEquals(TemplateSnapshotComparison.CHANGED, result.getTemplateSnapshotComparison());
+        assertTrue(result.getWarnings().stream().anyMatch(warning -> warning.contains("differ")));
+        assertTrue(result.getSummary().contains("verification is run again"));
+    }
+
+    @Test
     void templateComparison_emptyLegacyApiAssignmentsDoesNotCreateFalseDrift() throws Exception {
         DeviceManifest.API frozenApi = DeviceManifest.API.builder()
                 .name("on")
@@ -772,19 +786,20 @@ class FixServiceImplTest {
         verify(boardStorageService).updateRulesAgainstSnapshot(anyLong(), any());
     }
 
-    // ---- template-drift fail-closed on apply (a repo error must not let apply proceed) ----
+    // ---- template-drift fail-closed on apply ----
 
     @Test
-    void applyFix_templateDriftCheckThrows_failsClosedAndNotApplied() {
+    void applyFix_currentTemplateSetEmpty_rejectsAsConfirmedDrift() {
         setupApplyContextWithTraceCreatedAt();
-        // Current manifests cannot be read, so exact equality cannot be confirmed and apply fails closed.
+        // A full-scene clear legitimately produces no referenced manifests. Compared with the
+        // non-empty verification snapshot, that is confirmed drift rather than an unavailable read.
         currentTemplateManifests = Map.of();
         stubServerRecompute(verifiedParameterSuggestion("40"));
         stubUpdateRules(new java.util.ArrayList<>(List.of(boardRuleMatchingSnapshot())));
 
-        ServiceUnavailableException ex = assertThrows(ServiceUnavailableException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> fixService.applyFix(1L, 1L, "parameter", verifiedParameterSuggestion("40"), null));
-        assertTrue(ex.getMessage().contains("retry"));
+        assertTrue(ex.getMessage().contains("re-run verification"));
         verify(boardStorageService).updateRulesAgainstSnapshot(anyLong(), any());
     }
 
