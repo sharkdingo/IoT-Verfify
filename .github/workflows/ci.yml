@@ -177,7 +177,7 @@ jobs:
             kill -0 "$backend_pid" || { cat "$RUNNER_TEMP/backend-e2e.log"; exit 1; }
             status="$(curl -s -o "$RUNNER_TEMP/readiness.json" -w '%{http_code}' \
               -H 'Content-Type: application/json' \
-              -d '{"identifier":"ci-readiness-user","password":"Pass1234"}' \
+              -d '{"identifier":"ci-readiness-user","password":"Pass1234!!"}' \
               http://127.0.0.1:8080/api/auth/login || true)"
             [ "$status" = 401 ] && break
             sleep 2

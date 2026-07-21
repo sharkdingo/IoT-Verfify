@@ -68,7 +68,7 @@ public class NusmvExecutor {
     }
 
     private NusmvResult executeInternal(File smvFile, Long totalBudgetMs) throws InterruptedException {
-        if (smvFile == null) {
+        if (smvFile == null || !smvFile.exists()) {
             return NusmvResult.error("NuSMV model file does not exist or is null");
         }
 
@@ -297,7 +297,7 @@ public class NusmvExecutor {
         if (steps <= 0) {
             return SimulationOutput.error("Simulation steps must be positive, got: " + steps);
         }
-        if (smvFile == null) {
+        if (smvFile == null || !smvFile.exists()) {
             return SimulationOutput.error("NuSMV model file does not exist or is null");
         }
 

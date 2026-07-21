@@ -85,7 +85,9 @@ class NusmvExecutorSimulationTest {
 
     @Test
     void executeInteractiveSimulation_nonExistentFile_returnsError() throws Exception {
-        java.io.File nonExistent = new java.io.File("/tmp/does_not_exist_" + System.nanoTime() + ".smv");
+        java.io.File nonExistent = new java.io.File(
+                System.getProperty("java.io.tmpdir"),
+                "does_not_exist_" + System.nanoTime() + ".smv");
         NusmvExecutor.SimulationOutput output = executor.executeInteractiveSimulation(nonExistent, 10);
         assertFalse(output.isSuccess());
         assertTrue(output.getErrorMessage().contains("does not exist"));

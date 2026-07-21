@@ -27,6 +27,9 @@ history into a technical spec. The spec content itself now lives under
   have explicit capacity limits.
 
 #### Fixed
+- Made missing NuSMV model validation deterministic before artifact locking, keeping the
+  Linux and Windows test paths aligned while retaining the post-lock race check. CI and E2E
+  account probes now use credentials that match the current registration contract.
 - Aligned interactive recommendation and automatic-fix request-id validation across DTOs,
   controllers, and execution services, and preserved accepted chat turns when a successful
   HTTP response later exposes no readable SSE body.
