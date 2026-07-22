@@ -28,12 +28,14 @@ export class ChatStreamError extends Error {
     readonly status?: number
     readonly kind: ChatStreamErrorKind
     readonly detail?: string
+    readonly reasonCode?: string
 
     constructor(message: string, options: {
         serverFrame?: boolean
         status?: number
         kind?: ChatStreamErrorKind
         detail?: string
+        reasonCode?: string
     } = {}) {
         super(message)
         this.name = 'ChatStreamError'
@@ -41,6 +43,7 @@ export class ChatStreamError extends Error {
         this.status = options.status
         this.kind = options.kind ?? (this.serverFrame ? 'SERVER_FRAME' : 'UNKNOWN')
         this.detail = options.detail
+        this.reasonCode = options.reasonCode
     }
 }
 
@@ -172,10 +175,11 @@ export const sendStreamChat = async (
                 }
             }
             const detail = await readErrorDetail(response);
-            throw new ChatStreamError(`HTTP ${response.status}: ${detail}`, {
+            throw new ChatStreamError(`HTTP ${response.status}: ${detail.message}`, {
                 kind: 'HTTP_ERROR',
                 status: response.status,
-                detail
+                detail: detail.message,
+                reasonCode: detail.reasonCode
             });
         }
 
@@ -297,14 +301,17 @@ const readErrorDetail = async (response: Response) => {
     const fallback = response.statusText || 'Request failed';
     try {
         const body = await response.text();
-        if (!body) return fallback;
+        if (!body) return { message: fallback };
         try {
             const json = JSON.parse(body);
-            return json?.message || json?.error || fallback;
+            return {
+                message: json?.message || json?.error || fallback,
+                reasonCode: typeof json?.data?.reasonCode === 'string' ? json.data.reasonCode : undefined
+            };
         } catch {
-            return body.slice(0, 200);
+            return { message: body.slice(0, 200) };
         }
     } catch {
-        return fallback;
+        return { message: fallback };
     }
 };

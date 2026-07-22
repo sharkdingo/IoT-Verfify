@@ -10,12 +10,7 @@ html, body {
     flex-direction: column;
 }
 
-/*
- * Material icon fonts are fetched from Google Fonts. If that request is slow or
- * unavailable, the ligature text (for example "play_circle") must not resize the
- * UI. Keep every icon slot to a single glyph box so controls remain usable while
- * the font is loading or missing.
- */
+/* Local font slots keep ligature icons stable while the bundled font is decoded. */
 .material-symbols-outlined,
 .material-icons-round {
     font-family: 'Material Symbols Outlined', 'Material Icons Round', sans-serif;

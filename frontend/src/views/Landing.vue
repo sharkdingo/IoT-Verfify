@@ -7,6 +7,7 @@ import PublicHeader from '@/components/common/PublicHeader.vue'
 import { authApi } from '@/api/auth'
 import { useAuth } from '@/stores/auth'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
+import { isValidNormalizedUsername, normalizeAccountIdentifier } from '@/utils/accountIdentifier'
 
 type AuthMode = 'login' | 'register'
 
@@ -126,7 +127,7 @@ const validatePhone = (phone: string, key: string) => {
 
 const validateLogin = () => {
   clearErrors()
-  if (!loginForm.identifier.trim()) {
+  if (!normalizeAccountIdentifier(loginForm.identifier)) {
     formErrors.loginIdentifier = t('auth.accountRequired')
   }
   if (!loginForm.password) {
@@ -145,12 +146,15 @@ const validateLogin = () => {
 const validateRegister = () => {
   clearErrors()
   const validPhone = validatePhone(registerForm.phone, 'registerPhone')
-  const username = registerForm.username.trim()
+  const username = normalizeAccountIdentifier(registerForm.username)
+  const usernameLength = Array.from(username).length
 
   if (!username) {
     formErrors.registerUsername = t('auth.usernameRequired')
-  } else if (username.length < 3 || username.length > 20) {
+  } else if (usernameLength < 3 || usernameLength > 20) {
     formErrors.registerUsername = t('auth.usernameLength')
+  } else if (!isValidNormalizedUsername(username)) {
+    formErrors.registerUsername = t('auth.usernameInvalidCharacters')
   }
 
   if (!registerForm.password) {
@@ -202,7 +206,7 @@ const handleLogin = async () => {
   loading.value = true
   try {
     const res = await authApi.login({
-      identifier: loginForm.identifier.trim(),
+      identifier: normalizeAccountIdentifier(loginForm.identifier),
       password: loginForm.password
     })
 
@@ -237,7 +241,7 @@ const handleRegister = async () => {
   try {
     const res = await authApi.register({
       phone: registerForm.phone.trim(),
-      username: registerForm.username.trim(),
+      username: normalizeAccountIdentifier(registerForm.username),
       password: registerForm.password
     })
 
@@ -588,8 +592,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;700;800&display=swap');
-
 .landing-wrapper {
   position: relative;
   width: 100%;
@@ -597,7 +599,7 @@ onUnmounted(() => {
   overflow-x: hidden;
   overflow-y: auto;
   background-color: hsl(201, 100%, 13%);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter Variable', 'Inter', sans-serif;
   color: hsl(0, 0%, 100%);
 }
 

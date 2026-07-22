@@ -131,6 +131,22 @@ class GlobalExceptionHandlerSmvTest {
     }
 
     @Test
+    void handleChatHistoryQuotaExceeded_shouldReturnStable429Details() {
+        ResponseEntity<Result<Map<String, Object>>> response =
+                handler.handleChatHistoryQuotaExceededException(
+                        new ChatHistoryQuotaExceededException(4_000L, 5_000, 1_090L));
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, response.getStatusCode());
+        Result<Map<String, Object>> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(429, body.getCode());
+        assertEquals("CHAT_HISTORY_LIMIT_REACHED", body.getData().get("reasonCode"));
+        assertEquals(4_000L, body.getData().get("messageCount"));
+        assertEquals(5_000, body.getData().get("maxMessagesPerSession"));
+        assertEquals(1_090L, body.getData().get("requiredTurnCapacity"));
+    }
+
+    @Test
     void handleFixApplyPreflightUnavailable_shouldExposeStableReasonCode() {
         ResponseEntity<Result<Map<String, Object>>> response =
                 handler.handleFixApplyPreflightUnavailableException(

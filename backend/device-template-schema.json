@@ -18,8 +18,8 @@
     "Icon": {
       "type": "string",
       "maxLength": 262144,
-      "pattern": "^(data:image\\/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+|https:\\/\\/\\S+)$",
-      "description": "Optional template icon. Use a data:image URI for self-contained JSON imports, or an HTTPS image URL. If omitted, the frontend uses a bundled default icon or generates a stable fallback icon."
+      "pattern": "^data:image\\/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+$",
+      "description": "Optional self-contained template icon as a data:image URI. Remote image URLs are rejected so opening a template cannot contact an untrusted host. If omitted, the frontend uses a bundled default icon or generates a stable fallback icon."
     },
     "Modes": {
       "type": "array",

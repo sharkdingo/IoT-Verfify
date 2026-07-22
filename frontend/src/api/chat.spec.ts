@@ -200,6 +200,28 @@ describe('chat stream lifecycle semantics', () => {
     expect(routerMocks.push).not.toHaveBeenCalled()
   })
 
+  it('preserves a structured chat-history quota reason from an HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        message: 'Conversation limit reached',
+        data: { reasonCode: 'CHAT_HISTORY_LIMIT_REACHED' }
+      }))
+    }))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() }
+    )).rejects.toMatchObject({
+      kind: 'HTTP_ERROR',
+      status: 429,
+      reasonCode: 'CHAT_HISTORY_LIMIT_REACHED'
+    })
+  })
+
   it('classifies a missing response body without exposing its English parser message as UI text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: null }))
     const onError = vi.fn()

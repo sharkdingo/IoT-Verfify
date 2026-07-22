@@ -22,11 +22,23 @@ vi.mock('element-plus/es/components/message-box/style/css', () => ({}))
 
 vi.mock('@/api/chat', () => ({
   ChatStreamError: class ChatStreamError extends Error {
-    readonly serverFrame = false
+    readonly serverFrame: boolean
+    readonly kind: string
+    readonly status?: number
+    readonly reasonCode?: string
+
+    constructor(message: string, options: Record<string, any> = {}) {
+      super(message)
+      this.serverFrame = options.serverFrame ?? false
+      this.kind = options.kind ?? 'UNKNOWN'
+      this.status = options.status
+      this.reasonCode = options.reasonCode
+    }
   },
   ...chatApi
 }))
 
+import { ChatStreamError } from '@/api/chat'
 import ChatView from '../ChatView.vue'
 
 const chatStore = useChatStore()
@@ -521,6 +533,30 @@ describe('ChatView', () => {
     expect((wrapper.get('[data-testid="chat-input"]').element as HTMLTextAreaElement).value)
       .toBe('不要留下虚假消息')
 
+    wrapper.unmount()
+  })
+
+  it('explains a stored-history limit instead of reporting a concurrency conflict', async () => {
+    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as any)
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.sendStreamChat.mockRejectedValue(new ChatStreamError('limit', {
+      kind: 'HTTP_ERROR',
+      status: 429,
+      reasonCode: 'CHAT_HISTORY_LIMIT_REACHED'
+    }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-input"]').setValue('继续检查')
+    await wrapper.get('[data-testid="chat-send"]').trigger('click')
+    await flushPromises()
+
+    expect(errorMessage).toHaveBeenCalledWith(
+      '发送消息失败：当前对话已接近历史容量上限，请新建对话，或删除不再需要的旧对话。'
+    )
     wrapper.unmount()
   })
 

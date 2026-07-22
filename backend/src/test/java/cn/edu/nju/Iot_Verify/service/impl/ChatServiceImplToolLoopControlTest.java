@@ -17,6 +17,7 @@ import cn.edu.nju.Iot_Verify.dto.chat.ChatConfirmationCommandDto;
 import cn.edu.nju.Iot_Verify.dto.chat.StreamResponseDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
+import cn.edu.nju.Iot_Verify.exception.ChatHistoryQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.po.ChatMessagePo;
@@ -1453,6 +1454,40 @@ class ChatServiceImplToolLoopControlTest {
                         && msg.getContent().contains("All requested rule pages were checked.")
                         && !msg.getContent().contains("planning limit")));
         verify(emitter).complete();
+    }
+
+    @Test
+    void beginStreamRequest_whenHistoryCannotReserveAFullTurn_shouldRejectBeforeClaimingLease() {
+        ChatSessionPo session = new ChatSessionPo();
+        session.setId("s1");
+        session.setUserId(1L);
+        when(sessionRepo.findByIdAndUserIdForUpdate("s1", 1L)).thenReturn(Optional.of(session));
+        when(messageRepo.countBySessionId("s1")).thenReturn(4_000L);
+
+        ChatHistoryQuotaExceededException error = assertThrows(
+                ChatHistoryQuotaExceededException.class,
+                () -> service.beginStreamRequest(1L, "s1"));
+
+        assertEquals(5_000, error.getMaxMessagesPerSession());
+        assertEquals(1_090L, error.getRequiredTurnCapacity());
+        assertEquals(null, session.getActiveExecutionId());
+    }
+
+    @Test
+    void executeToolLoop_whenOnePlanningResponseExceedsToolCallLimit_shouldExecuteNone() throws Exception {
+        List<LlmToolCall> calls = java.util.stream.IntStream.range(0, 17)
+                .mapToObj(index -> new LlmToolCall("tc_" + index, "list_rules", "{}"))
+                .toList();
+        when(llmChatService.chatWithTools(anyList(), anyList()))
+                .thenReturn(LlmChatResponse.ofToolCalls(calls));
+
+        Object result = invokeToolLoop(new AtomicBoolean(false), new LinkedHashSet<>());
+
+        Method stopReason = result.getClass().getDeclaredMethod("stopReason");
+        stopReason.setAccessible(true);
+        assertEquals("EMERGENCY_LIMIT", stopReason.invoke(result).toString());
+        verify(aiToolManager, never()).execute(anyString(), anyString());
+        verify(messageRepo, never()).saveAndFlush(any());
     }
 
     @Test

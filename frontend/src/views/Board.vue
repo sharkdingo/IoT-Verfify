@@ -10444,6 +10444,18 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
 
 // ==== Results Dialog ====
 const showResultDialog = computed(() => !!verificationResult.value || !!verificationError.value)
+const closeResultDialog = () => {
+  verificationResult.value = null
+  verificationError.value = null
+}
+const {
+  setDialogRef: setVerificationResultDialogRef,
+  handleModalKeydown: handleVerificationResultDialogKeydown
+} = useModalAccessibility(
+  showResultDialog,
+  closeResultDialog,
+  () => document.querySelector<HTMLElement>('[data-testid="open-verification-panel"]')
+)
 const isSimulationResultDialogOpen = computed(() => !!simulationResult.value || !!simulationError.value)
 const closeSimulationResultDialog = () => {
   simulationResult.value = null
@@ -10665,10 +10677,6 @@ const counterexampleTraceHelpText = computed(() => {
   return details.join('\n\n')
 })
 
-const closeResultDialog = () => {
-  verificationResult.value = null
-  verificationError.value = null
-}
 </script>
 
 <template>
@@ -14169,8 +14177,17 @@ const closeResultDialog = () => {
     data-testid="verification-result-dialog"
     class="fixed inset-0 z-[2400] bg-black/60 backdrop-blur-sm flex items-center justify-center"
     @click="closeResultDialog"
+    @keydown="handleVerificationResultDialogKeydown"
   >
-    <div class="min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col" @click.stop>
+    <div
+      :ref="setVerificationResultDialogRef"
+      class="min-h-0 max-h-[85vh] w-[650px] max-w-[95vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="verification-result-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <!-- Header -->
       <div data-testid="verification-result-header" class="relative flex-shrink-0 overflow-hidden rounded-t-2xl border-b" :class="verificationResultStatus.headerClass">
         <div class="relative flex items-center justify-between p-5">
@@ -14181,7 +14198,7 @@ const closeResultDialog = () => {
               </span>
             </div>
             <div>
-              <h3 class="text-xl font-bold text-slate-800">{{ t('app.verificationResult') }}</h3>
+              <h3 id="verification-result-dialog-title" class="text-xl font-bold text-slate-800">{{ t('app.verificationResult') }}</h3>
               <p class="text-sm text-slate-600">{{ verificationResultStatus.detail }}</p>
             </div>
           </div>

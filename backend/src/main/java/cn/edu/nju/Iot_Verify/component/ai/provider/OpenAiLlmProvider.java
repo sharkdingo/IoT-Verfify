@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.ai.provider;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControl;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolCall;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmToolSpec;
@@ -40,6 +41,9 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * OpenAI-compatible {@link LlmProvider} implementation and the sole anti-corruption layer
@@ -101,23 +105,75 @@ public class OpenAiLlmProvider implements LlmProvider {
     @Override
     public LlmChatResponse chat(LlmChatRequest request) {
         ChatCompletionCreateParams params = toParams(request, false);
-        ChatCompletion completion;
         try {
-            completion = client.chat().completions().create(params);
+            return parseResponse(client.chat().completions().create(params));
         } catch (Exception e) {
             logProviderError("OpenAI chat completion failed", e);
             throw ServiceUnavailableException.aiService(e);
         }
-        return parseResponse(completion);
+    }
+
+    @Override
+    public LlmChatResponse chat(LlmChatRequest request, LlmRequestControl control) {
+        if (control.isCancellationRequested()) return LlmChatResponse.empty();
+        ChatCompletionCreateParams params = toParams(request, false);
+        CompletableFuture<ChatCompletion> future;
+        try {
+            future = client.async().chat().completions().create(params);
+        } catch (Exception e) {
+            if (control.isCancellationRequested()) return LlmChatResponse.empty();
+            logProviderError("OpenAI chat completion failed", e);
+            throw ServiceUnavailableException.aiService(e);
+        }
+        AutoCloseable cancellation = () -> future.cancel(true);
+        control.attach(cancellation);
+        try {
+            return parseResponse(future.get());
+        } catch (CancellationException e) {
+            if (control.isCancellationRequested()) return LlmChatResponse.empty();
+            throw e;
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            return LlmChatResponse.empty();
+        } catch (ExecutionException e) {
+            if (control.isCancellationRequested()) return LlmChatResponse.empty();
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            Exception providerFailure = cause instanceof Exception exception
+                    ? exception
+                    : new RuntimeException(cause);
+            logProviderError("OpenAI chat completion failed", providerFailure);
+            throw ServiceUnavailableException.aiService(providerFailure);
+        } catch (Exception e) {
+            if (control.isCancellationRequested()) return LlmChatResponse.empty();
+            logProviderError("OpenAI chat completion failed", e);
+            throw ServiceUnavailableException.aiService(e);
+        } finally {
+            control.detach(cancellation);
+        }
     }
 
     @Override
     public void streamChat(LlmChatRequest request, Consumer<String> onDelta, BooleanSupplier shouldStop) {
+        streamChat(request, onDelta, shouldStop, new LlmRequestControl());
+    }
+
+    @Override
+    public void streamChat(LlmChatRequest request,
+                           Consumer<String> onDelta,
+                           BooleanSupplier shouldStop,
+                           LlmRequestControl control) {
+        if (control.isCancellationRequested()) return;
         ChatCompletionCreateParams params = toParams(request, true);
-        try (StreamResponse<ChatCompletionChunk> stream = client.chat().completions().createStreaming(params)) {
+        StreamResponse<ChatCompletionChunk> stream = null;
+        AutoCloseable cancellation = null;
+        try {
+            stream = client.chat().completions().createStreaming(params);
+            cancellation = stream::close;
+            control.attach(cancellation);
             Stream<ChatCompletionChunk> chunks = stream.stream();
             for (ChatCompletionChunk chunk : (Iterable<ChatCompletionChunk>) chunks::iterator) {
-                if (shouldStop.getAsBoolean()) {
+                if (shouldStop.getAsBoolean() || control.isCancellationRequested()) {
                     break;
                 }
                 if (chunk.choices().isEmpty()) {
@@ -128,12 +184,15 @@ public class OpenAiLlmProvider implements LlmProvider {
                         .ifPresent(onDelta);
             }
         } catch (Exception e) {
-            if (shouldStop.getAsBoolean()) {
+            if (shouldStop.getAsBoolean() || control.isCancellationRequested()) {
                 log.info("OpenAI streaming chat stopped after cancellation: {}", e.toString());
                 return;
             }
             logProviderError("OpenAI streaming chat error", e);
             throw ServiceUnavailableException.aiService(e);
+        } finally {
+            control.detach(cancellation);
+            if (stream != null) stream.close();
         }
     }
 

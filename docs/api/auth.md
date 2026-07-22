@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-21. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-22. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -18,7 +18,7 @@ Public. Creates a user.
 | Field | Type | Rules |
 | :--- | :--- | :--- |
 | `phone` | `String` | Required; must match `^1[3-9]\d{9}$` (mainland China mobile) |
-| `username` | `String` | Required; 3–20 characters; unique and can be used to log in |
+| `username` | `String` | Required; raw input at most 100 characters; NFC-normalized and stripped of surrounding Unicode whitespace; 3–20 Unicode code points afterwards; no control, invisible format, or line-separator characters; unique with case- and accent-sensitive matching; usable for login |
 | `password` | `String` | Required; 10–64 characters and at most 72 UTF-8 bytes |
 
 **Response**: `AuthResponseDto` (under `data`)
@@ -42,6 +42,8 @@ with separate higher source-IP ceilings so ordinary users behind one NAT do not 
 low credential limit. Excess attempts return structured `429` data and `Retry-After`.
 The owning limits and multi-instance guidance live in the
 [configuration reference](../getting-started/configuration.md#authentication-jwt).
+Registration, login, deletion confirmation, and authentication throttling use the same
+username normalization, so surrounding whitespace cannot create an unreachable account.
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/register \
@@ -59,7 +61,7 @@ Public. Returns a JWT token.
 
 | Field | Type | Rules |
 | :--- | :--- | :--- |
-| `identifier` | `String` | Required; phone number or username; at most 100 characters |
+| `identifier` | `String` | Required; phone number or username; at most 100 characters; usernames use the registration normalization above |
 | `password` | `String` | Required; at most 128 characters |
 
 **Response**: `AuthResponseDto` (under `data`)
@@ -119,7 +121,7 @@ lock or by the missing task row, so deleted accounts do not receive late history
 | Field | Type | Rules |
 | :--- | :--- | :--- |
 | `password` | `String` | Required; at most 128 characters and must match the current account password |
-| `confirmation` | `String` | Required; at most 100 characters and must exactly match the current `username` or `phone` |
+| `confirmation` | `String` | Required; at most 100 characters; normalized like login and then must exactly match the current `username` or `phone` |
 
 Password or confirmation mismatches return `400 Bad Request`; they do not revoke the
 current session. Missing/invalid authentication still returns `401 Unauthorized`.

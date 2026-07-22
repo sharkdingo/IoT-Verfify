@@ -28,7 +28,7 @@ public class ChatMessagePo {
     @Column(nullable = false) // "user", "assistant", "system"
     private String role;
 
-    @Column(columnDefinition = "TEXT") // 支持长文本
+    @Column(columnDefinition = "LONGTEXT")
     private String content;
 
     @Column(name = "turn_id", length = 64)

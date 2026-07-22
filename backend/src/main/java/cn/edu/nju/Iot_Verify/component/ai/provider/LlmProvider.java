@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.component.ai.provider;
 
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatRequest;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControl;
 
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -31,6 +32,10 @@ public interface LlmProvider {
      */
     LlmChatResponse chat(LlmChatRequest request);
 
+    default LlmChatResponse chat(LlmChatRequest request, LlmRequestControl control) {
+        return chat(request);
+    }
+
     /**
      * Streaming chat completion. Text deltas are delivered to {@code onDelta} as they arrive.
      * Streaming stops early (and the underlying HTTP stream is closed) as soon as
@@ -41,4 +46,11 @@ public interface LlmProvider {
      * @param shouldStop cooperative cancellation signal, polled between chunks
      */
     void streamChat(LlmChatRequest request, Consumer<String> onDelta, BooleanSupplier shouldStop);
+
+    default void streamChat(LlmChatRequest request,
+                            Consumer<String> onDelta,
+                            BooleanSupplier shouldStop,
+                            LlmRequestControl control) {
+        streamChat(request, onDelta, shouldStop);
+    }
 }

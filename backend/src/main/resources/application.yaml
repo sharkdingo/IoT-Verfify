@@ -52,6 +52,9 @@ chat:
   execution:
     max-tool-rounds: ${CHAT_MAX_TOOL_ROUNDS:64}
     max-stagnant-rounds: ${CHAT_MAX_STAGNANT_ROUNDS:2}
+    max-tool-result-bytes: ${CHAT_MAX_TOOL_RESULT_BYTES:49152}
+    max-tool-calls-per-round: ${CHAT_MAX_TOOL_CALLS_PER_ROUND:16}
+    max-messages-per-session: ${CHAT_MAX_MESSAGES_PER_SESSION:5000}
     lease-ttl-ms: ${CHAT_EXECUTION_LEASE_TTL_MS:30000}
     lease-heartbeat-ms: ${CHAT_EXECUTION_LEASE_HEARTBEAT_MS:10000}
 

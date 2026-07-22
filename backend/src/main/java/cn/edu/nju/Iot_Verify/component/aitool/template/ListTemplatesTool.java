@@ -9,6 +9,7 @@ import cn.edu.nju.Iot_Verify.service.BoardStorageService;
 import cn.edu.nju.Iot_Verify.util.FunctionParameterSchema;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -41,7 +42,7 @@ public class ListTemplatesTool extends AbstractAiTool {
         ));
         props.put("detail", Map.of(
                 "type", "boolean",
-                "description", "If true, return full manifest details (modes, variables, APIs, transitions). Default false (summary only)."
+                "description", "If true, return semantic manifest details (modes, variables, APIs, transitions) without the UI-only Icon. Default false (summary only)."
         ));
 
         FunctionParameterSchema schema = new FunctionParameterSchema(
@@ -80,7 +81,10 @@ public class ListTemplatesTool extends AbstractAiTool {
             }
 
             if (detail) {
-                return objectMapper.writeValueAsString(Map.of("count", templates.size(), "templates", templates));
+                List<Map<String, Object>> details = templates.stream()
+                        .map(this::detailView)
+                        .toList();
+                return objectMapper.writeValueAsString(Map.of("count", details.size(), "templates", details));
             }
 
             // Summary mode: name + description + modes + API names
@@ -113,5 +117,19 @@ public class ListTemplatesTool extends AbstractAiTool {
             log.error("list_templates failed", e);
             return errorJson("Failed to list templates.", "INTERNAL_ERROR", 500);
         }
+    }
+
+    private Map<String, Object> detailView(DeviceTemplateDto template) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("id", template.getId());
+        detail.put("name", template.getName());
+        detail.put("defaultTemplate", template.getDefaultTemplate());
+        if (template.getManifest() != null) {
+            Map<String, Object> manifest = objectMapper.convertValue(
+                    template.getManifest(), new TypeReference<LinkedHashMap<String, Object>>() { });
+            manifest.remove("Icon");
+            detail.put("manifest", manifest);
+        }
+        return detail;
     }
 }

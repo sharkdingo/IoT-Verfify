@@ -42,7 +42,7 @@ public class LlmChatService {
                 .messages(messages)
                 .tools(tools)
                 .build();
-        return llmProvider.chat(request);
+        return llmProvider.chat(request, LlmRequestControlHolder.currentOrNew());
     }
 
     /**
@@ -53,6 +53,7 @@ public class LlmChatService {
         LlmChatRequest request = LlmChatRequest.builder()
                 .messages(messages)
                 .build();
-        llmProvider.streamChat(request, onDelta, shouldStop);
+        llmProvider.streamChat(
+                request, onDelta, shouldStop, LlmRequestControlHolder.currentOrNew());
     }
 }

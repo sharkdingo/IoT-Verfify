@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -58,6 +59,31 @@ class TemplateToolsFallbackTest {
 
         assertEquals("VALIDATION_ERROR", json.path("errorCode").asText());
         verify(boardStorageService, never()).getDeviceTemplates(1L);
+    }
+
+    @Test
+    void listTemplates_detail_shouldOmitUiOnlyIcon() throws Exception {
+        DeviceTemplateDto.DeviceManifest manifest = DeviceTemplateDto.DeviceManifest.builder()
+                .name("Camera")
+                .description("Entry camera")
+                .icon("data:image/png;base64," + "A".repeat(70_000))
+                .modes(java.util.List.of("Power"))
+                .build();
+        DeviceTemplateDto template = new DeviceTemplateDto();
+        template.setId(7L);
+        template.setName("Camera");
+        template.setManifest(manifest);
+        template.setDefaultTemplate(false);
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(java.util.List.of(template));
+        ListTemplatesTool tool = new ListTemplatesTool(boardStorageService, objectMapper);
+
+        JsonNode json = objectMapper.readTree(tool.execute("{\"detail\":true}"));
+
+        JsonNode returnedTemplate = json.path("templates").path(0);
+        assertEquals("Camera", returnedTemplate.path("name").asText());
+        assertEquals("Entry camera", returnedTemplate.path("manifest").path("Description").asText());
+        assertFalse(returnedTemplate.path("manifest").has("Icon"));
+        assertTrue(json.toString().length() < 10_000);
     }
 
     @Test

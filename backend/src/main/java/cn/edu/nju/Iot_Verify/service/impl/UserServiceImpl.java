@@ -1,9 +1,11 @@
 package cn.edu.nju.Iot_Verify.service.impl;
 
+import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.po.UserPo;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.UserService;
+import cn.edu.nju.Iot_Verify.util.UsernameNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -23,16 +25,21 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public UserPo register(String phone, String username, String password) {
+        String normalizedUsername = UsernameNormalizer.normalize(username);
+        if (!UsernameNormalizer.isValid(normalizedUsername)) {
+            throw new BadRequestException(
+                    "Username must be 3-20 Unicode characters after trimming and must not contain control or format characters.");
+        }
         if (existsByPhone(phone)) {
             throw ConflictException.duplicatePhone(phone);
         }
-        if (existsByUsername(username)) {
-            throw ConflictException.duplicateUsername(username);
+        if (existsByUsername(normalizedUsername)) {
+            throw ConflictException.duplicateUsername(normalizedUsername);
         }
 
         UserPo user = UserPo.builder()
                 .phone(phone)
-                .username(username)
+                .username(normalizedUsername)
                 .password(passwordEncoder.encode(password))
                 .createdAt(LocalDateTime.now())
                 .build();

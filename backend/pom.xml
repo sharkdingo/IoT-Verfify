@@ -21,7 +21,6 @@
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
 		<openai.version>4.41.0</openai.version>
-		<bouncycastle.version>1.78.1</bouncycastle.version>
 		<json-schema-validator.version>1.5.6</json-schema-validator.version>
 	</properties>
 
@@ -79,12 +78,6 @@
 			<groupId>com.networknt</groupId>
 			<artifactId>json-schema-validator</artifactId>
 			<version>${json-schema-validator.version}</version>
-		</dependency>
-
-		<dependency>
-			<groupId>org.bouncycastle</groupId>
-			<artifactId>bcprov-jdk18on</artifactId>
-			<version>${bouncycastle.version}</version>
 		</dependency>
 
 		<!-- Spring Security -->

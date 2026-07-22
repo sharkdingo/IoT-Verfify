@@ -14,7 +14,7 @@ import type {
 } from '@/types/spec'
 import type { DeviceTemplate, InternalVariable } from '@/types/device'
 import { useI18n } from 'vue-i18n'
-import { getDefaultDeviceIcon } from '@/utils/device'
+import { getDeviceIconUrl } from '@/utils/device'
 import {
   PRIVACY_OPTIONS,
   TRUST_OPTIONS,
@@ -874,11 +874,10 @@ const deviceImportPlaceholder = computed(() => {
   return `${jsonExample}\n${t('app.deviceImportCsvExamplePrefix')}\nAir Conditioner,living_ac`
 })
 
-// Get template icon SVG
-const getTemplateIcon = (template: any): string => {
+const getTemplateIconUrl = (template: DeviceTemplate): string => {
   const name = template.manifest?.Name || template.name
   const initState = template.manifest?.InitState || 'Working'
-  return getDefaultDeviceIcon(name, initState, template.manifest)
+  return getDeviceIconUrl(name, initState, template.manifest)
 }
 
 // Specification form data
@@ -1978,6 +1977,16 @@ const closeResetDefaultsConfirm = (force = false) => {
   defaultTemplateResetPreview.value = null
 }
 
+const {
+  setDialogRef: setTemplateDeleteDialogRef,
+  handleModalKeydown: handleTemplateDeleteDialogKeydown
+} = useModalAccessibility(showDeleteConfirmDialog, closeTemplateDeleteConfirm)
+
+const {
+  setDialogRef: setResetDefaultsDialogRef,
+  handleModalKeydown: handleResetDefaultsDialogKeydown
+} = useModalAccessibility(showResetDefaultsConfirmDialog, closeResetDefaultsConfirm)
+
 const openResetDefaultsConfirm = async () => {
   if (!ensureWritable()) return
   if (isLoadingDefaultTemplateResetPreview.value) return
@@ -2788,26 +2797,33 @@ const exportTemplate = (template: any) => {
                     :key="template.id"
                     class="template-card relative rounded-lg p-2 border transition-all duration-200"
                     :class="{ 'template-card--active': isTemplatePreviewVisible(template) }"
-                    role="button"
-                    tabindex="0"
                     draggable="true"
-                    :aria-label="`${t('app.viewTemplateDetails')}: ${getTemplateName(template)}`"
                     :title="getTemplateName(template)"
                     @click.stop="toggleTemplatePreview(template, $event)"
-                    @keydown.enter.prevent="toggleTemplatePreview(template, $event)"
-                    @keydown.space.prevent="toggleTemplatePreview(template, $event)"
                     @dragstart.stop="handleTemplateDragStart(template, $event)"
                     @dragend="handleTemplateDragEnd"
                   >
-                    <div class="relative">
+                    <button
+                      type="button"
+                      class="relative block w-full border-0 bg-transparent p-0 text-left"
+                      :aria-label="`${t('app.viewTemplateDetails')}: ${getTemplateName(template)}`"
+                      @click.stop="toggleTemplatePreview(template, $event)"
+                    >
                       <div class="flex items-start gap-2">
-                        <div class="template-card__icon w-7 h-7 rounded flex items-center justify-center transition-all shadow-sm overflow-hidden flex-shrink-0" v-html="getTemplateIcon(template)"></div>
+                        <div class="template-card__icon w-7 h-7 rounded flex items-center justify-center transition-all shadow-sm overflow-hidden flex-shrink-0">
+                          <img
+                            :src="getTemplateIconUrl(template)"
+                            alt=""
+                            aria-hidden="true"
+                            class="h-full w-full object-contain"
+                          />
+                        </div>
                         <div class="min-w-0 flex-1">
                           <div class="flex min-w-0 items-start gap-1">
                             <h4 class="template-card__title min-w-0 flex-1 text-xs font-bold transition-colors truncate" :title="getTemplateName(template)">
                               {{ getTemplateName(template) }}
                             </h4>
-                            <span class="template-card__drag-cue material-symbols-outlined" :title="t('app.dragTemplateToCanvas')">drag_indicator</span>
+                            <span class="template-card__drag-cue material-symbols-outlined" aria-hidden="true">drag_indicator</span>
                           </div>
                           <div class="template-card__stats text-[9px] mt-0.5 flex items-center gap-1.5">
                             <span class="template-card__pill px-1.5 py-0.5 rounded">{{ template.manifest.InternalVariables?.length || 0 }} {{ t('app.varsShort') }}</span>
@@ -2815,25 +2831,29 @@ const exportTemplate = (template: any) => {
                           </div>
                         </div>
                       </div>
+                    </button>
 
-                      <div class="template-card__actions mt-0.5 pt-0.5 border-t flex justify-end gap-1">
-                        <button
-                          @click.stop="exportTemplate(template)"
-                          @dragstart.stop.prevent
-                          class="template-card__action cursor-pointer p-1 rounded transition-colors"
-                          :title="t('app.export')"
-                        >
-                          <span class="material-symbols-outlined text-xs">download</span>
-                        </button>
-                        <button
-                          @click.stop="openDeleteConfirm(template)"
-                          @dragstart.stop.prevent
-                          class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors"
-                          :title="t('app.delete')"
-                        >
-                          <span class="material-symbols-outlined text-xs">delete</span>
-                        </button>
-                      </div>
+                    <div class="template-card__actions mt-0.5 pt-0.5 border-t flex justify-end gap-1">
+                      <button
+                        type="button"
+                        @click.stop="exportTemplate(template)"
+                        @dragstart.stop.prevent
+                        class="template-card__action cursor-pointer p-1 rounded transition-colors"
+                        :aria-label="t('app.export')"
+                        :title="t('app.export')"
+                      >
+                        <span class="material-symbols-outlined text-xs" aria-hidden="true">download</span>
+                      </button>
+                      <button
+                        type="button"
+                        @click.stop="openDeleteConfirm(template)"
+                        @dragstart.stop.prevent
+                        class="template-card__action template-card__action--danger cursor-pointer p-1 rounded transition-colors"
+                        :aria-label="t('app.delete')"
+                        :title="t('app.delete')"
+                      >
+                        <span class="material-symbols-outlined text-xs" aria-hidden="true">delete</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3505,15 +3525,28 @@ const exportTemplate = (template: any) => {
   </Teleport>
 
   <!-- Delete Confirmation Dialog -->
-  <div v-if="showDeleteConfirmDialog" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50" @click="closeTemplateDeleteConfirm()">
-    <div class="bg-white rounded-lg p-6 w-full max-w-md shadow-2xl border border-slate-200 transform transition-all" @click.stop>
+  <div
+    v-if="showDeleteConfirmDialog"
+    class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50"
+    @click="closeTemplateDeleteConfirm()"
+    @keydown="handleTemplateDeleteDialogKeydown"
+  >
+    <div
+      :ref="setTemplateDeleteDialogRef"
+      class="bg-white rounded-lg p-6 w-full max-w-md shadow-2xl border border-slate-200 transform transition-all"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-template-dialog-title"
+      tabindex="-1"
+      @click.stop
+    >
       <!-- 警告头部 -->
       <div class="relative -mx-6 -top-6 mb-6 bg-red-600 rounded-t-2xl p-6 text-center">
         <div class="relative">
           <div class="w-16 h-16 mx-auto bg-white/20 rounded-full flex items-center justify-center mb-3">
             <span class="material-symbols-outlined text-white text-3xl">warning</span>
           </div>
-          <p class="text-base text-white/90">{{ t('app.youAreAboutToDelete') }}</p>
+          <h3 id="delete-template-dialog-title" class="text-base text-white/90">{{ t('app.youAreAboutToDelete') }}</h3>
         </div>
       </div>
 
@@ -3572,12 +3605,15 @@ const exportTemplate = (template: any) => {
     v-if="showResetDefaultsConfirmDialog"
     class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
     @click="closeResetDefaultsConfirm()"
+    @keydown="handleResetDefaultsDialogKeydown"
   >
     <div
+      :ref="setResetDefaultsDialogRef"
       class="template-reset-dialog w-full max-w-md rounded-2xl border p-5 shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-labelledby="reset-default-templates-title"
+      tabindex="-1"
       @click.stop
     >
       <div class="mb-4 flex items-start gap-3">

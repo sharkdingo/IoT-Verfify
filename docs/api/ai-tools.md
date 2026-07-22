@@ -10,7 +10,7 @@ inspects the tool's JSON (`throwIfToolError`) and wraps the result in
 `Result<Map<String, Object>>` (see [board.md](board.md) and
 [overview.md](overview.md)).
 
-Verified against code on 2026-07-21. Source: component/aitool/, component/ai/.
+Verified against code on 2026-07-22. Source: component/aitool/, component/ai/.
 
 ## Argument Contract Notes
 
@@ -71,6 +71,12 @@ recommendation set.
 | `reset_default_templates` | `confirmed`; preview `impactToken` when confirmed | Uses the same atomic default-template refresh authority as the Board UI. `confirmed=false` returns exact bundled-template, affected-device, blocker, and itemized Environment Pool changes (change type plus previous/current value, trust, and privacy) without writing. A later explicit default-template-reset confirmation plus the opaque preview token refreshes bundled defaults while preserving custom template names, then refreshes `board_state`. Deletion, scene-replacement, and reset confirmations are separate authorization kinds. |
 | Async task tools | `taskId` for status/cancel operations | Start tools return the authoritative accepted task snapshot, including its current lifecycle status, progress, frozen model scope, semantics, and `taskId`; acceptance is not completion. Polling/cancel tools require that id. |
 | Trace tools | `traceId` or `simulationId` depending on domain | Verification traces use `traceId`; simulation traces use `simulationId`. |
+
+Every tool result is measured as UTF-8 before it is persisted or returned to the model.
+Results over `CHAT_MAX_TOOL_RESULT_BYTES` become a bounded `RESULT_UNAVAILABLE` response
+with `errorCode=TOOL_RESULT_TOO_LARGE`; mutation-capable tools conservatively report that
+state may already have changed. `list_templates(detail=true)` returns the semantic manifest
+but deliberately omits the UI-only `Icon` field.
 
 All recommendation tools share one behavior-capability projection. It includes explicit
 `modeValues`, full variable/environment domains, falsifiability and natural change,
@@ -405,7 +411,7 @@ itself, so AI output must separate state tuples with comma or pipe, for example
 | --- | --- |
 | `add_template` | Add a custom device template defining states, transitions, and APIs. |
 | `delete_template` | Preview a template, its device-instance blockers, and an impact token; delete only after later explicit confirmation of that unchanged preview. |
-| `list_templates` | List available device templates (modes, variables, transitions, and APIs). |
+| `list_templates` | List available device templates. Detail mode includes semantic manifest fields but never the UI-only icon payload. |
 | `reset_default_templates` | Preview and, after an explicit action-specific confirmation, atomically refresh bundled defaults and reconcile affected Board/environment data while preserving custom templates. |
 
 `add_template` uses `backend/device-template-schema.json` as the manifest authority.
@@ -421,8 +427,8 @@ targets/values must fit the manifest domains; impact-only `EnvironmentDomains` c
 written but not read as triggers. `WorkingStates[].Dynamics` is also domain-driven:
 numeric targets use `ChangeRate`, enum/boolean targets use `Value`, and every target must
 be a declared local variable or `ImpactedVariables` entry. Optional
-`Icon` may be a `data:image/...` URI or HTTPS image URL; it is ignored by NuSMV
-generation and exists only for frontend rendering. Each internal variable must include
+`Icon` may be a self-contained `data:image/...` URI; remote URLs are rejected. It is ignored
+by NuSMV generation and exists only for frontend rendering. Each internal variable must include
 `FalsifiableWhenCompromised`: `true` means a compromised instance may report any value
 inside that variable's declared domain and the source becomes untrusted. API presence
 does not infer this behavior, and attack modeling never widens the declared domain.

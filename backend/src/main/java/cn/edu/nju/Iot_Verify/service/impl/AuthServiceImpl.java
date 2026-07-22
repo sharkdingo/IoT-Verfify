@@ -35,6 +35,7 @@ import cn.edu.nju.Iot_Verify.service.TokenBlacklistService;
 import cn.edu.nju.Iot_Verify.service.UserService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
 import cn.edu.nju.Iot_Verify.util.JwtUtil;
+import cn.edu.nju.Iot_Verify.util.UsernameNormalizer;
 import cn.edu.nju.Iot_Verify.util.mapper.UserMapper;
 import io.jsonwebtoken.JwtException;
 import lombok.RequiredArgsConstructor;
@@ -102,7 +103,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public AuthResponseDto login(LoginRequestDto request) {
-        String identifier = request.getIdentifier().trim();
+        String identifier = UsernameNormalizer.normalize(request.getIdentifier());
         UserPo user = resolveLoginUser(identifier)
                 .orElseThrow(UnauthorizedException::invalidCredentials);
 
@@ -145,7 +146,7 @@ public class AuthServiceImpl implements AuthService {
             throw new BadRequestException("Current password is incorrect.");
         }
 
-        String confirmation = request.getConfirmation() == null ? "" : request.getConfirmation().trim();
+        String confirmation = UsernameNormalizer.normalize(request.getConfirmation());
         if (!confirmation.equals(user.getUsername()) && !confirmation.equals(user.getPhone())) {
             throw new BadRequestException("Account confirmation must match the username or phone number.");
         }

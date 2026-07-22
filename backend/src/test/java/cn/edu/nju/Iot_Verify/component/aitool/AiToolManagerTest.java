@@ -1,5 +1,6 @@
 package cn.edu.nju.Iot_Verify.component.aitool;
 
+import cn.edu.nju.Iot_Verify.configure.ChatExecutionConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,12 +24,14 @@ class AiToolManagerTest {
 
     private ObjectMapper objectMapper;
     private AiToolManager manager;
+    private ChatExecutionConfig chatExecutionConfig;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
+        chatExecutionConfig = new ChatExecutionConfig();
         when(knownTool.getName()).thenReturn("known_tool");
-        manager = new AiToolManager(List.of(knownTool), objectMapper);
+        manager = new AiToolManager(List.of(knownTool), objectMapper, chatExecutionConfig);
         manager.init();
     }
 
@@ -50,5 +53,19 @@ class AiToolManagerTest {
 
         assertTrue(result.contains("\"ok\":true"));
         verify(knownTool).execute("{\"x\":1}");
+    }
+
+    @Test
+    void execute_oversizedReadOnlyResult_shouldReturnBoundedUnavailableResult() throws Exception {
+        chatExecutionConfig.setMaxToolResultBytes(4096);
+        when(knownTool.execute("{}"))
+                .thenReturn("{\"payload\":\"" + "x".repeat(5000) + "\"}");
+
+        JsonNode result = objectMapper.readTree(manager.execute("known_tool", "{}"));
+
+        assertEquals("RESULT_UNAVAILABLE", result.path("resultStatus").asText());
+        assertEquals("TOOL_RESULT_TOO_LARGE", result.path("errorCode").asText());
+        assertEquals(false, result.path("mutationMayHaveCommitted").asBoolean());
+        assertEquals(4096, result.path("maxResultBytes").asInt());
     }
 }

@@ -157,7 +157,7 @@ const navigateTo = (target?: string) => {
 }
 
 .public-header__brand-mark {
-  font-family: var(--font-display, var(--font-family, 'Inter', sans-serif));
+  font-family: var(--font-display, var(--font-family, 'Inter Variable', 'Inter', sans-serif));
   font-size: clamp(1.35rem, 2vw, 1.875rem);
   line-height: 1;
 }

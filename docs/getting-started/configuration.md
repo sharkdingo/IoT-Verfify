@@ -121,6 +121,9 @@ process that starts it.
 | `CHAT_SSE_TIMEOUT_MS` | `3600000` | Total SSE emitter lifetime for `/api/chat/completions` (60 minutes by default); keep it higher than `LLM_TIMEOUT_MINUTES` so long multi-step tasks and provider errors remain visible. |
 | `CHAT_MAX_TOOL_ROUNDS` | `64` | Emergency runaway guard for one assistant request, not a normal task budget. Product flows should finish or stop on confirmation/result safety before this value. Minimum `8`. |
 | `CHAT_MAX_STAGNANT_ROUNDS` | `2` | Stop after this many consecutive rounds repeat the exact same tool calls and results. A changed call or changed result resets the counter. Minimum `1`. |
+| `CHAT_MAX_TOOL_RESULT_BYTES` | `49152` | Maximum UTF-8 bytes in one AI tool result before it becomes a structured `TOOL_RESULT_TOO_LARGE` unavailable result. Minimum `4096`. |
+| `CHAT_MAX_TOOL_CALLS_PER_ROUND` | `16` | Maximum tool calls accepted from one model planning response. A larger response executes none of its calls. Minimum `1`. |
+| `CHAT_MAX_MESSAGES_PER_SESSION` | `5000` | Stored-row ceiling for one conversation. It must reserve `2 + CHAT_MAX_TOOL_ROUNDS * (1 + CHAT_MAX_TOOL_CALLS_PER_ROUND)` rows for a complete turn. |
 | `CHAT_EXECUTION_LEASE_TTL_MS` | `30000` | Lifetime of the cross-instance chat execution lease without a successful heartbeat. A crashed/restarted worker therefore stops reporting the session as active after at most this interval. Minimum `3000`; must be at least twice the heartbeat interval. |
 | `CHAT_EXECUTION_LEASE_HEARTBEAT_MS` | `10000` | Fixed delay between execution-lease renewals and expired-lease cleanup passes. Renewal is conditional on the same session/user/execution id, so an old worker cannot reclaim a replaced lease. Minimum `1000`. |
 | `AI_SESSION_STATE_CLEANUP_MS` | `60000` | Fixed delay between database cleanup passes for expired AI task-continuation, scenario-draft, and protected-action state. Active reads also reject and remove expired rows. |

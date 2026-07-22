@@ -1,6 +1,7 @@
 package cn.edu.nju.Iot_Verify.security;
 
 import cn.edu.nju.Iot_Verify.exception.AuthRateLimitException;
+import cn.edu.nju.Iot_Verify.util.UsernameNormalizer;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -82,7 +83,7 @@ public class AuthRateLimitGuard {
     }
 
     private String normalizedIdentity(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return UsernameNormalizer.normalize(value).toLowerCase(Locale.ROOT);
     }
 
     private String sourceAddress(HttpServletRequest request) {

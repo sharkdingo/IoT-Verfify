@@ -12,8 +12,8 @@ export default {
         secondary: "#C026D3",
       },
       fontFamily: {
-        display: ["Plus Jakarta Sans", "Inter", "sans-serif"],
-        body: ["Inter", "sans-serif"],
+        display: ["Space Grotesk Variable", "Space Grotesk", "sans-serif"],
+        body: ["Inter Variable", "Inter", "sans-serif"],
       },
       borderRadius: {
         DEFAULT: "0.75rem",

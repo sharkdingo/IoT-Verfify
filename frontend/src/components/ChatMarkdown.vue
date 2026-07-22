@@ -7,6 +7,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import java from '@shikijs/langs/java';
 import { useTheme } from '@/composables/useTheme';
+import { safeMarkdownPlugin } from '@/utils/safeMarkdown';
 
 defineProps<{
   source: string;
@@ -16,7 +17,8 @@ const { theme } = useTheme();
 const currentTheme = computed((): 'light' | 'dark' => theme.value);
 const extraLangs = [java];
 const remarkPlugins = [remarkMath];
-const rehypePlugins = [rehypeKatex as any];
+const rehypePlugins = [rehypeKatex as any, safeMarkdownPlugin];
+const remarkRehypeOptions = { allowDangerousHtml: false };
 </script>
 
 <template>
@@ -27,5 +29,13 @@ const rehypePlugins = [rehypeKatex as any];
     :extra-langs="extraLangs"
     :remark-plugins="remarkPlugins"
     :rehype-plugins="rehypePlugins"
+    :remark-rehype-options="remarkRehypeOptions"
   />
 </template>
+
+<style scoped>
+:deep(.markdown-image-alt) {
+  color: var(--chat-text-muted, #64748b);
+  font-style: italic;
+}
+</style>

@@ -712,9 +712,13 @@ instance may falsify that reading within its declared domain. API presence is no
 sensor/actuator classifier.
 
 For custom-template icons, the optional PascalCase `Icon` field may contain a
-`data:image/...` URI (best for self-contained JSON imports) or an HTTPS image URL.
+`data:image/...` URI for a self-contained JSON import. Remote URLs are not accepted.
 If it is missing, UI code should render the bundled state icon when one exists and
 fall back to a generated template icon rather than showing a broken image.
+
+Assistant Markdown disables raw HTML. Links accept only relative URLs or `http`, `https`,
+`mailto`, and `tel`; external links use `noopener noreferrer nofollow` with no referrer.
+Remote Markdown images render as alt text instead of being fetched automatically.
 
 ---
 

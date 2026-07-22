@@ -25,6 +25,18 @@ public class ChatExecutionConfig {
     @Min(1)
     private int maxStagnantRounds = 2;
 
+    /** Maximum UTF-8 size of one tool result sent to the model and persisted in chat history. */
+    @Min(4096)
+    private int maxToolResultBytes = 49_152;
+
+    /** Hard cap for one model planning response so one round cannot create unbounded rows. */
+    @Min(1)
+    private int maxToolCallsPerRound = 16;
+
+    /** Stored-message cap per session. Users can start another session or delete old history. */
+    @Min(100)
+    private int maxMessagesPerSession = 5_000;
+
     /**
      * Distributed lease lifetime. A live worker renews this independently of the SSE connection.
      */
@@ -40,5 +52,16 @@ public class ChatExecutionConfig {
     @AssertTrue(message = "chat.execution.lease-ttl-ms must be at least twice lease-heartbeat-ms")
     public boolean isLeaseTimingValid() {
         return leaseHeartbeatMs <= leaseTtlMs / 2;
+    }
+
+    @AssertTrue(message = "chat.execution.max-messages-per-session must reserve one complete worst-case tool turn")
+    public boolean isMessageCapacityValid() {
+        try {
+            long required = Math.addExact(2L, Math.multiplyExact(
+                    1L + maxToolCallsPerRound, (long) maxToolRounds));
+            return maxMessagesPerSession >= required;
+        } catch (ArithmeticException e) {
+            return false;
+        }
     }
 }

@@ -4,7 +4,7 @@ This document is the project authority for board data contracts. The project is
 in active development: invalid legacy shapes should be fixed at the source or by
 clearing development data, not by adding fallback branches.
 
-Verified against code on 2026-07-20. Source: board/fuzz DTOs and services,
+Verified against code on 2026-07-22. Source: board/fuzz DTOs and services,
 `BoardDataConverter`, `modelRequest.ts`, scene import/export, fuzzing, and NuSMV generation.
 
 ## Principles
@@ -45,7 +45,7 @@ Backend DTO: `DeviceTemplateDto`. Frontend type: `DeviceTemplate`.
 | `defaultTemplate` | DB | Splits default vs custom templates | Template repository UI |
 | `manifest.Name` | Template authoring | Canonical template name | Node `templateName`, current device details |
 | `manifest.Description` | Template authoring | User-facing explanation | Template cards, AI context |
-| `manifest.Icon` | Template authoring | Data URI or HTTPS image | Template cards, node icons |
+| `manifest.Icon` | Template authoring | Self-contained `data:image` URI | Template cards, node icons |
 | `manifest.Modes` | Template authoring | Mode dimensions for multi-mode state strings | Rule/spec options, NuSMV state variables |
 | `manifest.InternalVariables` | Template authoring | Device variables and bounds/enums. Required `IsInside=true` means device-local; required `IsInside=false` means a shared environment variable and grants read permission. Shared declarations require explicit `Trust` and `Privacy`. Required `FalsifiableWhenCompromised` explicitly says whether compromise may replace that reported value inside its declared domain; API presence never infers ownership or attack behavior. | Rule/spec options, environment pool, NuSMV variables, attack behavior, fix ranges |
 | `manifest.EnvironmentDomains` | Template authoring | Domain/default metadata for shared values this template affects without reading. It creates no device variable and grants no rule/spec source capability. Every entry requires explicit `Trust`/`Privacy` and must correspond to an `ImpactedVariables` name | Environment pool, NuSMV shared domain/dynamics |

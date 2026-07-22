@@ -5,6 +5,8 @@ import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.ConfirmationDecision;
 import cn.edu.nju.Iot_Verify.component.ai.ChatConfirmationDetector.ConfirmationKind;
 import cn.edu.nju.Iot_Verify.component.ai.LlmChatService;
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControl;
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControlHolder;
 import cn.edu.nju.Iot_Verify.component.ai.LlmMessageCodec;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
@@ -27,6 +29,7 @@ import cn.edu.nju.Iot_Verify.exception.ConflictException;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ChatSessionBusyException;
+import cn.edu.nju.Iot_Verify.exception.ChatHistoryQuotaExceededException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.UnauthorizedException;
 import cn.edu.nju.Iot_Verify.dto.RequestLimits;
@@ -241,6 +244,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 if (hasActiveExecutionLease(session, now)) {
                     throw new ChatSessionBusyException(sessionId);
                 }
+                long messageCount = messageRepo.countBySessionId(sessionId);
+                long requiredTurnCapacity = requiredMessageCapacityForTurn();
+                if (messageCount + requiredTurnCapacity > chatExecutionConfig.getMaxMessagesPerSession()) {
+                    throw new ChatHistoryQuotaExceededException(
+                            messageCount,
+                            chatExecutionConfig.getMaxMessagesPerSession(),
+                            requiredTurnCapacity);
+                }
                 String requestId = UUID.randomUUID().toString();
                 session.setActiveExecutionId(requestId);
                 session.setActiveExecutionExpiresAt(now.plus(executionLeaseTtl()));
@@ -347,6 +358,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             request.userStopRequested().set(true);
         }
         request.stopRequested().set(true);
+        request.requestControl().cancel();
         SseEmitter emitter = request.emitter().get();
         if (emitter == null) return;
         try {
@@ -403,6 +415,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                     stopActiveRequest(sessionId, request, false);
                     log.warn("Stopped local chat execution after losing its lease: sessionId={}, executionId={}",
                             sessionId, request.requestId());
+                } else if (renewed > 0) {
+                    sessionRepo.findByIdAndUserId(sessionId, request.userId())
+                            .filter(session -> Boolean.TRUE.equals(session.getExecutionStopRequested()))
+                            .ifPresent(session -> stopActiveRequest(
+                                    sessionId, request, Boolean.TRUE.equals(session.getExecutionUserStopRequested())));
                 }
             } catch (RuntimeException e) {
                 log.warn("Could not renew chat execution lease for session {}: {}", sessionId, e.toString());
@@ -486,13 +503,6 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
             pendingKinds.add(ConfirmationKind.CHOICE);
         }
         ConfirmationDecision confirmationDecision = resolveConfirmation(content, confirmation, pendingKinds);
-        UserContextHolder.setUserId(userId);
-        UserContextHolder.setChatSessionId(sessionId);
-        UserContextHolder.setChatExecutionId(executionId);
-        UserContextHolder.setConfirmedProtectedActionKind(
-                confirmationDecision.confirmed() && confirmationDecision.kind() != ConfirmationKind.CHOICE
-                        ? confirmationDecision.kind().name()
-                        : null);
         if (confirmationDecision.cancelled()) {
             clearCancelledPendingAction(userId, sessionId, confirmationDecision.kind());
         }
@@ -515,10 +525,17 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         emitter.onCompletion(() -> {
             if (!serverCompletion.get()) {
                 isDisconnect.set(true);
+                activeRequest.requestControl().cancel();
             }
         });
-        emitter.onTimeout(() -> isDisconnect.set(true));
-        emitter.onError(ex -> isDisconnect.set(true));
+        emitter.onTimeout(() -> {
+            isDisconnect.set(true);
+            activeRequest.requestControl().cancel();
+        });
+        emitter.onError(ex -> {
+            isDisconnect.set(true);
+            activeRequest.requestControl().cancel();
+        });
         if (isUserStop.get()) {
             try {
                 emitter.complete();
@@ -528,6 +545,14 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
 
         try {
+            UserContextHolder.setUserId(userId);
+            UserContextHolder.setChatSessionId(sessionId);
+            UserContextHolder.setChatExecutionId(executionId);
+            UserContextHolder.setConfirmedProtectedActionKind(
+                    confirmationDecision.confirmed() && confirmationDecision.kind() != ConfirmationKind.CHOICE
+                            ? confirmationDecision.kind().name()
+                            : null);
+            LlmRequestControlHolder.set(activeRequest.requestControl());
             if (shouldStop.getAsBoolean() && !isUserStop.get()) {
                 try {
                     emitter.complete();
@@ -715,6 +740,7 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                         interruptedStatus);
             }
             UserContextHolder.clear();
+            LlmRequestControlHolder.clear();
         }
     }
 
@@ -769,6 +795,11 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                                              AtomicBoolean isUserStop,
                                              boolean forcePoll) {
         if (isDisconnect.get()) return true;
+        if (Thread.currentThread().isInterrupted()) {
+            isDisconnect.set(true);
+            activeRequest.requestControl().cancel();
+            return true;
+        }
         long nowNanos = System.nanoTime();
         long nextPoll = activeRequest.nextControlPollNanos().get();
         if (!forcePoll && (nowNanos < nextPoll || !activeRequest.nextControlPollNanos().compareAndSet(
@@ -1309,6 +1340,13 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
                 return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.COMPLETED, successfulToolCalls,
                         failedToolCalls, resultUnavailableToolCalls, uncertainMutationCalls,
                         confirmationPending);
+            }
+            if (toolCalls.size() > chatExecutionConfig.getMaxToolCallsPerRound()) {
+                log.warn("LLM requested too many tools in one round: count={}, limit={}",
+                        toolCalls.size(), chatExecutionConfig.getMaxToolCallsPerRound());
+                return new ToolLoopResult(hadToolCalls, ToolLoopStopReason.EMERGENCY_LIMIT,
+                        successfulToolCalls, failedToolCalls, resultUnavailableToolCalls,
+                        uncertainMutationCalls, confirmationPending);
             }
 
             String reasoningSource = response.reasoningSummary().isBlank()
@@ -2172,18 +2210,30 @@ public class ChatServiceImpl implements ChatService, ChatExecutionControl {
         }
     }
 
+    private long requiredMessageCapacityForTurn() {
+        long perRound = 1L + chatExecutionConfig.getMaxToolCallsPerRound();
+        try {
+            return Math.addExact(2L, Math.multiplyExact(
+                    perRound, (long) chatExecutionConfig.getMaxToolRounds()));
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private record ActiveStreamRequest(
             Long userId,
             String requestId,
             AtomicBoolean stopRequested,
             AtomicBoolean userStopRequested,
             AtomicReference<SseEmitter> emitter,
-            AtomicLong nextControlPollNanos) {
+            AtomicLong nextControlPollNanos,
+            LlmRequestControl requestControl) {
 
         private ActiveStreamRequest(Long userId, String requestId) {
             this(userId, requestId, new AtomicBoolean(false), new AtomicBoolean(false),
                     new AtomicReference<>(),
-                    new AtomicLong(System.nanoTime() + EXECUTION_CONTROL_POLL_NANOS));
+                    new AtomicLong(System.nanoTime() + EXECUTION_CONTROL_POLL_NANOS),
+                    new LlmRequestControl());
         }
     }
 

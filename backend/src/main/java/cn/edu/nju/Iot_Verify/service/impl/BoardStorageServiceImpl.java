@@ -4047,7 +4047,7 @@ public class BoardStorageServiceImpl implements BoardStorageService {
     private static final int MAX_TEMPLATE_ICON_LENGTH = 262_144;
     private static final java.util.regex.Pattern SAFE_TEMPLATE_ICON =
             java.util.regex.Pattern.compile(
-                    "^(data:image/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+|https://\\S+)$",
+                    "^data:image/(svg\\+xml|png|jpe?g|webp|gif)(;[^,]+)?,.+$",
                     java.util.regex.Pattern.CASE_INSENSITIVE);
 
     private void validateTemplateManifestForNuSmv(String templateName, DeviceManifest manifest) {
@@ -4305,11 +4305,11 @@ public class BoardStorageServiceImpl implements BoardStorageService {
         String trimmed = icon.trim();
         if (trimmed.length() > MAX_TEMPLATE_ICON_LENGTH) {
             throw new BadRequestException("Template '" + templateName
-                    + "' Icon is too large. Use a data:image URI or HTTPS image under 256 KB.");
+                    + "' Icon is too large. Use a self-contained data:image URI under 256 KB.");
         }
         if (!SAFE_TEMPLATE_ICON.matcher(trimmed).matches()) {
             throw new BadRequestException("Template '" + templateName
-                    + "' Icon must be a data:image URI (svg/png/jpeg/webp/gif) or an HTTPS URL.");
+                    + "' Icon must be a self-contained data:image URI (svg/png/jpeg/webp/gif).");
         }
     }
 

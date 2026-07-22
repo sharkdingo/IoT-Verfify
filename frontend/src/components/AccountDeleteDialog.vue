@@ -2,6 +2,7 @@
 import { computed, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
+import { normalizeAccountIdentifier } from '@/utils/accountIdentifier'
 
 const { t } = useI18n()
 
@@ -29,7 +30,7 @@ const form = reactive({
 
 const confirmationHint = computed(() => t('app.deleteAccountConfirmationHint'))
 const confirmationMatches = computed(() => {
-  const value = form.confirmation.trim()
+  const value = normalizeAccountIdentifier(form.confirmation)
   return value.length > 0 && (value === props.username || value === props.phone)
 })
 const canConfirm = computed(() => confirmationMatches.value && form.password.length > 0 && !props.loading)
@@ -50,7 +51,7 @@ const handleConfirm = () => {
   if (!canConfirm.value) return
   emit('confirm', {
     password: form.password,
-    confirmation: form.confirmation.trim()
+    confirmation: normalizeAccountIdentifier(form.confirmation)
   })
 }
 

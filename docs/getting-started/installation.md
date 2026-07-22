@@ -1,6 +1,6 @@
 # Installation
 
-> Verified against code on 2026-07-09. Source: root `README.md`, `backend/README.md`,
+> Verified against code on 2026-07-22. Source: root `README.md`, `backend/README.md`,
 > `backend/pom.xml`, `frontend/package.json`, `frontend/vite.config.ts`,
 > `frontend/playwright.config.ts`.
 
@@ -44,10 +44,19 @@ AI-powered assistance (chat, rule/spec/device recommendations) requires an API k
 Create a database named `iot_verify` with the `utf8mb4` character set:
 
 ```bash
-mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs;"
 ```
 
 The backend auto-creates all tables on first startup, so no schema import is needed.
+The accent- and case-sensitive collation keeps normalized usernames deterministic across
+MySQL and the application. For a database created with the former `utf8mb4_unicode_ci`
+recommendation, migrate the username column once after taking a backup:
+
+```sql
+ALTER TABLE app_user
+  MODIFY username VARCHAR(50)
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs NOT NULL;
+```
 
 ### 2. Set required environment variables
 

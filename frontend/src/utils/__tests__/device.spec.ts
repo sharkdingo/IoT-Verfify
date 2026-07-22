@@ -31,9 +31,13 @@ describe('device icon resolution', () => {
     const unsafeManifest = {
       Icon: 'javascript:alert(1)'
     } as DeviceManifest
+    const remoteManifest = {
+      Icon: 'https://tracker.example/device.png'
+    } as DeviceManifest
 
     expect(getDeviceIconUrl('Any Device', 'Working', safeManifest)).toBe(safeManifest.Icon)
     expect(getDeviceIconUrl('Any Device', 'Working', unsafeManifest)).toMatch(/^data:image\/svg\+xml/)
+    expect(getDeviceIconUrl('Any Device', 'Working', remoteManifest)).toMatch(/^data:image\/svg\+xml/)
   })
 })
 

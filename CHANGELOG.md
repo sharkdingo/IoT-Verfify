@@ -27,6 +27,24 @@ history into a technical spec. The spec content itself now lives under
   have explicit capacity limits.
 
 #### Fixed
+- Sanitized AI Markdown links and disabled raw HTML, blocked automatic third-party image
+  requests, removed dynamic template-icon HTML rendering, and added a deployment CSP
+  example as defense in depth.
+- Made chat stop requests close the active OpenAI stream or cancel a pending planning
+  future instead of waiting for another provider chunk or timeout.
+- Bounded AI tool calls, UTF-8 result size, and stored messages per conversation; detailed
+  template results now exclude UI-only icons and oversized results become structured
+  unavailable outcomes.
+- Canonicalized usernames across registration, login, account confirmation, and throttling;
+  validation now counts Unicode code points and rejects invisible formatting controls.
+- Made the documented MySQL username collation case- and accent-sensitive, with an
+  explicit migration for databases created from the former setup command.
+- Self-hosted application and Material icon fonts, removing the Google Fonts dependency.
+- Removed an unused Bouncy Castle runtime dependency from the backend package.
+- Removed unused frontend UI and legacy Markdown dependencies and their inactive resolver.
+- Restricted custom template icons to self-contained `data:image` values.
+- Corrected nested template/chat controls and completed keyboard focus handling for
+  template confirmations and verification results.
 - Updated pinned GitHub Actions dependencies to their Node.js 24-based releases, removing
   the hosted-runner deprecation warnings while retaining immutable commit pinning.
 - Made missing NuSMV model validation deterministic before artifact locking, keeping the

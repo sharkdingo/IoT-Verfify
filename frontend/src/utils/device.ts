@@ -99,13 +99,6 @@ const escapeXml = (value: string): string =>
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
 
-const escapeAttr = (value: string): string =>
-    value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-
 const hashString = (value: string): number => {
     let hash = 0
     for (let i = 0; i < value.length; i++) {
@@ -195,7 +188,6 @@ const isSafeManifestIcon = (icon: string | undefined | null): icon is string => 
     if (trimmed.length === 0 || trimmed.length > 262144) return false
 
     return /^data:image\/(svg\+xml|png|jpe?g|webp|gif)(;[^,]+)?,/i.test(trimmed)
-        || /^https:\/\//i.test(trimmed)
 }
 
 const getManifestIcon = (manifest?: DeviceManifest | null): string | null => {
@@ -575,15 +567,4 @@ export const validateManifest = (obj: any): { valid: boolean; msg?: string } => 
 // --- 增强版图标获取函数 ---
 export const getNodeIconWithFallback = (node: DeviceNode): string => {
   return getNodeIcon(node)
-}
-
-// --- 默认设备图标 ---
-// 注意：所有图标现在应该从 @frontend/src/assets 目录中获取
-export const getDefaultDeviceIcon = (
-  deviceType: string,
-  initState?: string,
-  manifest?: DeviceManifest | null
-): string => {
-  const iconPath = getDeviceIconUrl(deviceType, initState || 'Working', manifest)
-  return `<img src="${escapeAttr(iconPath)}" alt="${escapeAttr(deviceType)}" class="w-full h-full object-contain" />`
 }

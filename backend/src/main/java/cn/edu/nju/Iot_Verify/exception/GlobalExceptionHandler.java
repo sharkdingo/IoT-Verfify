@@ -59,6 +59,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
     }
 
+    @ExceptionHandler(ChatHistoryQuotaExceededException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleChatHistoryQuotaExceededException(
+            ChatHistoryQuotaExceededException e) {
+        log.warn("Chat history quota reached: count={}, limit={}, reserve={}",
+                e.getMessageCount(), e.getMaxMessagesPerSession(), e.getRequiredTurnCapacity());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("reasonCode", "CHAT_HISTORY_LIMIT_REACHED");
+        data.put("messageCount", e.getMessageCount());
+        data.put("maxMessagesPerSession", e.getMaxMessagesPerSession());
+        data.put("requiredTurnCapacity", e.getRequiredTurnCapacity());
+        Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
+        body.setData(data);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+    }
+
     @ExceptionHandler(BaseException.class)
     public ResponseEntity<Result<Void>> handleBaseException(BaseException e) {
         log.warn("Business exception [{}]: {}", e.getCode(), e.getMessage());

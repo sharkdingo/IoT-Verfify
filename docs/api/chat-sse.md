@@ -31,6 +31,11 @@ part of the user-facing contract and are normalized to `null` when reading older
 At most 100 sessions are stored per user. Creation beyond that limit returns `400` and asks
 the user to delete an old session; the list endpoint is correspondingly bounded to the 100
 most recently updated sessions.
+Each session also has a configured stored-message ceiling. Before accepting a completion,
+the backend reserves enough rows for one worst-case complete tool turn. A conversation too
+close to the ceiling returns `429` before claiming a lease with
+`data={ reasonCode: "CHAT_HISTORY_LIMIT_REACHED", messageCount, maxMessagesPerSession,
+requiredTurnCapacity }`.
 `ChatHistoryPageDto` is `{ messages: ChatMessageResponseDto[], nextBeforeId: Long | null,
 hasMore: boolean }`. `limit` defaults to 50 and accepts `1..100`; `beforeId` is the positive
 message-id cursor returned by the preceding page. The service scans at most 2,000 raw rows
@@ -116,8 +121,10 @@ Every non-blank message first runs model-driven planning with the complete regis
 tool catalog. The model may choose zero tools for ordinary conversation, or freely chain
 read, recommendation, mutation, verification, and status tools when the request spans
 domains. This decision is based on the message meaning and conversation context rather
-than a keyword or deterministic intent route. Tool calls and full tool results are
-persisted as internal chat messages but are not exposed as raw user-visible text.
+than a keyword or deterministic intent route. Tool calls and bounded tool results are
+persisted as internal chat messages but are not exposed as raw user-visible text. A result
+over `CHAT_MAX_TOOL_RESULT_BYTES` becomes a structured `TOOL_RESULT_TOO_LARGE` unavailable
+result before persistence or reuse as provider context.
 Structured progress frames expose the verifiable execution state and outcome of each
 step while it runs. After planning completes, the final assistant reply is generated
 through the streaming LLM path so tool-backed answers also arrive as incremental text
@@ -155,8 +162,10 @@ the row lock, the control request waits and the already-started write may commit
 continues while calls or results are changing. Two guards prevent runaway execution:
 consecutive rounds that repeat the exact same calls and results stop after
 `CHAT_MAX_STAGNANT_ROUNDS`, and `CHAT_MAX_TOOL_ROUNDS` is a high emergency ceiling rather
-than a normal task limit. Either guard preserves earlier commits, emits a visible guard
-event, and still runs the streaming final-answer model with an instruction to identify
+than a normal task limit. One planning response is additionally limited by
+`CHAT_MAX_TOOL_CALLS_PER_ROUND`; an oversized response executes none of its calls. These
+guards preserve earlier commits, emit a visible guard
+event, and still run the streaming final-answer model with an instruction to identify
 completed, failed, and unfinished work accurately.
 
 Account deletion removes confirmation, draft, continuation, chat history, and the account
@@ -340,8 +349,10 @@ playback locked until a later full reconciliation succeeds.
 
 The Stop control first sends `POST /api/chat/sessions/{sessionId}/stop`, then aborts the
 browser stream. This distinguishes an explicit user stop from an unexpected transport
-loss, but it still cannot cancel or roll back a tool transaction already running on the
-server. A tool that has already returned is still classified and persisted before the
+loss. The owning backend immediately closes a blocked provider stream or cancels a pending
+planning future; another backend instance observes the durable stop flag during lease
+maintenance and closes its local provider request. Stop still cannot cancel or roll back a
+tool transaction already running on the server. A tool that has already returned is still classified and persisted before the
 worker stops when the same execution still owns the lease, so committed writes and
 confirmation previews do not lose their audit result. A worker replaced by a newer execution
 cannot persist that result or a terminal assistant row.

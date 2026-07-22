@@ -722,8 +722,9 @@ rate, default trust, and default privacy; node/scene writes reject conflicts bef
 persistence, so device ordering cannot choose the model silently.
 
 `Icon` is optional and is ignored by NuSMV generation. It exists for UI rendering:
-custom JSON imports may provide a self-contained `data:image/...` URI or an HTTPS
-image URL (max 256 KB). If `Icon` is omitted, the frontend first looks for a bundled
+custom JSON imports may provide a self-contained `data:image/...` URI (max 256 KB).
+Remote URLs are rejected so opening a catalog cannot contact a template-controlled host.
+If `Icon` is omitted, the frontend first looks for a bundled
 default asset matching the template/state, then generates a stable fallback icon from
 the template name so custom templates never render as blank images.
 

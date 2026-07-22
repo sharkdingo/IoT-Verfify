@@ -699,6 +699,9 @@ const formatStreamError = (error: unknown) => {
       case 'HTTP_ERROR':
         if (error.status === 403) return t('app.chat.authorizationFailed');
         if (error.status === 401) return t('app.chat.authenticationExpired');
+        if (error.reasonCode === 'CHAT_HISTORY_LIMIT_REACHED') {
+          return t('app.chat.historyLimitReached');
+        }
         if (error.status === 429) return t('app.chat.assistantOperationBusy');
         return t('app.chat.httpRequestFailed', { status: error.status ?? '?' });
       case 'SERVER_FRAME':
@@ -1636,23 +1639,24 @@ const scrollToBottom = (force = false) => {
             <div
                 v-for="session in sessions"
                 :key="session.id"
-                :data-testid="`chat-session-${session.id}`"
                 :class="['session-item', { active: currentSessionId === session.id }]"
-                role="button"
-                tabindex="0"
-                @click="handleSelectSession(session.id, session.active)"
-                @keydown.enter.prevent="handleSelectSession(session.id, session.active)"
-                @keydown.space.prevent="handleSelectSession(session.id, session.active)"
             >
-              <MessageOutlined class="item-icon"/>
-              <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
-              <span
-                v-if="session.active"
-                class="session-active-indicator"
-                data-testid="chat-session-active"
-                :aria-label="t('app.chat.sessionActive')"
-                :title="t('app.chat.sessionActive')"
-              ></span>
+              <button
+                type="button"
+                class="session-select-button"
+                :data-testid="`chat-session-${session.id}`"
+                @click="handleSelectSession(session.id, session.active)"
+              >
+                <MessageOutlined class="item-icon"/>
+                <span class="item-title">{{ session.title || t('app.chat.newChat') }}</span>
+                <span
+                  v-if="session.active"
+                  class="session-active-indicator"
+                  data-testid="chat-session-active"
+                  :aria-label="t('app.chat.sessionActive')"
+                  :title="t('app.chat.sessionActive')"
+                ></span>
+              </button>
               <button
                 type="button"
                 class="delete-btn-wrapper"
@@ -2252,17 +2256,38 @@ const scrollToBottom = (force = false) => {
   border: 1px solid transparent;
   border-radius: 0.6rem;
   color: var(--chat-muted);
-  cursor: pointer;
   font-size: 0.82rem;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .session-item:hover,
-.session-item:focus-visible {
+.session-item:focus-within {
   outline: none;
   border-color: var(--chat-border);
   background: color-mix(in srgb, var(--chat-control-bg) 76%, transparent);
   color: var(--chat-text);
+}
+
+.session-select-button {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.session-select-button:focus-visible {
+  border-radius: 0.35rem;
+  outline: 2px solid color-mix(in srgb, var(--chat-accent) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .session-item.active {
