@@ -609,7 +609,8 @@ class AcceptanceDemoScenarioNusmvTest {
                 "The intended 28-to-37 threshold edit must be a valid, non-duplicate repair before search begins");
 
         FixConfig fixConfig = new FixConfig();
-        fixConfig.setFixTimeoutMs(10_000);
+        // This test asserts all strategies, not timeout behavior; allow headroom on shared runners.
+        fixConfig.setFixTimeoutMs(30_000);
         fixConfig.setMaxRefineAttempts(20);
         fixConfig.setMaxCandidatesPerRule(5);
         RuleFixer fixer = new RuleFixer(
@@ -720,7 +721,8 @@ class AcceptanceDemoScenarioNusmvTest {
                 violation.getCounterexample(), baselineModel.deviceSmvMap(), rules);
         assertTrue(states.size() >= 2);
 
-        RuleFixer fixer = allStrategyFixer(generator, executor, 20_000);
+        // This test asserts all strategies, not timeout behavior; allow headroom on shared runners.
+        RuleFixer fixer = allStrategyFixer(generator, executor, 30_000);
         List<String> strategies = List.of("parameter", "condition", "remove");
         FixResultDto fixResult = fixer.fix(
                 307L, safety.getId(), states, rules, devices, environment, specs,
@@ -872,7 +874,8 @@ class AcceptanceDemoScenarioNusmvTest {
         assertTrue(states.size() >= 2);
 
         List<String> strategies = List.of("parameter", "condition", "remove");
-        FixResultDto fixResult = allStrategyFixer(generator, executor, 10_000).fix(
+        // This test asserts strategy fall-through, not timeout behavior.
+        FixResultDto fixResult = allStrategyFixer(generator, executor, 30_000).fix(
                 309L, safety.getId(), states, rules, devices, environment, specs,
                 baselineModel.deviceSmvMap(), USER_ID, false, 0, false,
                 strategies, 20, Map.of());

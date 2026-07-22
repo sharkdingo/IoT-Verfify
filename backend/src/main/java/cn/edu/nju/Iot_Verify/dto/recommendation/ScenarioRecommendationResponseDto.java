@@ -21,5 +21,6 @@ public class ScenarioRecommendationResponseDto {
     private String rationale;
     private Boolean verificationReady;
     private List<ScenarioReadinessIssueDto> readinessIssues;
+    private List<ScenarioSemanticWarningDto> semanticWarnings;
     private PortableSceneDto scene;
 }

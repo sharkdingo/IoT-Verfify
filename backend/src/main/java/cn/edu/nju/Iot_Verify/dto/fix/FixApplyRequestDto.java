@@ -8,6 +8,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.util.List;
 
@@ -34,6 +35,7 @@ public class FixApplyRequestDto {
     private FixSuggestionDto suggestion;
 
     @NotBlank(message = "suggestionToken must not be blank")
+    @ToString.Exclude
     private String suggestionToken;
 
     /**

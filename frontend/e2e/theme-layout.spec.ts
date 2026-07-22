@@ -219,4 +219,48 @@ test.describe('public theme and layout', () => {
     await page.locator('.ai-assistant-btn').click({ force: true })
     await expect(page.locator('.chat-panel')).toBeVisible({ timeout: 15_000 })
   })
+
+  test('workspace keeps account actions reachable at mid width and low height', async ({ page, request }) => {
+    const auth = await createAuthenticatedUser(request)
+    await page.setViewportSize({ width: 720, height: 720 })
+    await openWorkspace(page, auth)
+
+    const logoutButton = page.locator('.nav-logout-btn')
+    const sceneActions = page.locator('details.scene-actions-menu')
+    await expect(logoutButton).toBeVisible()
+    await expect(sceneActions).toBeVisible()
+    await expect(page.getByTestId('scene-import')).toBeHidden()
+
+    const logoutBox = await logoutButton.boundingBox()
+    expect(logoutBox).not.toBeNull()
+    expect(logoutBox!.x).toBeGreaterThanOrEqual(0)
+    expect(logoutBox!.x + logoutBox!.width).toBeLessThanOrEqual(720)
+
+    await logoutButton.click()
+    await page.locator('.delete-account-link').click()
+    const accountDialog = page.locator('.account-delete-dialog')
+    await expect(accountDialog).toBeVisible()
+
+    await page.setViewportSize({ width: 720, height: 360 })
+    const dialogMetrics = await accountDialog.evaluate(element => {
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportHeight: window.innerHeight,
+        overflowY: style.overflowY,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight
+      }
+    })
+    expect(dialogMetrics.top).toBeGreaterThanOrEqual(0)
+    expect(dialogMetrics.bottom).toBeLessThanOrEqual(dialogMetrics.viewportHeight)
+    expect(dialogMetrics.overflowY).toBe('auto')
+    expect(dialogMetrics.scrollHeight).toBeGreaterThan(dialogMetrics.clientHeight)
+
+    const confirmButton = accountDialog.locator('button[type="submit"]')
+    await confirmButton.scrollIntoViewIfNeeded()
+    await expect(confirmButton).toBeVisible()
+  })
 })

@@ -34,6 +34,7 @@ import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.repository.VerificationTaskRepository;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.VerificationTaskMapper;
@@ -65,7 +66,10 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Future;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -83,6 +87,7 @@ class VerificationServiceImplBuildResultTest {
     @Mock private NusmvConfig nusmvConfig;
     @Mock private VerificationTaskRepository taskRepository;
     @Mock private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+    @Mock private FormalOperationAdmission formalOperationAdmission;
     @Mock private TraceRepository traceRepository;
     @Mock private TraceMapper traceMapper;
     @Mock private UserRepository userRepository;
@@ -148,13 +153,15 @@ class VerificationServiceImplBuildResultTest {
         syncVerificationExecutor.setThreadNamePrefix("test-sync-verify-");
         syncVerificationExecutor.initialize();
         transactionTemplate = inlineTransactionTemplate();
+        lenient().when(formalOperationAdmission.execute(anyLong(), any()))
+                .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1).get());
 
         service = new VerificationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard);
+                chatExecutionLeaseGuard, formalOperationAdmission);
         lenient().when(taskRepository.currentDatabaseTime()).thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(taskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -193,7 +200,8 @@ class VerificationServiceImplBuildResultTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                executor, syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard);
+                executor, syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard,
+                formalOperationAdmission);
     }
 
     private VerificationServiceImpl serviceWithTransactionTemplate(TransactionTemplate transactionTemplate) {
@@ -202,7 +210,7 @@ class VerificationServiceImplBuildResultTest {
                 taskRepository, traceRepository, traceMapper, userRepository,
                 specificationMapper, verificationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 verificationTaskExecutor, syncVerificationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard);
+                chatExecutionLeaseGuard, formalOperationAdmission);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -998,6 +1006,7 @@ class VerificationServiceImplBuildResultTest {
         assertEquals(cn.edu.nju.Iot_Verify.dto.model.RunPersistenceDto.Status.SAVED,
                 result.getHistoryPersistence().getStatus());
         assertEquals(1000L, result.getHistoryPersistence().getRunId());
+        verify(formalOperationAdmission).execute(eq(1L), any());
     }
 
     @Test
@@ -1145,6 +1154,52 @@ class VerificationServiceImplBuildResultTest {
         assertNotNull(nativeExecutor);
         assertEquals(0, nativeExecutor.getQueue().size());
         blocker.cancel(true);
+    }
+
+    @Test
+    void verify_interruptedWaitCancelsNestedFutureAndDoesNotPersistRun() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(5000L);
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocker = new CountDownLatch(1);
+        Future<?> blocker = syncVerificationExecutor.submit(() -> {
+            blockerStarted.countDown();
+            try {
+                releaseBlocker.await();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(blockerStarted.await(2, TimeUnit.SECONDS));
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try {
+                service.verify(1L, makeRequest(singleDevice(), List.of(),
+                        List.of(makeEffectiveSpec("s1")), false, 0, false));
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        }, "interrupted-verification-caller");
+
+        caller.start();
+        awaitQueueSize(syncVerificationExecutor, 1);
+        caller.interrupt();
+        caller.join(2000);
+
+        assertFalse(caller.isAlive());
+        assertInstanceOf(ServiceUnavailableException.class, failure.get());
+        assertEquals(0, syncVerificationExecutor.getThreadPoolExecutor().getQueue().size());
+        verify(taskRepository, never()).save(any(VerificationTaskPo.class));
+        releaseBlocker.countDown();
+        blocker.cancel(true);
+    }
+
+    private void awaitQueueSize(ThreadPoolTaskExecutor executor, int expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (executor.getThreadPoolExecutor().getQueue().size() != expected
+                && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertEquals(expected, executor.getThreadPoolExecutor().getQueue().size());
     }
 
     private SpecificationDto makeEffectiveSpec(String id) {

@@ -23,6 +23,6 @@ public class UnauthorizedException extends BaseException {
     }
 
     public static UnauthorizedException invalidCredentials() {
-        return new UnauthorizedException("Phone number or password is incorrect");
+        return new UnauthorizedException("Account or password is incorrect");
     }
 }

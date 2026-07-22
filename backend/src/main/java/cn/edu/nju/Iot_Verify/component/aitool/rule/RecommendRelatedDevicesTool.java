@@ -333,7 +333,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             for (DeviceInfoHelper.DeviceInfo device : currentDevices) {
                 existingInstanceKeys.add(instanceKey(device.label()));
             }
-            log.debug("Existing device recommendation instance keys: {}", existingInstanceKeys);
+            log.debug("Loaded {} existing device recommendation instance key(s)", existingInstanceKeys.size());
 
             // 解析 JSON
             JsonNode root = objectMapper.readTree(cleanedResponse);
@@ -369,7 +369,8 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                     String templateKey = templateName.toLowerCase(Locale.ROOT);
                     DeviceTemplateDto template = availableTemplateByName.get(templateKey);
                     if (template == null) {
-                        log.debug("Template {} not found in available templates", templateName);
+                        log.debug("Filtered device recommendation candidate {}: reasonCode=unknownTemplate",
+                                inspected);
                         filteredItems.add(filteredItem(inspected, "unknownTemplate", language, templateName));
                         continue;
                     }
@@ -382,7 +383,8 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                             : rawSuggestedLabel;
                     String key = instanceKey(suggestedLabel);
                     if (existingInstanceKeys.contains(key) || addedInstanceKeys.contains(key)) {
-                        log.debug("Device instance {} already exists or was already recommended", key);
+                        log.debug("Filtered device recommendation candidate {}: reasonCode=duplicateDeviceInstance",
+                                inspected);
                         filteredItems.add(filteredItem(inspected, "duplicateDeviceInstance", language, suggestedLabel));
                         continue;
                     }
@@ -466,7 +468,8 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
                     addedInstanceKeys.add(key);
                     count++;
                 } catch (Exception e) {
-                    log.warn("Failed to parse recommendation: {}", rec);
+                    log.warn("Failed to parse device recommendation candidate {}: exception={}",
+                            inspected, e.getClass().getName());
                     filteredItems.add(filteredItem(inspected, "parseFailed", language, text(rec.path("templateName"), "")));
                 }
             }
@@ -493,7 +496,7 @@ public class RecommendRelatedDevicesTool extends AbstractAiTool {
             return objectMapper.writeValueAsString(result);
 
         } catch (Exception e) {
-            log.error("Failed to parse AI response", e);
+            log.error("Failed to parse AI response: exception={}", e.getClass().getName());
             return errorJson(
                     recommendationMessage(language, "parseFailed", 0),
                     "AI_RESPONSE_INVALID",

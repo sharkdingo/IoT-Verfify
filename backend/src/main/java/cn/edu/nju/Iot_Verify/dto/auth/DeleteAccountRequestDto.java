@@ -3,12 +3,14 @@ package cn.edu.nju.Iot_Verify.dto.auth;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+import lombok.ToString;
 
 @Data
 public class DeleteAccountRequestDto {
 
     @NotBlank(message = "Password is required")
     @Size(max = 128, message = "Password must not exceed 128 characters")
+    @ToString.Exclude
     private String password;
 
     @NotBlank(message = "Account confirmation is required")

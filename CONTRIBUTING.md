@@ -47,9 +47,9 @@ Include this line in the PR description and tick it:
 
 ### Recommended CI gates
 
-- Keep the real-backend Playwright journey green. The full-stack smoke gate runs
-  `frontend/e2e/fuzzing-flow.spec.ts` against MySQL, Redis, and NuSMV; run the complete
-  `npm run test:e2e` suite locally for broader interaction and authority-model changes.
+- Keep the real-backend Playwright suite green. CI runs `npm run test:e2e` against MySQL,
+  Redis, and NuSMV, including recommendation, verification/fix, cancellation, recovery,
+  cross-tab, error-contract, and fuzzing journeys.
 - Regenerate the endpoint index from controller annotations and fail if it differs from
   `docs/api/rest-endpoints.md` (see the "Regeneration" note in that file).
 - Run a Markdown dead-link check across `docs/` and the root docs.

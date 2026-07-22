@@ -24,7 +24,6 @@ import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.InteractiveFixExecutionService;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
-import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
@@ -37,7 +36,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.time.Duration;
 
 /**
  * 验证控制器
@@ -52,7 +50,6 @@ public class VerificationController {
     private final FixService fixService;
     private final InteractiveFixExecutionService interactiveFixExecutionService;
     private final ModelRequestParser modelRequestParser;
-    private final UserOperationGuard userOperationGuard;
 
     /**
      * 同步验证（立即返回结果）
@@ -62,14 +59,8 @@ public class VerificationController {
             @CurrentUser Long userId,
             @RequestBody JsonNode body) {
 
-        try (var lease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
-            lease.requireActive();
-            VerificationRequestDto request = modelRequestParser.parseVerification(body);
-            Result<VerificationResultDto> result = Result.success(verificationService.verify(userId, request));
-            lease.requireActive();
-            return result;
-        }
+        VerificationRequestDto request = modelRequestParser.parseVerification(body);
+        return Result.success(verificationService.verify(userId, request));
     }
 
     /** Create an asynchronous run and return the authoritative task snapshot. */
@@ -218,16 +209,10 @@ public class VerificationController {
             @Valid @RequestBody(required = false) FixRequestDto request) {
         List<String> strategies = (request != null) ? request.getStrategies() : null;
         var preferredRanges = (request != null) ? preferredRangesFromRequest(request) : null;
-        try (var lease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
-            lease.requireActive();
-            Result<FixResultDto> result = interactiveFixExecutionService.execute(userId, requestId,
-                    () -> Result.success(fixService.fix(
-                            userId, id, strategies, preferredRanges,
-                            stage -> interactiveFixExecutionService.markStage(userId, requestId, stage))));
-            lease.requireActive();
-            return result;
-        }
+        return interactiveFixExecutionService.execute(userId, requestId,
+                () -> Result.success(fixService.fix(
+                        userId, id, strategies, preferredRanges,
+                        stage -> interactiveFixExecutionService.markStage(userId, requestId, stage))));
     }
 
     @DeleteMapping("/fix-requests/{requestId}")

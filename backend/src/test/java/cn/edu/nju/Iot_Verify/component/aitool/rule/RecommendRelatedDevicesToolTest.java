@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.testutil.LogCapture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -73,6 +74,31 @@ class RecommendRelatedDevicesToolTest {
         assertEquals("AI_RESPONSE_INVALID", json.path("errorCode").asText());
         assertEquals(502, json.path("status").asInt());
         assertEquals("response_parse", json.path("phase").asText());
+    }
+
+    @Test
+    void executeBoardRecommendations_doesNotLogRejectedModelCandidateContent() throws Exception {
+        String sensitive = "private-template-value-never-log";
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of());
+        when(boardStorageService.getDeviceTemplates(1L)).thenReturn(List.of(template("Camera")));
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            {
+                              "templateName": "private-template-value-never-log",
+                              "suggestedLabel": "private-template-value-never-log"
+                            }
+                          ]
+                        }
+                        """);
+
+        try (LogCapture logs = LogCapture.forClass(RecommendRelatedDevicesTool.class)) {
+            JsonNode json = objectMapper.readTree(tool.executeBoardRecommendations("{}"));
+
+            assertEquals(1, json.path("filteredCount").asInt());
+            assertFalse(logs.messages().stream().anyMatch(message -> message.contains(sensitive)));
+        }
     }
 
     @Test

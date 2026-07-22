@@ -8,8 +8,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.lang.reflect.Method;
 import java.lang.reflect.Field;
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,5 +92,55 @@ class NusmvExecutorTimeoutTest {
         assertFalse(result.isSuccess());
         assertEquals(0, occupied.availablePermits(), "a busy call must not create a phantom permit");
         assertTrue(model.delete());
+    }
+
+    @Test
+    void terminateProcessTreeStopsWrapperAndDiscoveredDescendant() throws Exception {
+        String javaExecutable = new File(System.getProperty("java.home"),
+                "bin" + File.separator + (System.getProperty("os.name").toLowerCase().contains("windows")
+                        ? "java.exe" : "java")).getAbsolutePath();
+        Process wrapper = new ProcessBuilder(
+                javaExecutable,
+                "-cp", System.getProperty("java.class.path"),
+                ProcessTreeFixture.class.getName(), "parent")
+                .redirectErrorStream(true)
+                .start();
+        ProcessHandle descendant = null;
+        try {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    wrapper.getInputStream(), StandardCharsets.UTF_8));
+            String pidLine = reader.readLine();
+            assertNotNull(pidLine, "fixture parent must report its child PID");
+            descendant = ProcessHandle.of(Long.parseLong(pidLine)).orElseThrow();
+            assertTrue(descendant.isAlive());
+
+            assertTrue(NusmvExecutor.terminateProcessTree(wrapper));
+
+            assertTrue(wrapper.waitFor(2, TimeUnit.SECONDS));
+            assertFalse(descendant.isAlive());
+        } finally {
+            if (descendant != null && descendant.isAlive()) descendant.destroyForcibly();
+            if (wrapper.isAlive()) wrapper.destroyForcibly();
+        }
+    }
+
+    public static final class ProcessTreeFixture {
+        private ProcessTreeFixture() { }
+
+        public static void main(String[] args) throws Exception {
+            if (args.length > 0 && "parent".equals(args[0])) {
+                String javaExecutable = new File(System.getProperty("java.home"),
+                        "bin" + File.separator + (System.getProperty("os.name").toLowerCase().contains("windows")
+                                ? "java.exe" : "java")).getAbsolutePath();
+                Process child = new ProcessBuilder(
+                        javaExecutable,
+                        "-cp", System.getProperty("java.class.path"),
+                        ProcessTreeFixture.class.getName(), "child")
+                        .start();
+                System.out.println(child.pid());
+                System.out.flush();
+            }
+            Thread.sleep(TimeUnit.MINUTES.toMillis(1));
+        }
     }
 }

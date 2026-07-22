@@ -63,8 +63,8 @@ public class ChatConfirmationDetector {
                     SYSTEM_PROMPT, request.toString(), 0.0, 160);
             return parseDecision(response, pending);
         } catch (Exception e) {
-            log.warn("AI confirmation classification was unavailable; no protected action was authorized: {}",
-                    e.toString());
+            log.warn("AI confirmation classification was unavailable; no protected action was authorized: "
+                    + "exception={}", e.getClass().getName());
             return ConfirmationDecision.none();
         }
     }

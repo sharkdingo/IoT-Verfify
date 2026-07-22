@@ -25,6 +25,7 @@ public class UserPo {
     private String username;
 
     @Column(nullable = false)
+    @ToString.Exclude
     private String password;
 
     @Column(nullable = false)

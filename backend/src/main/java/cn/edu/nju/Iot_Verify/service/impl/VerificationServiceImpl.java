@@ -49,6 +49,7 @@ import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.SmvConstants;
 import cn.edu.nju.Iot_Verify.util.SpecificationFormulaPreview;
 import cn.edu.nju.Iot_Verify.service.VerificationService;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.mapper.SpecificationMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
@@ -101,6 +102,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
     private final ThreadPoolTaskExecutor syncVerificationExecutor;
     private final TransactionTemplate transactionTemplate;
     private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+    private final FormalOperationAdmission formalOperationAdmission;
     private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
     private final String workerId = UUID.randomUUID().toString();
     private final ScheduledExecutorService leaseMaintenanceExecutor =
@@ -128,6 +130,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                                    @Qualifier("syncVerificationExecutor") ThreadPoolTaskExecutor syncVerificationExecutor,
                                    TransactionTemplate transactionTemplate,
                                    ChatExecutionLeaseGuard chatExecutionLeaseGuard,
+                                   FormalOperationAdmission formalOperationAdmission,
                                    AsyncTaskAdmissionConfig taskAdmissionConfig) {
         super(objectMapper, "VerificationTask");
         this.smvGenerator = smvGenerator;
@@ -144,6 +147,7 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
         this.syncVerificationExecutor = syncVerificationExecutor;
         this.transactionTemplate = transactionTemplate;
         this.chatExecutionLeaseGuard = chatExecutionLeaseGuard;
+        this.formalOperationAdmission = formalOperationAdmission;
         this.taskAdmissionLimits = taskAdmissionConfig.getVerification();
     }
 
@@ -161,11 +165,13 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
                             ThreadPoolTaskExecutor verificationTaskExecutor,
                             ThreadPoolTaskExecutor syncVerificationExecutor,
                             TransactionTemplate transactionTemplate,
-                            ChatExecutionLeaseGuard chatExecutionLeaseGuard) {
+                            ChatExecutionLeaseGuard chatExecutionLeaseGuard,
+                            FormalOperationAdmission formalOperationAdmission) {
         this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig, taskRepository,
                 traceRepository, traceMapper, userRepository, specificationMapper,
                 verificationTaskMapper, objectMapper, verificationTaskExecutor,
                 syncVerificationExecutor, transactionTemplate, chatExecutionLeaseGuard,
+                formalOperationAdmission,
                 new AsyncTaskAdmissionConfig());
     }
 
@@ -220,7 +226,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
 
     @Override
     public VerificationResultDto verify(Long userId, VerificationRequestDto request) {
-        return verifyInput(userId, validateAndNormalize(userId, request));
+        return formalOperationAdmission.execute(userId,
+                () -> verifyInput(userId, validateAndNormalize(userId, request)));
     }
 
     @Override
@@ -228,7 +235,8 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             Long userId,
             VerificationRequestDto request,
             Map<String, DeviceManifest> templateManifests) {
-        return verifyInput(userId, validateAndNormalize(userId, request, templateManifests));
+        return formalOperationAdmission.execute(userId,
+                () -> verifyInput(userId, validateAndNormalize(userId, request, templateManifests)));
     }
 
     private VerificationResultDto verifyInput(Long userId, VerificationInput input) {
@@ -268,10 +276,10 @@ public class VerificationServiceImpl extends AbstractAsyncTaskService<Verificati
             log.error("Sync verification failed", cause);
             throw new InternalServerException("Verification failed: " + cause.getMessage());
         } catch (InterruptedException e) {
+            future.cancel(true);
+            purgeCancelledSyncTasks();
             Thread.currentThread().interrupt();
-            result = applyRunContext(buildErrorResult("", List.of("Verification interrupted")),
-                    input.attackScenario(), input.enablePrivacy(), input.attackSurface(), input.modelSnapshot(),
-                    JsonUtils.toJson(input.templateManifests()));
+            throw new ServiceUnavailableException("Verification was interrupted before completion", e);
         }
         try {
             Long runId = persistCompletedVerificationRun(userId, input, result, startedAt);

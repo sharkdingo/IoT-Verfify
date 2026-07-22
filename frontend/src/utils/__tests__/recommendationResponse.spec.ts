@@ -107,6 +107,10 @@ describe('recommendation candidate accounting', () => {
       rationale: '',
       verificationReady: false,
       readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
+      semanticWarnings: [{
+        code: 'NO_AUTOMATION_RULES',
+        message: 'The final draft contains no automation rules.'
+      }],
       scene: {
         templates: [],
         devices: [{}],
@@ -136,6 +140,10 @@ describe('recommendation candidate accounting', () => {
       rationale: '',
       verificationReady: false,
       readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
+      semanticWarnings: [{
+        code: 'NO_AUTOMATION_RULES',
+        message: 'The final draft contains no automation rules.'
+      }],
       scene: { templates: [], devices: [{}], environmentVariables: [], rules: [], specs: [] }
     }, 'Scenario')).toThrow(expect.objectContaining({
       code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
@@ -159,6 +167,39 @@ describe('recommendation candidate accounting', () => {
       rationale: '',
       verificationReady: true,
       readinessIssues: [],
+      semanticWarnings: [{
+        code: 'NO_AUTOMATION_RULES',
+        message: 'The final draft contains no automation rules.'
+      }],
+      scene: { templates: [], devices: [{}], environmentVariables: [], rules: [], specs: [] }
+    }, 'Scenario')).toThrow(expect.objectContaining({
+      code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE
+    }))
+  })
+
+  it('rejects semantic warnings that omit a filtered-candidate coverage warning', () => {
+    expect(() => validateScenarioRecommendationResponse({
+      message: 'Scenario generated.',
+      count: 1,
+      requestedCount: 3,
+      validatedCount: 1,
+      filteredCount: 1,
+      filteredItems: [{
+        type: 'rule', index: 1, reasonCode: 'invalidRuleSources', reason: 'Invalid source'
+      }],
+      adjustedCount: 0,
+      adjustedItems: [],
+      rawCandidateCount: 2,
+      inspectedCount: 2,
+      truncatedCount: 0,
+      scenarioName: 'Home',
+      rationale: 'Final retained content only.',
+      verificationReady: false,
+      readinessIssues: [{ code: 'NO_SPECIFICATIONS', message: 'Add a specification.' }],
+      semanticWarnings: [{
+        code: 'NO_AUTOMATION_RULES',
+        message: 'The final draft contains no automation rules.'
+      }],
       scene: { templates: [], devices: [{}], environmentVariables: [], rules: [], specs: [] }
     }, 'Scenario')).toThrow(expect.objectContaining({
       code: RECOMMENDATION_RESPONSE_INCOMPLETE_CODE

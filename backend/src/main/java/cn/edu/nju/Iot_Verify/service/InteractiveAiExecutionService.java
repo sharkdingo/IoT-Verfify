@@ -1,5 +1,7 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControl;
+import cn.edu.nju.Iot_Verify.component.ai.LlmRequestControlHolder;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
 import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
@@ -8,6 +10,8 @@ import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStage;
 import cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
@@ -31,13 +35,21 @@ public class InteractiveAiExecutionService {
     private static final long COMPLETED_STATUS_TTL_NANOS = TimeUnit.SECONDS.toNanos(15);
 
     private final ThreadPoolTaskExecutor executor;
+    private final DistributedInteractiveExecutionStore distributedStore;
     private final Map<RequestKey, ActiveExecution<?>> active = new ConcurrentHashMap<>();
     private final Map<Long, String> activeByUser = new ConcurrentHashMap<>();
     private final Map<RequestKey, RecentStatus> recentlyCompleted = new ConcurrentHashMap<>();
 
+    @Autowired
     public InteractiveAiExecutionService(
-            @Qualifier("interactiveAiExecutor") ThreadPoolTaskExecutor executor) {
+            @Qualifier("interactiveAiExecutor") ThreadPoolTaskExecutor executor,
+            DistributedInteractiveExecutionStore distributedStore) {
         this.executor = executor;
+        this.distributedStore = distributedStore;
+    }
+
+    InteractiveAiExecutionService(ThreadPoolTaskExecutor executor) {
+        this(executor, null);
     }
 
     public <T> T execute(Long userId, String requestId, Callable<T> operation) {
@@ -50,9 +62,22 @@ public class InteractiveAiExecutionService {
                     "Another AI recommendation is already running for this user. Stop it before starting a new one.");
         }
 
-        ActiveExecution<T> execution = new ActiveExecution<>(key, operation);
+        DistributedInteractiveExecutionStore.Lease distributedLease;
+        try {
+            distributedLease = distributedStore == null ? null
+                    : distributedStore.acquire("recommendation", userId, id, true);
+        } catch (DistributedInteractiveExecutionStore.BusyException e) {
+            activeByUser.remove(userId, id);
+            String message = e.getScope() == DistributedInteractiveExecutionStore.BusyScope.USER
+                    ? "Another AI recommendation is already running for this user. Stop it before starting a new one."
+                    : "An AI recommendation with this requestId is already running.";
+            throw new ServiceUnavailableException(message);
+        }
+
+        ActiveExecution<T> execution = new ActiveExecution<>(key, operation, distributedLease);
         if (active.putIfAbsent(key, execution) != null) {
             activeByUser.remove(userId, id);
+            if (distributedStore != null) distributedStore.abandon(distributedLease);
             throw new ServiceUnavailableException(
                     "An AI recommendation with this requestId is already running.");
         }
@@ -81,10 +106,12 @@ public class InteractiveAiExecutionService {
     public boolean cancel(Long userId, String requestId) {
         String id = validateRequestId(requestId);
         ActiveExecution<?> execution = active.get(new RequestKey(userId, id));
-        boolean cancelled = execution != null && execution.cancel();
+        boolean remotelySignalled = distributedStore != null
+                && distributedStore.requestCancellation("recommendation", userId, id);
+        boolean cancelled = execution != null && execution.cancel(false);
         log.info("AI recommendation cancellation: userId={}, requestId={}, cancelled={}",
-                userId, id, cancelled);
-        return cancelled;
+                userId, id, cancelled || remotelySignalled);
+        return cancelled || remotelySignalled;
     }
 
     public InteractiveOperationStatusDto getStatus(Long userId, String requestId) {
@@ -92,6 +119,11 @@ public class InteractiveAiExecutionService {
         String id = validateRequestId(requestId);
         RequestKey key = new RequestKey(userId, id);
         ActiveExecution<?> execution = active.get(key);
+        if (execution != null && !execution.usesDistributedLease()) return execution.status();
+        if (distributedStore != null) {
+            var distributed = distributedStore.getStatus("recommendation", userId, id);
+            if (distributed.isPresent()) return distributed.get();
+        }
         if (execution != null) return execution.status();
         RecentStatus recent = recentlyCompleted.get(key);
         if (recent != null) return recent.status();
@@ -100,7 +132,22 @@ public class InteractiveAiExecutionService {
 
     public void markStage(Long userId, String requestId, InteractiveOperationStage stage) {
         ActiveExecution<?> execution = active.get(new RequestKey(userId, validateRequestId(requestId)));
-        if (execution != null) execution.stage.set(Objects.requireNonNull(stage));
+        if (execution != null) {
+            InteractiveOperationStage next = Objects.requireNonNull(stage);
+            InteractiveOperationStage effective = execution.stage.updateAndGet(current ->
+                    current == InteractiveOperationStage.CANCELLING ? current : next);
+            if (distributedStore != null) {
+                distributedStore.update(execution.distributedLease, execution.state.get().name(), effective);
+            }
+        }
+    }
+
+    @Scheduled(fixedDelay = 1000L)
+    public void pollDistributedCancellation() {
+        if (distributedStore == null) return;
+        active.values().forEach(execution -> {
+            if (distributedStore.shouldStop(execution.distributedLease)) execution.cancel(false);
+        });
     }
 
     private String validateRequestId(String requestId) {
@@ -144,19 +191,28 @@ public class InteractiveAiExecutionService {
         private final AtomicBoolean cleaned = new AtomicBoolean(false);
         private final AtomicReference<InteractiveOperationStage> stage =
                 new AtomicReference<>(InteractiveOperationStage.QUEUED);
+        private final LlmRequestControl requestControl = new LlmRequestControl();
+        private final DistributedInteractiveExecutionStore.Lease distributedLease;
         private final long createdAtNanos = System.nanoTime();
         private final FutureTask<T> task;
 
-        private ActiveExecution(RequestKey key, Callable<T> operation) {
+        private ActiveExecution(RequestKey key, Callable<T> operation,
+                                DistributedInteractiveExecutionStore.Lease distributedLease) {
             this.key = key;
+            this.distributedLease = distributedLease;
             this.task = new FutureTask<>(() -> {
                 if (!state.compareAndSet(ExecutionState.WAITING, ExecutionState.RUNNING)) {
                     throw new CancellationException("AI recommendation was cancelled before it started.");
                 }
                 stage.compareAndSet(InteractiveOperationStage.QUEUED, InteractiveOperationStage.RUNNING);
+                if (distributedStore != null) {
+                    distributedStore.update(distributedLease, ExecutionState.RUNNING.name(), stage.get());
+                }
+                LlmRequestControlHolder.set(requestControl);
                 try {
                     return operation.call();
                 } finally {
+                    LlmRequestControlHolder.clear();
                     state.set(ExecutionState.FINISHED);
                     cleanup();
                 }
@@ -164,7 +220,15 @@ public class InteractiveAiExecutionService {
         }
 
         private boolean cancel() {
+            return cancel(true);
+        }
+
+        private boolean cancel(boolean publishDistributed) {
             stage.set(InteractiveOperationStage.CANCELLING);
+            requestControl.cancel();
+            if (publishDistributed && distributedStore != null) {
+                distributedStore.requestCancellation("recommendation", key.userId(), key.requestId());
+            }
             boolean cancelled = task.cancel(true);
             if (cancelled && state.compareAndSet(ExecutionState.WAITING, ExecutionState.FINISHED)) {
                 cleanup();
@@ -181,10 +245,15 @@ public class InteractiveAiExecutionService {
                     .build();
         }
 
+        private boolean usesDistributedLease() {
+            return distributedLease != null && distributedLease.isRedisBacked();
+        }
+
         private void cleanup() {
             if (!cleaned.compareAndSet(false, true)) return;
             recentlyCompleted.put(key, new RecentStatus(
                     status(), System.nanoTime() + COMPLETED_STATUS_TTL_NANOS));
+            if (distributedStore != null) distributedStore.finish(distributedLease, stage.get());
             active.remove(key, this);
             activeByUser.remove(key.userId(), key.requestId());
         }

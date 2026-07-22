@@ -11,11 +11,11 @@ public class ConflictException extends BaseException {
     }
 
     public static ConflictException duplicatePhone(String phone) {
-        return new ConflictException("Phone number already registered: " + phone);
+        return new ConflictException("Phone number is already registered.");
     }
 
     public static ConflictException duplicateUsername(String username) {
-        return new ConflictException("Username already exists: " + username);
+        return new ConflictException("Username already exists.");
     }
 
     public static ConflictException duplicateTemplate(String name) {

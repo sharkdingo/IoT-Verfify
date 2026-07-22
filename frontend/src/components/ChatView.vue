@@ -38,6 +38,7 @@ import {
   sendStreamChat
 } from '@/api/chat';
 import { useChatStore } from '@/stores/chat';
+import { useAuth } from '@/stores/auth';
 import { localizedTextOrFallback } from '@/utils/userMessage';
 import { REQUEST_LIMITS } from '@/constants/requestLimits';
 
@@ -67,6 +68,9 @@ const ChatMarkdown = defineAsyncComponent(() => import('@/components/ChatMarkdow
 // 使用全局状态
 const chatStore = useChatStore();
 const visible = computed(() => chatStore.state.visible);
+const { state: authState } = useAuth();
+const authenticatedUserId = computed(() => authState.user?.userId ?? null);
+let chatAuthEpoch = 0;
 
 const loadingRegex = /^(正在执行指令|Executing command)[.\s\n]*/;
 const boardContext = ref<BoardChatContext | null>(null);
@@ -216,6 +220,7 @@ const isRecording = ref(false);
 const sessions = ref<ChatSession[]>([]);
 const isLoadingSessions = ref(false);
 const sessionListLoadFailed = ref(false);
+const isCreatingSession = ref(false);
 const currentSessionId = ref<string>('');
 const messages = ref<ChatMessage[]>([]);
 const pendingConfirmationKinds = ref<ChatConfirmationKind[]>([]);
@@ -235,6 +240,7 @@ const isRetryingReconciliation = ref(false);
 const activeStreamSessionId = ref('');
 const activeStreamTurnId = ref('');
 const isLoadingHistory = ref(false);
+const historyLoadFailed = ref(false);
 const isLoadingOlderHistory = ref(false);
 const historyHasMore = ref(false);
 const historyNextBeforeId = ref<number | null>(null);
@@ -518,6 +524,7 @@ const createDefaultChatGeometry = () => {
 };
 
 const chatPanelStyle = computed<Record<string, string>>(() => {
+  if (typeof window !== 'undefined' && window.innerWidth <= 720) return {};
   if (!chatPosition.value) return {} as Record<string, string>;
   return {
     left: `${chatPosition.value.left}px`,
@@ -960,8 +967,10 @@ const initSessions = async (reattachActive = true) => {
 };
 
 const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true) => {
+  const authEpoch = chatAuthEpoch;
   try {
     const session = await createSession(signal);
+    if (authEpoch !== chatAuthEpoch) return '';
     if (session && session.id) {
       sessionListRequestEpoch += 1;
       isLoadingSessions.value = false;
@@ -971,6 +980,7 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
     }
     throw new Error('Chat session response is incomplete');
   } catch (e) {
+    if (authEpoch !== chatAuthEpoch) return '';
     console.error('创建会话失败:', e);
     if (notifyOnFailure) ElMessage.error(t('app.chat.createSessionFailed'));
     return null;
@@ -978,12 +988,18 @@ const handleCreateSession = async (signal?: AbortSignal, notifyOnFailure = true)
 };
 
 const onNewChatClick = async () => {
-  if (await settleActiveRequest(false) !== 'ready') return;
-  const newId = await handleCreateSession();
-  if (!newId) return;
-  await handleSelectSession(newId);
-  // 新建对话后自动收起侧边栏（移动端友好）
-  if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
+  if (isCreatingSession.value) return;
+  isCreatingSession.value = true;
+  try {
+    if (await settleActiveRequest(false) !== 'ready') return;
+    const newId = await handleCreateSession();
+    if (!newId) return;
+    await handleSelectSession(newId);
+    // 新建对话后自动收起侧边栏（移动端友好）
+    if (window.innerWidth < 960 || isChatPanelCompact.value) isSidebarOpen.value = false;
+  } finally {
+    isCreatingSession.value = false;
+  }
 };
 
 const handleDelete = async (sessionId: string) => {
@@ -1010,6 +1026,7 @@ const handleDelete = async (sessionId: string) => {
       historyAbortController.value?.abort();
       historyAbortController.value = null;
       isLoadingHistory.value = false;
+      historyLoadFailed.value = false;
       currentSessionId.value = '';
       messages.value = [];
       historyHasMore.value = false;
@@ -1029,7 +1046,7 @@ const handleDelete = async (sessionId: string) => {
 };
 
 const handleSelectSession = async (sessionId: string, knownActive = false) => {
-  if (currentSessionId.value === sessionId) {
+  if (currentSessionId.value === sessionId && !historyLoadFailed.value) {
     if (!isAssistantBusy.value) {
       monitorSessionActivity(sessionId, knownActive);
       void refreshPendingConfirmation(sessionId);
@@ -1049,6 +1066,7 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
   historyNextBeforeId.value = null;
   pendingConfirmationKinds.value = [];
   pendingConfirmationLoadFailed.value = false;
+  historyLoadFailed.value = false;
   isLoadingHistory.value = true;
   const requestEpoch = ++historyRequestEpoch;
   const controller = new AbortController();
@@ -1062,12 +1080,14 @@ const handleSelectSession = async (sessionId: string, knownActive = false) => {
     const historyPage = await getSessionHistory(sessionId, controller.signal);
     if (requestEpoch !== historyRequestEpoch || currentSessionId.value !== sessionId) return;
     applyHistoryPage(historyPage, false);
+    historyLoadFailed.value = false;
     await refreshPendingConfirmation(sessionId, controller.signal);
     scrollToBottom(true);
     if (!knownActive) monitorSessionActivity(sessionId);
   } catch (e: any) {
     if (requestEpoch !== historyRequestEpoch) return;
     if (e?.name !== 'CanceledError' && e?.code !== 'ERR_CANCELED') {
+      historyLoadFailed.value = true;
       ElMessage.error(t('app.chat.networkError'));
     }
   } finally {
@@ -1152,6 +1172,10 @@ const hasTerminalAssistantRecord = (history: ChatMessage[], turnId?: string) => 
 };
 
 const detachActiveTransport = (showCancelledMessage = false) => {
+  if (streamElapsedTimer) {
+    clearInterval(streamElapsedTimer);
+    streamElapsedTimer = null;
+  }
   const controller = abortController.value;
   if (!controller) return null;
   streamRequestEpoch += 1;
@@ -1165,6 +1189,49 @@ const detachActiveTransport = (showCancelledMessage = false) => {
 
 const abortActiveTransport = (showCancelledMessage = false) => {
   detachActiveTransport(showCancelledMessage)?.abort();
+};
+
+const resetChatForAuthSubjectChange = () => {
+  chatAuthEpoch += 1;
+  streamRequestEpoch += 1;
+  sessionListRequestEpoch += 1;
+  historyRequestEpoch += 1;
+  confirmationRequestEpoch += 1;
+  abortActiveTransport(false);
+  stopSessionActivityMonitor();
+  settlementAbortController?.abort();
+  settlementAbortController = null;
+  settlementPromise = null;
+  reconciliationPromise = null;
+  historyAbortController.value?.abort();
+  historyAbortController.value = null;
+
+  sessions.value = [];
+  currentSessionId.value = '';
+  messages.value = [];
+  inputValue.value = '';
+  pendingConfirmationKinds.value = [];
+  pendingConfirmationLoadFailed.value = false;
+  activeStreamSessionId.value = '';
+  activeStreamTurnId.value = '';
+  isStreaming.value = false;
+  isSettlingStream.value = false;
+  isMonitoringRemoteExecution.value = false;
+  reconciliationRequired.value = false;
+  isRetryingReconciliation.value = false;
+  isLoadingSessions.value = false;
+  sessionListLoadFailed.value = false;
+  isCreatingSession.value = false;
+  isLoadingHistory.value = false;
+  historyLoadFailed.value = false;
+  isLoadingOlderHistory.value = false;
+  historyHasMore.value = false;
+  historyNextBeforeId.value = null;
+  streamProgress.value = null;
+  streamProgressEvents.value = [];
+  streamElapsedSeconds.value = 0;
+  boardContext.value = null;
+  chatStore.setStreaming(false);
 };
 
 const waitForSessionIdle = async (sessionId: string, signal?: AbortSignal): Promise<boolean> => {
@@ -1294,6 +1361,15 @@ const handleDocumentVisibilityChange = () => {
   if (!document.hidden && visible.value) void initSessions();
 };
 
+watch(authenticatedUserId, (nextUserId, previousUserId) => {
+  if (nextUserId === previousUserId) return;
+  resetChatForAuthSubjectChange();
+  if (nextUserId !== null && visible.value) {
+    refreshBoardContext();
+    void initSessions();
+  }
+}, { flush: 'sync' });
+
 onMounted(() => {
   if (visible.value) {
     refreshBoardContext();
@@ -1311,6 +1387,7 @@ onUnmounted(() => {
   settlementAbortController = null;
   chatStore.setStreaming(false);
   if (streamElapsedTimer) clearInterval(streamElapsedTimer);
+  streamElapsedTimer = null;
   historyRequestEpoch += 1;
   historyAbortController.value?.abort();
   historyAbortController.value = null;
@@ -1603,7 +1680,7 @@ const scrollToBottom = (force = false) => {
 
         <div :class="['sidebar', { collapsed: !isSidebarOpen }]">
           <div class="sidebar-header">
-            <button type="button" class="new-chat-btn" :disabled="isSettlingStream" @click="onNewChatClick">
+            <button type="button" class="new-chat-btn" :disabled="isSettlingStream || isCreatingSession" @click="onNewChatClick">
               <PlusOutlined/> <span class="btn-label">{{ t('app.chat.newChat') }}</span>
             </button>
           </div>
@@ -1743,7 +1820,19 @@ const scrollToBottom = (force = false) => {
               </button>
             </div>
 
-            <div v-if="messages.length === 0" class="welcome-screen">
+            <div
+              v-if="historyLoadFailed && currentSessionId"
+              class="session-list-state session-list-retry"
+              data-testid="chat-history-retry"
+              role="alert"
+            >
+              <span>{{ t('app.chat.networkError') }}</span>
+              <button type="button" class="history-pagination__button" @click="handleSelectSession(currentSessionId)">
+                {{ t('app.retry') }}
+              </button>
+            </div>
+
+            <div v-else-if="messages.length === 0" class="welcome-screen">
               <div class="brand-logo">
                 <div class="logo-inner">
                   <img src="/AI.png" :alt="t('app.aiAssistant')" class="custom-logo-img" />
@@ -2025,7 +2114,7 @@ const scrollToBottom = (force = false) => {
                 v-model="inputValue"
                 data-testid="chat-input"
                 :placeholder="t('app.chat.inputPlaceholder')"
-                :disabled="interactionLocked || isLoading"
+                :disabled="interactionLocked || isLoading || historyLoadFailed"
                 rows="2"
                 :maxlength="REQUEST_LIMITS.chatContentCharacters"
                 @keydown.ctrl.enter="handleSend"
@@ -2039,7 +2128,7 @@ const scrollToBottom = (force = false) => {
                     :aria-label="t('app.chat.startSpeaking')"
                     :title="t('app.chat.startSpeaking')"
                     @click="startListening"
-                    :disabled="interactionLocked || isLoading"
+                    :disabled="interactionLocked || isLoading || historyLoadFailed"
                   >
                     <AudioOutlined/>
                   </button>
@@ -2064,7 +2153,7 @@ const scrollToBottom = (force = false) => {
                     class="action-btn send"
                     data-testid="chat-send"
                     @click="handleSend"
-                    :disabled="interactionLocked || !inputValue.trim() || isLoading"
+                    :disabled="interactionLocked || !inputValue.trim() || isLoading || historyLoadFailed"
                     :title="interactionLocked ? t('app.chat.boardInteractionLocked') : undefined"
                   ><SendOutlined/></button>
                 </div>

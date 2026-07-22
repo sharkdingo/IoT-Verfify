@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.testutil.LogCapture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -76,6 +78,33 @@ class RecommendRulesToolTest {
         assertEquals("AI_RESPONSE_INVALID", json.path("errorCode").asText());
         assertEquals(502, json.path("status").asInt());
         assertEquals("response_parse", json.path("phase").asText());
+    }
+
+    @Test
+    void execute_doesNotLogRejectedModelCandidateContent() throws Exception {
+        String sensitive = "private-rule-value-never-log";
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(lightDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            "private-rule-value-never-log",
+                            {
+                              "name": "private-rule-value-never-log",
+                              "conditions": [],
+                              "command": {}
+                            }
+                          ]
+                        }
+                        """);
+
+        try (LogCapture logs = LogCapture.forClass(RecommendRulesTool.class)) {
+            JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+            assertEquals(2, json.path("filteredCount").asInt());
+            assertFalse(logs.messages().stream().anyMatch(message -> message.contains(sensitive)));
+        }
     }
 
     @Test

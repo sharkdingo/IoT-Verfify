@@ -51,4 +51,14 @@ class UserServiceImplTest {
         assertThrows(BadRequestException.class,
                 () -> service.register("13800138000", "Ali\nce", "password123"));
     }
+
+    @Test
+    void register_shouldRejectPhoneShapedUsername() {
+        UserServiceImpl service = new UserServiceImpl(userRepository, passwordEncoder);
+
+        assertThrows(BadRequestException.class,
+                () -> service.register("13900139000", "13800138000", "password123"));
+
+        verify(userRepository, never()).save(any());
+    }
 }

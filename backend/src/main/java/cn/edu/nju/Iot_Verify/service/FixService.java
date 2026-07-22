@@ -40,7 +40,9 @@ public interface FixService {
 
     /**
      * Internal compatibility overload for service-level callers that need to assert a submitted
-     * suggestion against the server recomputation. It is not exposed by the REST API.
+     * suggestion against the server recomputation. It is not exposed by the REST API. Because the
+     * recomputation invokes NuSMV, it participates in the same per-user formal-operation admission
+     * as an ordinary fix search.
      */
     @Deprecated
     FixApplyResultDto applyFix(Long userId, Long traceId, String strategy, FixSuggestionDto suggestion,

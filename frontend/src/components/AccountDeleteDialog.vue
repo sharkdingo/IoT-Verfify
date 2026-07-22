@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import { normalizeAccountIdentifier } from '@/utils/accountIdentifier'
@@ -27,17 +27,41 @@ const form = reactive({
   confirmation: '',
   password: ''
 })
+const confirmationWasEdited = ref(false)
+let confirmationEditPending = false
 
 const confirmationHint = computed(() => t('app.deleteAccountConfirmationHint'))
 const confirmationMatches = computed(() => {
   const value = normalizeAccountIdentifier(form.confirmation)
   return value.length > 0 && (value === props.username || value === props.phone)
 })
-const canConfirm = computed(() => confirmationMatches.value && form.password.length > 0 && !props.loading)
+const canConfirm = computed(() => confirmationWasEdited.value
+  && confirmationMatches.value
+  && form.password.length > 0
+  && !props.loading)
+
+const markConfirmationEditIntent = () => {
+  confirmationEditPending = true
+}
+
+const markConfirmationEditIntentByKeyboard = (event: KeyboardEvent) => {
+  if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+  if (event.key.length === 1 || event.key === 'Backspace' || event.key === 'Delete') {
+    markConfirmationEditIntent()
+  }
+}
+
+const confirmConfirmationEdited = () => {
+  if (!confirmationEditPending) return
+  confirmationWasEdited.value = true
+  confirmationEditPending = false
+}
 
 const resetForm = () => {
   form.confirmation = ''
   form.password = ''
+  confirmationWasEdited.value = false
+  confirmationEditPending = false
 }
 
 const handleCancel = () => {
@@ -55,8 +79,8 @@ const handleConfirm = () => {
   })
 }
 
-watch(() => props.visible, visible => {
-  if (!visible) resetForm()
+watch(() => props.visible, () => {
+  resetForm()
 })
 
 const isDialogOpen = computed(() => props.visible)
@@ -101,9 +125,16 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
               v-model="form.confirmation"
               type="text"
               autocomplete="off"
+              name="delete-account-confirmation"
+              data-1p-ignore
+              data-lpignore="true"
               :placeholder="t('app.deleteAccountConfirmationPlaceholder')"
               :aria-invalid="Boolean(form.confirmation) && !confirmationMatches"
               :disabled="loading"
+              @keydown="markConfirmationEditIntentByKeyboard"
+              @paste="markConfirmationEditIntent"
+              @compositionstart="markConfirmationEditIntent"
+              @input="confirmConfirmationEdited"
             >
             <small :class="{ danger: form.confirmation && !confirmationMatches }">
               {{ confirmationHint }}
@@ -145,13 +176,22 @@ const { setDialogRef, handleModalKeydown } = useModalAccessibility(isDialogOpen,
   align-items: center;
   justify-content: center;
   padding: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--text, #0f172a) 56%, transparent);
   backdrop-filter: blur(5px);
 }
 
 .account-delete-dialog {
+  box-sizing: border-box;
   width: min(100%, 28rem);
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
   padding: 1.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid color-mix(in srgb, #ef4444 28%, var(--border, #e2e8f0));
   border-radius: 1.25rem;
   background: var(--surface-overlay, #ffffff);

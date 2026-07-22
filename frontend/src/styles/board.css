@@ -223,7 +223,7 @@
   font-size: 20px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .board-nav-bar {
     padding: 0.5rem;
   }

@@ -17,6 +17,12 @@ spring:
       hibernate:
         format_sql: true
 
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:6}
+      thread-name-prefix: scheduling-
+
 server:
   port: ${SERVER_PORT:8080}
   error:
@@ -24,6 +30,7 @@ server:
     include-binding-errors: never
 
 iot-verify:
+  time-zone: ${IOT_VERIFY_TIME_ZONE:Asia/Shanghai}
   http:
     max-request-bytes: ${IOT_VERIFY_MAX_REQUEST_BYTES:4194304}
     max-scene-request-bytes: ${IOT_VERIFY_MAX_SCENE_REQUEST_BYTES:67108864}

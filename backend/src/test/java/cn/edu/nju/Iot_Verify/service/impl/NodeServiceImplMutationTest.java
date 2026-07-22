@@ -178,8 +178,8 @@ class NodeServiceImplMutationTest {
     }
 
     @Test
-    void addNode_whenTemplateHasEmptyInitState_shouldUseFallbackState() {
-        // Simulates Weather/Clock/Temperature Sensor templates whose InitState is ""
+    void addNode_whenTemplateIsStateless_shouldUsePlaceholderWithoutWarning() {
+        // Simulates Weather/Clock/Temperature Sensor templates with no state machine.
         String weatherJson = "{\"Name\":\"Weather\",\"Modes\":[],\"InitState\":\"\",\"WorkingStates\":[]}";
         DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
                 .id(1L).userId(1L).name("Weather").manifestJson(weatherJson).build();
@@ -192,9 +192,9 @@ class NodeServiceImplMutationTest {
                 1L, "Weather", "weather_1", null, null, null, null, null);
 
         assertEquals("Working", savedNode().getState());
-        assertEquals("systemFallback", result.getInitialStateSource());
+        assertEquals("statelessPlaceholder", result.getInitialStateSource());
         assertTrue(result.getDefaultsApplied().contains("state"));
-        assertTrue(result.getWarnings().get(0).contains("no usable initial state"));
+        assertTrue(result.getWarnings().isEmpty());
     }
 
     @Test
@@ -247,9 +247,48 @@ class NodeServiceImplMutationTest {
         when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
         applyNodeCreateWithExisting();
 
-        nodeService.addNode(1L, "Custom", "custom_1", null, null, null, null, null);
+        DeviceCreationResultDto result = nodeService.addNode(
+                1L, "Custom", "custom_1", null, null, null, null, null);
 
         assertEquals("Working", savedNode().getState());
+        assertEquals("statelessPlaceholder", result.getInitialStateSource());
+        assertTrue(result.getWarnings().isEmpty());
+    }
+
+    @Test
+    void addNode_whenStatefulTemplateHasBlankInitState_shouldWarnAboutFallback() {
+        String invalidJson = "{\"Name\":\"Custom\",\"Modes\":[\"Mode\"],\"InitState\":\"\","
+                + "\"WorkingStates\":[{\"Name\":\"Working\"}]}";
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(3L).userId(1L).name("Custom").manifestJson(invalidJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Custom")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
+        applyNodeCreateWithExisting();
+
+        DeviceCreationResultDto result = nodeService.addNode(
+                1L, "Custom", "custom_1", null, null, null, null, null);
+
+        assertEquals("systemFallback", result.getInitialStateSource());
+        assertTrue(result.getWarnings().get(0).contains("no usable initial state"));
+    }
+
+    @Test
+    void addNode_whenLegacyTemplateHasOnlyPartialStateDefinition_shouldWarnAboutFallback() {
+        String invalidJson = "{\"Name\":\"Custom\",\"Modes\":[],\"InitState\":\"on\","
+                + "\"WorkingStates\":[]}";
+        DeviceTemplatePo templatePo = DeviceTemplatePo.builder()
+                .id(3L).userId(1L).name("Custom").manifestJson(invalidJson).build();
+
+        when(deviceTemplateService.checkTemplateExists(1L, "Custom")).thenReturn(true);
+        when(deviceTemplateService.findTemplateByName(1L, "Custom")).thenReturn(Optional.of(templatePo));
+        applyNodeCreateWithExisting();
+
+        DeviceCreationResultDto result = nodeService.addNode(
+                1L, "Custom", "custom_1", null, null, null, null, null);
+
+        assertEquals("systemFallback", result.getInitialStateSource());
+        assertFalse(result.getWarnings().isEmpty());
     }
 
     @Test

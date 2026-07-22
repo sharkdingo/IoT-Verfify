@@ -22,6 +22,8 @@ import java.util.stream.Stream;
 public class NusmvTempArtifactCleaner {
 
     private static final String PREFIX = "nusmv_";
+    private static final String LOCK_PREFIX = "." + PREFIX;
+    private static final String LOCK_SUFFIX = ".active.lock";
     private static final Duration ACTIVE_GRACE = Duration.ofMinutes(10);
 
     private final NusmvConfig config;
@@ -36,7 +38,8 @@ public class NusmvTempArtifactCleaner {
     void cleanupRoot(Path root, Instant now) {
         Path tempRoot = root.toAbsolutePath().normalize();
         try (Stream<Path> entries = Files.list(tempRoot)) {
-            List<Path> directories = entries
+            List<Path> allEntries = entries.toList();
+            List<Path> directories = allEntries.stream()
                     .filter(Files::isDirectory)
                     .filter(path -> path.getFileName().toString().startsWith(PREFIX))
                     .sorted(Comparator.comparing(this::lastModified))
@@ -54,8 +57,21 @@ public class NusmvTempArtifactCleaner {
                     retained--;
                 }
             }
+            cleanupOrphanMarkers(tempRoot, allEntries);
         } catch (IOException e) {
             log.warn("Could not enumerate NuSMV temporary artifacts: {}", e.getMessage());
+        }
+    }
+
+    private void cleanupOrphanMarkers(Path tempRoot, List<Path> entries) {
+        for (Path marker : entries) {
+            String name = marker.getFileName().toString();
+            if (!name.startsWith(LOCK_PREFIX) || !name.endsWith(LOCK_SUFFIX)) continue;
+            String directoryName = name.substring(1, name.length() - LOCK_SUFFIX.length());
+            if (!directoryName.startsWith(PREFIX)) continue;
+            Path directory = tempRoot.resolve(directoryName).toAbsolutePath().normalize();
+            if (Files.exists(directory)) continue;
+            artifactRegistry.deleteIfInactive(directory, () -> !Files.exists(directory));
         }
     }
 

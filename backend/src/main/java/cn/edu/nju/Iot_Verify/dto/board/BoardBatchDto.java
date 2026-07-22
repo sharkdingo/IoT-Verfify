@@ -14,6 +14,7 @@ import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.util.List;
 
@@ -93,6 +94,7 @@ public class BoardBatchDto {
     /** Request-only opaque token from the latest server replacement preview. */
     @NotBlank(message = "Scene replacement impactToken is required")
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @ToString.Exclude
     private String impactToken;
 
     /** Response-only templates created while resolving scene-import snapshots. */

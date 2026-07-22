@@ -4,6 +4,8 @@ import java.text.Normalizer;
 
 public final class UsernameNormalizer {
 
+    private static final String PHONE_PATTERN = "^1[3-9]\\d{9}$";
+
     private UsernameNormalizer() {
     }
 
@@ -34,6 +36,10 @@ public final class UsernameNormalizer {
                         || Character.getType(codePoint) == Character.FORMAT
                         || Character.getType(codePoint) == Character.LINE_SEPARATOR
                         || Character.getType(codePoint) == Character.PARAGRAPH_SEPARATOR);
+    }
+
+    public static boolean isPhoneNumber(String value) {
+        return value != null && value.matches(PHONE_PATTERN);
     }
 
     private static boolean isEdgeWhitespace(int codePoint) {

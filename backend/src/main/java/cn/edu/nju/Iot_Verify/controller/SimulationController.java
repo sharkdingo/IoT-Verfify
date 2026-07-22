@@ -12,7 +12,6 @@ import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceDto;
 import cn.edu.nju.Iot_Verify.dto.simulation.SimulationTraceSummaryDto;
 import cn.edu.nju.Iot_Verify.security.CurrentUser;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
-import cn.edu.nju.Iot_Verify.service.UserOperationGuard;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import jakarta.validation.constraints.Positive;
@@ -21,7 +20,6 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.time.Duration;
 
 @Validated
 @RestController
@@ -31,20 +29,13 @@ public class SimulationController {
 
     private final SimulationService simulationService;
     private final ModelRequestParser modelRequestParser;
-    private final UserOperationGuard userOperationGuard;
 
     @PostMapping
     public Result<SimulationResultDto> simulate(
             @CurrentUser Long userId,
             @RequestBody JsonNode body) {
-        try (var lease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
-            lease.requireActive();
-            SimulationRequestDto request = modelRequestParser.parseSimulation(body);
-            Result<SimulationResultDto> result = Result.success(simulationService.simulate(userId, request));
-            lease.requireActive();
-            return result;
-        }
+        SimulationRequestDto request = modelRequestParser.parseSimulation(body);
+        return Result.success(simulationService.simulate(userId, request));
     }
 
     @PostMapping("/async")
@@ -98,14 +89,8 @@ public class SimulationController {
     public Result<SimulationTraceDto> simulateAndSave(
             @CurrentUser Long userId,
             @RequestBody JsonNode body) {
-        try (var lease = userOperationGuard.acquire(
-                userId, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2))) {
-            lease.requireActive();
-            SimulationRequestDto request = modelRequestParser.parseSimulation(body);
-            Result<SimulationTraceDto> result = Result.success(simulationService.simulateAndSave(userId, request));
-            lease.requireActive();
-            return result;
-        }
+        SimulationRequestDto request = modelRequestParser.parseSimulation(body);
+        return Result.success(simulationService.simulateAndSave(userId, request));
     }
 
     @GetMapping("/traces")

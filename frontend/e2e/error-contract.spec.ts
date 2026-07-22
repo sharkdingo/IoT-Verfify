@@ -29,3 +29,24 @@ test('logout and permanent account deletion reject unauthenticated requests', as
   expect(deleteResponse.status()).toBe(401)
   expect((await deleteResponse.json()).code).toBe(401)
 })
+
+test('chat stream setup errors preserve their JSON status for SSE clients', async ({ request }) => {
+  const auth = await createAuthenticatedUser(request, { usernamePrefix: 'sseerror' })
+  const response = await request.post(`${apiBaseURL}/api/chat/completions`, {
+    headers: {
+      Authorization: `Bearer ${auth.token}`,
+      Accept: 'text/event-stream'
+    },
+    data: {
+      sessionId: 'missing-session',
+      turnId: 'missing-session-turn',
+      content: 'hello'
+    }
+  })
+
+  expect(response.status()).toBe(404)
+  expect(response.headers()['content-type']).toContain('application/json')
+  const body = await response.json()
+  expect(body.code).toBe(404)
+  expect(body.message).toContain('missing-session')
+})

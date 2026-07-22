@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import jakarta.validation.Valid;
 import lombok.Data;
+import lombok.ToString;
 
 @Data
 public class ChatRequestDto {
@@ -15,6 +16,7 @@ public class ChatRequestDto {
 
     @NotBlank(message = "Content is required")
     @Size(max = RequestLimits.MAX_CHAT_CONTENT_LENGTH, message = "Content must not exceed 10000 characters")
+    @ToString.Exclude
     private String content;
 
     @Size(max = 64, message = "Turn ID must not exceed 64 characters")

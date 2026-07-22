@@ -11,7 +11,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Base64;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -83,7 +82,7 @@ public class AuthRateLimitGuard {
     }
 
     private String normalizedIdentity(String value) {
-        return UsernameNormalizer.normalize(value).toLowerCase(Locale.ROOT);
+        return UsernameNormalizer.normalize(value);
     }
 
     private String sourceAddress(HttpServletRequest request) {

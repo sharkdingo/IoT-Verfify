@@ -85,7 +85,7 @@ public class OpenAiLlmProvider implements LlmProvider {
                 .putHeader("Accept-Charset", "utf-8")
                 .timeout(Duration.ofMinutes(config.getTimeoutMinutes()))
                 .build();
-        log.info("OpenAiLlmProvider initialized: model={}, baseUrl={}", config.getModel(), config.getBaseUrl());
+        log.info("OpenAiLlmProvider initialized: model={}", config.getModel());
     }
 
     @PreDestroy
@@ -95,7 +95,7 @@ public class OpenAiLlmProvider implements LlmProvider {
                 client.close();
                 log.info("OpenAiLlmProvider client closed");
             } catch (Exception e) {
-                log.warn("Error closing OpenAI client: {}", e.getMessage());
+                log.warn("Error closing OpenAI client: exception={}", e.getClass().getName());
             }
         }
     }
@@ -185,7 +185,8 @@ public class OpenAiLlmProvider implements LlmProvider {
             }
         } catch (Exception e) {
             if (shouldStop.getAsBoolean() || control.isCancellationRequested()) {
-                log.info("OpenAI streaming chat stopped after cancellation: {}", e.toString());
+                log.info("OpenAI streaming chat stopped after cancellation: exception={}",
+                        e.getClass().getName());
                 return;
             }
             logProviderError("OpenAI streaming chat error", e);
@@ -369,15 +370,12 @@ public class OpenAiLlmProvider implements LlmProvider {
 
     private void logProviderError(String message, Exception e) {
         if (e instanceof OpenAIServiceException serviceException) {
-            log.error("{}: status={}, type={}, code={}, body={}",
+            log.error("{}: status={}, exception={}",
                     message,
                     serviceException.statusCode(),
-                    serviceException.type().orElse(""),
-                    serviceException.code().orElse(""),
-                    serviceException.body(),
-                    e);
+                    e.getClass().getSimpleName());
             return;
         }
-        log.error("{}: {}", message, e.getMessage(), e);
+        log.error("{}: exception={}", message, e.getClass().getName());
     }
 }

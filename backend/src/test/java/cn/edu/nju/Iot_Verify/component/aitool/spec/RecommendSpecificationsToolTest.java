@@ -4,6 +4,7 @@ import cn.edu.nju.Iot_Verify.component.ai.PromptCompletionService;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.DeviceInfoHelper;
 import cn.edu.nju.Iot_Verify.security.UserContextHolder;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.testutil.LogCapture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -75,6 +76,36 @@ class RecommendSpecificationsToolTest {
         assertEquals("AI_RESPONSE_INVALID", json.path("errorCode").asText());
         assertEquals(502, json.path("status").asInt());
         assertEquals("response_parse", json.path("phase").asText());
+    }
+
+    @Test
+    void execute_doesNotLogRejectedModelCandidateContent() throws Exception {
+        String sensitive = "private-spec-value-never-log";
+        when(deviceInfoHelper.getDevicesWithTemplateInfo(1L)).thenReturn(List.of(thermostatDevice()));
+        when(boardStorageService.getRules(1L)).thenReturn(List.of());
+        when(boardStorageService.getSpecs(1L)).thenReturn(List.of());
+        when(promptCompletionService.completeRecommendation(anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn("""
+                        {
+                          "recommendations": [
+                            "private-spec-value-never-log",
+                            {
+                              "rationale": "private-spec-value-never-log",
+                              "templateId": "invalid",
+                              "aConditions": [],
+                              "ifConditions": [],
+                              "thenConditions": []
+                            }
+                          ]
+                        }
+                        """);
+
+        try (LogCapture logs = LogCapture.forClass(RecommendSpecificationsTool.class)) {
+            JsonNode json = objectMapper.readTree(tool.execute("{}"));
+
+            assertEquals(2, json.path("filteredCount").asInt());
+            assertFalse(logs.messages().stream().anyMatch(message -> message.contains(sensitive)));
+        }
     }
 
     @Test

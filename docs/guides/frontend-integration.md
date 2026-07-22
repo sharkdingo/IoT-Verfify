@@ -4,7 +4,7 @@ How the Vue 3 frontend calls the backend: the HTTP client, the API modules and t
 real shapes, SSE streaming, and where the TypeScript types live. This replaces the
 old `frontend/API-DOCUMENTATION.md`, which had drifted from the code.
 
-Verified against code on 2026-07-22. Source: `frontend/src/api/`,
+Verified against code on 2026-07-23. Source: `frontend/src/api/`,
 `frontend/src/types/`, `frontend/src/components/ChatView.vue`,
 `frontend/src/views/Board.vue`, `frontend/src/App.vue`, and `frontend/src/router/index.ts`.
 
@@ -40,12 +40,14 @@ Axios instance:
 - `baseURL: (import.meta.env.VITE_API_BASE_URL || '') + '/api'`
 - `timeout: 100000` (100 s)
 - Request interceptor: attaches `Authorization: Bearer <token>` from the auth store.
-- Response interceptor: on HTTP `401`, clears auth state and redirects to the landing
-  page's integrated login panel: `/?mode=login`. If the user was on a protected route,
-  it also adds `redirect=<current fullPath>` so a successful login can return them to
-  that route. Standalone `/login` and `/register` routes were removed during the
-  landing-page consolidation; do not reintroduce compatibility routes during the
-  current development phase.
+- Response interceptor: records the token attached to each request. On HTTP `401`, it
+  clears auth state only when that token is still the current token, then redirects to
+  the landing page's integrated login panel: `/?mode=login`. This prevents a delayed
+  request from the previous account from signing out a newly authenticated account. If
+  the user was on a protected route, the redirect also carries the current full path.
+  Standalone `/login` and `/register` routes were removed during the landing-page
+  consolidation; do not reintroduce compatibility routes during the current development
+  phase.
 
 > **Base URL is uniform and relative by default.** Both `http.ts` (axios, most modules)
 > and `chat.ts` (SSE) derive their base URL from `import.meta.env.VITE_API_BASE_URL`.
@@ -69,8 +71,8 @@ normalized to hash URLs during app startup.
 
 ## Response unwrapping — two conventions
 
-The backend wraps everything (except SSE) in the `Result<T>` envelope (authoritative
-definition: [../api/overview.md](../api/overview.md)). What this guide owns is that the
+The backend's application JSON responses use the `Result<T>` envelope (authoritative
+definition and protocol exceptions: [../api/overview.md](../api/overview.md)). What this guide owns is that the
 frontend does **not** unwrap it uniformly:
 
 | Module | Returns | Caller must read |
@@ -103,9 +105,26 @@ username, and password separately.
 `deleteAccount` sends `{ password, confirmation }`; the backend requires the password
 to match and `confirmation` to equal the current username or phone number. On success,
 clear local auth state and send the user back to the landing page.
+An explicit `4xx` deletion response is a definite rejection and leaves the form available
+for correction. A missing response or `5xx` has an unknown commit outcome: clear only the
+matching local session, return to login, and ask the user to sign in again to determine
+whether the account still exists instead of retrying the destructive request.
+The destructive dialog enables confirmation only after the user actually types, pastes,
+or composes the identifier in that opening. A browser/password-manager autofill that merely
+populates the matching value is not treated as deliberate confirmation.
 `logout` only revokes the current token; background verification/simulation/exploration tasks are
 not cancelled. `deleteAccount` is the destructive path: it cancels active tasks,
 serializes in-flight writes with account deletion, and removes user-owned data.
+
+Authentication changes propagate between tabs through one JSON storage event
+containing token and user together. Other tabs apply that record atomically and validate the
+token before entering the logged-in state; they do not react independently to the legacy
+token and user keys, which could otherwise expose a half-login or half-logout snapshot.
+Private route components are keyed by authenticated user id, so switching accounts unmounts
+the previous Board request/timer/subscription scope before loading the new account. The
+assistant synchronously aborts and clears its selected conversation on the same boundary.
+Cross-tab logout hides private content immediately and routes to the integrated login panel;
+refreshing a token for the same user does not remount the workspace.
 
 Example:
 
@@ -177,8 +196,9 @@ Its methods return already-unwrapped values. Non-exhaustive:
   initial mount, manual retry, and invalidation reads all use the same coordinator. A delayed
   initial response must complete before the pending invalidation fetch begins, so it cannot
   arrive after and overwrite a newer cross-tab snapshot.
-  persisted canvas/panel layout remains a separate concern. Read-only POST checks such as
-  rule duplicate/similarity validation do not publish invalidations.
+  persisted canvas/panel layout remains a separate concern. Read-only POST operations,
+  including rule/specification recommendations and rule duplicate/similarity validation,
+  do not publish invalidations or make another tab reload an unchanged Board.
   The UI generates an opaque stable `DeviceNode.id` independently of the user-visible
   label. Renaming a device therefore never changes rule/spec identity, and labels are
   compared case-insensitively without applying NuSMV normalization rules to what the
@@ -291,6 +311,12 @@ Its methods return already-unwrapped values. Non-exhaustive:
   template ids/flags, condition display caches, or state-label fields that file import
   would reject. Optional rule titles stay optional and never cause a semantically valid
   AI rule to be filtered.
+- Every recommendation attempt owns a fresh opaque request id. Stop makes five short backend
+  cancellation attempts to cover registration races and aborts the POST transport only after
+  one is accepted, then keeps the panel in a truthful stopping state until the status API
+  reports `FINISHED`. An early `404` is treated as a possible registration race. Thirty
+  consecutive unavailable status reads end recovery with a visible outcome-unknown warning
+  rather than claiming cancellation or spinning forever.
 - Device creation: manual creation, device-list JSON import, standalone AI device
   recommendation, and assistant `add_device` all materialize the same template-local
   starting state/variable values. The shared `materializeDeviceRuntimeConfig` helper
@@ -321,7 +347,13 @@ Its methods return already-unwrapped values. Non-exhaustive:
   `startAsync(req)`, task polling/cancellation, run list/detail/delete, and lazy finding
   detail. The accepted task is authoritative; the client never sends a Board/model
   payload or fabricates a task ID.
-- Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?)`.
+- Fix: `getFaultRules(traceId)`, `fixTrace(traceId, request?, { requestId, signal })`,
+  `getFixRequestStatus(requestId)`, `cancelFixRequest(requestId)`, and signed apply.
+  `FixResultDialog` uses a fresh id for each search, retries backend cancellation before
+  aborting, and retains `CANCELLING` recovery after a failed stop call. Thirty consecutive
+  unavailable status reads release the local busy state with an explicit uncertainty
+  warning. Closing or unmounting the dialog also retries backend cancellation before
+  releasing the POST transport.
 
 > **`verifyAsync` signature**: `verifyAsync(req): Promise<VerificationTask>` — it takes
 > only the request and resolves to the authoritative accepted task. The client reads the
@@ -569,6 +601,13 @@ parseable/replayable trace. Failed and cancelled task rows can be dismissed thro
 task `DELETE` endpoints; deleting a verification result deletes all of its linked
 counterexamples.
 
+When a verification or simulation task first reports `COMPLETED`, its result/trace detail
+may become readable a moment later than the task row. The Board retries transient detail
+failures for up to three attempts. A permanent client/auth/not-found error fails fast; after
+transient recovery is exhausted, the UI preserves the task as completed, refreshes history,
+and reports that the result is unavailable instead of reverting to a running spinner or
+inventing an empty result.
+
 Exploration findings are likewise nested under their run, but they are candidate
 finite paths rather than NuSMV counterexamples. `FOUND_VIOLATION` is shown as candidate
 evidence, `BUDGET_EXHAUSTED` stays neutral and explicitly says it is not a proof, and
@@ -595,6 +634,9 @@ must have a matching current fingerprint before it is treated as unchanged, so a
 temporary fingerprint-read failure is shown as unconfirmed rather than silently falling
 back to equal counts. Legacy runs without a fingerprint fall back to the public model
 counts and must not be presented as an exact semantic match.
+Device, rule, specification, environment, and template snapshot replacement invalidates
+the cached fingerprint immediately. In-flight fingerprint responses are revision-guarded,
+so an older response cannot mark a newly edited Board as matching historical work.
 
 Treat task `status` as execution lifecycle only. A task's direct polling endpoint may
 return `COMPLETED` so the submitter can obtain the result, but the history UI then moves
@@ -778,6 +820,10 @@ axios; **streaming does not**.
 `getSessionHistory` returns `{ messages, nextBeforeId, hasMore }`; the first call requests
 the newest bounded page, and `ChatView` passes `nextBeforeId` back as `beforeId` when the
 user loads older messages. Older pages are prepended while preserving scroll position.
+If the initial history request fails, the selected session remains selected and the message
+composer stays disabled behind an explicit Retry action; the UI does not reinterpret a
+network error as an empty conversation. New-session clicks are single-flight, and a failed
+or incomplete create response is shown without closing the mobile session list.
 
 `sendStreamChat(...)` uses the native `fetch` API against
 `${VITE_API_BASE_URL || ''}/api/chat/completions` (relative by default, so it also goes
@@ -837,8 +883,9 @@ if that also fails, a localized retry panel keeps assistant requests, scene repl
 and trace playback locked until reconciliation succeeds. Sign-out invokes the same
 settlement through the exposed `prepareForLogout()` method, requiring explicit user
 confirmation when the backend tool outcome remains unknown. SSE `401` responses clear
-authentication and navigate to login; `403` responses remain authorization errors and do
-not discard a valid login session.
+authentication and navigate to login only when the stream's original token is still current;
+a delayed stream from another account is isolated. `403` responses remain authorization
+errors and do not discard a valid login session.
 Board collection refreshes triggered by chat are serialized through the same mutation
 queue. Read-only trace playback and a pending scene replacement disable new assistant
 requests; starting either while an assistant stream is active is blocked until the stream
@@ -850,6 +897,9 @@ loads; callbacks from replaced requests cannot clear a newer controller or overw
 newly selected conversation. Conversation-history loading is separate from response
 generation, so the Stop control is shown only for a response that can actually be
 aborted.
+Unmount aborts history/activity/settlement transports and clears elapsed/poll timers, so a
+closed assistant panel cannot later overwrite the replacement view or continue invisible
+client polling.
 
 ---
 

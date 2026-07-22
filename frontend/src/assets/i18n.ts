@@ -119,6 +119,7 @@ const messages = {
             deleteAccountConfirm: '永久注销',
             deleteAccountSuccess: '账号已注销',
             deleteAccountFailed: '注销账号失败',
+            deleteAccountOutcomeUnknown: '无法确认注销请求是否已经完成。本地会话已清除，请重新登录确认账号是否仍存在，再决定是否重试。',
             export: '导出',
             empty: '空',
             copy: '复制',
@@ -785,6 +786,12 @@ const messages = {
                 NO_DEVICES: '至少需要一个设备。',
                 NO_SPECIFICATIONS: '至少需要一条有效规约。'
             },
+            scenarioSemanticWarningsTitle: '应用前请审阅草案的语义覆盖',
+            scenarioSemanticWarnings: {
+                FILTERED_CANDIDATES: '部分生成候选未通过校验，最终草案可能没有覆盖原始设计的全部内容。',
+                NO_AUTOMATION_RULES: '最终草案不包含自动化规则，不能据此宣称已形成自动化闭环。',
+                UNREFERENCED_DEVICES: '部分设备未被任何规则或规约引用，请确认它们是否参与预期行为。'
+            },
             scenarioDeviceRuntime: '初始状态：{state}；来源：{trust}；敏感度：{privacy}',
             scenarioStatelessDeviceRuntime: '该设备没有状态机；读数来自共享环境或设备本地变量。',
             scenarioLocalVariables: '本地变量：{values}',
@@ -948,6 +955,7 @@ const messages = {
             selectFixStrategyPrompt: '选择一种策略后再尝试生成可验证建议',
             tryingFixStrategy: '正在尝试“{strategy}”策略...',
             fixSearchProgress: '已用时 {seconds} 秒；关闭窗口会请求取消服务端搜索。',
+            fixStopRequestMayStillBeRunning: '停止请求未得到服务端确认；自动修复可能仍在后台运行，系统会继续短暂核对状态。',
             fixProgressStage_QUEUED: '请求已接收，正在等待修复执行资源',
             fixProgressStage_RUNNING: '修复搜索已开始',
             fixProgressStage_PREPARING_CONTEXT: '正在读取反例、规则与模型快照',
@@ -2039,6 +2047,7 @@ const messages = {
             deleteAccountConfirm: 'Delete Permanently',
             deleteAccountSuccess: 'Account deleted',
             deleteAccountFailed: 'Failed to delete account',
+            deleteAccountOutcomeUnknown: 'The deletion result could not be confirmed. Your local session was cleared; sign in again to check whether the account still exists before retrying.',
             export: 'Export',
             empty: 'Empty',
             copy: 'Copy',
@@ -2705,6 +2714,12 @@ const messages = {
                 NO_DEVICES: 'Add at least one device.',
                 NO_SPECIFICATIONS: 'Add at least one valid specification.'
             },
+            scenarioSemanticWarningsTitle: 'Review the draft\'s semantic coverage before applying it',
+            scenarioSemanticWarnings: {
+                FILTERED_CANDIDATES: 'Some generated candidates failed validation, so the final draft may not cover the entire original design.',
+                NO_AUTOMATION_RULES: 'The final draft contains no automation rules and does not establish an automation closed loop.',
+                UNREFERENCED_DEVICES: 'Some devices are not referenced by any rule or specification; confirm that they participate in the intended behavior.'
+            },
             scenarioDeviceRuntime: 'Initial state: {state}; source: {trust}; sensitivity: {privacy}',
             scenarioStatelessDeviceRuntime: 'This device has no state machine; readings come from shared environment or device-local variables.',
             scenarioLocalVariables: 'Local variables: {values}',
@@ -2868,6 +2883,7 @@ const messages = {
             selectFixStrategyPrompt: 'Choose a strategy, then try to generate a verifiable suggestion',
             tryingFixStrategy: 'Trying the “{strategy}” strategy...',
             fixSearchProgress: '{seconds}s elapsed; closing this dialog requests cancellation of the server search.',
+            fixStopRequestMayStillBeRunning: 'The server did not confirm the stop request. The fix may still be running while its status is checked briefly.',
             fixProgressStage_QUEUED: 'Request accepted; waiting for fix execution capacity',
             fixProgressStage_RUNNING: 'Fix search started',
             fixProgressStage_PREPARING_CONTEXT: 'Reading the counterexample, rules, and model snapshot',

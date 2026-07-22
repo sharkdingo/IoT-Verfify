@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.ChatExecutionStatus;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 import java.time.LocalDateTime;
 
 /**
@@ -29,6 +30,7 @@ public class ChatMessagePo {
     private String role;
 
     @Column(columnDefinition = "LONGTEXT")
+    @ToString.Exclude
     private String content;
 
     @Column(name = "turn_id", length = 64)
@@ -36,6 +38,7 @@ public class ChatMessagePo {
 
     @Lob
     @Column(name = "execution_trace_json", columnDefinition = "LONGTEXT")
+    @ToString.Exclude
     private String executionTraceJson;
 
     @Column(name = "execution_elapsed_seconds")

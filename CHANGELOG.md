@@ -15,9 +15,30 @@ history into a technical spec. The spec content itself now lives under
 
 ## [Unreleased]
 
+### 2026-07-23
+
+#### Fixed
+- Rejected ambiguous legacy phone/username logins when the supplied password matches both
+  colliding accounts, instead of selecting the phone-owned account by lookup order.
+- Replaced scenario recommendation's model-authored rationale with a deterministic summary
+  of the final retained scene, and separated structural verification readiness from
+  semantic-coverage warnings for filtered candidates, missing automation rules, and
+  devices unused by every retained rule/specification. A submit-ready draft therefore no
+  longer implies that it satisfies the user's natural-language requirement or forms a
+  closed automation loop.
+- Kept Board account actions reachable at tablet widths, made the permanent-account
+  deletion dialog scroll within short viewports, and stopped Tab or other navigation keys
+  from satisfying its deliberate-edit guard. Long canvas labels now expose their full text
+  on hover, and the action-dock mode control announces whether labels are expanded.
+  Refreshed the real browser check to use the current scene-replacement, layered-history,
+  simulation, and eight-tool contracts and to fail on page exceptions.
+
 ### 2026-07-22
 
 #### Changed
+- Added one explicit application time-zone contract (`IOT_VERIFY_TIME_ZONE`, default
+  `Asia/Shanghai`): API date-times now include the configured UTC offset, while legacy
+  offset-free request values remain accepted and mismatched supplied offsets are rejected.
 - Changed chat history to a cursor-paged contract with bounded raw-row scanning and an
   in-panel "load older" workflow. Chat catalogs now retain at most 100 sessions per user,
   while individual requests remain limited to 10,000 characters.
@@ -27,6 +48,32 @@ history into a technical spec. The spec content itself now lives under
   have explicit capacity limits.
 
 #### Fixed
+- Enforced formal-operation admission at the service boundary for REST and assistant-tool
+  callers, including compatibility fix-recomputation paths; cancelled nested solver work on
+  interruption, and terminated descendant NuSMV processes so cancelled or lease-lost work cannot
+  continue consuming formal capacity.
+- Made interactive recommendation and automatic-fix status/cancellation token-fenced and
+  observable across backend instances, including renewable cancellation ownership and
+  stale-request-id protection; browser stop recovery now tolerates registration races but
+  exits with a visible uncertainty warning after bounded status failures. Redis status
+  scripts now use single-field `HSET` calls so older development servers keep distributed
+  tracking instead of rejecting the registry script and silently falling back to local state.
+- Kept asynchronous simulation completion in the user-lock-before-task-lock order used by
+  account deletion, preventing completion and deletion from deadlocking or persisting a
+  trace for a deleted account.
+- Made method/media negotiation errors deterministic (`405`, empty `406`, and `415`),
+  separated case-sensitive authentication rate buckets, rejected phone-shaped new
+  usernames, resolved legacy phone/username login collisions by the matching password,
+  and made invalid-login messages account-neutral for both identifier types.
+- Added recoverable chat-history loading and single-flight session creation, atomic
+  cross-tab authentication snapshots, account-scoped workspace/assistant remounting, and
+  request-token-bound `401` handling so a late response cannot expose or sign out the next
+  account; also added explicit account-deletion confirmation typing and bounded
+  completed-task/fix/recommendation recovery from transient backend failures.
+- Treat account-deletion network failures and `5xx` responses as an unknown commit outcome:
+  the client now clears only the matching local session and asks the user to sign in again
+  to confirm whether the account still exists, while explicit `4xx` rejections remain
+  correctable in the open deletion dialog.
 - Sanitized AI Markdown links and disabled raw HTML, blocked automatic third-party image
   requests, removed dynamic template-icon HTML rendering, and added a deployment CSP
   example as defense in depth.
@@ -38,7 +85,27 @@ history into a technical spec. The spec content itself now lives under
 - Canonicalized usernames across registration, login, account confirmation, and throttling;
   validation now counts Unicode code points and rejects invisible formatting controls.
 - Made the documented MySQL username collation case- and accent-sensitive, with an
-  explicit migration for databases created from the former setup command.
+  idempotent startup migration that changes only `app_user.username`; fresh and upgraded
+  databases retain the same schema-level comparison semantics for every other text column.
+- Restored standalone scenario recommendations by keeping chat-only draft metadata out of
+  the strict REST response, and stopped read-only rule/specification recommendations from
+  causing unnecessary cross-tab Board reloads.
+- Serialized specification recommendations with one canonical `aConditions` property,
+  removing the case-different `aconditions` duplicate that broke case-insensitive JSON
+  clients.
+- Preserved the original JSON status and error envelope for synchronous chat-stream
+  rejections when standards-compliant SSE clients send `Accept: text/event-stream`, instead
+  of allowing internal error dispatch to misreport business errors as `401`.
+- Excluded credentials, provider keys, private chat payloads, and destructive-action
+  capability tokens from automatic string logging; provider failures no longer log external
+  response bodies, including cancellation paths, and model-response validation logs retain
+  only candidate indexes, stable reason codes, and exception classes rather than generated
+  or user-derived values.
+- Enforced durable AI workflow-state ownership with a composite chat-session cascade and
+  startup orphan repair, and removed inactive NuSMV lock markers left behind after direct
+  temporary-directory cleanup.
+- Distinguished valid stateless device placeholders from broken stateful-template fallback,
+  so no-mode device creation no longer reports a false initialization warning.
 - Self-hosted application and Material icon fonts, removing the Google Fonts dependency.
 - Removed an unused Bouncy Castle runtime dependency from the backend package.
 - Removed unused frontend UI and legacy Markdown dependencies and their inactive resolver.

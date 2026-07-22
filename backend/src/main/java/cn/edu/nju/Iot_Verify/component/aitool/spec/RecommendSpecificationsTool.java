@@ -684,11 +684,13 @@ value/trust/privacy 是用户当前覆盖后的共享值。
                         recommendations.add(recommendation);
                         count++;
                     } else {
-                        log.debug("Filtered out invalid recommendation: {}", recommendation.get("rationale"));
+                        log.debug("Filtered specification recommendation candidate {}: reasonCode={}",
+                                inspected, validation.reasonCode());
                         filteredItems.add(filteredItem("specification", inspected, validation, recommendationLabel(recommendation)));
                     }
                 } catch (Exception e) {
-                    log.warn("Failed to parse recommendation: {}", rec);
+                    log.warn("Failed to parse specification recommendation candidate {}: exception={}",
+                            inspected, e.getClass().getName());
                     filteredItems.add(filteredItem("specification", inspected,
                             invalid("parseFailed", language), jsonText(rec.path("rationale"), "")));
                 }
@@ -714,7 +716,7 @@ value/trust/privacy 是用户当前覆盖后的共享值。
             return objectMapper.writeValueAsString(result);
 
         } catch (Exception e) {
-            log.error("Failed to parse AI response", e);
+            log.error("Failed to parse AI response: exception={}", e.getClass().getName());
             return errorJson(
                     recommendationMessage(language, "parseFailed", 0),
                     "AI_RESPONSE_INVALID",
@@ -742,13 +744,11 @@ value/trust/privacy 是用户当前覆盖后的共享值。
         recommendation.put("rationale", rationale);
         String templateId = asTrimmedString(recommendation.get("templateId"));
         if (!ALLOWED_TEMPLATE_IDS.contains(templateId)) {
-            log.debug("Rejecting recommendation without legal templateId: {}", recommendation.get("rationale"));
             return invalid("invalidTemplateId", language);
         }
         recommendation.put("templateId", templateId);
 
         if (!hasValidTemplateShape(templateId, recommendation)) {
-            log.debug("Rejecting recommendation with invalid template shape: {}", recommendation.get("rationale"));
             return invalid("invalidTemplateShape", language);
         }
 
@@ -796,14 +796,12 @@ value/trust/privacy 是用户当前覆盖后的共享值。
 
                 DeviceInfoHelper.DeviceInfo device = resolveDevice(deviceId, deviceMap);
                 if (device == null) {
-                    log.debug("Device {} not found in board. Available devices: {}", deviceId, deviceMap.keySet());
                     return invalid("unknownDevice", language);
                 }
                 condition.put("deviceId", device.nodeId());
                 condition.put("deviceLabel", device.label());
 
                 if ("currentState".equalsIgnoreCase(key)) {
-                    log.debug("Rejecting currentState key for device {}. Use targetType=state with key=state and a valid state value.", deviceId);
                     return invalid("currentStateKey", language);
                 }
 
@@ -835,7 +833,6 @@ value/trust/privacy 是用户当前覆盖后的共享值。
                 }
 
                 if (actualKey == null || canonicalValue == null) {
-                    log.debug("Attribute {} (type: {}) not found in device {}", key, targetType, deviceId);
                     return invalid("invalidConditionCapability", language);
                 }
                 condition.put("targetType", targetTypeLower);

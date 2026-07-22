@@ -313,6 +313,8 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "rawCandidateCount":2,"inspectedCount":2,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Exercise a shared reading",
                  "verificationReady":true,"readinessIssues":[],
+                 "semanticWarnings":[{"code":"NO_AUTOMATION_RULES",
+                 "message":"The final draft contains no retained automation rules."}],
                  "scene":{"schema":"iot-verify.board-scene","version":4,
                  "templates":[{"name":"Sensor","manifest":{"Name":"Sensor"}}],
                  "devices":[{"id":"device_1","templateName":"Sensor","label":"Hall sensor",
@@ -340,6 +342,7 @@ class BoardStorageControllerThrowIfToolErrorTest {
                 iterableFieldNames(condition));
         assertTrue(response.getVerificationReady());
         assertTrue(response.getReadinessIssues().isEmpty());
+        assertEquals("NO_AUTOMATION_RULES", response.getSemanticWarnings().get(0).getCode());
     }
 
     @Test
@@ -351,6 +354,10 @@ class BoardStorageControllerThrowIfToolErrorTest {
                  "rawCandidateCount":1,"inspectedCount":1,"truncatedCount":0,
                  "scenarioName":"Home","rationale":"Missing a specification",
                  "verificationReady":true,"readinessIssues":[],
+                 "semanticWarnings":[
+                   {"code":"NO_AUTOMATION_RULES","message":"No retained rules."},
+                   {"code":"UNREFERENCED_DEVICES","message":"One device is unreferenced."}
+                 ],
                  "scene":{"schema":"iot-verify.board-scene","version":4,
                  "templates":[],"devices":[{"id":"device_1","templateName":"Sensor",
                  "label":"Hall sensor","position":{"x":0,"y":0},"width":176,"height":128}],

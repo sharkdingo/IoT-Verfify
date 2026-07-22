@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 @Data
 @Builder
@@ -13,5 +14,6 @@ public class AuthResponseDto {
     private Long userId;
     private String phone;
     private String username;
+    @ToString.Exclude
     private String token;
 }

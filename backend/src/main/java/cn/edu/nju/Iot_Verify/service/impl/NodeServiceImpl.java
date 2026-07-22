@@ -236,6 +236,13 @@ public class NodeServiceImpl implements NodeService {
     }
 
     private InitialStateResolution resolveInitialState(String templateName, DeviceManifest manifest) {
+        if (!hasStateMachine(manifest)) {
+            if (hasAnyStateDefinition(manifest)) {
+                log.warn("Template {} manifest has an incomplete state-machine definition", templateName);
+                return fallbackState(templateName);
+            }
+            return new InitialStateResolution(HARD_FALLBACK_STATE, "statelessPlaceholder", null);
+        }
         if (manifest != null && manifest.getInitState() != null && !manifest.getInitState().isBlank()) {
             return new InitialStateResolution(manifest.getInitState().trim(), "templateDefault", null);
         }
@@ -250,10 +257,7 @@ public class NodeServiceImpl implements NodeService {
         DeviceRuntimeConfigDto result = new DeviceRuntimeConfigDto();
         result.setState(state);
 
-        boolean hasStateMachine = manifest != null
-                && manifest.getModes() != null && !manifest.getModes().isEmpty()
-                && manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
-        if (hasStateMachine) {
+        if (hasStateMachine(manifest)) {
             result.setCurrentStateTrust(requested != null && normalizeOptionalValue(requested.getCurrentStateTrust()) != null
                     ? requested.getCurrentStateTrust().trim().toLowerCase(Locale.ROOT) : null);
             result.setCurrentStatePrivacy(requested != null && normalizeOptionalValue(requested.getCurrentStatePrivacy()) != null
@@ -274,6 +278,19 @@ public class NodeServiceImpl implements NodeService {
         result.setPrivacies(requested != null && requested.getPrivacies() != null
                 ? new ArrayList<>(requested.getPrivacies()) : null);
         return result;
+    }
+
+    private boolean hasStateMachine(DeviceManifest manifest) {
+        return manifest != null
+                && manifest.getModes() != null && !manifest.getModes().isEmpty()
+                && manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty();
+    }
+
+    private boolean hasAnyStateDefinition(DeviceManifest manifest) {
+        return manifest != null && (
+                manifest.getModes() != null && !manifest.getModes().isEmpty()
+                        || manifest.getWorkingStates() != null && !manifest.getWorkingStates().isEmpty()
+                        || manifest.getInitState() != null && !manifest.getInitState().isBlank());
     }
 
     private List<VariableStateDto> mergeLocalVariables(List<VariableStateDto> requested,

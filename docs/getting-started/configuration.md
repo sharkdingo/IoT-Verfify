@@ -9,12 +9,13 @@ Backend options are read from `backend/src/main/resources/application.yaml` usin
 variable without editing the file. Frontend options are Vite build-time variables (see
 the [Frontend](#frontend-vite) section at the end).
 
-Verified against code on 2026-07-22. Source:
+Verified against code on 2026-07-23. Source:
 `backend/src/main/resources/application.yaml`, `configure/ThreadPoolConfig`,
 `configure/FuzzAdmissionConfig`, `configure/AsyncTaskAdmissionConfig`,
 `configure/ChatExecutionConfig`, `configure/NusmvConfig`, `configure/OperationAdmissionConfig`,
-`configure/ProductionSafetyCheck`,
+`configure/ProductionSafetyCheck`, `configure/ApplicationTimeConfig`,
 `security/RequestBodySizeFilter`, `security/AuthRateLimitGuard`, `service/UserOperationGuard`,
+`service/DistributedInteractiveExecutionStore`,
 `frontend/src/api/`, `frontend/.env.example`.
 
 ---
@@ -33,6 +34,22 @@ start); Hibernate detects the MySQL dialect from the live JDBC connection. Open 
 in View is disabled, so service methods must materialize response DTOs inside their
 transaction instead of issuing implicit queries during HTTP serialization.
 
+## Application time
+
+| Env var | Default | Notes |
+| :--- | :--- | :--- |
+| `IOT_VERIFY_TIME_ZONE` | `Asia/Shanghai` | IANA time-zone id used for application wall-clock persistence and offsets on API timestamps. Keep it aligned with the JDBC `serverTimezone` and the database session time zone. Invalid ids fail startup. |
+
+The configured zone is installed as the JVM default before persistence infrastructure is
+initialized. REST fields backed by Java `LocalDateTime` are emitted as ISO-8601 values with
+the zone's matching UTC offset (for example `2026-07-22T12:30:00+08:00`). Requests remain
+compatible with legacy ISO local date-times that have no offset. If a request supplies an
+offset, that offset must be valid for the configured zone at the supplied local time; a
+mismatched offset is rejected with `400` instead of silently changing the represented time.
+At daylight-saving overlaps the earlier valid offset is used for serialization. A
+nonexistent gap wall time is preserved with the offset immediately before the transition,
+so a serialized response can be submitted unchanged.
+
 ## Server
 
 | Env var | Default | Notes |
@@ -43,6 +60,10 @@ transaction instead of issuing implicit queries during HTTP serialization.
 
 `server.error.include-message` and `include-binding-errors` are fixed to `never` to
 prevent the Spring `/error` endpoint from leaking internal exception detail.
+Spring Boot also interprets a generic process environment variable named `DEBUG`; even a
+value intended for another tool can enable verbose framework logging. Remove `DEBUG` from
+the backend process environment in production and configure intentional logger levels
+through Spring's `logging.level.*` properties instead.
 
 ## Authentication (JWT)
 
@@ -64,8 +85,10 @@ proxy or API gateway. New passwords contain 10–64 characters and must encode t
 
 ## Redis
 
-Redis backs the JWT-token blacklist (logout revocation) and runs in **fail-open** mode:
-if Redis is unavailable the app still starts, but logout revocation degrades.
+Redis backs the JWT-token blacklist (logout revocation), per-user operation admission, and
+the short-lived interactive recommendation/fix execution registry. These paths run in
+**fail-open** mode: if Redis is unavailable the app still starts, but logout revocation and
+cross-instance coordination degrade to their documented process-local behavior.
 
 | Env var | Default | Notes |
 | :--- | :--- | :--- |
@@ -74,6 +97,7 @@ if Redis is unavailable the app still starts, but logout revocation degrades.
 | `REDIS_PASSWORD` | *(empty)* | |
 | `REDIS_DATABASE` | `0` | Database index |
 | `OPERATION_ADMISSION_LEASE_HEARTBEAT_MS` | `30000` | Delay between token-checked renewals of active per-user verification/simulation/fix/chat admission leases. Range `1000..600000` ms. |
+| `SCHEDULER_POOL_SIZE` | `6` | Shared Spring scheduler threads for independent lease heartbeats, interactive cancellation polling, AI-state cleanup, and NuSMV artifact cleanup. Keep this above `1` so a slow maintenance pass cannot delay every heartbeat. |
 
 Fixed pool settings: `timeout 3000ms`, `max-active 16`, `max-idle 8`, `min-idle 2`,
 `max-wait 2000ms`.
@@ -87,6 +111,18 @@ cannot coordinate across instances; request processing remains fail-open.
 An already-acquired lease tolerates transient renewal failures, but if ownership is
 explicitly lost or cannot be confirmed for a complete TTL, the owning worker is interrupted
 and the operation fails rather than overlapping a replacement worker.
+
+Standalone recommendation and interactive automatic-fix request ids are registered across
+instances with token-fenced owner, user, status, and cancellation keys. An active entry has
+a renewable 30-second lease, and its final `FINISHED` status remains readable for 15 seconds.
+Cancellation stays registered and renewed until the owning callable exits; an expired or
+reused request id cannot let an old worker publish status over its replacement. During a
+Redis outage, the worker remains controllable on the instance that accepted it, but a request
+routed to another instance cannot observe or cancel that process-local execution. Each new
+client attempt must therefore generate a fresh request id.
+
+These coordination scripts operate in the single Redis keyspace configured above. Redis
+Cluster is not supported by the current single-host configuration and multi-key scripts.
 
 ## CORS
 
@@ -139,7 +175,7 @@ process that starts it.
 | `NUSMV_ACQUIRE_PERMIT_TIMEOUT_MS` | `10000` | Timeout to acquire a concurrency permit (ms) |
 | `NUSMV_MAX_OUTPUT_BYTES` | `4194304` | Maximum retained bytes for each NuSMV stdout/stderr stream. Pipes are still fully drained; excess output is replaced by a truncation marker. |
 | `NUSMV_TEMP_RETENTION_HOURS` | `24` | Maximum age of retained `nusmv_*` diagnostic directories under the JVM temporary directory. |
-| `NUSMV_MAX_RETAINED_TEMP_DIRECTORIES` | `200` | Maximum number of retained `nusmv_*` diagnostic directories. Active directories are protected by an OS file lock; among inactive directories, the oldest eligible entries are removed first after a 10-minute grace period. |
+| `NUSMV_MAX_RETAINED_TEMP_DIRECTORIES` | `200` | Maximum number of retained `nusmv_*` diagnostic directories. Active directories are protected by an OS file lock; among inactive directories, the oldest eligible entries are removed first after a 10-minute grace period. Cleanup also removes inactive orphan lock markers left after another component already deleted its artifact directory. |
 | `NUSMV_TEMP_CLEANUP_MS` | `300000` | Fixed delay in milliseconds between diagnostic-directory cleanup passes; minimum 10000. |
 
 ## Auto-fix

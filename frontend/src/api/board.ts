@@ -138,11 +138,17 @@ export interface ScenarioRecommendationResponse {
     rationale: string
     verificationReady: boolean
     readinessIssues: ScenarioReadinessIssue[]
+    semanticWarnings: ScenarioSemanticWarning[]
     scene: PortableSceneFile
 }
 
 export interface ScenarioReadinessIssue {
     code: 'NO_DEVICES' | 'NO_SPECIFICATIONS'
+    message: string
+}
+
+export interface ScenarioSemanticWarning {
+    code: 'FILTERED_CANDIDATES' | 'NO_AUTOMATION_RULES' | 'UNREFERENCED_DEVICES'
     message: string
 }
 

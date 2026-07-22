@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -16,6 +17,9 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -40,7 +44,7 @@ public class GlobalExceptionHandler {
         data.put("retryAfterSeconds", e.getRetryAfterSeconds());
         Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
         body.setData(data);
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+        return json(HttpStatus.TOO_MANY_REQUESTS)
                 .header(HttpHeaders.RETRY_AFTER, Long.toString(e.getRetryAfterSeconds()))
                 .body(body);
     }
@@ -56,7 +60,7 @@ public class GlobalExceptionHandler {
         data.put("limit", e.getLimit());
         Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
         body.setData(data);
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+        return json(HttpStatus.TOO_MANY_REQUESTS).body(body);
     }
 
     @ExceptionHandler(ChatHistoryQuotaExceededException.class)
@@ -71,46 +75,41 @@ public class GlobalExceptionHandler {
         data.put("requiredTurnCapacity", e.getRequiredTurnCapacity());
         Result<Map<String, Object>> body = Result.error(e.getCode(), e.getMessage());
         body.setData(data);
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+        return json(HttpStatus.TOO_MANY_REQUESTS).body(body);
     }
 
     @ExceptionHandler(BaseException.class)
     public ResponseEntity<Result<Void>> handleBaseException(BaseException e) {
         log.warn("Business exception [{}]: {}", e.getCode(), e.getMessage());
-        return ResponseEntity
-                .status(e.getCode())
+        return json(e.getCode())
                 .body(Result.error(e.getCode(), e.getMessage()));
     }
 
     @ExceptionHandler(BadRequestException.class)
     public ResponseEntity<Result<Void>> handleBadRequestException(BadRequestException e) {
         log.warn("Bad request: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest(e.getMessage()));
     }
 
     @ExceptionHandler(UnauthorizedException.class)
     public ResponseEntity<Result<Void>> handleUnauthorizedException(UnauthorizedException e) {
         log.warn("Unauthorized: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.UNAUTHORIZED)
+        return json(HttpStatus.UNAUTHORIZED)
                 .body(Result.unauthorized(e.getMessage()));
     }
 
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<Result<Void>> handleForbiddenException(ForbiddenException e) {
         log.warn("Forbidden: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.FORBIDDEN)
+        return json(HttpStatus.FORBIDDEN)
                 .body(Result.forbidden(e.getMessage()));
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<Result<Void>> handleResourceNotFoundException(ResourceNotFoundException e) {
         log.warn("Resource not found: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.NOT_FOUND)
+        return json(HttpStatus.NOT_FOUND)
                 .body(Result.notFound(e.getMessage()));
     }
 
@@ -122,14 +121,13 @@ public class GlobalExceptionHandler {
         result.setData(Map.of(
                 "reasonCode", "BOARD_REPLACEMENT_STALE",
                 "currentPreview", e.getCurrentPreview()));
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+        return json(HttpStatus.CONFLICT).body(result);
     }
 
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Result<Void>> handleConflictException(ConflictException e) {
-        log.warn("Conflict: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.CONFLICT)
+        log.warn("Conflict response [{}]", e.getCode());
+        return json(HttpStatus.CONFLICT)
                 .body(Result.conflict(e.getMessage()));
     }
 
@@ -144,7 +142,7 @@ public class GlobalExceptionHandler {
                 "reasonCode", FuzzTaskQuotaExceededException.REASON_CODE,
                 "activeTaskCount", e.getActiveTaskCount(),
                 "maxActiveTasksPerUser", e.getMaxActiveTasksPerUser()));
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
+        return json(HttpStatus.TOO_MANY_REQUESTS).body(result);
     }
 
     @ExceptionHandler(FuzzTaskStorageQuotaExceededException.class)
@@ -158,7 +156,7 @@ public class GlobalExceptionHandler {
                 "reasonCode", FuzzTaskStorageQuotaExceededException.REASON_CODE,
                 "storedTaskCount", e.getStoredTaskCount(),
                 "maxStoredTasksPerUser", e.getMaxStoredTasksPerUser()));
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
+        return json(HttpStatus.TOO_MANY_REQUESTS).body(result);
     }
 
     @ExceptionHandler(AsyncTaskQuotaExceededException.class)
@@ -174,7 +172,7 @@ public class GlobalExceptionHandler {
                 "quotaType", e.getQuotaType().name(),
                 "taskCount", e.getTaskCount(),
                 "maxTasksPerUser", e.getMaxTasksPerUser()));
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
+        return json(HttpStatus.TOO_MANY_REQUESTS).body(result);
     }
 
     @ExceptionHandler(ChatSessionBusyException.class)
@@ -185,7 +183,7 @@ public class GlobalExceptionHandler {
         result.setData(Map.of(
                 "reasonCode", e.getReasonCode(),
                 "sessionId", e.getSessionId()));
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+        return json(HttpStatus.CONFLICT).body(result);
     }
 
     @ExceptionHandler(TemplateDeletionConflictException.class)
@@ -196,7 +194,7 @@ public class GlobalExceptionHandler {
         result.setData(Map.of(
                 "reasonCode", e.getReasonCode(),
                 "currentPreview", e.getCurrentPreview()));
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+        return json(HttpStatus.CONFLICT).body(result);
     }
 
     @ExceptionHandler(ValidationException.class)
@@ -204,8 +202,7 @@ public class GlobalExceptionHandler {
         log.warn("Validation error: {}", e.getMessage());
         Result<Map<String, Object>> result = Result.error(422, e.getMessage());
         result.setData(Map.of("errors", e.getErrors()));
-        return ResponseEntity
-                .status(HttpStatus.UNPROCESSABLE_ENTITY)  // 422
+        return json(HttpStatus.UNPROCESSABLE_ENTITY)  // 422
                 .body(result);
     }
 
@@ -217,8 +214,7 @@ public class GlobalExceptionHandler {
                 "[" + e.getErrorCategory() + "] " + e.getMessage()
         );
         result.setData(Map.of("errorCategory", e.getErrorCategory()));
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(result);
     }
 
@@ -236,22 +232,20 @@ public class GlobalExceptionHandler {
         if (e.getRecordId() != null) details.put("recordId", e.getRecordId());
         details.put("field", e.getField());
         result.setData(details);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        return json(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
     }
 
     @ExceptionHandler(InternalServerException.class)
     public ResponseEntity<Result<Void>> handleInternalServerException(InternalServerException e) {
         log.error("Internal server error: {}", e.getMessage(), e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.error("Internal server error"));
     }
 
     @ExceptionHandler(ServiceUnavailableException.class)
     public ResponseEntity<Result<Void>> handleServiceUnavailableException(ServiceUnavailableException e) {
         log.error("Service unavailable: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.SERVICE_UNAVAILABLE)
+        return json(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(Result.serviceUnavailable(e.getMessage()));
     }
 
@@ -262,7 +256,7 @@ public class GlobalExceptionHandler {
         Result<Map<String, Object>> result = Result.error(
                 HttpStatus.SERVICE_UNAVAILABLE.value(), e.getMessage());
         result.setData(Map.of("reasonCode", FixApplyPreflightUnavailableException.REASON_CODE));
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(result);
+        return json(HttpStatus.SERVICE_UNAVAILABLE).body(result);
     }
 
     @ExceptionHandler(SimulationExecutionException.class)
@@ -274,14 +268,13 @@ public class GlobalExceptionHandler {
                 "reasonCode", e.getReasonCode(),
                 "logs", e.getLogs()
         ));
-        return ResponseEntity.status(e.getCode()).body(result);
+        return json(e.getCode()).body(result);
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<Result<Void>> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException e) {
         log.warn("Argument type mismatch: {} for parameter '{}'", e.getValue(), e.getName());
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest("Invalid parameter '" + e.getName() + "': expected a valid number"));
     }
 
@@ -289,9 +282,32 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleMissingServletRequestParameter(
             MissingServletRequestParameterException e) {
         log.warn("Missing required request parameter: {}", e.getParameterName());
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest("Missing required parameter '" + e.getParameterName() + "'"));
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Result<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.warn("HTTP method is not supported: {}", e.getMethod());
+        ResponseEntity.BodyBuilder response = json(HttpStatus.METHOD_NOT_ALLOWED);
+        String[] supported = e.getSupportedMethods();
+        if (supported != null && supported.length > 0) {
+            response.header(HttpHeaders.ALLOW, String.join(", ", supported));
+        }
+        return response.body(Result.error(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method not allowed"));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<Result<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        log.warn("HTTP media type is not supported");
+        return json(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(Result.error(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "Unsupported media type"));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Void> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException e) {
+        log.warn("No acceptable response media type is available");
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
@@ -301,16 +317,14 @@ public class GlobalExceptionHandler {
         RequestBodyError error = describeRequestBodyError(e);
         Result<Map<String, Object>> result = Result.error(HttpStatus.BAD_REQUEST.value(), error.message());
         result.setData(Map.of("errors", Map.of(error.path(), error.reason())));
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(result);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Result<Void>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("IllegalArgumentException: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(Result.badRequest("Invalid request parameter"));
     }
 
@@ -323,8 +337,7 @@ public class GlobalExceptionHandler {
         log.warn("Validation failed: {}", message);
         Result<Map<String, Object>> result = Result.error(400, message);
         result.setData(Map.of("errors", errors));
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(result);
     }
 
@@ -341,8 +354,7 @@ public class GlobalExceptionHandler {
         log.warn("Handler method validation failed: {}", message);
         Result<Map<String, Object>> result = Result.error(400, message);
         result.setData(Map.of("errors", errors));
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(result);
     }
 
@@ -355,8 +367,7 @@ public class GlobalExceptionHandler {
         log.warn("Constraint violation: {}", message);
         Result<Map<String, Object>> result = Result.error(400, message);
         result.setData(Map.of("errors", errors));
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
+        return json(HttpStatus.BAD_REQUEST)
                 .body(result);
     }
 
@@ -409,80 +420,71 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<Result<Void>> handleAuthenticationException(AuthenticationException e) {
         log.warn("Authentication failed: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.UNAUTHORIZED)
+        return json(HttpStatus.UNAUTHORIZED)
                 .body(Result.unauthorized(e.getMessage()));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<Result<Void>> handleAccessDeniedException(AccessDeniedException e) {
         log.warn("Access denied: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.FORBIDDEN)
+        return json(HttpStatus.FORBIDDEN)
                 .body(Result.forbidden(e.getMessage()));
     }
 
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<Result<Void>> handleEntityNotFoundException(EntityNotFoundException e) {
         log.warn("Entity not found: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.NOT_FOUND)
+        return json(HttpStatus.NOT_FOUND)
                 .body(Result.notFound(e.getMessage()));
     }
 
     @ExceptionHandler(NoHandlerFoundException.class)
     public ResponseEntity<Result<Void>> handleNoHandlerFoundException(NoHandlerFoundException e) {
         log.warn("Endpoint not found: {}", e.getRequestURL());
-        return ResponseEntity
-                .status(HttpStatus.NOT_FOUND)
+        return json(HttpStatus.NOT_FOUND)
                 .body(Result.notFound("Endpoint not found: " + e.getRequestURL()));
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<Result<Void>> handleNoResourceFoundException(NoResourceFoundException e) {
         log.warn("Resource not found: {}", e.getResourcePath());
-        return ResponseEntity
-                .status(HttpStatus.NOT_FOUND)
+        return json(HttpStatus.NOT_FOUND)
                 .body(Result.notFound("Endpoint not found: " + e.getResourcePath()));
     }
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Result<Void>> handleIllegalStateException(IllegalStateException e) {
         log.error("IllegalStateException: {}", e.getMessage(), e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.error(500, "Internal server error"));
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Result<Void>> handleDataIntegrityViolation(DataIntegrityViolationException e) {
-        log.warn("Data integrity violation: {}", e.getMessage());
-        return ResponseEntity
-                .status(HttpStatus.CONFLICT)
+        log.warn("Data integrity violation [{}]", e.getClass().getSimpleName());
+        return json(HttpStatus.CONFLICT)
                 .body(Result.conflict("Data conflict, the resource may already exist"));
     }
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Result<Void>> handleRuntimeException(RuntimeException e) {
         log.error("Internal server error", e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.error("Internal server error"));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception e) {
         log.error("Unexpected error: {} - {}", e.getClass().getName(), e.getMessage(), e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        return json(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.error("Internal server error"));
     }
 
-    @ExceptionHandler(Throwable.class)
-    public ResponseEntity<Result<Void>> handleThrowable(Throwable e) {
-        log.error("Unhandled Throwable: {} - {}", e.getClass().getName(), e.getMessage(), e);
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Result.error("Internal server error"));
+    private ResponseEntity.BodyBuilder json(HttpStatus status) {
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON);
+    }
+
+    private ResponseEntity.BodyBuilder json(int status) {
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON);
     }
 }

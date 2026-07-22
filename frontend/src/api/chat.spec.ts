@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const authMocks = vi.hoisted(() => ({
-  logout: vi.fn(),
+  logoutIfTokenMatches: vi.fn(() => true),
   getToken: vi.fn(() => null as string | null)
 }))
 
@@ -13,7 +13,7 @@ const routerMocks = vi.hoisted(() => ({
 vi.mock('@/stores/auth', () => ({
   useAuth: () => ({
     getToken: authMocks.getToken,
-    logout: authMocks.logout
+    logoutIfTokenMatches: authMocks.logoutIfTokenMatches
   })
 }))
 
@@ -39,6 +39,7 @@ describe('chat stream lifecycle semantics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     authMocks.getToken.mockReturnValue(null)
+    authMocks.logoutIfTokenMatches.mockReturnValue(true)
     routerMocks.currentRoute.value = { path: '/board', fullPath: '/board' }
     routerMocks.push.mockResolvedValue(undefined)
   })
@@ -175,7 +176,7 @@ describe('chat stream lifecycle semantics', () => {
       { onMessage: vi.fn() }
     )).rejects.toMatchObject({ status: 401 })
 
-    expect(authMocks.logout).toHaveBeenCalledOnce()
+    expect(authMocks.logoutIfTokenMatches).toHaveBeenCalledWith(null)
     expect(routerMocks.push).toHaveBeenCalledWith({
       path: '/',
       query: { mode: 'login', redirect: '/board' }
@@ -196,7 +197,27 @@ describe('chat stream lifecycle semantics', () => {
       { onMessage: vi.fn() }
     )).rejects.toMatchObject({ status: 403 })
 
-    expect(authMocks.logout).not.toHaveBeenCalled()
+    expect(authMocks.logoutIfTokenMatches).not.toHaveBeenCalled()
+    expect(routerMocks.push).not.toHaveBeenCalled()
+  })
+
+  it('does not let a delayed Alice SSE 401 redirect Bob to login', async () => {
+    authMocks.getToken.mockReturnValue('alice-token')
+    authMocks.logoutIfTokenMatches.mockReturnValue(false)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: vi.fn().mockResolvedValue('{"message":"Authentication required"}')
+    }))
+
+    await expect(sendStreamChat(
+      'session-1',
+      'hello',
+      { onMessage: vi.fn() }
+    )).rejects.toMatchObject({ status: 401 })
+
+    expect(authMocks.logoutIfTokenMatches).toHaveBeenCalledWith('alice-token')
     expect(routerMocks.push).not.toHaveBeenCalled()
   })
 

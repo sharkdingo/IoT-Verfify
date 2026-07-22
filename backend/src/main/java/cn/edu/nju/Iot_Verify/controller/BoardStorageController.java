@@ -5,6 +5,7 @@ import cn.edu.nju.Iot_Verify.component.aitool.rule.RecommendRelatedDevicesTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckDuplicateRuleTool;
 import cn.edu.nju.Iot_Verify.component.aitool.rule.CheckRuleSimilarityTool;
 import cn.edu.nju.Iot_Verify.component.aitool.scenario.RecommendScenarioTool;
+import cn.edu.nju.Iot_Verify.component.aitool.scenario.ScenarioVerificationReadiness;
 import cn.edu.nju.Iot_Verify.component.aitool.spec.RecommendSpecificationsTool;
 import cn.edu.nju.Iot_Verify.component.board.BoardBatchRequestParser;
 import cn.edu.nju.Iot_Verify.component.template.DeviceTemplateSchemaValidator;
@@ -44,6 +45,7 @@ import cn.edu.nju.Iot_Verify.dto.recommendation.RuleRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioRecommendationResponseDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioReadinessIssueDto;
+import cn.edu.nju.Iot_Verify.dto.recommendation.ScenarioSemanticWarningDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.StandaloneRecommendationRequestDto;
 import cn.edu.nju.Iot_Verify.dto.recommendation.SpecificationRecommendationDto;
 import cn.edu.nju.Iot_Verify.dto.rule.DuplicateRuleCheckResultDto;
@@ -673,7 +675,8 @@ public class BoardStorageController {
                 "message", "count", "requestedCount", "validatedCount",
                 "filteredCount", "filteredItems", "adjustedCount", "adjustedItems",
                 "rawCandidateCount", "inspectedCount", "truncatedCount",
-                "scenarioName", "rationale", "verificationReady", "readinessIssues", "scene"), context);
+                "scenarioName", "rationale", "verificationReady", "readinessIssues",
+                "semanticWarnings", "scene"), context);
         RecommendationAudit audit = parseRecommendationAudit(result, true, context);
         PortableSceneDto scene = convertRecommendationItem(
                 result.get("scene"), PortableSceneDto.class, context, "scene");
@@ -712,24 +715,31 @@ public class BoardStorageController {
         List<ScenarioReadinessIssueDto> readinessIssues = convertRecommendationItems(
                 requireRecommendationList(result, "readinessIssues", context),
                 ScenarioReadinessIssueDto.class, context);
-        validateScenarioReadiness(scene, verificationReady, readinessIssues, context);
+        List<ScenarioSemanticWarningDto> semanticWarnings = convertRecommendationItems(
+                requireRecommendationList(result, "semanticWarnings", context),
+                ScenarioSemanticWarningDto.class, context);
+        validateScenarioAnalysis(
+                scene,
+                audit.filteredCount(),
+                verificationReady,
+                readinessIssues,
+                semanticWarnings,
+                context);
         response.setVerificationReady(verificationReady);
         response.setReadinessIssues(readinessIssues);
+        response.setSemanticWarnings(semanticWarnings);
         response.setScene(scene);
         return response;
     }
 
-    private void validateScenarioReadiness(PortableSceneDto scene,
-                                           boolean verificationReady,
-                                           List<ScenarioReadinessIssueDto> readinessIssues,
-                                           String context) {
-        boolean hasDevices = scene.getDevices() != null && !scene.getDevices().isEmpty();
-        boolean hasSpecifications = scene.getSpecs() != null && !scene.getSpecs().isEmpty();
-        boolean expectedReady = hasDevices && hasSpecifications;
-        List<String> expectedCodes = new ArrayList<>();
-        if (!hasDevices) expectedCodes.add("NO_DEVICES");
-        if (!hasSpecifications) expectedCodes.add("NO_SPECIFICATIONS");
-
+    private void validateScenarioAnalysis(PortableSceneDto scene,
+                                          int filteredCount,
+                                          boolean verificationReady,
+                                          List<ScenarioReadinessIssueDto> readinessIssues,
+                                          List<ScenarioSemanticWarningDto> semanticWarnings,
+                                          String context) {
+        ScenarioVerificationReadiness.Status expected = ScenarioVerificationReadiness.assess(
+                objectMapper.valueToTree(scene), filteredCount, "en");
         List<String> actualCodes = new ArrayList<>();
         for (int index = 0; index < readinessIssues.size(); index++) {
             ScenarioReadinessIssueDto issue = readinessIssues.get(index);
@@ -739,9 +749,29 @@ public class BoardStorageController {
             }
             actualCodes.add(issue.getCode());
         }
-        if (verificationReady != expectedReady || !actualCodes.equals(expectedCodes)) {
+        List<String> expectedCodes = expected.readinessIssues().stream()
+                .map(ScenarioVerificationReadiness.Issue::code)
+                .toList();
+        if (verificationReady != expected.verificationReady() || !actualCodes.equals(expectedCodes)) {
             throw invalidRecommendationResult(
                     context, "verificationReady/readinessIssues must match the returned scene");
+        }
+
+        List<String> actualWarningCodes = new ArrayList<>();
+        for (int index = 0; index < semanticWarnings.size(); index++) {
+            ScenarioSemanticWarningDto warning = semanticWarnings.get(index);
+            if (warning == null || isBlank(warning.getCode()) || isBlank(warning.getMessage())) {
+                throw invalidRecommendationResult(
+                        context, "semanticWarnings[" + index + "] requires non-blank code and message");
+            }
+            actualWarningCodes.add(warning.getCode());
+        }
+        List<String> expectedWarningCodes = expected.semanticWarnings().stream()
+                .map(ScenarioVerificationReadiness.Issue::code)
+                .toList();
+        if (!actualWarningCodes.equals(expectedWarningCodes)) {
+            throw invalidRecommendationResult(
+                    context, "semanticWarnings must match the returned scene and filtered candidates");
         }
     }
 

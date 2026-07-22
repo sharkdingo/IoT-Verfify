@@ -11,6 +11,7 @@ interface AuthState {
 
 const TOKEN_KEY = 'iot_verify_token';
 const USER_KEY = 'iot_verify_user';
+const AUTH_SYNC_KEY = 'iot_verify_auth_sync';
 
 // 初始化状态
 const getInitialState = (): AuthState => {
@@ -50,6 +51,39 @@ const getInitialState = (): AuthState => {
 
 const state = reactive<AuthState>(getInitialState());
 
+const applyAuthState = (token: string | null, user: UserInfo | null) => {
+  const authenticated = isLocallyUsableJwt(token) && Boolean(user);
+  state.token = authenticated ? token : null;
+  state.user = authenticated ? user : null;
+  state.isLoggedIn = authenticated;
+};
+
+const publishAuthState = (token: string | null, user: UserInfo | null) => {
+  localStorage.setItem(AUTH_SYNC_KEY, JSON.stringify({ token, user, updatedAt: Date.now() }));
+};
+
+if (typeof window !== 'undefined') {
+  const authWindow = window as Window & { __iotVerifyAuthStorageListener?: (event: StorageEvent) => void };
+  if (authWindow.__iotVerifyAuthStorageListener) {
+    window.removeEventListener('storage', authWindow.__iotVerifyAuthStorageListener);
+  }
+  authWindow.__iotVerifyAuthStorageListener = (event: StorageEvent) => {
+    if (event.storageArea && event.storageArea !== localStorage) return;
+    if (event.key === null) {
+      applyAuthState(null, null);
+      return;
+    }
+    if (event.key !== AUTH_SYNC_KEY || !event.newValue) return;
+    try {
+      const next = JSON.parse(event.newValue) as { token?: string | null; user?: UserInfo | null };
+      applyAuthState(next.token ?? null, next.user ?? null);
+    } catch {
+      applyAuthState(null, null);
+    }
+  };
+  window.addEventListener('storage', authWindow.__iotVerifyAuthStorageListener);
+}
+
 // 只读引用，供外部使用
 export const useAuth = () => {
   // 登录成功
@@ -59,6 +93,7 @@ export const useAuth = () => {
     state.isLoggedIn = true;
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    publishAuthState(token, user);
   };
 
   // 登出
@@ -68,6 +103,15 @@ export const useAuth = () => {
     state.isLoggedIn = false;
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    publishAuthState(null, null);
+  };
+
+  // A response may arrive after another tab has logged in as a different user.
+  // Only the request's own token is allowed to invalidate the current session.
+  const logoutIfTokenMatches = (requestToken: string | null): boolean => {
+    if (state.token !== requestToken) return false;
+    logout();
+    return true;
   };
 
   // 获取token
@@ -83,6 +127,7 @@ export const useAuth = () => {
     state: readonly(state),
     login,
     logout,
+    logoutIfTokenMatches,
     getToken,
     getUser,
     isAuthenticated

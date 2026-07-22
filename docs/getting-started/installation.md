@@ -14,7 +14,7 @@ This guide covers a local development setup of the IoT-Verify platform (Vue 3 fr
 | Node.js    | 18+     | Frontend runtime |
 | Maven      | 3.6+    | Backend build |
 | MySQL      | 8.0+    | Primary datastore |
-| Redis      | 6.0+    | Optional. JWT logout blacklist; runs fail-open (the app continues to start if Redis is unavailable) |
+| Redis      | 6.0+    | Optional. Logout revocation and cross-instance operation coordination; failures fall back to documented process-local behavior |
 | NuSMV      | 2.6-2.7 | Formal verification engine. **NOT nuXmv — nuXmv is incompatible.** |
 
 ### NuSMV
@@ -44,19 +44,18 @@ AI-powered assistance (chat, rule/spec/device recommendations) requires an API k
 Create a database named `iot_verify` with the `utf8mb4` character set:
 
 ```bash
-mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs;"
+mysql -u root -p -e "CREATE DATABASE iot_verify CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
 
 The backend auto-creates all tables on first startup, so no schema import is needed.
-The accent- and case-sensitive collation keeps normalized usernames deterministic across
-MySQL and the application. For a database created with the former `utf8mb4_unicode_ci`
-recommendation, migrate the username column once after taking a backup:
-
-```sql
-ALTER TABLE app_user
-  MODIFY username VARCHAR(50)
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_cs NOT NULL;
-```
+Keep the schema-level `utf8mb4_unicode_ci` default so fresh installations retain the same
+non-username text comparison semantics as upgraded databases. On every MySQL startup, the
+backend separately verifies `app_user.username` and migrates that column only to the
+accent- and case-sensitive `utf8mb4_0900_as_cs` collation. This keeps normalized usernames
+deterministic without silently changing identifiers and literal domain names elsewhere.
+Back up an existing database before the first startup with this version and allow time for
+the column-alter lock; startup fails rather than serving with an unverified username
+collation.
 
 ### 2. Set required environment variables
 

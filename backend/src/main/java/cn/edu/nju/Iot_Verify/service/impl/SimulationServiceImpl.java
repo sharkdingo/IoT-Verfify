@@ -36,6 +36,7 @@ import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.SimulationService;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
 import cn.edu.nju.Iot_Verify.util.JsonUtils;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
@@ -83,6 +84,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private final ThreadPoolTaskExecutor syncSimulationExecutor;
     private final TransactionTemplate transactionTemplate;
     private final ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+    private final FormalOperationAdmission formalOperationAdmission;
     private final AsyncTaskAdmissionConfig.Limits taskAdmissionLimits;
     private final String workerId = UUID.randomUUID().toString();
     private final ScheduledExecutorService leaseMaintenanceExecutor =
@@ -109,6 +111,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                                  @Qualifier("syncSimulationExecutor") ThreadPoolTaskExecutor syncSimulationExecutor,
                                  TransactionTemplate transactionTemplate,
                                  ChatExecutionLeaseGuard chatExecutionLeaseGuard,
+                                 FormalOperationAdmission formalOperationAdmission,
                                  AsyncTaskAdmissionConfig taskAdmissionConfig) {
         super(objectMapper, "SimulationTask");
         this.smvGenerator = smvGenerator;
@@ -124,6 +127,7 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
         this.syncSimulationExecutor = syncSimulationExecutor;
         this.transactionTemplate = transactionTemplate;
         this.chatExecutionLeaseGuard = chatExecutionLeaseGuard;
+        this.formalOperationAdmission = formalOperationAdmission;
         this.taskAdmissionLimits = taskAdmissionConfig.getSimulation();
     }
 
@@ -140,11 +144,13 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                           ThreadPoolTaskExecutor simulationTaskExecutor,
                           ThreadPoolTaskExecutor syncSimulationExecutor,
                           TransactionTemplate transactionTemplate,
-                          ChatExecutionLeaseGuard chatExecutionLeaseGuard) {
+                          ChatExecutionLeaseGuard chatExecutionLeaseGuard,
+                          FormalOperationAdmission formalOperationAdmission) {
         this(smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, objectMapper,
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
+                formalOperationAdmission,
                 new AsyncTaskAdmissionConfig());
     }
 
@@ -196,6 +202,10 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     public SimulationResultDto simulate(Long userId, SimulationRequestDto request) {
+        return formalOperationAdmission.execute(userId, () -> simulateWithoutAdmission(userId, request));
+    }
+
+    private SimulationResultDto simulateWithoutAdmission(Long userId, SimulationRequestDto request) {
         SimulationInput input = validateAndNormalize(userId, request);
         SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.sync());
         result.setHistoryPersistence(RunPersistenceDto.notRequested());
@@ -207,10 +217,12 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             Long userId,
             SimulationRequestDto request,
             Map<String, DeviceManifest> templateManifests) {
-        SimulationInput input = validateAndNormalize(userId, request, templateManifests);
-        SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.sync());
-        result.setHistoryPersistence(RunPersistenceDto.notRequested());
-        return result;
+        return formalOperationAdmission.execute(userId, () -> {
+            SimulationInput input = validateAndNormalize(userId, request, templateManifests);
+            SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.sync());
+            result.setHistoryPersistence(RunPersistenceDto.notRequested());
+            return result;
+        });
     }
 
     private SimulationResultDto simulateInput(Long userId, SimulationInput input,
@@ -250,6 +262,8 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
             log.error("Simulation failed", cause);
             throw new InternalServerException("Simulation failed: " + cause.getMessage());
         } catch (InterruptedException e) {
+            future.cancel(true);
+            purgeCancelledSyncTasks();
             Thread.currentThread().interrupt();
             throw SimulationExecutionException.interrupted();
         }
@@ -742,6 +756,10 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
 
     @Override
     public SimulationTraceDto simulateAndSave(Long userId, SimulationRequestDto request) {
+        return formalOperationAdmission.execute(userId, () -> simulateAndSaveWithoutAdmission(userId, request));
+    }
+
+    private SimulationTraceDto simulateAndSaveWithoutAdmission(Long userId, SimulationRequestDto request) {
         SimulationInput input = validateAndNormalize(userId, request);
         SimulationResultDto result = simulateInput(userId, input, SmvGenerator.TempModelContext.savedTrace());
 
@@ -1008,6 +1026,11 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
     private SimulationTracePo persistSimulationTrace(Long userId, SimulationResultDto result,
                                                      String requestJson, String templateSnapshotsJson) {
         requireActiveUserForPersistence(userId);
+        return persistSimulationTraceForActiveUser(userId, result, requestJson, templateSnapshotsJson);
+    }
+
+    private SimulationTracePo persistSimulationTraceForActiveUser(Long userId, SimulationResultDto result,
+                                                                  String requestJson, String templateSnapshotsJson) {
         ModelSemanticsDto semantics = result.getModelSemantics();
         SimulationTracePo po = SimulationTracePo.builder()
                 .userId(userId)
@@ -1061,8 +1084,9 @@ public class SimulationServiceImpl extends AbstractAsyncTaskService<SimulationTa
                 status.setRollbackOnly();
                 return false;
             }
+            requireActiveUserForPersistence(userId);
             simulationTaskRepository.findByIdForUpdate(task.getId());
-            SimulationTracePo savedTrace = persistSimulationTrace(
+            SimulationTracePo savedTrace = persistSimulationTraceForActiveUser(
                     userId, result, requestJson, templateSnapshotsJson);
             if (isCompletionCancelled(task.getId())) {
                 log.info("Simulation task {} was cancelled after trace persistence but before completion; rolling back trace", task.getId());

@@ -139,6 +139,66 @@ class AuthServiceImplLogoutTest {
     }
 
     @Test
+    void login_legacyPhoneUsernameCollision_selectsTheMatchingPassword() {
+        LoginRequestDto request = new LoginRequestDto();
+        request.setIdentifier("13800138000");
+        request.setPassword("UsernameOwnerPass");
+        UserPo phoneOwner = UserPo.builder()
+                .id(7L).phone("13800138000").username("bob").password("phone-password").build();
+        UserPo usernameOwner = UserPo.builder()
+                .id(8L).phone("13900139000").username("13800138000").password("username-password").build();
+        AuthResponseDto response = AuthResponseDto.builder()
+                .userId(8L).phone("13900139000").username("13800138000").token("jwt").build();
+        when(userService.findByPhone("13800138000")).thenReturn(Optional.of(phoneOwner));
+        when(userService.findByUsername("13800138000")).thenReturn(Optional.of(usernameOwner));
+        when(passwordEncoder.matches("UsernameOwnerPass", "phone-password")).thenReturn(false);
+        when(passwordEncoder.matches("UsernameOwnerPass", "username-password")).thenReturn(true);
+        when(jwtUtil.generateToken(8L, "13900139000")).thenReturn("jwt");
+        when(userMapper.toAuthResponseDto(usernameOwner, "jwt")).thenReturn(response);
+
+        AuthResponseDto result = authService.login(request);
+
+        assertEquals(8L, result.getUserId());
+        verify(userService).findByPhone("13800138000");
+        verify(userService).findByUsername("13800138000");
+    }
+
+    @Test
+    void login_legacyPhoneUsernameCollision_rejectsWhenBothPasswordsMatch() {
+        LoginRequestDto request = new LoginRequestDto();
+        request.setIdentifier("13800138000");
+        request.setPassword("SharedPass123");
+        UserPo phoneOwner = UserPo.builder()
+                .id(7L).phone("13800138000").username("bob").password("phone-password").build();
+        UserPo usernameOwner = UserPo.builder()
+                .id(8L).phone("13900139000").username("13800138000").password("username-password").build();
+        when(userService.findByPhone("13800138000")).thenReturn(Optional.of(phoneOwner));
+        when(userService.findByUsername("13800138000")).thenReturn(Optional.of(usernameOwner));
+        when(passwordEncoder.matches("SharedPass123", "phone-password")).thenReturn(true);
+        when(passwordEncoder.matches("SharedPass123", "username-password")).thenReturn(true);
+
+        UnauthorizedException error = assertThrows(
+                UnauthorizedException.class, () -> authService.login(request));
+
+        assertEquals("Account or password is incorrect", error.getMessage());
+        verifyNoInteractions(jwtUtil, userMapper);
+    }
+
+    @Test
+    void login_invalidCredentials_usesAccountNeutralMessage() {
+        LoginRequestDto request = new LoginRequestDto();
+        request.setIdentifier("alice");
+        request.setPassword("WrongPass123");
+        when(userService.findByPhone("alice")).thenReturn(Optional.empty());
+        when(userService.findByUsername("alice")).thenReturn(Optional.empty());
+
+        UnauthorizedException error = assertThrows(
+                UnauthorizedException.class, () -> authService.login(request));
+
+        assertEquals("Account or password is incorrect", error.getMessage());
+    }
+
+    @Test
     void register_whenDefaultCatalogCannotBeInitialized_doesNotReturnPartialSuccess() {
         RegisterRequestDto request = new RegisterRequestDto();
         request.setPhone("13900000000");
@@ -258,6 +318,9 @@ class AuthServiceImplLogoutTest {
 
         authService.deleteAccount(7L, null, request);
 
+        InOrder chatCleanupOrder = inOrder(chatSessionRepository, aiSessionStateRepository);
+        chatCleanupOrder.verify(chatSessionRepository).findByUserIdForUpdate(7L);
+        chatCleanupOrder.verify(aiSessionStateRepository).deleteUser(7L);
         InOrder fuzzCleanupOrder = inOrder(fuzzFindingRepository, fuzzTaskRepository);
         fuzzCleanupOrder.verify(fuzzFindingRepository).deleteByUserId(7L);
         fuzzCleanupOrder.verify(fuzzTaskRepository).deleteByUserId(7L);

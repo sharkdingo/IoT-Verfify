@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, defineAsyncComponent, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import type { ChatLogoutPreparation, StreamCommand } from "@/types/chat";
 import { useChatStore } from "@/stores/chat";
 import { useAuth } from "@/stores/auth";
@@ -8,11 +8,29 @@ import { publishBoardInvalidation } from "@/utils/boardInvalidation";
 import AppErrorBoundary from "./components/AppErrorBoundary.vue";
 
 const route = useRoute();
+const router = useRouter();
 const routerViewRef = ref<any>(null);
 const chatViewRef = ref<any>(null);
 const ChatView = defineAsyncComponent(() => import("./components/ChatView.vue"));
 const chatStore = useChatStore();
-const { getUser } = useAuth();
+const { state: authState, getUser } = useAuth();
+
+// Authentication is a hard ownership boundary. Remount private route components when
+// the subject changes so no request, timer, or subscription from the previous account
+// can write into the next account's workspace.
+const routeAuthScopeKey = computed(() =>
+  `${route.fullPath}:${route.meta.public ? 'public' : (authState.user?.userId ?? 'anonymous')}`
+);
+const canRenderCurrentRoute = computed(() => Boolean(route.meta.public) || authState.isLoggedIn);
+
+watch(() => authState.isLoggedIn, authenticated => {
+  if (authenticated || route.meta.public) return;
+  const redirect = route.fullPath;
+  void router.replace({
+    path: '/',
+    query: { mode: 'login', ...(redirect !== '/' ? { redirect } : {}) }
+  });
+}, { flush: 'sync' });
 
 // Load the assistant lazily on first open, then keep it mounted while hidden. Closing a
 // floating panel must not discard the selected conversation or abort an active stream.
@@ -102,8 +120,14 @@ const routerViewProps = computed(() => isBoardChat.value
   <div class="app-layout">
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <AppErrorBoundary :reset-key="route.fullPath">
-          <component :is="Component" ref="routerViewRef" v-bind="routerViewProps" />
+        <AppErrorBoundary :reset-key="routeAuthScopeKey">
+          <component
+            v-if="canRenderCurrentRoute"
+            :is="Component"
+            :key="routeAuthScopeKey"
+            ref="routerViewRef"
+            v-bind="routerViewProps"
+          />
         </AppErrorBoundary>
       </router-view>
 

@@ -110,6 +110,7 @@ jobs:
       REDIS_PORT: 6379
       JWT_SECRET: ci-only-jwt-secret-must-be-at-least-256-bits-long
       IOT_VERIFY_OPENAI_API_KEY: sk-ci-unused
+      IOT_VERIFY_TIME_ZONE: UTC
       SERVER_PORT: 8080
       NUSMV_MAX_CONCURRENT: 1
       E2E_API_BASE_URL: http://127.0.0.1:8080

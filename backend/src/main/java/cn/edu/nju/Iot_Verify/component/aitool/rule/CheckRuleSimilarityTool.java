@@ -295,7 +295,8 @@ public class CheckRuleSimilarityTool extends AbstractAiTool {
                     : "AI found no obvious similar rule; this is not a conflict-free proof.");
             return objectMapper.writeValueAsString(result);
         } catch (Exception e) {
-            log.error("Failed to parse AI rule similarity response", e);
+            log.error("Failed to parse AI rule similarity response: exception={}",
+                    e.getClass().getName());
             return errorJson(
                     "Failed to parse AI similarity result. Please try again.",
                     "AI_RESPONSE_INVALID",

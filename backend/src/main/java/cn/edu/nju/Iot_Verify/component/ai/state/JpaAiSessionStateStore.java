@@ -47,7 +47,8 @@ public class JpaAiSessionStateStore implements AiSessionStateStore {
                     version));
         } catch (Exception e) {
             repository.deleteByStateKeyAndVersion(stateKey, version);
-            log.error("Removed unreadable AI session state: key={}, kind={}", stateKey, kind, e);
+            log.error("Removed unreadable AI session state: key={}, kind={}, exception={}",
+                    stateKey, kind, e.getClass().getName());
             return Optional.empty();
         }
     }

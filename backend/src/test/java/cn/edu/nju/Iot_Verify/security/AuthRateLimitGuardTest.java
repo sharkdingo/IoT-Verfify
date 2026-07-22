@@ -25,6 +25,16 @@ class AuthRateLimitGuardTest {
     }
 
     @Test
+    void caseSensitiveUsernamesDoNotShareAnAccountBucket() {
+        AuthRateLimitGuard guard = new AuthRateLimitGuard(1, 1, 10, 10);
+        MockHttpServletRequest request = request("203.0.113.10");
+
+        assertDoesNotThrow(() -> guard.checkLogin("Alice", request));
+        assertDoesNotThrow(() -> guard.checkLogin("alice", request));
+        assertThrows(AuthRateLimitException.class, () -> guard.checkLogin("Alice", request));
+    }
+
+    @Test
     void highSourceLimitStillBoundsRotatingIdentifiers() {
         AuthRateLimitGuard guard = new AuthRateLimitGuard(1, 1, 2, 2);
         MockHttpServletRequest request = request("203.0.113.10");

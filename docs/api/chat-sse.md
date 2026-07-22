@@ -116,6 +116,10 @@ or late stream therefore cannot recreate data after the account has been removed
 Sends a user message and streams the assistant's visible reply. **Not** wrapped in
 `Result<T>` — the response is `text/event-stream` produced by a Spring `SseEmitter`
 (60-minute default timeout, configured by `CHAT_SSE_TIMEOUT_MS`).
+Synchronous rejections that occur before the stream is established (for example invalid
+input, an unknown session, or a busy session) use the standard JSON `Result<T>` error
+envelope and retain their documented HTTP status even when the client sends
+`Accept: text/event-stream`.
 
 Every non-blank message first runs model-driven planning with the complete registered
 tool catalog. The model may choose zero tools for ordinary conversation, or freely chain

@@ -59,7 +59,7 @@ public class PromptCompletionService {
                 .model(model)
                 .build();
 
-        LlmChatResponse response = llmProvider.chat(request);
+        LlmChatResponse response = llmProvider.chat(request, LlmRequestControlHolder.currentOrNew());
         String text = response.text();
         long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
         log.info("LLM {} completion finished: promptChars={}, outputChars={}, elapsedMs={}",

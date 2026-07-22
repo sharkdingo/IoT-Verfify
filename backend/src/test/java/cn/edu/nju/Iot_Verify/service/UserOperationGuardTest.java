@@ -2,6 +2,7 @@ package cn.edu.nju.Iot_Verify.service;
 
 import cn.edu.nju.Iot_Verify.exception.UserOperationBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.configure.OperationAdmissionConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -22,6 +23,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.anyList;
+import org.mockito.ArgumentCaptor;
 
 @ExtendWith(MockitoExtension.class)
 class UserOperationGuardTest {
@@ -96,5 +98,46 @@ class UserOperationGuardTest {
         assertFalse(lease.isActive());
         assertThrows(ServiceUnavailableException.class, lease::requireActive);
         lease.close();
+    }
+
+    @Test
+    void longRequestedTtlIsCappedForRenewableLeaseRecovery() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+
+        UserOperationGuard.Lease lease = guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofHours(2));
+
+        ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
+        verify(valueOperations).setIfAbsent(anyString(), anyString(), ttl.capture());
+        org.junit.jupiter.api.Assertions.assertEquals(Duration.ofMinutes(2), ttl.getValue());
+        lease.close();
+    }
+
+    @Test
+    void renewableTtlAlwaysSpansAtLeastFourConfiguredHeartbeats() {
+        OperationAdmissionConfig config = new OperationAdmissionConfig();
+        config.setLeaseHeartbeatMs(Duration.ofMinutes(3).toMillis());
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate, config);
+
+        org.junit.jupiter.api.Assertions.assertEquals(Duration.ofMinutes(12), guard.renewableLeaseTtl());
+    }
+
+    @Test
+    void failedReleaseIsRetriedByScheduledMaintenance() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(true);
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any()))
+                .thenThrow(new RedisConnectionFailureException("down"))
+                .thenReturn(1L);
+        UserOperationGuard guard = new UserOperationGuard(redisTemplate);
+        UserOperationGuard.Lease lease = guard.acquire(
+                7L, UserOperationGuard.Kind.FORMAL, 1, Duration.ofMinutes(1));
+
+        lease.close();
+        guard.renewActiveLeases();
+
+        verify(redisTemplate, times(2)).execute(any(RedisScript.class), anyList(), any());
     }
 }

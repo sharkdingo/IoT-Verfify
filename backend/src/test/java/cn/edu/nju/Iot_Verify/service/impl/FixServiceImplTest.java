@@ -19,6 +19,7 @@ import cn.edu.nju.Iot_Verify.dto.rule.RuleDto;
 import cn.edu.nju.Iot_Verify.dto.spec.SpecificationDto;
 import cn.edu.nju.Iot_Verify.dto.trace.TraceDto;
 import cn.edu.nju.Iot_Verify.exception.BadRequestException;
+import cn.edu.nju.Iot_Verify.exception.ResourceNotFoundException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
@@ -27,6 +28,7 @@ import cn.edu.nju.Iot_Verify.dto.device.DeviceVerificationDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceNodeDto;
 import cn.edu.nju.Iot_Verify.dto.device.DeviceTemplateDto.DeviceManifest;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter;
 import cn.edu.nju.Iot_Verify.util.mapper.BoardDataConverter.ModelInputSnapshot;
 import cn.edu.nju.Iot_Verify.util.mapper.TraceMapper;
@@ -57,6 +59,7 @@ class FixServiceImplTest {
     @Mock private BoardStorageService boardStorageService;
     @Mock private BoardDataConverter boardDataConverter;
     @Mock private cn.edu.nju.Iot_Verify.service.FixSuggestionTokenService fixSuggestionTokenService;
+    @Mock private FormalOperationAdmission formalOperationAdmission;
 
     private FixServiceImpl fixService;
     private List<DeviceVerificationDto> currentDevices;
@@ -69,8 +72,10 @@ class FixServiceImplTest {
     void setUp() {
         FixConfig fixConfig = new FixConfig();
         fixConfig.setMaxAttempts(20);
+        lenient().when(formalOperationAdmission.execute(anyLong(), any()))
+                .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1).get());
         fixService = new FixServiceImpl(traceRepository, traceMapper, smvGenerator, ruleFixer, fixConfig,
-                boardStorageService, boardDataConverter, fixSuggestionTokenService);
+                boardStorageService, boardDataConverter, fixSuggestionTokenService, formalOperationAdmission);
         DeviceManifest manifest = DeviceManifest.builder().name("t1").build();
         currentDevices = List.of();
         currentSpecs = List.of();
@@ -207,6 +212,7 @@ class FixServiceImplTest {
         verify(ruleFixer).fix(anyLong(), any(), any(), anyList(), anyList(), anyList(), anyList(),
                 anyMap(), anyLong(), anyBoolean(), anyInt(), anyBoolean(), captor.capture(), anyInt(), any());
         assertNull(captor.getValue());
+        verify(formalOperationAdmission).execute(eq(1L), any());
     }
 
     @Test
@@ -244,6 +250,17 @@ class FixServiceImplTest {
                 () -> fixService.applyFix(1L, 1L, "disable", null));
 
         verifyNoInteractions(traceRepository);
+        verify(formalOperationAdmission).execute(eq(1L), any());
+    }
+
+    @Test
+    void applyFix_compatibilitySuggestionReverificationUsesFormalAdmission() {
+        assertThrows(ResourceNotFoundException.class,
+                () -> fixService.applyFix(
+                        1L, 1L, "parameter", verifiedParameterSuggestion("40"), null));
+
+        verify(formalOperationAdmission).execute(eq(1L), any());
+        verify(traceRepository).findByIdAndUserId(1L, 1L);
     }
 
     @Test

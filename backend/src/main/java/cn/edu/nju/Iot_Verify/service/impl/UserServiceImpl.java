@@ -30,11 +30,20 @@ public class UserServiceImpl implements UserService {
             throw new BadRequestException(
                     "Username must be 3-20 Unicode characters after trimming and must not contain control or format characters.");
         }
+        if (UsernameNormalizer.isPhoneNumber(normalizedUsername)) {
+            throw new BadRequestException("Username cannot use the phone-number format.");
+        }
         if (existsByPhone(phone)) {
             throw ConflictException.duplicatePhone(phone);
         }
+        if (existsByUsername(phone)) {
+            throw new ConflictException("Phone number conflicts with an existing username.");
+        }
         if (existsByUsername(normalizedUsername)) {
             throw ConflictException.duplicateUsername(normalizedUsername);
+        }
+        if (existsByPhone(normalizedUsername)) {
+            throw new ConflictException("Username conflicts with an existing phone number.");
         }
 
         UserPo user = UserPo.builder()

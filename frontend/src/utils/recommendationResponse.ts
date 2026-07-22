@@ -175,5 +175,52 @@ export const validateScenarioRecommendationResponse = <T>(
       'verificationReady/readinessIssues must match the returned scene'
     )
   }
+  const semanticWarnings = requireArray(result, 'semanticWarnings', context)
+  const actualWarningCodes = semanticWarnings.map((item, index) => {
+    const warning = requireRecord(item, context)
+    const code = requireNonBlankText(warning.code, `semanticWarnings[${index}].code`, context)
+    requireNonBlankText(warning.message, `semanticWarnings[${index}].message`, context)
+    return code
+  })
+  const expectedWarningCodes: string[] = []
+  if (result.filteredCount > 0) expectedWarningCodes.push('FILTERED_CANDIDATES')
+  if (devices.length > 0) {
+    if (rules.length === 0) expectedWarningCodes.push('NO_AUTOMATION_RULES')
+
+    const referencedDeviceIds = new Set<string>()
+    const addReference = (value: unknown) => {
+      if (typeof value === 'string' && value.trim()) referencedDeviceIds.add(value.trim())
+    }
+    rules.forEach((value) => {
+      const rule = requireRecord(value, context)
+      addReference(rule.toId)
+      addReference(rule.contentDevice)
+      if (Array.isArray(rule.sources)) {
+        rule.sources.forEach((source) => addReference(requireRecord(source, context).fromId))
+      }
+    })
+    specs.forEach((value) => {
+      const spec = requireRecord(value, context)
+      ;['aConditions', 'ifConditions', 'thenConditions'].forEach((field) => {
+        if (Array.isArray(spec[field])) {
+          spec[field].forEach((condition: unknown) => {
+            addReference(requireRecord(condition, context).deviceId)
+          })
+        }
+      })
+    })
+    const hasUnreferencedDevice = devices.some((value) => {
+      const id = requireRecord(value, context).id
+      return typeof id === 'string' && id.trim() && !referencedDeviceIds.has(id.trim())
+    })
+    if (hasUnreferencedDevice) expectedWarningCodes.push('UNREFERENCED_DEVICES')
+  }
+  if (actualWarningCodes.length !== expectedWarningCodes.length
+    || actualWarningCodes.some((code, index) => code !== expectedWarningCodes[index])) {
+    throw new RecommendationResponseContractError(
+      context,
+      'semanticWarnings must match the returned scene and filtered candidates'
+    )
+  }
   return result as T
 }

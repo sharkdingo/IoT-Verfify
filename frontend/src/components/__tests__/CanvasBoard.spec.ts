@@ -33,6 +33,7 @@ describe('CanvasBoard device context actions', () => {
     })
 
     expect(wrapper.emitted('node-context')).toEqual([[node, { x: 240, y: 180 }]])
+    expect(wrapper.get('.device-label').attributes('title')).toBe('Hall light')
     wrapper.unmount()
   })
 

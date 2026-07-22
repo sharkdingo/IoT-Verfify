@@ -40,11 +40,12 @@ class UserOwnedOrphanCleanupTest {
         createSchemaAndRows(dataSource);
         UserOwnedOrphanCleanup migration = new UserOwnedOrphanCleanup(dataSource);
 
-        assertEquals(16, migration.migrate());
+        assertEquals(19, migration.migrate());
         assertEquals(0, migration.migrate());
 
         assertEquals(1, count(dataSource, "chat_message"));
         assertEquals(1, count(dataSource, "chat_session"));
+        assertEquals(1, count(dataSource, "ai_session_state"));
         assertEquals(1, count(dataSource, "fuzz_finding"));
         assertEquals(1, count(dataSource, "fuzz_task"));
         for (String table : GENERIC_USER_TABLES) {
@@ -60,6 +61,7 @@ class UserOwnedOrphanCleanupTest {
 
         assertEquals(1, count(dataSource, "chat_message"));
         assertEquals(1, count(dataSource, "chat_session"));
+        assertEquals(1, count(dataSource, "ai_session_state"));
         assertEquals(1, count(dataSource, "fuzz_finding"));
         assertEquals(1, count(dataSource, "fuzz_task"));
         for (String table : GENERIC_USER_TABLES) {
@@ -75,8 +77,17 @@ class UserOwnedOrphanCleanupTest {
                             "INSERT INTO chat_message (id, session_id) VALUES (99, 'missing')"));
             assertThrows(SQLException.class,
                     () -> statement.executeUpdate(
+                            "INSERT INTO ai_session_state (state_key, user_id, session_id) "
+                                    + "VALUES ('missing-session', 1, 'missing')"));
+            assertThrows(SQLException.class,
+                    () -> statement.executeUpdate(
                             "INSERT INTO fuzz_finding (id, user_id, fuzz_task_id) VALUES (99, 1, 999)"));
             statement.executeUpdate("INSERT INTO app_user (id) VALUES (3)");
+            statement.executeUpdate("INSERT INTO chat_session (id, user_id) VALUES ('owner-3', 3)");
+            assertThrows(SQLException.class,
+                    () -> statement.executeUpdate(
+                            "INSERT INTO ai_session_state (state_key, user_id, session_id) "
+                                    + "VALUES ('wrong-owner', 1, 'owner-3')"));
             statement.executeUpdate("INSERT INTO fuzz_task (id, user_id) VALUES (30, 3)");
             assertThrows(SQLException.class,
                     () -> statement.executeUpdate(
@@ -90,6 +101,8 @@ class UserOwnedOrphanCleanupTest {
             statement.executeUpdate("CREATE TABLE app_user (id BIGINT PRIMARY KEY)");
             statement.executeUpdate("CREATE TABLE chat_session (id VARCHAR(100) PRIMARY KEY, user_id BIGINT NOT NULL)");
             statement.executeUpdate("CREATE TABLE chat_message (id BIGINT PRIMARY KEY, session_id VARCHAR(100) NOT NULL)");
+            statement.executeUpdate("CREATE TABLE ai_session_state ("
+                    + "state_key VARCHAR(200) PRIMARY KEY, user_id BIGINT NOT NULL, session_id VARCHAR(100) NOT NULL)");
             statement.executeUpdate("CREATE TABLE fuzz_task (id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL)");
             statement.executeUpdate("CREATE TABLE fuzz_finding ("
                     + "id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, fuzz_task_id BIGINT NOT NULL)");
@@ -101,6 +114,9 @@ class UserOwnedOrphanCleanupTest {
             statement.executeUpdate("INSERT INTO chat_session (id, user_id) VALUES ('valid', 1), ('orphan', 99)");
             statement.executeUpdate("INSERT INTO chat_message (id, session_id) VALUES "
                     + "(1, 'valid'), (2, 'orphan'), (3, 'missing')");
+            statement.executeUpdate("INSERT INTO ai_session_state (state_key, user_id, session_id) VALUES "
+                    + "('valid-state', 1, 'valid'), ('wrong-owner', 2, 'valid'), "
+                    + "('orphan-owner', 99, 'orphan'), ('missing-session', 1, 'missing')");
             statement.executeUpdate("INSERT INTO fuzz_task (id, user_id) VALUES (1, 1), (2, 99)");
             statement.executeUpdate("INSERT INTO fuzz_finding (id, user_id, fuzz_task_id) VALUES "
                     + "(1, 1, 1), (2, 99, 2), (3, 1, 999)");
@@ -116,6 +132,8 @@ class UserOwnedOrphanCleanupTest {
             statement.executeUpdate("INSERT INTO app_user (id) VALUES (2)");
             statement.executeUpdate("INSERT INTO chat_session (id, user_id) VALUES ('cascade', 2)");
             statement.executeUpdate("INSERT INTO chat_message (id, session_id) VALUES (20, 'cascade')");
+            statement.executeUpdate("INSERT INTO ai_session_state (state_key, user_id, session_id) "
+                    + "VALUES ('cascade-state', 2, 'cascade')");
             statement.executeUpdate("INSERT INTO fuzz_task (id, user_id) VALUES (20, 2)");
             statement.executeUpdate("INSERT INTO fuzz_finding (id, user_id, fuzz_task_id) VALUES (20, 2, 20)");
             for (String table : GENERIC_USER_TABLES) {
@@ -127,6 +145,8 @@ class UserOwnedOrphanCleanupTest {
     private void assertCascadeForeignKeys(DataSource dataSource) throws Exception {
         assertCascadeForeignKey(dataSource, "chat_message", "fk_chat_message_session",
                 List.of("session_id"), "chat_session", List.of("id"));
+        assertCascadeForeignKey(dataSource, "ai_session_state", "fk_ai_session_state_session_owner",
+                List.of("user_id", "session_id"), "chat_session", List.of("user_id", "id"));
         assertCascadeForeignKey(dataSource, "fuzz_finding", "fk_fuzz_finding_task_owner",
                 List.of("user_id", "fuzz_task_id"), "fuzz_task", List.of("user_id", "id"));
         assertCascadeForeignKey(dataSource, "chat_session", "fk_chat_session_user",
@@ -140,6 +160,7 @@ class UserOwnedOrphanCleanupTest {
                     List.of("user_id"), "app_user", List.of("id"));
         }
         assertTrue(hasNamedIndex(dataSource, "fuzz_task", "uk_fuzz_task_user_id", true));
+        assertTrue(hasNamedIndex(dataSource, "chat_session", "uk_chat_session_user_id", true));
         assertTrue(hasNamedIndex(dataSource, "fuzz_finding", "idx_fuzz_finding_user_task", false));
     }
 

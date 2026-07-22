@@ -1,3 +1,64 @@
+<script lang="ts">
+export type BoardResultRetryOptions<T> = {
+  load: () => Promise<T>
+  shouldRetry: (error: unknown) => boolean
+  waitBeforeRetry: (failedAttempt: number) => Promise<void>
+  maxAttempts: number
+}
+
+export const loadBoardResultWithRetry = async <T,>({
+  load,
+  shouldRetry,
+  waitBeforeRetry,
+  maxAttempts
+}: BoardResultRetryOptions<T>): Promise<T> => {
+  const attempts = Math.max(1, Math.floor(maxAttempts))
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await load()
+    } catch (error) {
+      if (attempt >= attempts || !shouldRetry(error)) throw error
+      await waitBeforeRetry(attempt)
+    }
+  }
+  throw new Error('Completed result recovery exhausted')
+}
+
+export const createLatestBoardRequestGuard = () => {
+  let epoch = 0
+  return {
+    begin: () => ++epoch,
+    invalidate: () => { epoch += 1 },
+    isCurrent: (requestEpoch: number) => requestEpoch === epoch
+  }
+}
+
+export const createScopedBoardInvalidationBinding = <Message,>(
+  subscribe: (
+    userId: number | null | undefined,
+    listener: (message: Message) => void
+  ) => () => void,
+  listener: (message: Message) => void
+) => {
+  let unsubscribe: () => void = () => undefined
+  return {
+    bind(userId: number | null | undefined) {
+      unsubscribe()
+      unsubscribe = subscribe(userId, listener)
+    },
+    dispose() {
+      unsubscribe()
+      unsubscribe = () => undefined
+    }
+  }
+}
+
+export const isAccountDeletionOutcomeUncertain = (error: unknown): boolean => {
+  const status = Number((error as { response?: { status?: unknown } } | null)?.response?.status)
+  return !Number.isInteger(status) || status < 400 || status >= 500
+}
+</script>
+
 <script setup lang="ts">
 /* =================================================================================
  * 1. Imports & Setup
@@ -107,6 +168,7 @@ import {
   selectedAttackPoints
 } from '@/utils/attackSurface'
 import { localizedErrorMessage, localizedTextOrFallback } from '@/utils/userMessage'
+import { requestInteractiveCancellation } from '@/utils/interactiveCancellation'
 import { REQUEST_LIMITS } from '@/constants/requestLimits'
 import { RECOMMENDATION_RESPONSE_INCOMPLETE_CODE } from '@/utils/recommendationResponse'
 import {
@@ -218,14 +280,19 @@ const { t, locale } = useI18n()
 const router = useRouter()
 const chatStore = useChatStore()
 const { toggleChat } = chatStore
-const { logout, getUser, getToken } = useAuth()
+const { state: authState, logout, logoutIfTokenMatches, getToken } = useAuth()
 const { theme } = useTheme()
 
 const showLogoutDialog = ref(false)
 const showDeleteAccountDialog = ref(false)
 const isLoggingOut = ref(false)
 const isDeletingAccount = ref(false)
-const currentUser = computed(() => getUser())
+const currentUser = computed(() => authState.user)
+const currentAuthUserId = computed(() => currentUser.value?.userId ?? null)
+const isAuthScopeTransitioning = ref(false)
+let boardAuthScopeEpoch = 0
+const isCurrentBoardAuthScope = (epoch: number) =>
+  !boardLifecycleDisposed && epoch === boardAuthScopeEpoch
 
 type FuzzUnreadNotification = {
   taskId: number
@@ -316,6 +383,7 @@ const handleOpenDeleteAccount = () => {
 const handleDeleteAccountConfirm = async (payload: { password: string; confirmation: string }) => {
   if (isDeletingAccount.value) return
   isDeletingAccount.value = true
+  const requestToken = getToken()
   const deletedAccountNotificationStorageKey = fuzzNotificationStorageKeyForUser(
     currentUser.value?.userId
   )
@@ -324,13 +392,25 @@ const handleDeleteAccountConfirm = async (payload: { password: string; confirmat
     clearStoredFuzzNotifications(deletedAccountNotificationStorageKey)
     unreadFuzzNotifications.value = []
     trackedFuzzTaskIds.value = []
-    logout()
-    showDeleteAccountDialog.value = false
-    ElMessage.success(t('app.deleteAccountSuccess'))
-    router.push({ path: '/', query: { mode: 'register' } })
+    if (logoutIfTokenMatches(requestToken)) {
+      showDeleteAccountDialog.value = false
+      ElMessage.success(t('app.deleteAccountSuccess'))
+      await router.replace({ path: '/', query: { mode: 'register' } })
+    }
   } catch (error: any) {
-    const message = localizedErrorMessage(error, t('app.deleteAccountFailed'), locale.value)
-    ElMessage.error(message)
+    if (isAccountDeletionOutcomeUncertain(error)) {
+      clearStoredFuzzNotifications(deletedAccountNotificationStorageKey)
+      unreadFuzzNotifications.value = []
+      trackedFuzzTaskIds.value = []
+      if (logoutIfTokenMatches(requestToken)) {
+        showDeleteAccountDialog.value = false
+        ElMessage.warning(t('app.deleteAccountOutcomeUnknown'))
+        await router.replace({ path: '/', query: { mode: 'login' } })
+      }
+    } else if (getToken() === requestToken) {
+      const message = localizedErrorMessage(error, t('app.deleteAccountFailed'), locale.value)
+      ElMessage.error(message)
+    }
   } finally {
     isDeletingAccount.value = false
   }
@@ -362,7 +442,7 @@ const ASYNC_TASK_POLL_INTERVAL_MS = 1000
 const ASYNC_TASK_MAX_POLLS = 600
 const TASK_INBOX_REFRESH_INTERVAL_MS = 5000
 const AI_RECOMMENDATION_REQUIREMENT_MAX_LENGTH = 2000
-const pollingAborted = ref(false)
+let pollingEpoch = 0
 let boardLifecycleDisposed = false
 
 const formatEnvironmentSnapshot = (variable: ModelEnvironmentVariable | null | undefined): string => {
@@ -468,6 +548,7 @@ type ScenarioRecommendationResult = {
   rationale: string
   verificationReady: boolean
   readinessIssues: ScenarioRecommendationResponse['readinessIssues']
+  semanticWarnings: ScenarioRecommendationResponse['semanticWarnings']
   scene: BoardSceneModel | null
 }
 
@@ -499,8 +580,18 @@ class FuzzCompletedResultUnavailableError extends Error {
   }
 }
 
-const throwIfPollingAborted = () => {
-  if (pollingAborted.value) {
+class CompletedTaskResultUnavailableError extends Error {
+  readonly kind: 'verification' | 'simulation'
+
+  constructor(kind: 'verification' | 'simulation', message: string) {
+    super(message)
+    this.name = 'CompletedTaskResultUnavailableError'
+    this.kind = kind
+  }
+}
+
+const throwIfPollingAborted = (expectedEpoch = pollingEpoch) => {
+  if (boardLifecycleDisposed || expectedEpoch !== pollingEpoch) {
     throw new PollingAbortedError()
   }
 }
@@ -517,14 +608,19 @@ const isFuzzTaskRecoveryPendingError = (error: unknown): boolean =>
 const isFuzzCompletedResultUnavailableError = (error: unknown): boolean =>
   error instanceof FuzzCompletedResultUnavailableError
 
-const waitForNextPoll = async () => {
+const isCompletedTaskResultUnavailableError = (
+  error: unknown
+): error is CompletedTaskResultUnavailableError =>
+  error instanceof CompletedTaskResultUnavailableError
+
+const waitForNextPoll = async (expectedEpoch = pollingEpoch) => {
   await new Promise(resolve => setTimeout(resolve, ASYNC_TASK_POLL_INTERVAL_MS))
-  throwIfPollingAborted()
+  throwIfPollingAborted(expectedEpoch)
 }
 
-const waitForPollingDelay = async (delayMs: number) => {
+const waitForPollingDelay = async (delayMs: number, expectedEpoch = pollingEpoch) => {
   await new Promise(resolve => setTimeout(resolve, delayMs))
-  throwIfPollingAborted()
+  throwIfPollingAborted(expectedEpoch)
 }
 
 /* =================================================================================
@@ -744,7 +840,8 @@ const allBoardDataKeys: BoardDataKey[] = ['templates', 'nodes', 'environment', '
 const failedBoardDataKeys = computed(() =>
   allBoardDataKeys.filter(key => boardDataLoadState[key] === 'error'))
 const isBoardDataReady = computed(() =>
-  allBoardDataKeys.every(key => boardDataLoadState[key] === 'ready'))
+  !isAuthScopeTransitioning.value
+  && allBoardDataKeys.every(key => boardDataLoadState[key] === 'ready'))
 
 const boardDataKeyLabel = (key: BoardDataKey): string => t(`app.boardDataKey_${key}`)
 
@@ -1178,7 +1275,14 @@ let nodeLayoutMutationVersion = 0
 const pendingNodeLayouts = new Map<string, { version: number; layout: DeviceLayout }>()
 
 const enqueueBoardMutation = async <T,>(work: () => Promise<T>): Promise<T> => {
-  const next = boardMutationQueue.then(work, work)
+  const authScopeEpoch = boardAuthScopeEpoch
+  const guardedWork = () => {
+    if (!isCurrentBoardAuthScope(authScopeEpoch)) {
+      return Promise.reject(new PollingAbortedError())
+    }
+    return work()
+  }
+  const next = boardMutationQueue.then(guardedWork, guardedWork)
   boardMutationQueue = next.then(() => undefined, () => undefined)
   return next
 }
@@ -2699,10 +2803,12 @@ const refreshEnvironmentVariables = async (): Promise<boolean> => {
 }
 
 const refreshBoardSnapshot = async (): Promise<boolean> => {
+  const authScopeEpoch = boardAuthScopeEpoch
   allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'loading' })
   templatesLoading.value = true
   try {
     const snapshot = await boardApi.getSnapshot()
+    if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
     deviceTemplates.value = snapshot.deviceTemplates
     nodes.value = getVisibleDeviceNodes(snapshot.nodes)
     environmentVariables.value = snapshot.environmentVariables
@@ -2710,13 +2816,15 @@ const refreshBoardSnapshot = async (): Promise<boolean> => {
     specifications.value = snapshot.specifications
     syncRuleDerivedEdges()
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'ready' })
+    void refreshCurrentFuzzingModelFingerprint()
     return true
   } catch (error) {
+    if (!isCurrentBoardAuthScope(authScopeEpoch)) return false
     console.error('加载画布语义快照失败:', error)
     allBoardDataKeys.forEach(key => { boardDataLoadState[key] = 'error' })
     return false
   } finally {
-    templatesLoading.value = false
+    if (isCurrentBoardAuthScope(authScopeEpoch)) templatesLoading.value = false
   }
 }
 
@@ -2760,13 +2868,18 @@ const requestBoardSnapshotRefresh = ({
 }
 
 const refreshBoardOnForeground = () => {
+  if (!boardForegroundRefreshPromise) invalidateCurrentFuzzingModelFingerprint()
   requestBoardSnapshotRefresh({ queueIfBusy: false })
 }
 
-const unsubscribeBoardInvalidation = subscribeBoardInvalidation(
-  currentUser.value?.userId,
-  () => requestBoardSnapshotRefresh()
+const boardInvalidationBinding = createScopedBoardInvalidationBinding(
+  subscribeBoardInvalidation,
+  () => {
+    invalidateCurrentFuzzingModelFingerprint()
+    requestBoardSnapshotRefresh()
+  }
 )
+boardInvalidationBinding.bind(currentAuthUserId.value)
 
 const environmentPatchFieldLabel = (field: EnvironmentVariablePatchResult['suppliedFields'][number]) => {
   if (field === 'value') return t('app.variableValue')
@@ -3890,7 +4003,9 @@ const refreshSceneForReconciliation = async (): Promise<boolean> => {
     refreshSpecifications()
   ])
   const environmentOk = await refreshEnvironmentVariables()
-  return templatesOk && nodesOk && rulesOk && specsOk && environmentOk
+  const refreshed = templatesOk && nodesOk && rulesOk && specsOk && environmentOk
+  if (refreshed) void refreshCurrentFuzzingModelFingerprint()
+  return refreshed
 }
 
 const readBoardReplacementStalePreview = (error: any): BoardReplacementPreview | null => {
@@ -4257,32 +4372,7 @@ const retryBoardDataLoad = async () => {
 
 watch([nodes, rules], syncRuleDerivedEdges, { deep: true })
 
-onMounted(async () => {
-  updateActionDockViewport()
-  window.addEventListener('resize', updateActionDockViewport)
-
-  hydrateFuzzNotificationState()
-  const [boardLoaded, , layout, currentModelFingerprint] = await Promise.all([
-    requestBoardSnapshotRefresh({ force: true }),
-    loadTaskInbox(false, { showLoading: false }),
-    boardApi.getLayout().catch(() => null),
-    fuzzingApi.getCurrentModelFingerprint().catch(() => null)
-  ])
-  if (boardLifecycleDisposed) return
-  if (!boardLoaded || !isBoardDataReady.value) {
-    ElMessage.error(t('app.boardDataLoadFailed'))
-  }
-  currentFuzzingModelFingerprint.value = currentModelFingerprint
-  taskInboxRefreshTimer = setInterval(() => {
-    if (activeBackgroundTaskCount.value > 0
-      || trackedFuzzTaskIds.value.length > 0
-      || showHistoryPanel.value) {
-      void refreshTaskInboxInBackground()
-    }
-  }, TASK_INBOX_REFRESH_INTERVAL_MS)
-
-  // 监听 AI 推荐的设备添加事件
-
+const applyLoadedBoardLayout = (layout: BoardLayoutDto | null, initialHydration: boolean) => {
   persistedWideLayout = layout ?? {
     canvasPan: { x: 0, y: 0 },
     canvasZoom: 1,
@@ -4299,7 +4389,8 @@ onMounted(async () => {
       }
     }
   }
-  const layoutChangedBeforeHydration = panelStateTouchedBeforeLayout || canvasStateTouchedBeforeLayout
+  const layoutChangedBeforeHydration = initialHydration
+    && (panelStateTouchedBeforeLayout || canvasStateTouchedBeforeLayout)
   if (isNarrowViewport()) {
     applyViewportPanelConstraints()
     void nextTick(() => fitNodesToCanvas(getVisibleDeviceNodes()))
@@ -4313,11 +4404,44 @@ onMounted(async () => {
     persistedWideLayout = buildBoardLayoutPayload()
     void saveBoardLayout({ silent: true })
   }
+}
 
-  if (boardLifecycleDisposed) return
+const loadBoardAuthScope = async (
+  expectedAuthScopeEpoch: number,
+  options: { hydrateNotifications?: boolean; initialLayout?: boolean } = {}
+) => {
+  if (currentAuthUserId.value === null || !isCurrentBoardAuthScope(expectedAuthScopeEpoch)) return
+  if (options.hydrateNotifications) hydrateFuzzNotificationState()
+  const [boardLoaded, , layout] = await Promise.all([
+    requestBoardSnapshotRefresh({ force: true }),
+    loadTaskInbox(false, { showLoading: false }),
+    boardApi.getLayout().catch(() => null)
+  ])
+  if (!isCurrentBoardAuthScope(expectedAuthScopeEpoch)) return
+  if (!boardLoaded || !isBoardDataReady.value) {
+    ElMessage.error(t('app.boardDataLoadFailed'))
+  }
+  applyLoadedBoardLayout(layout, options.initialLayout === true)
+}
+
+onMounted(async () => {
+  updateActionDockViewport()
+  window.addEventListener('resize', updateActionDockViewport)
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('focus', refreshBoardOnForeground)
   document.addEventListener('visibilitychange', refreshBoardOnForeground)
+  taskInboxRefreshTimer = setInterval(() => {
+    if (activeBackgroundTaskCount.value > 0
+      || trackedFuzzTaskIds.value.length > 0
+      || showHistoryPanel.value) {
+      void refreshTaskInboxInBackground()
+    }
+  }, TASK_INBOX_REFRESH_INTERVAL_MS)
+  const authScopeEpoch = boardAuthScopeEpoch
+  await loadBoardAuthScope(authScopeEpoch, {
+    hydrateNotifications: true,
+    initialLayout: true
+  })
 })
 
 
@@ -5098,26 +5222,53 @@ const getNextNodePosition = (occupiedNodes: DeviceNode[] = nodes.value): { x: nu
   return { x: finalX, y: finalY }
 }
 
+const cancelRecommendationDuringTeardown = (
+  requestId: string | null,
+  controller: AbortController | null
+) => {
+  if (!requestId) {
+    controller?.abort()
+    return
+  }
+  void requestInteractiveCancellation({
+    cancel: () => boardApi.cancelRecommendation(requestId),
+    waitBeforeRetry: () => new Promise<void>(resolve => setTimeout(resolve, 100)),
+    maxAttempts: 20
+  }).catch(error => {
+    console.warn(`Failed to confirm recommendation cancellation during teardown (${requestId}):`, error)
+  }).finally(() => {
+    controller?.abort()
+  })
+}
+
 onBeforeUnmount(() => {
   boardLifecycleDisposed = true
   layoutSaveFeedbackSuppressed = true
-  pollingAborted.value = true
+  pollingEpoch += 1
   stopTraceAnimation()
   ruleRecommendationRequestEpoch += 1
-  if (ruleRecommendationRequestId.value) void boardApi.cancelRecommendation(ruleRecommendationRequestId.value)
-  ruleRecommendationAbortController.value?.abort()
+  cancelRecommendationDuringTeardown(
+    ruleRecommendationRequestId.value,
+    ruleRecommendationAbortController.value
+  )
   ruleRecommendationAbortController.value = null
   deviceRecommendationRequestEpoch += 1
-  if (deviceRecommendationRequestId.value) void boardApi.cancelRecommendation(deviceRecommendationRequestId.value)
-  deviceRecommendationAbortController.value?.abort()
+  cancelRecommendationDuringTeardown(
+    deviceRecommendationRequestId.value,
+    deviceRecommendationAbortController.value
+  )
   deviceRecommendationAbortController.value = null
   specRecommendationRequestEpoch += 1
-  if (specRecommendationRequestId.value) void boardApi.cancelRecommendation(specRecommendationRequestId.value)
-  specRecommendationAbortController.value?.abort()
+  cancelRecommendationDuringTeardown(
+    specRecommendationRequestId.value,
+    specRecommendationAbortController.value
+  )
   specRecommendationAbortController.value = null
   scenarioRecommendationRequestEpoch += 1
-  if (scenarioRecommendationRequestId.value) void boardApi.cancelRecommendation(scenarioRecommendationRequestId.value)
-  scenarioRecommendationAbortController.value?.abort()
+  cancelRecommendationDuringTeardown(
+    scenarioRecommendationRequestId.value,
+    scenarioRecommendationAbortController.value
+  )
   scenarioRecommendationAbortController.value = null
   if (recommendationProgressTimer) {
     clearInterval(recommendationProgressTimer)
@@ -5132,7 +5283,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateActionDockViewport)
   window.removeEventListener('focus', refreshBoardOnForeground)
   document.removeEventListener('visibilitychange', refreshBoardOnForeground)
-  unsubscribeBoardInvalidation()
+  boardInvalidationBinding.dispose()
   window.removeEventListener('pointermove', onCanvasPointerMove)
   window.removeEventListener('pointerup', onCanvasPointerUp)
   window.removeEventListener('pointermove', onCanvasMapPointerMove)
@@ -5386,6 +5537,64 @@ const buildSpecDeviceRefsFromConditions = (
 type RecommendationPanelKind = 'rule' | 'device' | 'spec' | 'scenario'
 
 const recommendationStopRequestsInFlight = new Set<RecommendationPanelKind>()
+const RECOMMENDATION_STOP_STATUS_FAILURE_LIMIT = 30
+const RECOMMENDATION_STOP_RETRY_DELAY_MS = 50
+type RecommendationStopRecovery = {
+  requestId: string
+  requestIdRef: Ref<string | null>
+  abortControllerRef: Ref<AbortController | null>
+  controller: AbortController | null
+  setRunning: (running: boolean) => void
+  cancelledMessageKey: string
+  showMessage: boolean
+  cancellationAccepted: boolean
+  acceptanceNotified: boolean
+  consecutiveStatusFailures: number
+}
+const recommendationStopRecoveries = new Map<RecommendationPanelKind, RecommendationStopRecovery>()
+
+const waitForRecommendationCancellationRetry = () => new Promise<void>(resolve => {
+  setTimeout(resolve, RECOMMENDATION_STOP_RETRY_DELAY_MS)
+})
+
+const acceptRecommendationCancellation = (
+  kind: RecommendationPanelKind,
+  requestId: string
+) => {
+  const recovery = recommendationStopRecoveries.get(kind)
+  if (!recovery || recovery.requestId !== requestId) return
+  recovery.cancellationAccepted = true
+  recovery.controller?.abort()
+  if (recovery.abortControllerRef.value === recovery.controller) {
+    recovery.abortControllerRef.value = null
+  }
+  if (recovery.showMessage && !recovery.acceptanceNotified) {
+    recovery.acceptanceNotified = true
+    ElMessage.info(t(recovery.cancelledMessageKey))
+  }
+}
+
+const finishRecommendationStopRecovery = (
+  kind: RecommendationPanelKind,
+  requestId: string,
+  uncertain = false
+) => {
+  const recovery = recommendationStopRecoveries.get(kind)
+  if (!recovery || recovery.requestId !== requestId) return
+  recommendationStopRecoveries.delete(kind)
+  recovery.controller?.abort()
+  if (recovery.abortControllerRef.value === recovery.controller) {
+    recovery.abortControllerRef.value = null
+  }
+  if (recovery.requestIdRef.value === requestId) recovery.requestIdRef.value = null
+  if (recommendationProgressRequestId.value === requestId) {
+    recommendationProgressRequestId.value = null
+  }
+  recovery.setRunning(false)
+  if (uncertain) {
+    ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
+  }
+}
 
 const stopActiveRecommendation = async (
   kind: RecommendationPanelKind,
@@ -5399,21 +5608,45 @@ const stopActiveRecommendation = async (
   recommendationStopRequestsInFlight.add(kind)
   const requestId = requestIdRef.value
   const controller = abortControllerRef.value
-  controller?.abort()
-  if (abortControllerRef.value === controller) abortControllerRef.value = null
-  try {
-    if (requestId) await boardApi.cancelRecommendation(requestId)
-    if (requestIdRef.value === requestId) requestIdRef.value = null
+  if (!requestId) {
+    controller?.abort()
+    if (abortControllerRef.value === controller) abortControllerRef.value = null
     setRunning(false)
-    if (options.showMessage !== false) {
-      ElMessage.info(t(cancelledMessageKey))
+    recommendationStopRequestsInFlight.delete(kind)
+    return
+  }
+  recommendationStopRecoveries.set(kind, {
+    requestId,
+    requestIdRef,
+    abortControllerRef,
+    controller,
+    setRunning,
+    cancelledMessageKey,
+    showMessage: options.showMessage !== false,
+    cancellationAccepted: false,
+    acceptanceNotified: false,
+    consecutiveStatusFailures: 0
+  })
+  // Keep the POST transport alive until cancellation is accepted. Aborting it first can let
+  // the DELETE beat server-side registration while the provider call continues unobserved.
+  setRunning(true)
+  try {
+    const cancellationAccepted = await requestInteractiveCancellation({
+      cancel: () => boardApi.cancelRecommendation(requestId),
+      waitBeforeRetry: waitForRecommendationCancellationRetry,
+      shouldContinue: () => recommendationStopRecoveries.get(kind)?.requestId === requestId
+    })
+    if (cancellationAccepted) {
+      acceptRecommendationCancellation(kind, requestId)
+    } else {
+      ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
     }
   } catch (error) {
     console.error('Failed to cancel recommendation request:', error)
-    if (requestId && requestIdRef.value === requestId) setRunning(true)
     ElMessage.warning(t('app.recommendationStopRequestMayStillBeRunning'))
   } finally {
     recommendationStopRequestsInFlight.delete(kind)
+    void refreshRecommendationProgress(kind)
   }
 }
 
@@ -5438,12 +5671,36 @@ const refreshRecommendationProgress = async (kind: RecommendationPanelKind) => {
   if (!requestId) return
   recommendationProgressRefreshInFlight = true
   try {
+    const recovery = recommendationStopRecoveries.get(kind)
+    if (recovery?.requestId === requestId && !recovery.cancellationAccepted) {
+      try {
+        if (await boardApi.cancelRecommendation(requestId)) {
+          acceptRecommendationCancellation(kind, requestId)
+        }
+      } catch {
+        // The status read below remains the source of truth while cancellation is retried.
+      }
+    }
     const status = await boardApi.getRecommendationStatus(requestId)
     if (getRunningRecommendationKind() === kind && recommendationProgressRequestId.value === requestId) {
       recommendationProgressStage.value = status.stage
+      const currentRecovery = recommendationStopRecoveries.get(kind)
+      if (currentRecovery?.requestId === requestId) {
+        currentRecovery.consecutiveStatusFailures = 0
+        if (status.state === 'FINISHED') finishRecommendationStopRecovery(kind, requestId)
+      }
     }
-  } catch {
-    // Registration and completion can race with this read; the main request remains authoritative.
+  } catch (error: any) {
+    const recovery = recommendationStopRecoveries.get(kind)
+    if (recovery?.requestId === requestId) {
+      // A first 404 can mean the DELETE won a race with POST registration. Treat all
+      // unavailable status reads as bounded uncertainty instead of declaring completion.
+      recovery.consecutiveStatusFailures += 1
+      if (recovery.consecutiveStatusFailures >= RECOMMENDATION_STOP_STATUS_FAILURE_LIMIT) {
+        finishRecommendationStopRecovery(kind, requestId, true)
+      }
+    }
+    // Registration and ordinary completion can race with this read; the POST remains authoritative.
   } finally {
     recommendationProgressRefreshInFlight = false
   }
@@ -6024,6 +6281,7 @@ const fetchScenarioRecommendation = async () => {
       rationale: response.rationale,
       verificationReady: response.verificationReady,
       readinessIssues: response.readinessIssues,
+      semanticWarnings: response.semanticWarnings,
       scene
     }
     scenarioRecommendationMessage.value = localizedRecommendationText(
@@ -7034,14 +7292,43 @@ onBeforeUnmount(() => {
 })
 
 const currentFuzzingModelFingerprint = ref<string | null>(null)
+let boardModelRevision = 0
+let fingerprintModelRevision = -1
+const fingerprintRequestGuard = createLatestBoardRequestGuard()
 
-const refreshCurrentFuzzingModelFingerprint = async (): Promise<string | null> => {
+const invalidateCurrentFuzzingModelFingerprint = () => {
+  boardModelRevision += 1
+  fingerprintModelRevision = -1
+  currentFuzzingModelFingerprint.value = null
+  fingerprintRequestGuard.invalidate()
+}
+
+watch(
+  [nodes, rules, specifications, environmentVariables, deviceTemplates],
+  invalidateCurrentFuzzingModelFingerprint,
+  { flush: 'sync' }
+)
+
+const refreshCurrentFuzzingModelFingerprint = async (
+  expectedModelRevision = boardModelRevision
+): Promise<string | null> => {
+  const requestEpoch = fingerprintRequestGuard.begin()
   try {
     const fingerprint = await fuzzingApi.getCurrentModelFingerprint()
-    if (!boardLifecycleDisposed) currentFuzzingModelFingerprint.value = fingerprint
+    if (!boardLifecycleDisposed
+      && fingerprintRequestGuard.isCurrent(requestEpoch)
+      && expectedModelRevision === boardModelRevision) {
+      currentFuzzingModelFingerprint.value = fingerprint
+      fingerprintModelRevision = expectedModelRevision
+    }
     return fingerprint
   } catch {
-    if (!boardLifecycleDisposed) currentFuzzingModelFingerprint.value = null
+    if (!boardLifecycleDisposed
+      && fingerprintRequestGuard.isCurrent(requestEpoch)
+      && expectedModelRevision === boardModelRevision) {
+      currentFuzzingModelFingerprint.value = null
+      fingerprintModelRevision = -1
+    }
     return null
   }
 }
@@ -7054,7 +7341,9 @@ const currentFuzzingBoardScope = computed(() => ({
   deviceTemplateCount: new Set(nodes.value
     .map(device => device.templateName?.trim())
     .filter((name): name is string => Boolean(name))).size,
-  modelFingerprint: currentFuzzingModelFingerprint.value
+  modelFingerprint: fingerprintModelRevision === boardModelRevision
+    ? currentFuzzingModelFingerprint.value
+    : null
 }))
 
 const fuzzRunHasBoardDrift = (run: AvailableFuzzingRunSummary | FuzzingRun): boolean => {
@@ -8019,7 +8308,9 @@ const watchVerificationTask = async (taskId: number) => {
     await pollAsyncVerification(taskId, { presentResult: true })
   } catch (error: any) {
     if (!isPollingAbortedError(error)) {
-      const message = extractApiErrorMessage(error, t('app.verificationFailed'))
+      const message = isCompletedTaskResultUnavailableError(error)
+        ? error.message
+        : extractApiErrorMessage(error, t('app.verificationFailed'))
       if (isAsyncTaskCancelledError(error)) {
         verificationError.value = null
         ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
@@ -8108,7 +8399,9 @@ const watchSimulationTask = async (taskId: number) => {
     }
   } catch (error: any) {
     if (!isPollingAbortedError(error)) {
-      const message = extractApiErrorMessage(error, t('app.simulationFailed'))
+      const message = isCompletedTaskResultUnavailableError(error)
+        ? error.message
+        : extractApiErrorMessage(error, t('app.simulationFailed'))
       if (isAsyncTaskCancelledError(error)) {
         simulationError.value = null
         ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
@@ -9782,9 +10075,11 @@ const handleVerify = async (): Promise<boolean> => {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = formalOperationBusyMessage(error)
-      || asyncTaskQuotaMessage(error, 'verification')
-      || extractApiErrorMessage(error, t('app.verificationFailed'))
+    const message = isCompletedTaskResultUnavailableError(error)
+      ? error.message
+      : formalOperationBusyMessage(error)
+        || asyncTaskQuotaMessage(error, 'verification')
+        || extractApiErrorMessage(error, t('app.verificationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       verificationError.value = null
       ElMessage.info({ message: t('app.verificationCancelled'), type: 'info' })
@@ -10204,9 +10499,11 @@ const handleSimulate = async (simConfig: {
     if (isPollingAbortedError(error)) {
       return false
     }
-    const message = formalOperationBusyMessage(error)
-      || asyncTaskQuotaMessage(error, 'simulation')
-      || extractApiErrorMessage(error, t('app.simulationFailed'))
+    const message = isCompletedTaskResultUnavailableError(error)
+      ? error.message
+      : formalOperationBusyMessage(error)
+        || asyncTaskQuotaMessage(error, 'simulation')
+        || extractApiErrorMessage(error, t('app.simulationFailed'))
     if (isAsyncTaskCancelledError(error)) {
       simulationError.value = null
       ElMessage.info({ message: t('app.simulationCancelled'), type: 'info' })
@@ -10246,6 +10543,34 @@ const isPermanentPollError = (error: any): boolean => {
     && !isTransientTaskHttpStatus(status)
 }
 
+const completedTaskResultError = (
+  kind: 'verification' | 'simulation',
+  error: unknown
+) => new CompletedTaskResultUnavailableError(
+  kind,
+  localizedErrorMessage(
+    error,
+    kind === 'verification'
+      ? t('app.failedToLoadVerificationRun')
+      : t('app.failedToLoadSimulationRun'),
+    locale.value
+  )
+)
+
+const loadCompletedTaskResult = async <T,>(
+  load: () => Promise<T>,
+  expectedPollingEpoch: number
+): Promise<T> =>
+  loadBoardResultWithRetry({
+    load,
+    shouldRetry: error => !isPermanentPollError(error),
+    waitBeforeRetry: failedAttempt => waitForPollingDelay(
+      fuzzRunRetryDelayMs(failedAttempt - 1),
+      expectedPollingEpoch
+    ),
+    maxAttempts: FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES
+  })
+
 // 轮询异步验证任务：await 到终态/超时/永久错误为止，供 handleVerify await。
 // 用 while + await sleep（而非 setInterval + async 回调）：串行执行，天然无重入——
 // 若某次状态查询超过 1s 也不会并发发起下一轮、不会重复 toast 或旧响应覆盖新进度。
@@ -10254,13 +10579,14 @@ const pollAsyncVerification = async (
   options: { presentResult?: boolean; submission?: RunSubmission<VerificationRequest> } = {}
 ): Promise<void> => {
   let pollCount = 0
+  const expectedPollingEpoch = pollingEpoch
 
   while (pollCount < ASYNC_TASK_MAX_POLLS) {
-    throwIfPollingAborted()
+    throwIfPollingAborted(expectedPollingEpoch)
     let task: VerificationTask
     try {
       task = await boardApi.getTask(taskId)
-      throwIfPollingAborted()
+      throwIfPollingAborted(expectedPollingEpoch)
       asyncVerificationTask.value.progress = normalizeTaskProgress(task.progress)
       asyncVerificationTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertVerificationTaskSummary(task)
@@ -10272,17 +10598,29 @@ const pollAsyncVerification = async (
       if (isPermanentPollError(e)) {
         throw e
       }
-      await waitForNextPoll()
+      await waitForNextPoll(expectedPollingEpoch)
       pollCount++
       continue
     }
 
     // Terminal-state handling outside the try so its logic isn't swallowed by the catch.
     if (task.status === 'COMPLETED') {
-      const traces = task.outcome === 'VIOLATED'
-        ? await boardApi.getTaskTraces(taskId)
-        : []
-      throwIfPollingAborted()
+      asyncVerificationTask.value.progress = 100
+      let traces: Trace[] = []
+      try {
+        traces = task.outcome === 'VIOLATED'
+          ? await loadCompletedTaskResult(
+            () => boardApi.getTaskTraces(taskId),
+            expectedPollingEpoch
+          )
+          : []
+      } catch (error) {
+        if (isPollingAbortedError(error)) throw error
+        upsertVerificationTaskSummary({ ...task, progress: 100 })
+        await loadVerificationRuns(false)
+        throw completedTaskResultError('verification', error)
+      }
+      throwIfPollingAborted(expectedPollingEpoch)
       const result = attachLocalRunSubmission(
         buildVerificationResultFromTask(task, traces),
         options.submission || submissionForTask(activeVerificationSubmission.value, taskId)
@@ -10304,7 +10642,7 @@ const pollAsyncVerification = async (
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
-    await waitForNextPoll()
+    await waitForNextPoll(expectedPollingEpoch)
     pollCount++
   }
 
@@ -10314,14 +10652,15 @@ const pollAsyncVerification = async (
 // 轮询异步模拟任务
 const pollAsyncSimulation = async (taskId: number): Promise<any> => {
   let pollCount = 0
+  const expectedPollingEpoch = pollingEpoch
 
   while (pollCount < ASYNC_TASK_MAX_POLLS) {
-    throwIfPollingAborted()
+    throwIfPollingAborted(expectedPollingEpoch)
     let task: SimulationTask
     try {
       // 获取任务进度 + 状态（瞬时网络错误容忍：进入 catch 后继续轮询）
       task = await simulationApi.getTask(taskId)
-      throwIfPollingAborted()
+      throwIfPollingAborted(expectedPollingEpoch)
       asyncSimulationTask.value.progress = normalizeTaskProgress(task.progress)
       asyncSimulationTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertSimulationTaskSummary(task)
@@ -10335,7 +10674,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
         throw error
       }
       console.error('Poll error (transient, will retry):', error)
-      await waitForNextPoll()
+      await waitForNextPoll(expectedPollingEpoch)
       pollCount++
       continue
     }
@@ -10343,9 +10682,21 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
     // 终态处理放在 try 之外：FAILED/CANCELLED 必须立即抛出并中止轮询，
     // 不能被上面的瞬时错误 catch 吞掉（否则会一直轮询到超时才报通用错误）。
     if (task.status === 'COMPLETED') {
+      asyncSimulationTask.value.progress = 100
       if (task.simulationTraceId) {
-        const trace = await simulationApi.getSimulation(task.simulationTraceId)
-        throwIfPollingAborted()
+        let trace: Awaited<ReturnType<typeof simulationApi.getSimulation>>
+        try {
+          trace = await loadCompletedTaskResult(
+            () => simulationApi.getSimulation(task.simulationTraceId as number),
+            expectedPollingEpoch
+          )
+        } catch (error) {
+          if (isPollingAbortedError(error)) throw error
+          upsertSimulationTaskSummary({ ...task, progress: 100 })
+          await loadSimulationRuns(false)
+          throw completedTaskResultError('simulation', error)
+        }
+        throwIfPollingAborted(expectedPollingEpoch)
         upsertSimulationTaskSummary({ ...task, progress: 100 })
         await loadSimulationRuns()
         return {
@@ -10375,7 +10726,7 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
     }
 
     // 仍在 PENDING/RUNNING，等待后继续
-    await waitForNextPoll()
+    await waitForNextPoll(expectedPollingEpoch)
     pollCount++
   }
 
@@ -10386,20 +10737,21 @@ const pollAsyncSimulation = async (taskId: number): Promise<any> => {
 const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
   let pollCount = 0
   let completedResultFailures = 0
+  const expectedPollingEpoch = pollingEpoch
 
   while (pollCount < ASYNC_TASK_MAX_POLLS) {
-    throwIfPollingAborted()
+    throwIfPollingAborted(expectedPollingEpoch)
     let task: FuzzingTask
     try {
       task = await fuzzingApi.getTask(taskId)
-      throwIfPollingAborted()
+      throwIfPollingAborted(expectedPollingEpoch)
       asyncFuzzingTask.value.progress = normalizeTaskProgress(task.progress)
       asyncFuzzingTask.value.status = formatTaskProgressStage(task.progressStage, task.status)
       upsertFuzzingTaskSummary(task)
     } catch (error: any) {
       if (isPollingAbortedError(error)) throw error
       if (isPermanentPollError(error)) throw error
-      await waitForNextPoll()
+      await waitForNextPoll(expectedPollingEpoch)
       pollCount++
       continue
     }
@@ -10423,7 +10775,7 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
         if (completedResultFailures >= FUZZ_INLINE_RESULT_RECOVERY_MAX_FAILURES) {
           throw new FuzzTaskRecoveryPendingError()
         }
-        await waitForPollingDelay(retryDelay)
+        await waitForPollingDelay(retryDelay, expectedPollingEpoch)
         pollCount++
         continue
       }
@@ -10435,7 +10787,7 @@ const pollAsyncFuzzing = async (taskId: number): Promise<FuzzingRun> => {
       throw new AsyncTaskCancelledError(task.errorMessage || t('app.fuzzSearchCancelled'))
     }
 
-    await waitForNextPoll()
+    await waitForNextPoll(expectedPollingEpoch)
     pollCount++
   }
 
@@ -11386,6 +11738,7 @@ const counterexampleTraceHelpText = computed(() => {
             class="board-action-dock__toggle"
             data-testid="toggle-action-dock"
             :aria-label="actionDockToggleLabel"
+            :aria-expanded="actionDockMode === 'expanded'"
             :title="actionDockToggleLabel"
             @click="cycleActionDockMode"
           >
@@ -12376,6 +12729,24 @@ const counterexampleTraceHelpText = computed(() => {
                 <ul v-if="scenarioRecommendationResult?.readinessIssues.length" class="mt-1 list-disc pl-4">
                   <li v-for="issue in scenarioRecommendationResult.readinessIssues" :key="issue.code">
                     {{ t(`app.scenarioReadiness.${issue.code}`) }}
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div
+              v-if="scenarioRecommendationResult?.semanticWarnings.length"
+              data-testid="scenario-semantic-warnings"
+              class="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+            >
+              <span class="material-symbols-outlined text-base" aria-hidden="true">warning</span>
+              <div>
+                <div class="font-semibold">{{ t('app.scenarioSemanticWarningsTitle') }}</div>
+                <ul class="mt-1 list-disc space-y-0.5 pl-4">
+                  <li v-for="warning in scenarioRecommendationResult.semanticWarnings" :key="warning.code">
+                    {{ localizedRecommendationText(
+                      warning.message,
+                      t(`app.scenarioSemanticWarnings.${warning.code}`)
+                    ) }}
                   </li>
                 </ul>
               </div>

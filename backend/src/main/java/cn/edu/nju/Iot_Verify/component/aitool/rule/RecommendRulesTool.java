@@ -556,11 +556,13 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                         adjustedItems.addAll(validation.adjustments());
                         count++;
                     } else {
-                        log.debug("Filtered out invalid recommendation: {}", recommendation);
+                        log.debug("Filtered rule recommendation candidate {}: reasonCode={}",
+                                inspected, validation.reasonCode());
                         filteredItems.add(filteredItem("rule", inspected, validation, recommendationLabel(recommendation)));
                     }
                 } catch (Exception e) {
-                    log.warn("Failed to parse recommendation: {}", rec);
+                    log.warn("Failed to parse rule recommendation candidate {}: exception={}",
+                            inspected, e.getClass().getName());
                     filteredItems.add(filteredItem("rule", inspected,
                             invalid("parseFailed", language), jsonText(rec.path("name"), "")));
                 }
@@ -588,7 +590,7 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             return objectMapper.writeValueAsString(result);
 
         } catch (Exception e) {
-            log.error("Failed to parse AI response", e);
+            log.error("Failed to parse AI response: exception={}", e.getClass().getName());
             return errorJson(
                     recommendationMessage(language, "parseFailed", 0),
                     "AI_RESPONSE_INVALID",
@@ -646,7 +648,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             // 检查设备是否存在
             DeviceInfoHelper.DeviceInfo device = resolveDevice(deviceId, deviceMap);
             if (device == null) {
-                log.debug("Device {} not found in board", deviceId);
                 return invalid("unknownConditionDevice", language);
             }
             condition.put("deviceId", device.nodeId());
@@ -655,7 +656,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             if ("api".equals(targetType)) {
                 String canonicalApi = canonicalApiName(device, attribute, true);
                 if (canonicalApi == null) {
-                    log.debug("API signal {} not found in device {}", attribute, deviceId);
                     return invalid("unknownApiSignal", language);
                 }
                 if (relation != null || value != null) {
@@ -711,7 +711,6 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
                     canonicalValue = canonicalStateValues(device, canonicalRelation, value);
                 }
                 if (canonicalAttribute == null || canonicalValue == null) {
-                    log.debug("Attribute {} not found in device {} for targetType {}", attribute, deviceId, targetType);
                     return invalid("invalidConditionCapability", language);
                 }
                 condition.put("attribute", canonicalAttribute);
@@ -733,14 +732,12 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
 
         DeviceInfoHelper.DeviceInfo actionDevice = resolveDevice(actionDeviceId, deviceMap);
         if (actionDevice == null) {
-            log.debug("Action device {} not found in board", actionDeviceId);
             return invalid("unknownCommandDevice", language);
         }
         command.put("deviceId", actionDevice.nodeId());
         command.put("deviceName", actionDevice.label());
         DeviceInfoHelper.ApiInfo actionApi = canonicalApi(actionDevice, action, false);
         if (actionApi == null) {
-            log.debug("Action {} not found in device {} APIs", action, actionDeviceId);
             return invalid("unknownActionApi", language);
         }
         command.put("action", actionApi.name());
@@ -756,12 +753,10 @@ Environment Pool，其中的 value/trust/privacy 是用户当前覆盖后的共�
             }
             DeviceInfoHelper.DeviceInfo resolvedContentDevice = resolveDevice(contentDevice, deviceMap);
             if (resolvedContentDevice == null) {
-                log.debug("Content device {} not found in board", contentDevice);
                 return invalid("unknownContentDevice", language);
             }
             DeviceInfoHelper.ContentInfo resolvedContent = findContent(resolvedContentDevice, contentName);
             if (resolvedContent == null) {
-                log.debug("Content {} not found in device {} template", contentName, contentDevice);
                 return invalid("unknownContent", language);
             }
             command.put("contentDevice", resolvedContentDevice.nodeId());

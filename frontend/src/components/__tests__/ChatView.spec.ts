@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '@/assets/i18n'
 import { useChatStore } from '@/stores/chat'
+import { useAuth } from '@/stores/auth'
 
 const chatApi = vi.hoisted(() => ({
   createSession: vi.fn(),
@@ -42,6 +43,12 @@ import { ChatStreamError } from '@/api/chat'
 import ChatView from '../ChatView.vue'
 
 const chatStore = useChatStore()
+const authStore = useAuth()
+const validToken = (signature: string) => {
+  const payload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  return `header.${payload}.${signature}`
+}
 const session = {
   id: 'session-1',
   userId: 1,
@@ -63,6 +70,7 @@ const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
 describe('ChatView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
     i18n.global.locale.value = 'zh-CN'
@@ -75,6 +83,7 @@ describe('ChatView', () => {
   })
 
   afterEach(() => {
+    authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
   })
@@ -89,6 +98,79 @@ describe('ChatView', () => {
     expect(chatApi.getSessionList).toHaveBeenCalledTimes(1)
     expect(wrapper.get('[data-testid="chat-session-session-1"]').text()).toContain('玄关场景检查')
 
+    wrapper.unmount()
+  })
+
+  it('clears Alice messages and loads Bob sessions when the auth subject changes', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    chatApi.getSessionList
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([bobSession])
+    chatApi.getSessionHistory.mockResolvedValue([
+      { role: 'assistant', content: 'Alice 的私密消息' }
+    ])
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Alice 的私密消息')
+
+    authStore.login(validToken('bob'), {
+      userId: 2,
+      phone: '13900139000',
+      username: 'bob'
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Alice 的私密消息')
+    expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
+    wrapper.unmount()
+  })
+
+  it('ignores an Alice session-list response that arrives after switching to Bob', async () => {
+    const bobSession = {
+      ...session,
+      id: 'session-2',
+      userId: 2,
+      title: 'Bob 的会话'
+    }
+    let resolveAliceSessions!: (sessions: Array<typeof session>) => void
+    chatApi.getSessionList
+      .mockReturnValueOnce(new Promise(resolve => { resolveAliceSessions = resolve }))
+      .mockResolvedValueOnce([bobSession])
+    authStore.login(validToken('alice'), {
+      userId: 1,
+      phone: '13800138000',
+      username: 'alice'
+    })
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    authStore.login(validToken('bob'), {
+      userId: 2,
+      phone: '13900139000',
+      username: 'bob'
+    })
+    await flushPromises()
+    resolveAliceSessions([session])
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-session-session-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-session-session-2"]').text()).toContain('Bob 的会话')
     wrapper.unmount()
   })
 
@@ -141,6 +223,49 @@ describe('ChatView', () => {
       wrapper.unmount()
       errorMessage.mockRestore()
     }
+  })
+
+  it('creates only one session when the new-chat button is clicked twice quickly', async () => {
+    let resolveSession!: (value: typeof session) => void
+    chatApi.createSession.mockReturnValue(new Promise<typeof session>(resolve => { resolveSession = resolve }))
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    const button = wrapper.get('.new-chat-btn')
+    await Promise.all([button.trigger('click'), button.trigger('click')])
+
+    expect(chatApi.createSession).toHaveBeenCalledTimes(1)
+    expect(button.attributes('disabled')).toBeDefined()
+
+    resolveSession(session)
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('shows a retryable error instead of an empty conversation when history loading fails', async () => {
+    chatApi.getSessionList.mockResolvedValue([session])
+    chatApi.getSessionHistory
+      .mockRejectedValueOnce(new Error('history unavailable'))
+      .mockResolvedValueOnce([{ role: 'assistant', content: '已恢复的历史消息' }])
+    chatStore.openChat()
+
+    const wrapper = mountChat()
+    await flushPromises()
+    await wrapper.get('[data-testid="chat-session-session-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-history-retry"]').exists()).toBe(true)
+    expect(wrapper.find('.welcome-screen').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="chat-history-retry"] button').trigger('click')
+    await flushPromises()
+
+    expect(chatApi.getSessionHistory).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="chat-history-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已恢复的历史消息')
+    wrapper.unmount()
   })
 
   it('submits protected approval as a structured command from the confirmation button', async () => {
@@ -442,6 +567,7 @@ describe('ChatView', () => {
   })
 
   it('registers an explicit stop before aborting and reconciling the active response', async () => {
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval')
     let streamSignal: AbortSignal | undefined
     let activeTurnId = ''
     const stopOrder: string[] = []
@@ -481,8 +607,10 @@ describe('ChatView', () => {
     expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1')
     expect(streamSignal?.aborted).toBe(true)
     expect(stopOrder).toEqual(['stop-request', 'transport-abort'])
+    expect(clearIntervalSpy).toHaveBeenCalled()
 
     wrapper.unmount()
+    clearIntervalSpy.mockRestore()
   })
 
   it('keeps the current local turn when history only contains an older terminal reply', async () => {

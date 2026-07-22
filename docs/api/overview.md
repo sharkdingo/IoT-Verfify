@@ -5,16 +5,21 @@ response envelope, the authentication scheme, and the error/status codes. This i
 **single source of truth** for these three things — every other API document links
 here instead of restating them.
 
-Verified against code on 2026-07-21. Source: `dto/Result.java`,
+Verified against code on 2026-07-22. Source: `dto/Result.java`,
 `exception/GlobalExceptionHandler.java`, `configure/JacksonConfig.java`,
+`configure/ApplicationTimeConfig.java`,
 `component/model/ModelRequestParser.java`, `security/`.
 
 ---
 
 ## Response envelope — `Result<T>`
 
-Every REST response is wrapped in `Result<T>` **except** the SSE endpoint
-`POST /api/chat/completions` (see [chat-sse.md](chat-sse.md)).
+Every application JSON REST response is wrapped in `Result<T>`. The exceptions are a
+successfully established SSE stream from `POST /api/chat/completions` (see
+[chat-sse.md](chat-sse.md)) and the protocol-level empty `406 Not Acceptable` response when
+the client accepts neither JSON nor an endpoint's success representation. Synchronous setup
+errors from the chat endpoint still use a JSON `Result<T>` envelope and their original HTTP
+status, including when the request advertises only `Accept: text/event-stream`.
 
 ```json
 {
@@ -35,6 +40,16 @@ null. Success responses are produced by `Result.success(data)` (code `200`).
 
 When a domain doc says "**Response**: `SomeDto`", it means that DTO appears under
 `data`. When it says "**Response `data`**: `Long`", the payload is that raw value.
+
+### Timestamp format
+
+Java `LocalDateTime` response fields are serialized as ISO-8601 date-times with the offset
+for the configured application zone, for example `2026-07-22T12:30:00+08:00`. Clients must
+parse the supplied offset and must not append `Z`. Request fields accept the legacy local
+form without an offset; when an offset is present, it must be a valid offset for the
+configured zone at that local time or deserialization returns `400`. The owning zone and
+default are documented in the
+[configuration reference](../getting-started/configuration.md#application-time).
 
 ---
 
@@ -71,7 +86,10 @@ default user because authentication is JWT-only.
 ## Error and status codes
 
 Errors are mapped centrally by `GlobalExceptionHandler` to a `Result<T>` whose `code`
-equals the HTTP status. Domain exceptions and their statuses:
+equals the HTTP status, except for the empty protocol-level `406` described above. Error
+envelopes explicitly use `Content-Type: application/json` instead of allowing a
+success-media `Accept` header to obscure the original error. Domain and framework
+exceptions and their statuses:
 
 | HTTP | Exception | Meaning |
 | :--- | :--- | :--- |
@@ -79,8 +97,11 @@ equals the HTTP status. Domain exceptions and their statuses:
 | 401 | `UnauthorizedException` | Missing/invalid/expired token |
 | 403 | `ForbiddenException` | Authenticated but not allowed (e.g. another user's resource) |
 | 404 | `ResourceNotFoundException` | Resource does not exist |
+| 405 | `HttpRequestMethodNotSupportedException` | The path exists but does not support the requested HTTP method |
+| 406 | `HttpMediaTypeNotAcceptableException` | No acceptable representation can be produced; the response body is intentionally empty |
 | 409 | `ConflictException`, `ChatSessionBusyException`, `TemplateDeletionConflictException`, `DataIntegrityViolationException` | State/uniqueness conflict; specialized conflicts include structured reason data |
 | 413 | `RequestBodySizeFilter` | JSON request body exceeds the configured byte limit and is rejected before DTO binding |
+| 415 | `HttpMediaTypeNotSupportedException` | The request content type is unsupported |
 | 422 | `ValidationException` | Semantic validation failure |
 | 429 | `FuzzTaskQuotaExceededException`, `FuzzTaskStorageQuotaExceededException`, `AsyncTaskQuotaExceededException`, `UserOperationBusyException`, `AuthRateLimitException` | Per-user active/stored background-task limit, per-user synchronous-operation limit, or public authentication attempt limit reached. Operation admission returns `USER_FORMAL_OPERATION_BUSY` or `USER_CHAT_OPERATION_BUSY`; authentication limits return an `AUTH_*_RATE_LIMIT_REACHED` reason, scope, retry delay, and `Retry-After` header. |
 | 500 | `InternalServerException`, `SmvGenerationException`, `PersistedDataIntegrityException` (and uncaught) | Server-side failure or unusable persisted semantic data |

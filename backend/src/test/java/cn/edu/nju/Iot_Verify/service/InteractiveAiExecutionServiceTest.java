@@ -11,12 +11,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class InteractiveAiExecutionServiceTest {
 
@@ -135,6 +138,9 @@ class InteractiveAiExecutionServiceTest {
             assertTrue(started.await(2, TimeUnit.SECONDS));
             assertTrue(service.cancel(1L, "request-123"));
             request.get(2, TimeUnit.SECONDS);
+            service.markStage(1L, "request-123", InteractiveOperationStage.FINALIZING);
+            assertEquals(InteractiveOperationStage.CANCELLING,
+                    service.getStatus(1L, "request-123").getStage());
 
             assertThrows(ServiceUnavailableException.class,
                     () -> service.execute(1L, "request-456", () -> null));
@@ -183,6 +189,42 @@ class InteractiveAiExecutionServiceTest {
             releaseWorker.countDown();
         }
         assertFalse(providerCalled.get());
+    }
+
+    @Test
+    void statusAndCancellationCanBeServedByAnotherInstance() {
+        DistributedInteractiveExecutionStore store = mock(DistributedInteractiveExecutionStore.class);
+        InteractiveAiExecutionService otherInstance = new InteractiveAiExecutionService(executor, store);
+        var remoteStatus = cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto.builder()
+                .requestId("request-123")
+                .state("RUNNING")
+                .stage(InteractiveOperationStage.REQUESTING_MODEL)
+                .elapsedMs(25)
+                .build();
+        when(store.getStatus("recommendation", 1L, "request-123"))
+                .thenReturn(Optional.of(remoteStatus));
+        when(store.requestCancellation("recommendation", 1L, "request-123"))
+                .thenReturn(true);
+
+        assertEquals(remoteStatus, otherInstance.getStatus(1L, "request-123"));
+        assertTrue(otherInstance.cancel(1L, "request-123"));
+    }
+
+    @Test
+    void distributedActiveStatusWinsOverStaleLocalCompletionForReusedRequestId() {
+        DistributedInteractiveExecutionStore store = mock(DistributedInteractiveExecutionStore.class);
+        InteractiveAiExecutionService instance = new InteractiveAiExecutionService(executor, store);
+        instance.execute(1L, "request-123", () -> null);
+        var currentStatus = cn.edu.nju.Iot_Verify.dto.model.InteractiveOperationStatusDto.builder()
+                .requestId("request-123")
+                .state("RUNNING")
+                .stage(InteractiveOperationStage.REQUESTING_MODEL)
+                .elapsedMs(5)
+                .build();
+        when(store.getStatus("recommendation", 1L, "request-123"))
+                .thenReturn(Optional.of(currentStatus));
+
+        assertEquals(currentStatus, instance.getStatus(1L, "request-123"));
     }
 
     private void awaitQueuedTask() throws Exception {

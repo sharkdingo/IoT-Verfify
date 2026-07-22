@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.configure;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.validation.annotation.Validated;
@@ -29,6 +30,7 @@ public class LlmConfig {
     private String provider = "openai";
 
     @NotBlank
+    @ToString.Exclude
     private String apiKey;
 
     /** Model id/deployment name passed to the endpoint (e.g. {@code gpt-5.5}). */

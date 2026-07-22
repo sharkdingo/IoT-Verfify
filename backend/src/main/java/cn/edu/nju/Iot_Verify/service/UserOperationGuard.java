@@ -1,8 +1,10 @@
 package cn.edu.nju.Iot_Verify.service;
 
+import cn.edu.nju.Iot_Verify.configure.OperationAdmissionConfig;
 import cn.edu.nju.Iot_Verify.exception.UserOperationBusyException;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,6 +20,9 @@ import java.util.concurrent.ConcurrentMap;
 @Component
 public class UserOperationGuard {
 
+    private static final Duration MIN_RENEWABLE_TTL = Duration.ofMinutes(2);
+    private static final int HEARTBEATS_PER_TTL = 4;
+
     private static final DefaultRedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>(
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
@@ -26,15 +31,35 @@ public class UserOperationGuard {
             Long.class);
 
     private final StringRedisTemplate redisTemplate;
+    private final OperationAdmissionConfig operationAdmissionConfig;
     private final ConcurrentMap<String, String> localSlots = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Lease> renewableLeases = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, PendingRelease> pendingReleases = new ConcurrentHashMap<>();
 
-    public UserOperationGuard(StringRedisTemplate redisTemplate) {
+    @Autowired
+    public UserOperationGuard(
+            StringRedisTemplate redisTemplate,
+            OperationAdmissionConfig operationAdmissionConfig) {
         this.redisTemplate = redisTemplate;
+        this.operationAdmissionConfig = operationAdmissionConfig;
+    }
+
+    UserOperationGuard(StringRedisTemplate redisTemplate) {
+        this(redisTemplate, new OperationAdmissionConfig());
+    }
+
+    Duration renewableLeaseTtl() {
+        long heartbeatWindow = operationAdmissionConfig.getLeaseHeartbeatMs() * HEARTBEATS_PER_TTL;
+        return Duration.ofMillis(Math.max(MIN_RENEWABLE_TTL.toMillis(), heartbeatWindow));
     }
 
     public Lease acquire(Long userId, Kind kind, int limit, Duration ttl) {
         if (userId == null) throw new IllegalArgumentException("Operation admission requires a user");
+        if (ttl == null || ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("Operation admission TTL must be positive");
+        }
+        Duration maxRenewableTtl = renewableLeaseTtl();
+        Duration effectiveTtl = ttl.compareTo(maxRenewableTtl) > 0 ? maxRenewableTtl : ttl;
         int slots = Math.max(1, limit);
         String token = UUID.randomUUID().toString();
         boolean redisAvailable = true;
@@ -42,9 +67,9 @@ public class UserOperationGuard {
             String key = "iot-verify:operation:" + kind.name().toLowerCase() + ":" + userId + ":" + slot;
             if (localSlots.putIfAbsent(key, token) != null) continue;
             try {
-                Boolean acquired = redisTemplate.opsForValue().setIfAbsent(key, token, ttl);
+                Boolean acquired = redisTemplate.opsForValue().setIfAbsent(key, token, effectiveTtl);
                 if (Boolean.TRUE.equals(acquired)) {
-                    Lease lease = new Lease(key, token, true, ttl);
+                    Lease lease = new Lease(key, token, true, effectiveTtl);
                     renewableLeases.put(key, lease);
                     return lease;
                 }
@@ -52,7 +77,7 @@ public class UserOperationGuard {
             } catch (RuntimeException e) {
                 redisAvailable = false;
                 log.warn("Redis operation admission is unavailable; using local guard for {}: {}", kind, e.toString());
-                return new Lease(key, token, false, ttl);
+                return new Lease(key, token, false, effectiveTtl);
             }
         }
         String scope = redisAvailable ? "all backend instances" : "this backend instance";
@@ -65,7 +90,29 @@ public class UserOperationGuard {
     @Scheduled(fixedDelayString = "#{@operationAdmissionConfig.leaseHeartbeatMs}")
     public void renewActiveLeases() {
         renewableLeases.values().forEach(Lease::renew);
+        retryPendingReleases();
     }
+
+    private void retryPendingReleases() {
+        long now = System.nanoTime();
+        pendingReleases.forEach((key, pending) -> {
+            if (now >= pending.retryUntilNanos()) {
+                pendingReleases.remove(key, pending);
+                return;
+            }
+            try {
+                Long released = redisTemplate.execute(
+                        RELEASE_SCRIPT, java.util.List.of(key), pending.token());
+                if (released != null) {
+                    pendingReleases.remove(key, pending);
+                }
+            } catch (RuntimeException e) {
+                log.warn("Could not retry release of distributed operation lease {}: {}", key, e.toString());
+            }
+        });
+    }
+
+    private record PendingRelease(String token, long retryUntilNanos) { }
 
     public enum Kind {
         FORMAL("formal verification, simulation, or fix"),
@@ -152,8 +199,15 @@ public class UserOperationGuard {
             localSlots.remove(key, token);
             if (!redisBacked) return;
             try {
-                redisTemplate.execute(RELEASE_SCRIPT, java.util.List.of(key), token);
+                Long released = redisTemplate.execute(RELEASE_SCRIPT, java.util.List.of(key), token);
+                if (released == null) {
+                    pendingReleases.put(key, new PendingRelease(
+                            token, System.nanoTime() + Duration.ofMillis(ttlMillis).toNanos()));
+                    log.warn("Distributed operation lease release returned no result for {}; scheduling a retry", key);
+                }
             } catch (RuntimeException e) {
+                pendingReleases.put(key, new PendingRelease(
+                        token, System.nanoTime() + Duration.ofMillis(ttlMillis).toNanos()));
                 log.warn("Could not release distributed operation lease {}: {}", key, e.toString());
             }
         }

@@ -17,13 +17,14 @@ const api = axios.create({
 
 type BoardAwareRequestConfig = InternalAxiosRequestConfig & {
   boardInvalidationUserId?: number
+  authTokenAtRequest?: string | null
 }
 
-const boardMutationPath = (config: { url?: string; method?: string }) => {
+export const isBoardMutationRequest = (config: { url?: string; method?: string }) => {
   const method = (config.method || 'get').toLowerCase()
   if (method === 'get' || method === 'head' || method === 'options') return false
   const path = (config.url || '').split('?')[0]
-  if (/^\/?board\/rules\/check-(duplicate|similarity)$/.test(path)) return false
+  if (/^\/?board\/(?:rules\/check-(?:duplicate|similarity)|(?:rules|specs)\/recommend)$/.test(path)) return false
   return /^\/?board\/(nodes|environment|specs|rules|templates|batch)(?:\/|$)/.test(path)
     || /^\/?verify\/traces\/[^/]+\/fix\/apply$/.test(path)
 }
@@ -36,6 +37,7 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    ;(config as BoardAwareRequestConfig).authTokenAtRequest = token
     ;(config as BoardAwareRequestConfig).boardInvalidationUserId = getUser()?.userId
     return config;
   },
@@ -47,7 +49,7 @@ api.interceptors.request.use(
 // 响应拦截器 - 处理401错误
 api.interceptors.response.use(
   (response) => {
-    if (boardMutationPath(response.config)) {
+    if (isBoardMutationRequest(response.config)) {
       publishBoardInvalidation(
         (response.config as BoardAwareRequestConfig).boardInvalidationUserId,
         'http-mutation'
@@ -57,16 +59,18 @@ api.interceptors.response.use(
   },
   (error) => {
     if (error.response?.status === 401) {
-      // Token无效或已加入黑名单，清除登录状态并跳转登录页
-      const { logout } = useAuth();
-      logout();
-      const currentRoute = router.currentRoute.value;
-      if (currentRoute.path !== '/') {
-        const query: Record<string, string> = { mode: 'login' };
-        if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
-          query.redirect = currentRoute.fullPath;
+      const requestConfig = (error.config || error.response?.config) as BoardAwareRequestConfig | undefined
+      const requestToken = requestConfig?.authTokenAtRequest ?? null
+      const { logoutIfTokenMatches } = useAuth();
+      if (logoutIfTokenMatches(requestToken)) {
+        const currentRoute = router.currentRoute.value;
+        if (currentRoute.path !== '/') {
+          const query: Record<string, string> = { mode: 'login' };
+          if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
+            query.redirect = currentRoute.fullPath;
+          }
+          router.push({ path: '/', query });
         }
-        router.push({ path: '/', query });
       }
     }
     return Promise.reject(error);

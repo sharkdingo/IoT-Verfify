@@ -55,6 +55,13 @@ parsing or NuSMV execution with `data.reasonCode=USER_FORMAL_OPERATION_BUSY`, pl
 `operationKind`, coordination `scope`, and `limit`. Async endpoints retain their separate
 stored/active task quotas.
 
+Admission is enforced at the verification, simulation, and fix service boundary, not only
+in REST controllers. Assistant tools and other internal callers therefore cannot bypass the
+same per-user formal-work limit. If an admitted worker is interrupted by cancellation,
+shutdown, or loss of its distributed lease, it cancels nested solver futures and terminates
+the NuSMV process tree before releasing capacity; interruption is not persisted as a normal
+completed history result.
+
 `AttackScenarioDto.points` contains either `{ kind: "DEVICE", deviceId }`, where
 `deviceId` is the normalized model-boundary device id, or
 `{ kind: "AUTOMATION_LINK", ruleId }`, where `ruleId` is the submitted persisted rule
@@ -898,6 +905,20 @@ unknown request returns 404. The fix workflow reports `QUEUED`, `RUNNING`,
 `PREPARING_CONTEXT`, `PREPARING_MODEL`, `SEARCHING_AND_VERIFYING`, `FINALIZING`, and
 `CANCELLING` as applicable. These are server-observed operational phases, not inferred
 timers or hidden model reasoning.
+
+The request owner, user admission, status, and cancellation records are token-fenced in
+Redis. Status and cancellation therefore work when a poll is routed to another backend
+instance, while an expired worker cannot finish over a newer owner that reused the same id.
+The cancellation record is renewed until the callable actually exits. During a Redis outage
+the accepting process retains local tracking, but another instance cannot observe it; every
+new search must use a fresh random request id.
+
+The frontend makes five short cancellation attempts to cover POST-registration races and
+aborts the POST transport only after the server accepts cancellation. If cancellation cannot
+be confirmed, it keeps polling for `FINISHED`; after 30 consecutive unavailable status reads
+it releases the local busy state with an explicit outcome-unknown warning. Closing or
+unmounting the fix dialog also retries the server cancellation request before releasing the
+POST transport so an expensive search is not left running merely because its UI disappeared.
 
 **Request body**: `FixRequestDto` — optional; omit or send `null` for defaults.
 

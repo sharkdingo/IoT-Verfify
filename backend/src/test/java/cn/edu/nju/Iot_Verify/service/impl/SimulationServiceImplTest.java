@@ -29,6 +29,7 @@ import cn.edu.nju.Iot_Verify.repository.SimulationTaskRepository;
 import cn.edu.nju.Iot_Verify.repository.SimulationTraceRepository;
 import cn.edu.nju.Iot_Verify.repository.UserRepository;
 import cn.edu.nju.Iot_Verify.service.ChatExecutionLeaseGuard;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTaskMapper;
 import cn.edu.nju.Iot_Verify.util.mapper.SimulationTraceMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.task.TaskRejectedException;
@@ -62,7 +64,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Future;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -82,6 +87,7 @@ class SimulationServiceImplTest {
     @Mock private SimulationTaskRepository simulationTaskRepository;
     @Mock private UserRepository userRepository;
     @Mock private ChatExecutionLeaseGuard chatExecutionLeaseGuard;
+    @Mock private FormalOperationAdmission formalOperationAdmission;
     @Mock private SimulationTraceMapper simulationTraceMapper;
     @Mock private SimulationTaskMapper simulationTaskMapper;
     private TransactionTemplate transactionTemplate;
@@ -160,13 +166,15 @@ class SimulationServiceImplTest {
         syncSimulationExecutor.setThreadNamePrefix("test-sync-simulation-");
         syncSimulationExecutor.initialize();
         transactionTemplate = inlineTransactionTemplate();
+        lenient().when(formalOperationAdmission.execute(anyLong(), any()))
+                .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(1).get());
 
         service = new SimulationServiceImpl(
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
                 simulationTaskExecutor, syncSimulationExecutor, transactionTemplate,
-                chatExecutionLeaseGuard);
+                chatExecutionLeaseGuard, formalOperationAdmission);
         lenient().when(simulationTaskRepository.currentDatabaseTime())
                 .thenAnswer(invocation -> LocalDateTime.now());
         lenient().when(simulationTaskRepository.updateProgressIfActive(anyLong(), anyInt(), any(), anyString(), any(LocalDateTime.class)))
@@ -205,7 +213,8 @@ class SimulationServiceImplTest {
                 smvGenerator, smvTraceParser, nusmvExecutor, nusmvConfig,
                 simulationTraceRepository, simulationTaskRepository, userRepository,
                 simulationTraceMapper, simulationTaskMapper, new ObjectMapper().findAndRegisterModules(),
-                executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard);
+                executor, syncSimulationExecutor, transactionTemplate, chatExecutionLeaseGuard,
+                formalOperationAdmission);
     }
 
     private TransactionTemplate inlineTransactionTemplate() {
@@ -428,6 +437,9 @@ class SimulationServiceImplTest {
 
         assertEquals(200, readResultCode(fakeFile));
         assertFalse(lastTransactionStatus.isRollbackOnly());
+        InOrder completionLocks = inOrder(userRepository, simulationTaskRepository);
+        completionLocks.verify(userRepository).findByIdForUpdate(1L);
+        completionLocks.verify(simulationTaskRepository, times(2)).findByIdForUpdate(9L);
     }
 
     @Test
@@ -918,6 +930,52 @@ class SimulationServiceImplTest {
     }
 
     @Test
+    void simulate_interruptedWaitCancelsNestedFutureAndPurgesQueue() throws Exception {
+        when(nusmvConfig.getTimeoutMs()).thenReturn(5000L);
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocker = new CountDownLatch(1);
+        Future<?> blocker = syncSimulationExecutor.submit(() -> {
+            blockerStarted.countDown();
+            try {
+                releaseBlocker.await();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(blockerStarted.await(2, TimeUnit.SECONDS));
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try {
+                service.simulate(1L, simRequest(singleDevice(), List.of(), 10, false, 0, false));
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        }, "interrupted-simulation-caller");
+
+        caller.start();
+        awaitQueueSize(syncSimulationExecutor, 1);
+        caller.interrupt();
+        caller.join(2000);
+
+        assertFalse(caller.isAlive());
+        SimulationExecutionException exception = assertInstanceOf(
+                SimulationExecutionException.class, failure.get());
+        assertEquals("INTERRUPTED", exception.getReasonCode());
+        assertEquals(0, syncSimulationExecutor.getThreadPoolExecutor().getQueue().size());
+        releaseBlocker.countDown();
+        blocker.cancel(true);
+    }
+
+    private void awaitQueueSize(ThreadPoolTaskExecutor executor, int expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (executor.getThreadPoolExecutor().getQueue().size() != expected
+                && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertEquals(expected, executor.getThreadPoolExecutor().getQueue().size());
+    }
+
+    @Test
     void simulate_executorFailure_throwsStructuredFailureInsteadOfEmptySuccess() throws Exception {
         when(nusmvConfig.getTimeoutMs()).thenReturn(1000L);
         File fakeFile = createTempModelFile();
@@ -954,6 +1012,7 @@ class SimulationServiceImplTest {
         assertFalse(result.isModelComplete());
         assertEquals(1, result.getDisabledRuleCount());
         assertTrue(result.getLogs().stream().anyMatch(log -> log.contains("[rule-disabled]")));
+        verify(formalOperationAdmission).execute(eq(1L), any());
     }
 
     @Test

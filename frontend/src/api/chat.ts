@@ -138,7 +138,7 @@ export const sendStreamChat = async (
     confirmation?: ChatConfirmationCommand
 ) => {
     try {
-        const { getToken, logout } = useAuth();
+        const { getToken, logoutIfTokenMatches } = useAuth();
         const token = getToken();
         const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -164,14 +164,15 @@ export const sendStreamChat = async (
 
         if (!response.ok) {
             if (response.status === 401) {
-                logout();
-                const currentRoute = router.currentRoute.value;
-                if (currentRoute.path !== '/') {
-                    const query: Record<string, string> = { mode: 'login' };
-                    if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
-                        query.redirect = currentRoute.fullPath;
+                if (logoutIfTokenMatches(token)) {
+                    const currentRoute = router.currentRoute.value;
+                    if (currentRoute.path !== '/') {
+                        const query: Record<string, string> = { mode: 'login' };
+                        if (currentRoute.fullPath && currentRoute.fullPath !== '/') {
+                            query.redirect = currentRoute.fullPath;
+                        }
+                        await router.push({ path: '/', query });
                     }
-                    await router.push({ path: '/', query });
                 }
             }
             const detail = await readErrorDetail(response);

@@ -3,6 +3,7 @@ package cn.edu.nju.Iot_Verify.configure;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.validation.annotation.Validated;
@@ -14,6 +15,7 @@ import org.springframework.validation.annotation.Validated;
 public class JwtConfig {
 
     @NotBlank
+    @ToString.Exclude
     private String secret;
 
     @Positive

@@ -104,23 +104,29 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthResponseDto login(LoginRequestDto request) {
         String identifier = UsernameNormalizer.normalize(request.getIdentifier());
-        UserPo user = resolveLoginUser(identifier)
-                .orElseThrow(UnauthorizedException::invalidCredentials);
-
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw UnauthorizedException.invalidCredentials();
-        }
+        UserPo user = resolveLoginUser(identifier, request.getPassword());
 
         String token = jwtUtil.generateToken(user.getId(), user.getPhone());
         return userMapper.toAuthResponseDto(user, token);
     }
 
-    private java.util.Optional<UserPo> resolveLoginUser(String identifier) {
+    private UserPo resolveLoginUser(String identifier, String password) {
         java.util.Optional<UserPo> byPhone = userService.findByPhone(identifier);
-        if (byPhone.isPresent()) {
-            return byPhone;
+        java.util.Optional<UserPo> byUsername = userService.findByUsername(identifier);
+        boolean phoneMatches = byPhone.isPresent()
+                && passwordEncoder.matches(password, byPhone.get().getPassword());
+        boolean distinctUsernameCandidate = byUsername.isPresent()
+                && (byPhone.isEmpty() || !java.util.Objects.equals(
+                        byUsername.get().getId(), byPhone.get().getId()));
+        boolean usernameMatches = distinctUsernameCandidate
+                && passwordEncoder.matches(password, byUsername.get().getPassword());
+
+        // Legacy data may contain one account whose phone equals another account's username.
+        // Authentication is safe only when the supplied password identifies exactly one of them.
+        if (phoneMatches != usernameMatches) {
+            return phoneMatches ? byPhone.orElseThrow() : byUsername.orElseThrow();
         }
-        return userService.findByUsername(identifier);
+        throw UnauthorizedException.invalidCredentials();
     }
 
     @Override
@@ -173,11 +179,11 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private void deleteUserOwnedData(Long userId) {
-        aiSessionStateRepository.deleteUser(userId);
-        List<String> sessionIds = chatSessionRepository.findByUserIdOrderByUpdatedAtDesc(userId).stream()
+        List<String> sessionIds = chatSessionRepository.findByUserIdForUpdate(userId).stream()
                 .map(session -> session.getId())
                 .filter(id -> id != null && !id.isBlank())
                 .toList();
+        aiSessionStateRepository.deleteUser(userId);
         if (!sessionIds.isEmpty()) {
             chatMessageRepository.deleteBySessionIdIn(sessionIds);
         }

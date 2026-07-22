@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FixResultDialog from '../FixResultDialog.vue'
 import type { FixResult } from '@/types/fix'
 
@@ -263,10 +263,16 @@ const parameterBudgetExhaustedResult = (): FixResult => ({
   fixable: false
 })
 
-const mountDialog = () => mount(FixResultDialog, {
-  props: { visible: true, traceId: 7, violatedSpecId: 'spec-1' },
-  global: { plugins: [i18n] }
-})
+const mountedDialogs: VueWrapper[] = []
+
+const mountDialog = () => {
+  const wrapper = mount(FixResultDialog, {
+    props: { visible: true, traceId: 7, violatedSpecId: 'spec-1' },
+    global: { plugins: [i18n] }
+  })
+  mountedDialogs.push(wrapper)
+  return wrapper
+}
 
 describe('FixResultDialog strategy workflow', () => {
   beforeEach(() => {
@@ -291,6 +297,12 @@ describe('FixResultDialog strategy workflow', () => {
     })
     boardApi.cancelFixRequest.mockResolvedValue(true)
     elementPlus.confirm.mockResolvedValue('confirm')
+  })
+
+  afterEach(async () => {
+    mountedDialogs.splice(0).forEach(wrapper => wrapper.unmount())
+    vi.useRealTimers()
+    await Promise.resolve()
   })
 
   it('opens with fault localization only and does not implicitly run an expensive strategy', async () => {
@@ -353,26 +365,117 @@ describe('FixResultDialog strategy workflow', () => {
     expect(wrapper.find('[data-testid="fix-result-dialog"]').exists()).toBe(false)
   })
 
-  it('contains a failed server cancellation after aborting the local search', async () => {
+  it('retries cancellation when the first DELETE beats server-side registration', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await wrapper.setProps({ visible: false })
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledTimes(2)
+    expect(options.signal.aborted).toBe(true)
+    expect(boardApi.getFixRequestStatus).not.toHaveBeenCalled()
+  })
+
+  it('keeps tracking a search when server cancellation cannot be confirmed', async () => {
     const pending = deferred<FixResult>()
     const cancellationError = new Error('network unavailable')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     boardApi.fixTrace.mockReturnValueOnce(pending.promise)
-    boardApi.cancelFixRequest.mockRejectedValueOnce(cancellationError)
+    boardApi.cancelFixRequest.mockRejectedValue(cancellationError)
     const wrapper = mountDialog()
     await flush()
+
+    vi.useFakeTimers()
     await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
 
     const options = boardApi.fixTrace.mock.calls[0]![2]
     await wrapper.setProps({ visible: false })
-    await flush()
+    await vi.advanceTimersByTimeAsync(250)
 
-    expect(options.signal.aborted).toBe(true)
+    expect(options.signal.aborted).toBe(false)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId)
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(`[Fix] Failed to cancel automatic-fix request ${options.requestId}`),
       cancellationError
     )
+    expect(elementPlus.warning).toHaveBeenCalledWith('fixStopRequestMayStillBeRunning')
+    vi.useRealTimers()
+    pending.resolve(parameterResult())
+    await flush()
     warn.mockRestore()
+  })
+
+  it('clears a cancellation request only after a terminal status is observed', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    boardApi.getFixRequestStatus.mockResolvedValueOnce({
+      requestId: 'request-123',
+      state: 'FINISHED',
+      stage: 'CANCELLING',
+      elapsedMs: 1000
+    })
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await wrapper.setProps({ visible: false })
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(options.signal.aborted).toBe(true)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledWith(options.requestId)
+  })
+
+  it('bounds cancellation recovery when the status endpoint remains unavailable', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    boardApi.getFixRequestStatus.mockRejectedValue(new Error('status unavailable'))
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+    await wrapper.setProps({ visible: false })
+    await vi.advanceTimersByTimeAsync(31_000)
+
+    expect(options.signal.aborted).toBe(true)
+    const readsAfterRecovery = boardApi.getFixRequestStatus.mock.calls.length
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(boardApi.getFixRequestStatus).toHaveBeenCalledTimes(readsAfterRecovery)
+  })
+
+  it('releases polling and the POST transport when the dialog component is destroyed', async () => {
+    const pending = deferred<FixResult>()
+    boardApi.fixTrace.mockReturnValueOnce(pending.promise)
+    boardApi.cancelFixRequest.mockResolvedValue(false)
+    const wrapper = mountDialog()
+    await flush()
+
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="fix-try-current"]').trigger('click')
+    const options = boardApi.fixTrace.mock.calls[0]![2]
+
+    wrapper.unmount()
+    mountedDialogs.splice(mountedDialogs.indexOf(wrapper), 1)
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(options.signal.aborted).toBe(true)
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledTimes(20)
+    expect(boardApi.cancelFixRequest).toHaveBeenCalledWith(options.requestId)
   })
 
   it('shows the server-observed automatic-fix phase while the strategy is running', async () => {

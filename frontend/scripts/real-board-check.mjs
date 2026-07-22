@@ -46,15 +46,49 @@ const valueFor = variable => (
     : (typeof variable.LowerBound === 'number' ? String(variable.LowerBound) : '0')
 )
 
-const varsFor = manifest => (manifest.InternalVariables || []).map(variable => ({
+const localVariablesFor = manifest => (manifest.InternalVariables || [])
+  .filter(variable => variable?.IsInside === true)
+
+const varsFor = manifest => localVariablesFor(manifest).map(variable => ({
   name: variable.Name,
   value: valueFor(variable),
   trust: variable.Trust || 'trusted'
 }))
 
 const privaciesFor = manifest => [
-  ...(manifest.InternalVariables || []).map(variable => ({ name: variable.Name, privacy: variable.Privacy || 'public' }))
+  ...localVariablesFor(manifest).map(variable => ({ name: variable.Name, privacy: variable.Privacy || 'public' }))
 ]
+
+const environmentDefinition = (manifest, name) => (
+  (manifest.InternalVariables || []).find(variable =>
+    variable?.Name === name && variable?.IsInside !== true)
+  || (manifest.EnvironmentDomains || []).find(domain => domain?.Name === name)
+)
+
+const environmentVariablesFor = templates => {
+  const definitions = new Map()
+  for (const template of templates) {
+    const manifest = template.manifest
+    for (const variable of manifest.InternalVariables || []) {
+      if (variable?.Name && variable?.IsInside !== true) {
+        definitions.set(variable.Name, variable)
+      }
+    }
+    for (const name of manifest.ImpactedVariables || []) {
+      const definition = environmentDefinition(manifest, name)
+      if (!definition) throw new Error(`Template ${template.name} has no environment domain for ${name}`)
+      definitions.set(name, definition)
+    }
+  }
+  return [...definitions.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, definition]) => ({
+      name,
+      value: valueFor(definition),
+      trust: definition.Trust || 'untrusted',
+      privacy: definition.Privacy || 'public'
+    }))
+}
 
 const hasModes = manifest => Array.isArray(manifest?.Modes) && manifest.Modes.length > 0
 const initialState = manifest => hasModes(manifest)
@@ -98,7 +132,7 @@ const modelRule = rule => ({
 async function seedScenario() {
   const suffix = String(Date.now()).slice(-8)
   const phone = `138${suffix}`
-  const password = '123456'
+  const password = 'RealCheck!2026'
   await post('/auth/register', { phone, username: `real${suffix}`, password })
   const auth = await post('/auth/login', { identifier: phone, password })
   const token = auth.token
@@ -117,6 +151,9 @@ async function seedScenario() {
   const alarm = template('Alarm')
   const thermostat = template('Thermostat')
   const windowShade = template('Window Shade')
+  const referencedTemplates = [light, door, alarm, thermostat, windowShade]
+  const environmentVariables = environmentVariablesFor(referencedTemplates)
+  const templateSnapshots = referencedTemplates.map(({ name, manifest }) => ({ name, manifest }))
 
   const nodeSpecs = [
     { id: 'node_door_entry', label: 'Entrance_Door_Long_Label_01', template: door, x: -180, y: 110, width: 178, height: 126, state: 'locked' },
@@ -187,7 +224,15 @@ async function seedScenario() {
     }
   }
 
-  await post('/board/batch', { nodes, rules, specs }, token)
+  const replacementPreview = await get('/board/replacement-preview', token)
+  await post('/board/batch', {
+    impactToken: replacementPreview.impactToken,
+    nodes,
+    environmentVariables,
+    rules,
+    specs,
+    templateSnapshots
+  }, token)
   await post('/board/layout', layout, token)
   const savedLayout = await get('/board/layout', token)
 
@@ -206,35 +251,25 @@ async function seedScenario() {
         privacies: node.privacies
       }
     }),
+    environmentVariables,
     rules: rules.map(modelRule),
     steps: 6,
-    isAttack: false,
-    intensity: 3,
+    attackScenario: { mode: 'NONE', budget: 0, points: [] },
     enablePrivacy: false
   }
 
-  const saveSimulationTrace = async steps => {
-    try {
-      return { trace: await post('/simulate/traces', { ...simRequest, steps }, token), error: null }
-    } catch (error) {
-      return { trace: null, error: String(error.message || error) }
-    }
-  }
-
-  const shortSimulation = await saveSimulationTrace(1)
-  const standardSimulation = await saveSimulationTrace(6)
-  const longSimulation = await saveSimulationTrace(28)
-  const simulateErrors = [shortSimulation.error, standardSimulation.error, longSimulation.error].filter(Boolean)
+  const shortSimulationTrace = await post('/simulate/traces', { ...simRequest, steps: 1 }, token)
+  const savedSimulationTrace = await post('/simulate/traces', simRequest, token)
+  const longSimulationTrace = await post('/simulate/traces', { ...simRequest, steps: 28 }, token)
 
   return {
     token,
     user,
     savedLayout,
-    savedSimulationTrace: standardSimulation.trace,
-    shortSimulationTrace: shortSimulation.trace,
-    longSimulationTrace: longSimulation.trace,
-    simulationSummaries: await get('/simulate/traces', token),
-    simulateError: simulateErrors.length ? simulateErrors.join(' | ') : null
+    savedSimulationTrace,
+    shortSimulationTrace,
+    longSimulationTrace,
+    simulationSummaries: await get('/simulate/traces', token)
   }
 }
 
@@ -272,7 +307,9 @@ async function runUiChecks(seed) {
     }
   })
   page.on('pageerror', error => {
-    browserEvents.push(`pageerror: ${error.message}`)
+    const message = `pageerror: ${error.message}`
+    browserEvents.push(message)
+    failures.push(message)
   })
   const soft = (condition, message) => { if (!condition) failures.push(message) }
   const box = selector => page.locator(selector).first().boundingBox()
@@ -368,21 +405,29 @@ async function runUiChecks(seed) {
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
       scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth
+      clientWidth: el.clientWidth,
+      overflow: getComputedStyle(el).overflow,
+      title: el.getAttribute('title')
     })),
     states: [...document.querySelectorAll('.device-state-value')].map(el => ({
       text: el.textContent.trim(),
       scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth
+      clientWidth: el.clientWidth,
+      overflow: getComputedStyle(el).overflow,
+      title: el.parentElement?.getAttribute('title')
     }))
   }))
   soft(nodeMetrics.nodes >= 5, `expected >=5 nodes, got ${nodeMetrics.nodes}`)
   for (const label of nodeMetrics.labels) {
-    soft(label.scrollHeight <= label.clientHeight + 2, `label vertical overflow: ${label.text}`)
-    soft(label.scrollWidth <= label.clientWidth + 2, `label horizontal overflow: ${label.text}`)
+    const clipped = label.scrollHeight > label.clientHeight + 2
+      || label.scrollWidth > label.clientWidth + 2
+    soft(!clipped || (label.overflow !== 'visible' && label.title === label.text),
+      `label overflow is not safely recoverable: ${label.text}`)
   }
   for (const state of nodeMetrics.states) {
-    soft(state.scrollWidth <= state.clientWidth + 2, `state overflow: ${state.text}`)
+    const clipped = state.scrollWidth > state.clientWidth + 2
+    soft(!clipped || (state.overflow !== 'visible' && state.title === state.text),
+      `state overflow is not safely recoverable: ${state.text}`)
   }
 
   const controlBox = await box('[data-testid="control-center"]')
@@ -397,7 +442,7 @@ async function runUiChecks(seed) {
   soft(!rectsOverlap(mapBox, controlBox, -2), 'canvas map overlaps control panel')
   soft(rectContains(inspectorBox, mapBox, 2), 'canvas map is not contained by inspector panel')
   soft(!rectsOverlap(actionRailBox, inspectorBox, -2), 'floating action rail overlaps inspector panel')
-  soft(actionRailBox && actionRailBox.height < 390, `floating action rail too tall: ${actionRailBox?.height}`)
+  soft(actionRailBox && actionRailBox.height < 920 * 0.7, `floating action rail too tall: ${actionRailBox?.height}`)
   soft(await page.locator('.board-floating-actions .absolute.-top-1').count() === 0, 'floating action rail still renders an unexplained corner badge')
   const toolRailAudit = await page.locator('.board-floating-actions').evaluate(rail => ({
     role: rail.getAttribute('role'),
@@ -408,6 +453,7 @@ async function runUiChecks(seed) {
         ? {
             ariaLabel: button.getAttribute('aria-label'),
             ariaPressed: button.getAttribute('aria-pressed'),
+            ariaExpanded: button.getAttribute('aria-expanded'),
             icon: button.querySelector('.material-symbols-outlined')?.textContent?.trim() || ''
           }
         : null
@@ -435,10 +481,10 @@ async function runUiChecks(seed) {
   soft(toolRailAudit.groups.length === 2, `floating action rail expected 2 groups, got ${toolRailAudit.groups.length}`)
   soft(toolRailAudit.groups.some(group => group.testId === 'run-tool-group' && group.ariaLabel), 'run tool group missing accessible name')
   soft(toolRailAudit.groups.some(group => group.testId === 'ai-tool-group' && group.ariaLabel), 'AI tool group missing accessible name')
-  soft(toolRailAudit.toggle && toolRailAudit.toggle.ariaLabel && toolRailAudit.toggle.ariaPressed !== null, `action dock toggle missing aria metadata: ${JSON.stringify(toolRailAudit.toggle)}`)
-  soft(toolRailAudit.buttons.length === 6, `floating action rail expected 6 buttons, got ${toolRailAudit.buttons.length}`)
+  soft(toolRailAudit.toggle && toolRailAudit.toggle.ariaLabel && toolRailAudit.toggle.ariaExpanded !== null, `action dock toggle missing aria metadata: ${JSON.stringify(toolRailAudit.toggle)}`)
+  soft(toolRailAudit.buttons.length === 8, `floating action rail expected 8 buttons, got ${toolRailAudit.buttons.length}`)
   soft(toolRailAudit.buttons.every(button => button.ariaLabel && button.ariaPressed !== null), `tool buttons missing aria metadata: ${JSON.stringify(toolRailAudit.buttons)}`)
-  soft(new Set(toolRailAudit.buttons.map(button => button.icon)).size === 6, `tool icons are not visually distinct: ${JSON.stringify(toolRailAudit.buttons.map(button => button.icon))}`)
+  soft(new Set(toolRailAudit.buttons.map(button => button.icon)).size === toolRailAudit.buttons.length, `tool icons are not visually distinct: ${JSON.stringify(toolRailAudit.buttons.map(button => button.icon))}`)
   soft(toolRailAudit.buttons.every(button => button.labelVisible && button.label), `desktop tool labels are not visible: ${JSON.stringify(toolRailAudit.buttons)}`)
   await checkNoInlineOverflow('.board-floating-actions button', 'floating action buttons')
 
@@ -589,6 +635,33 @@ async function runUiChecks(seed) {
     }
   ]
 
+  await page.setViewportSize({ width: 720, height: 720 })
+  await page.waitForTimeout(300)
+  const midWidthNavigation = await page.evaluate(() => {
+    const rect = selector => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const box = element.getBoundingClientRect()
+      return { left: box.left, right: box.right, width: box.width, height: box.height }
+    }
+    const menu = document.querySelector('details.scene-actions-menu')
+    return {
+      logout: rect('.nav-logout-btn'),
+      sceneMenuVisible: Boolean(menu && menu.getClientRects().length),
+      visibleFullSceneActions: [...document.querySelectorAll('.scene-action-btn')]
+        .filter(element => element.getClientRects().length > 0).length
+    }
+  })
+  soft(midWidthNavigation.logout
+    && midWidthNavigation.logout.left >= 0
+    && midWidthNavigation.logout.right <= 720,
+  `720px navigation logout is outside the viewport: ${JSON.stringify(midWidthNavigation.logout)}`)
+  soft(midWidthNavigation.logout?.width >= 44 && midWidthNavigation.logout?.height >= 44,
+    `720px navigation logout is below the 44px target: ${JSON.stringify(midWidthNavigation.logout)}`)
+  soft(midWidthNavigation.sceneMenuVisible, '720px navigation did not expose the compact scene-actions menu')
+  soft(midWidthNavigation.visibleFullSceneActions === 0,
+    `720px navigation still renders ${midWidthNavigation.visibleFullSceneActions} full scene actions`)
+
   await page.setViewportSize({ width: 1100, height: 820 })
   await page.waitForTimeout(300)
   for (const panelConfig of floatingPanels) {
@@ -620,7 +693,9 @@ async function runUiChecks(seed) {
     await closeFloatingPanels()
     await page.locator('[data-testid="open-history-panel"]').click()
     await page.waitForSelector('[data-testid="trace-history-panel"]')
-    await page.locator('[data-testid="history-tab-simulation"]').click()
+    await page.locator('[data-testid="history-layer-results"]').click()
+    await page.waitForSelector('[data-testid="history-result-filter-simulation"]')
+    await page.locator('[data-testid="history-result-filter-simulation"]').click()
     const replaySelector = `[data-testid="replay-simulation-trace-${trace.id}"]`
     await page.waitForSelector(replaySelector, { timeout: 10000 })
     await page.locator(replaySelector).click()
@@ -792,7 +867,6 @@ const summary = {
   shortSimulationTraceId: seed.shortSimulationTrace?.id ?? null,
   longSimulationTraceId: seed.longSimulationTrace?.id ?? null,
   simulationSummaries: seed.simulationSummaries.length,
-  simulateError: seed.simulateError,
   surfaceColorsLight: ui.surfaceColorsLight,
   darkColors: ui.darkColors,
   browserEvents: ui.browserEvents,

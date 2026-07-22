@@ -1328,7 +1328,7 @@ onBeforeUnmount(() => {
           </div>
           <!-- 名字 -->
           <div class="device-label-wrapper">
-            <div class="device-label" :style="getNodeLabelStyle(node)">
+            <div class="device-label" :style="getNodeLabelStyle(node)" :title="node.label">
               {{ node.label }}
             </div>
           </div>

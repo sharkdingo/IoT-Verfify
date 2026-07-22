@@ -104,6 +104,7 @@ public class NusmvExecutor {
         processBuilder.redirectErrorStream(true);
 
         Process process = null;
+        Thread outputThread = null;
         try {
             long timeout = effectiveProcessTimeout(totalBudgetMs, startedNanos);
             if (timeout <= 0) {
@@ -113,7 +114,7 @@ public class NusmvExecutor {
 
             final Process finalProcess = process;
             BoundedOutputCollector outputBuilder = new BoundedOutputCollector(nusmvConfig.getMaxOutputBytes());
-            Thread outputThread = new Thread(() -> {
+            outputThread = new Thread(() -> {
                 try (InputStream output = finalProcess.getInputStream()) {
                     drainOutput(output, outputBuilder);
                 } catch (IOException e) {
@@ -126,11 +127,9 @@ public class NusmvExecutor {
 
             if (!finished) {
                 log.warn("NuSMV execution timed out after {}ms, destroying process", timeout);
-                process.destroyForcibly();
-                if (!process.waitFor(PROCESS_DESTROY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
-                    log.error("Failed to destroy NuSMV process");
+                if (!terminateProcessTree(process)) {
+                    log.error("Failed to stop the complete NuSMV process tree after timeout");
                 }
-                // 进程销毁后流会关闭，等待输出线程结束
                 reclaimReaderThread(outputThread, process.getInputStream(), "merged-output");
                 return NusmvResult.error("NuSMV execution timed out after " + timeout + "ms");
             }
@@ -161,13 +160,20 @@ public class NusmvExecutor {
 
         } catch (IOException e) {
             log.error("Failed to execute NuSMV", e);
+            if (process != null) {
+                terminateProcessTree(process);
+                reclaimReaderThread(outputThread, process.getInputStream(), "merged-output");
+            }
             return NusmvResult.error("Failed to execute NuSMV: " + e.getMessage());
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
             log.warn("NuSMV execution interrupted");
             if (process != null) {
-                process.destroyForcibly();
+                if (!terminateProcessTree(process)) {
+                    log.error("Failed to stop the complete NuSMV process tree after interruption");
+                }
+                reclaimReaderThread(outputThread, process.getInputStream(), "merged-output");
             }
+            Thread.currentThread().interrupt();
             throw e;
         } finally {
             releaseExecutionPermit();
@@ -326,6 +332,8 @@ public class NusmvExecutor {
         processBuilder.redirectErrorStream(false);
 
         Process process = null;
+        Thread stdoutThread = null;
+        Thread stderrThread = null;
         try {
             process = processBuilder.start();
             long timeout = getTimeout();
@@ -335,7 +343,7 @@ public class NusmvExecutor {
             BoundedOutputCollector stderrBuilder = new BoundedOutputCollector(nusmvConfig.getMaxOutputBytes());
 
             // 独立线程读 stdout，防止管道缓冲区满导致死锁
-            Thread stdoutThread = new Thread(() -> {
+            stdoutThread = new Thread(() -> {
                 try (InputStream output = fp.getInputStream()) {
                     drainOutput(output, stdoutBuilder);
                 } catch (IOException e) {
@@ -344,7 +352,7 @@ public class NusmvExecutor {
             }, "nusmv-sim-stdout");
 
             // 独立线程读 stderr
-            Thread stderrThread = new Thread(() -> {
+            stderrThread = new Thread(() -> {
                 try (InputStream output = fp.getErrorStream()) {
                     drainOutput(output, stderrBuilder);
                 } catch (IOException e) {
@@ -365,8 +373,9 @@ public class NusmvExecutor {
             boolean finished = process.waitFor(timeout, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (!finished) {
                 log.warn("NuSMV simulation timed out after {}ms, destroying process", timeout);
-                process.destroyForcibly();
-                process.waitFor(PROCESS_DESTROY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+                if (!terminateProcessTree(process)) {
+                    log.error("Failed to stop the complete NuSMV simulation process tree after timeout");
+                }
                 reclaimReaderThread(stdoutThread, process.getInputStream(), "stdout");
                 reclaimReaderThread(stderrThread, process.getErrorStream(), "stderr");
                 return SimulationOutput.error("NuSMV simulation timed out after " + timeout + "ms");
@@ -420,15 +429,21 @@ public class NusmvExecutor {
         } catch (IOException e) {
             log.error("Failed to execute NuSMV simulation", e);
             if (process != null) {
-                process.destroyForcibly();
+                terminateProcessTree(process);
+                reclaimReaderThread(stdoutThread, process.getInputStream(), "stdout");
+                reclaimReaderThread(stderrThread, process.getErrorStream(), "stderr");
             }
             return SimulationOutput.error("Failed to execute NuSMV simulation: " + e.getMessage());
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
             log.warn("NuSMV simulation interrupted");
             if (process != null) {
-                process.destroyForcibly();
+                if (!terminateProcessTree(process)) {
+                    log.error("Failed to stop the complete NuSMV simulation process tree after interruption");
+                }
+                reclaimReaderThread(stdoutThread, process.getInputStream(), "stdout");
+                reclaimReaderThread(stderrThread, process.getErrorStream(), "stderr");
             }
+            Thread.currentThread().interrupt();
             throw e;
         } finally {
             releaseExecutionPermit();
@@ -454,22 +469,97 @@ public class NusmvExecutor {
     }
 
     private void reclaimReaderThread(Thread thread, InputStream stream, String label, boolean skipInitialJoin) {
+        if (thread == null) return;
+        boolean interrupted = Thread.interrupted();
         try {
             if (!skipInitialJoin) {
-                thread.join(5000);
+                interrupted |= joinReaderUntil(thread, READER_JOIN_TIMEOUT_MS);
             }
             if (thread.isAlive()) {
                 log.warn("NuSMV {} reader thread still alive after join timeout, reclaiming", label);
                 thread.interrupt();
-                try { stream.close(); } catch (IOException ignored) { }
-                thread.join(2000);
+                if (stream != null) {
+                    try { stream.close(); } catch (IOException ignored) { }
+                }
+                interrupted |= joinReaderUntil(thread, 2000);
                 if (thread.isAlive()) {
                     log.warn("NuSMV {} reader thread could not be reclaimed, may leak", label);
                 }
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
         }
+    }
+
+    /** Returns whether the caller was interrupted while waiting. */
+    private boolean joinReaderUntil(Thread thread, long timeoutMs) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        boolean interrupted = false;
+        while (thread.isAlive()) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) break;
+            try {
+                TimeUnit.NANOSECONDS.timedJoin(thread, remaining);
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        return interrupted;
+    }
+
+    /**
+     * Stop the command wrapper and every discovered descendant, then wait before releasing
+     * the global execution permit. Descendants are snapshotted before the wrapper is killed
+     * so shell/Wine-launched NuSMV processes cannot be orphaned by their parent exiting first.
+     */
+    static boolean terminateProcessTree(Process process) {
+        if (process == null) return true;
+
+        List<ProcessHandle> descendants = new ArrayList<>();
+        try {
+            process.toHandle().descendants().forEach(descendants::add);
+        } catch (RuntimeException e) {
+            log.warn("Could not enumerate NuSMV process descendants: {}", e.toString());
+        }
+        List<ProcessHandle> handles = new ArrayList<>(descendants.size() + 1);
+        handles.add(process.toHandle());
+        for (int i = descendants.size() - 1; i >= 0; i--) {
+            handles.add(descendants.get(i));
+        }
+
+        for (ProcessHandle handle : handles) {
+            if (!handle.isAlive()) continue;
+            try {
+                handle.destroyForcibly();
+            } catch (RuntimeException e) {
+                log.warn("Could not destroy NuSMV process {}: {}", handle.pid(), e.toString());
+            }
+        }
+
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime()
+                + TimeUnit.SECONDS.toNanos(PROCESS_DESTROY_TIMEOUT_SECONDS);
+        try {
+            while (handles.stream().anyMatch(ProcessHandle::isAlive)) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                try {
+                    TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(25)));
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            closeProcessStreams(process);
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+        return handles.stream().noneMatch(ProcessHandle::isAlive);
+    }
+
+    private static void closeProcessStreams(Process process) {
+        try { process.getOutputStream().close(); } catch (IOException ignored) { }
+        try { process.getInputStream().close(); } catch (IOException ignored) { }
+        try { process.getErrorStream().close(); } catch (IOException ignored) { }
     }
 
     /**

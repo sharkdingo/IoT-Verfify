@@ -14,6 +14,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 import java.time.Instant;
 
@@ -44,6 +45,7 @@ public class AiSessionStatePo {
 
     @Lob
     @Column(name = "payload_json", columnDefinition = "LONGTEXT", nullable = false)
+    @ToString.Exclude
     private String payloadJson;
 
     @Column(name = "expires_at", nullable = false)

@@ -32,6 +32,7 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
             "fuzz_finding",
             "fuzz_task",
             "chat_session",
+            "ai_session_state",
             "device_node",
             "board_environment_variable",
             "rules",
@@ -57,6 +58,9 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
                     "chat_message", List.of("session_id"),
                     "chat_session", List.of("id"), "fk_chat_message_session"),
             new ForeignKeySpec(
+                    "ai_session_state", List.of("user_id", "session_id"),
+                    "chat_session", List.of("user_id", "id"), "fk_ai_session_state_session_owner"),
+            new ForeignKeySpec(
                     "fuzz_finding", List.of("user_id", "fuzz_task_id"),
                     "fuzz_task", List.of("user_id", "id"), "fk_fuzz_finding_task_owner"));
 
@@ -77,6 +81,8 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
 
     int migrate() {
         int deleted = cleanupLegacyRows();
+        ensureIndex("chat_session", List.of("user_id", "id"),
+                "uk_chat_session_user_id", true);
         ensureIndex("fuzz_task", List.of("user_id", "id"), "uk_fuzz_task_user_id", true);
         ensureIndex("fuzz_finding", List.of("user_id", "fuzz_task_id"),
                 "idx_fuzz_finding_user_task", false);
@@ -91,6 +97,11 @@ public class UserOwnedOrphanCleanup implements SmartInitializingSingleton {
                         "DELETE FROM chat_message WHERE NOT EXISTS ("
                                 + "SELECT 1 FROM chat_session s JOIN app_user u ON u.id = s.user_id "
                                 + "WHERE s.id = chat_message.session_id)");
+                count += jdbcTemplate.update(
+                        "DELETE FROM ai_session_state WHERE NOT EXISTS ("
+                                + "SELECT 1 FROM chat_session s JOIN app_user u ON u.id = s.user_id "
+                                + "WHERE s.id = ai_session_state.session_id "
+                                + "AND s.user_id = ai_session_state.user_id)");
                 count += jdbcTemplate.update(
                         "DELETE FROM fuzz_finding WHERE NOT EXISTS ("
                                 + "SELECT 1 FROM app_user u WHERE u.id = fuzz_finding.user_id) OR NOT EXISTS ("

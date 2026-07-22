@@ -75,4 +75,24 @@ class NusmvTempArtifactCleanerTest {
             assertFalse(Files.exists(model));
         }
     }
+
+    @Test
+    void orphanActivityMarkerIsRemovedAfterItsDirectoryWasDeletedElsewhere() throws Exception {
+        NusmvConfig config = new NusmvConfig();
+        NusmvTempArtifactRegistry registry = new NusmvTempArtifactRegistry();
+        NusmvTempArtifactCleaner cleaner = new NusmvTempArtifactCleaner(config, registry);
+        Path directory = Files.createDirectory(tempRoot.resolve("nusmv_fix_orphan"));
+        Path model = Files.writeString(directory.resolve("model.smv"), "MODULE main\n");
+        Path marker = NusmvTempArtifactRegistry.lockPath(directory.toAbsolutePath().normalize());
+
+        try (var ignored = registry.activate(model.toFile())) {
+            assertTrue(Files.exists(marker));
+        }
+        Files.delete(model);
+        Files.delete(directory);
+
+        cleaner.cleanupRoot(tempRoot, Instant.now());
+
+        assertFalse(Files.exists(marker));
+    }
 }

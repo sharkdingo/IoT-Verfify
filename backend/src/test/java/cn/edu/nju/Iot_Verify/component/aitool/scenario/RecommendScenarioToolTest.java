@@ -104,8 +104,8 @@ class RecommendScenarioToolTest {
         assertEquals("NO_DEVICES", json.path("readinessIssues").get(0).path("code").asText());
         assertEquals("NO_SPECIFICATIONS", json.path("readinessIssues").get(1).path("code").asText());
         assertTrue(json.path("message").asText().contains("returned no scene-item candidates"));
-        assertFalse(json.path("draftStored").asBoolean());
-        assertFalse(json.path("previousDraftRetained").asBoolean());
+        assertFalse(json.has("draftStored"));
+        assertFalse(json.has("previousDraftRetained"));
     }
 
     @Test
@@ -190,6 +190,11 @@ class RecommendScenarioToolTest {
         assertTrue(json.path("draftStored").asBoolean());
         assertFalse(json.path("previousDraftRetained").asBoolean());
         assertEquals(0, json.path("readinessIssues").size());
+        assertEquals("FILTERED_CANDIDATES",
+                json.path("semanticWarnings").get(0).path("code").asText());
+        assertTrue(json.path("rationale").asText().contains("final canonical draft"));
+        assertTrue(json.path("rationale").asText().contains("does not claim"));
+        assertFalse(json.path("rationale").asText().contains("both reference the same sensor and light"));
         assertEquals("a_noise", scene.path("environmentVariables").get(0).path("name").asText());
         assertEquals("a_noise", scene.path("rules").get(0).path("sources").get(0).path("fromApi").asText());
         assertEquals("device_1", scene.path("specs").get(0).path("ifConditions").get(0).path("deviceId").asText());

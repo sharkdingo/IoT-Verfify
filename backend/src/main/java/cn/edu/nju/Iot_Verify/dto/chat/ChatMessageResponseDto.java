@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -17,9 +18,11 @@ public class ChatMessageResponseDto {
     private Long id;
     private String sessionId;
     private String role;
+    @ToString.Exclude
     private String content;
     private String turnId;
     private LocalDateTime createdAt;
+    @ToString.Exclude
     private List<StreamResponseDto.ProgressDto> executionTrace;
     private Integer executionElapsedSeconds;
     private ChatExecutionStatus executionStatus;

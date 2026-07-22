@@ -6,6 +6,7 @@ import cn.edu.nju.Iot_Verify.component.ai.model.LlmChatResponse;
 import cn.edu.nju.Iot_Verify.component.ai.model.LlmMessage;
 import cn.edu.nju.Iot_Verify.configure.LlmConfig;
 import cn.edu.nju.Iot_Verify.exception.ServiceUnavailableException;
+import cn.edu.nju.Iot_Verify.testutil.LogCapture;
 import com.openai.client.OpenAIClient;
 import com.openai.client.OpenAIClientAsync;
 import com.openai.core.http.StreamResponse;
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -100,6 +102,27 @@ class OpenAiLlmProviderStreamControlTest {
 
         assertThrows(ServiceUnavailableException.class,
                 () -> provider.streamChat(request, ignored -> { }, () -> false));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamChat_cancelledFailure_doesNotLogUpstreamExceptionMessage() {
+        String sensitive = "private-upstream-response-never-log";
+        OpenAIClient client = mock(OpenAIClient.class);
+        ChatService chatService = mock(ChatService.class);
+        ChatCompletionService completions = mock(ChatCompletionService.class);
+        StreamResponse<ChatCompletionChunk> streamResponse = mock(StreamResponse.class);
+
+        when(client.chat()).thenReturn(chatService);
+        when(chatService.completions()).thenReturn(completions);
+        when(completions.createStreaming(any(ChatCompletionCreateParams.class))).thenReturn(streamResponse);
+        when(streamResponse.stream()).thenThrow(new OpenAIInvalidDataException(sensitive));
+
+        try (LogCapture logs = LogCapture.forClass(OpenAiLlmProvider.class)) {
+            provider(client).streamChat(request(), ignored -> { }, () -> true);
+
+            assertFalse(logs.messages().stream().anyMatch(message -> message.contains(sensitive)));
+        }
     }
 
     @Test

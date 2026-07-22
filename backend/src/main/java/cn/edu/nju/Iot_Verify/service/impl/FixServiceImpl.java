@@ -32,6 +32,7 @@ import cn.edu.nju.Iot_Verify.exception.SmvGenerationException;
 import cn.edu.nju.Iot_Verify.po.TracePo;
 import cn.edu.nju.Iot_Verify.repository.TraceRepository;
 import cn.edu.nju.Iot_Verify.service.BoardStorageService;
+import cn.edu.nju.Iot_Verify.service.FormalOperationAdmission;
 import cn.edu.nju.Iot_Verify.service.FixService;
 import cn.edu.nju.Iot_Verify.service.FixSuggestionTokenService;
 import cn.edu.nju.Iot_Verify.component.nusmv.fixer.BoardSemanticFingerprint;
@@ -72,6 +73,7 @@ public class FixServiceImpl implements FixService {
     private final BoardStorageService boardStorageService;
     private final BoardDataConverter boardDataConverter;
     private final FixSuggestionTokenService fixSuggestionTokenService;
+    private final FormalOperationAdmission formalOperationAdmission;
 
     @Override
     @Transactional(readOnly = true)
@@ -112,6 +114,13 @@ public class FixServiceImpl implements FixService {
     public FixResultDto fix(Long userId, Long traceId, List<String> strategies,
                             Map<String, PreferredRange> preferredRanges,
                             Consumer<InteractiveOperationStage> progressListener) {
+        return formalOperationAdmission.execute(userId,
+                () -> fixWithoutAdmission(userId, traceId, strategies, preferredRanges, progressListener));
+    }
+
+    private FixResultDto fixWithoutAdmission(Long userId, Long traceId, List<String> strategies,
+                                             Map<String, PreferredRange> preferredRanges,
+                                             Consumer<InteractiveOperationStage> progressListener) {
         Consumer<InteractiveOperationStage> progress = Objects.requireNonNull(progressListener);
         progress.accept(InteractiveOperationStage.PREPARING_CONTEXT);
         strategies = validateRequestedStrategies(strategies);
@@ -163,7 +172,8 @@ public class FixServiceImpl implements FixService {
     @Transactional
     public FixApplyResultDto applyFix(Long userId, Long traceId, String strategy,
                                       Map<String, PreferredRange> preferredRanges) {
-        return applyFixInternal(userId, traceId, strategy, null, preferredRanges, false);
+        return formalOperationAdmission.execute(userId,
+                () -> applyFixInternal(userId, traceId, strategy, null, preferredRanges, false));
     }
 
     /**
@@ -184,7 +194,8 @@ public class FixServiceImpl implements FixService {
             throw new BadRequestException("strategy '" + strategy
                     + "' does not match suggestion.strategy '" + suggestion.getStrategy() + "'");
         }
-        return applyFixInternal(userId, traceId, strategy, suggestion, preferredRanges, false);
+        return formalOperationAdmission.execute(userId,
+                () -> applyFixInternal(userId, traceId, strategy, suggestion, preferredRanges, false));
     }
 
     @Override

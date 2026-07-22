@@ -1,10 +1,12 @@
 # Troubleshooting
 
-> Verified against code on 2026-07-06. Source:
+> Verified against code on 2026-07-22. Source:
 > `backend/src/main/resources/application.yaml`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/component/nusmv/`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/VerificationServiceImpl.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/service/impl/RedisTokenBlacklistService.java`,
+> `backend/src/main/java/cn/edu/nju/Iot_Verify/service/UserOperationGuard.java`,
+> `backend/src/main/java/cn/edu/nju/Iot_Verify/service/DistributedInteractiveExecutionStore.java`,
 > `backend/src/main/java/cn/edu/nju/Iot_Verify/configure/SecurityConfig.java`.
 
 Common issues and fixes. For every configuration key mentioned here, see [../getting-started/configuration.md](../getting-started/configuration.md) for the variable, its default, and how it is resolved — this page does not repeat defaults.
@@ -23,10 +25,15 @@ The backend cannot reach the database on startup.
 Unable to connect to Redis at localhost:6379
 ```
 
-Redis is optional and runs in fail-open mode: a failed connection does not stop the backend from starting. The only degraded behavior is the JWT logout blacklist — token revocation on logout stops working, so previously issued tokens remain valid until they expire.
+Redis is optional and runs in fail-open mode: a failed connection does not stop the backend
+from starting. Logout token revocation stops working, and per-user operation admission plus
+interactive recommendation/fix status and cancellation fall back to process-local behavior.
+Previously issued tokens remain valid until they expire, and separately load-balanced backend
+instances cannot coordinate those operations while Redis is unavailable. See the authoritative
+[Redis behavior](../getting-started/configuration.md#redis) for active-lease handling.
 
 - To restore full behavior, start Redis (`redis-server`, or `docker run -d -p 6379:6379 redis:alpine`).
-- Otherwise it is safe to continue without Redis.
+- Otherwise it is safe to continue on one backend instance with the degraded behavior above.
 
 See `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` in [../getting-started/configuration.md](../getting-started/configuration.md).
 

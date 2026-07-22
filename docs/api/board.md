@@ -12,7 +12,7 @@ The `Result<T>` envelope, auth, and error codes are defined in
 [overview.md](overview.md).
 
 All endpoints are authenticated and scoped to the current user (`@CurrentUser`).
-Verified against code on 2026-07-22. Source:
+Verified against code on 2026-07-23. Source:
 `service/impl/BoardStorageServiceImpl.java`, `controller/BoardStorageController.java`,
 `dto/device/`, `dto/board/`, `dto/rule/`, `dto/spec/`.
 
@@ -92,6 +92,13 @@ flags so later narrow/wide viewport restoration still works.
 > `DeviceNodeDto` is the canvas-CRUD shape (includes UI layout). The verification path
 > uses the leaner `DeviceVerificationDto` — see
 > [verification.md](verification.md).
+
+Targeted device creation returns `initialStateSource`. Its values are `requested` for an
+explicit runtime state, `templateDefault` for a state-machine `InitState`,
+`statelessPlaceholder` for the non-semantic `Working` canvas placeholder on a no-mode
+template, and `systemFallback` only for invalid legacy stateful data with no usable initial
+state. Only the last case produces a warning; a valid stateless device is not presented as
+an initialization failure.
 
 `DeviceBatchCreateRequestDto` is `{ devices, environmentVariablePatches }`; `devices`
 must contain 1–100 items, must keep the resulting Board at no more than 100 devices, and
@@ -748,8 +755,9 @@ the canonical schema when imported.
 ## Recommendation, duplicate check, and AI similarity check
 
 These delegate to AI tools (see [ai-tools.md](ai-tools.md)). They return
-`Result<Map<String, Object>>`; an AI-tool error is translated to the matching HTTP
-status by `throwIfToolError`.
+typed recommendation DTOs inside `Result<T>`; an AI-tool error is translated to the
+matching HTTP status by `throwIfToolError`, and malformed success output fails closed
+instead of crossing the controller as an untyped map.
 
 Every standalone recommendation request requires an opaque `requestId` containing 8–80
 characters. It starts with an ASCII letter or digit and otherwise accepts letters, digits,
@@ -759,11 +767,11 @@ paths, and cancellation paths.
 | Method | Path | Query / Body | Notes |
 | :--- | :--- | :--- | :--- |
 | POST | `/api/board/rules/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<RuleRecommendationDto>` |
-| POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
+| POST | `/api/board/specs/recommend` | JSON body `StandaloneRecommendationRequestDto`: required `requestId`, `maxRecommendations` (default 5; integer `1..10`), `category` (`all`, `safety`, `response`, `consistency`, or `privacy`; default `all`), `language` (default `en`), and optional `userRequirement` | Returns `RecommendationResponseDto<SpecificationRecommendationDto>` |
 | POST | `/api/board/devices/recommend` | Required `requestId` query parameter plus typed `DeviceRecommendationRequestDto`: `{ maxRecommendations, language, userRequirement }` | Returns `RecommendationResponseDto<DeviceRecommendationDto>` |
-| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, `rationale`, validation counters, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
+| POST | `/api/board/scenario/recommend` | Required `requestId` query parameter plus typed `ScenarioRecommendationRequestDto`: `{ maxDevices, maxRules, maxSpecs, language, userRequirement }` | Returns `ScenarioRecommendationResponseDto`, including `scenarioName`, a deterministic post-validation `rationale`, validation counters, structural readiness, semantic warnings, and a typed `PortableSceneDto` using the canonical `iot-verify.board-scene` import/export shape. |
 | GET | `/api/board/recommendations/{requestId}` | Reads the authenticated user's matching active or just-finished request | Returns `InteractiveOperationStatusDto`; terminal status is retained briefly for the final polling tick, while unknown requests return 404 |
-| DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means a tracked task accepted interruption |
+| DELETE | `/api/board/recommendations/{requestId}` | Cancels the authenticated user's matching in-flight request | Returns `boolean`; `true` means the durable stop signal was accepted for the matching local or remote execution. The callable may still be unwinding, so status remains authoritative until `FINISHED` |
 | POST | `/api/board/rules/check-duplicate` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Deterministic duplicate-rule check used by `RuleBuilderDialog` before saving. It does not call the external LLM and returns a typed `DuplicateRuleCheckResultDto`: required `isDuplicate`, `requiresReview`, `similarity` (`0..1`), `matchType`, stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Clients localize the ordinary explanation from `reasonCode`. |
 | POST | `/api/board/rules/check-similarity` | body: typed `RuleDto`; every condition includes `targetType`; rule API-signal conditions omit `relation`/`value` | Explicit AI semantic similarity check available from `RuleBuilderDialog` and the Board rule-recommendation apply flow. It may call the configured LLM and returns a typed `RuleSimilarityResultDto`: required `isSimilar`, `isDuplicate`, authoritative `requiresReview`, `similarity` (`0..1`), stable `reasonCode`, technical `reason`/`message`, plus nullable readable `matchedRule`. Internal candidate references and LLM prose are not ordinary UI concepts. |
 
@@ -811,6 +819,10 @@ conflict freedom.
 > identity before returning HTTP 200. Missing audit fields, unexplained filtered or
 > adjusted entries, unknown kept-candidate fields, and malformed portable-scene fields
 > return HTTP 502 rather than crossing the REST boundary as an untyped success map.
+> The standalone scenario endpoint likewise returns only its typed REST fields. Chat-only
+> `draftStored` and `previousDraftRetained` metadata is added only when the same tool runs
+> inside an authenticated chat session; it never leaks into `/scenario/recommend` success
+> responses.
 > Standalone recommendation DTOs omit genuinely absent optional values instead of
 > serializing them as explicit `null`. Rule API conditions therefore remain relation/value-
 > free, and specification recommendation conditions contain only authored semantic fields:
@@ -881,6 +893,17 @@ conflict freedom.
 > `NO_DEVICES` and `NO_SPECIFICATIONS` are the deterministic issue codes. A draft that
 > lacks specifications remains reviewable/applicable but is not presented as ready for
 > `verify_model`.
+> `verificationReady` means only that the retained scene has the devices and
+> specifications required by the verification entry point. It does not mean that the
+> draft satisfies the natural-language requirement. That separate boundary is exposed as
+> ordered `semanticWarnings[]` (`{ code, message }`): `FILTERED_CANDIDATES` reports that
+> validation removed generated content, `NO_AUTOMATION_RULES` reports that the retained
+> scene establishes no automation loop, and `UNREFERENCED_DEVICES` names retained devices
+> that participate in neither a retained rule nor a retained specification. These warnings
+> are computed from the final canonical graph, not inferred from the user's prose. The
+> returned `rationale` is likewise a backend-generated count summary of retained content;
+> model-authored rationale is not passed through after filtering and the summary explicitly
+> disclaims requirement satisfaction and formal-verification success.
 > A rule API event source normally omits `relation` and `value`. If the AI emits the
 > semantically equivalent pair `relation = "="`, `value = "TRUE"`, the backend keeps the
 > rule, removes those redundant fields, and returns an `apiEventSyntaxNormalized`
@@ -908,12 +931,23 @@ conflict freedom.
 
 Standalone recommendations run in a bounded dedicated executor. Only one is admitted per user;
 pool saturation returns `503`. While a request is active, its status DTO is
-`{ requestId, state, stage, elapsedMs }`. `state` is `WAITING` or `RUNNING`; `stage` is one of
+`{ requestId, state, stage, elapsedMs }`. `state` is `WAITING`, `RUNNING`, or briefly
+`FINISHED`; `stage` is one of
 `QUEUED`, `RUNNING`, `PREPARING_CONTEXT`, `REQUESTING_MODEL`, `VALIDATING_RESULT`, or
 `CANCELLING` for this workflow. The UI polls this endpoint and shows the submitted Board-context
 counts, selected tool, elapsed time, and the actual server-observed stage. It does not infer a
 phase from elapsed time, and these operational stages are not hidden model reasoning. Stop and
 panel-close actions call the cancellation endpoint before aborting the browser request.
+Owner, status, and cancellation records are token-fenced in Redis, so another backend
+instance can observe and stop the accepted request without allowing an expired worker to
+overwrite a reused id. Active records renew for the callable's lifetime and the final status
+is retained briefly. Redis failure falls back to process-local tracking; a different instance
+cannot see that local execution, so clients use a fresh random request id for every attempt.
+
+After a stop action the Board keeps the workflow visibly stopping until status reports
+`FINISHED`. A first `404` can be a registration-versus-cancellation race and is not treated
+as proof of completion. Five consecutive unavailable status reads end local polling with a
+visible outcome-unknown warning, preventing both a false success claim and an endless spinner.
 Recommendation prompts use a compact capability projection; the complete template manifests
 remain server-side for authoritative validation.
 

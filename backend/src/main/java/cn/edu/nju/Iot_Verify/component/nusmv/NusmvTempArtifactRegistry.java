@@ -104,7 +104,7 @@ public class NusmvTempArtifactRegistry {
         }
     }
 
-    private static Path lockPath(Path directory) {
+    static Path lockPath(Path directory) {
         Path fileName = directory.getFileName();
         if (fileName == null || directory.getParent() == null) {
             return directory.resolveSibling("nusmv-artifact" + LOCK_SUFFIX);

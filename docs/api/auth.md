@@ -4,7 +4,7 @@ Field-level contract for `/api/auth`. The `Result<T>` envelope, the `Bearer` sch
 and error codes are defined once in [overview.md](overview.md); this doc covers the
 request/response bodies only.
 
-Verified against code on 2026-07-22. Source: `controller/AuthController.java`,
+Verified against code on 2026-07-23. Source: `controller/AuthController.java`,
 `service/impl/AuthServiceImpl.java`, and `dto/auth/`.
 
 ---
@@ -18,7 +18,7 @@ Public. Creates a user.
 | Field | Type | Rules |
 | :--- | :--- | :--- |
 | `phone` | `String` | Required; must match `^1[3-9]\d{9}$` (mainland China mobile) |
-| `username` | `String` | Required; raw input at most 100 characters; NFC-normalized and stripped of surrounding Unicode whitespace; 3–20 Unicode code points afterwards; no control, invisible format, or line-separator characters; unique with case- and accent-sensitive matching; usable for login |
+| `username` | `String` | Required; raw input at most 100 characters; NFC-normalized and stripped of surrounding Unicode whitespace; 3–20 Unicode code points afterwards; no control, invisible format, or line-separator characters; must not match the phone-number pattern; unique with case- and accent-sensitive matching; usable for login |
 | `password` | `String` | Required; 10–64 characters and at most 72 UTF-8 bytes |
 
 **Response**: `AuthResponseDto` (under `data`)
@@ -39,7 +39,9 @@ each new user inside the registration transaction. Clients should store `data.to
 the authenticated application directly; a second login request is not required.
 Login is rate-limited per normalized account identifier and registration per phone number,
 with separate higher source-IP ceilings so ordinary users behind one NAT do not share the
-low credential limit. Excess attempts return structured `429` data and `Retry-After`.
+low credential limit. Username buckets retain the normalized identifier's case and accent
+because those distinctions identify different valid accounts. Excess attempts return
+structured `429` data and `Retry-After`.
 The owning limits and multi-instance guidance live in the
 [configuration reference](../getting-started/configuration.md#authentication-jwt).
 Registration, login, deletion confirmation, and authentication throttling use the same
@@ -73,6 +75,10 @@ Public. Returns a JWT token.
 | `username` | `String` | |
 | `token` | `String` | JWT; send as `Authorization: Bearer <token>` on later requests |
 
+Unknown accounts and incorrect passwords both return `401 Unauthorized` with the same
+account-neutral message, so the response works for phone and username login without
+revealing whether an identifier exists.
+
 ```bash
 TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
@@ -81,6 +87,11 @@ TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
 
 Note the field is `data.token` — the payload lives under the `Result<T>` envelope's
 `data`.
+
+Phone-shaped usernames are forbidden so new phone and username namespaces cannot overlap.
+For legacy data that already contains such a collision, login checks the supplied password
+against the matching phone and username candidates and authenticates only the uniquely
+matching account. It never chooses an account solely from lookup order.
 
 ---
 
@@ -125,6 +136,11 @@ lock or by the missing task row, so deleted accounts do not receive late history
 
 Password or confirmation mismatches return `400 Bad Request`; they do not revoke the
 current session. Missing/invalid authentication still returns `401 Unauthorized`.
+Because a missing response or `5xx` can arrive after the deletion transaction committed,
+clients must not retry blindly. The web client clears its local session and asks the user
+to sign in again to determine whether the account still exists. An explicit `4xx` response
+is treated as a definite rejection and leaves the deletion form available for correction
+(an authentication `401` still clears the invalid local session through the shared client).
 
 **Side effects**:
 
@@ -141,6 +157,9 @@ current session. Missing/invalid authentication still returns `401 Unauthorized`
 - `chat_message.session_id` cascades from `chat_session`, and exploration findings use a
   composite `(user_id, fuzz_task_id)` ownership constraint against their task. A late child row
   therefore cannot attach to a missing parent or to another user's task.
+- Durable AI continuation, confirmation, and scenario-draft rows use a composite
+  `(user_id, session_id)` constraint against their chat session. They cannot be attached to
+  another user's session and cascade when that session is deleted.
 - Deletes the current user's board layout, device nodes, rules, specifications,
   device templates, verification traces/tasks, simulation traces/tasks, exploration
   findings/tasks, AI continuation/confirmation/draft state, and AI chat sessions/messages.
@@ -151,10 +170,12 @@ establishing authentication. This keeps a deleted account from authenticating ev
 Redis blacklist revocation is temporarily unavailable.
 
 Startup first performs an idempotent transactional cleanup of legacy rows whose `user_id` no
-longer exists in `app_user`, chat messages whose session or session owner is gone, and findings
+longer exists in `app_user`, chat/AI state whose session or session owner is gone, and findings
 whose task is missing or belongs to another user. It then adds or verifies the cascade ownership
 constraints and required indexes. An unexpected non-cascade constraint fails startup instead of
-silently weakening account-deletion integrity. Active-account rows are not rewritten.
+silently weakening account-deletion integrity. Active-account rows are not rewritten. MySQL
+startup also verifies and, when necessary, migrates `app_user.username` to the case- and
+accent-sensitive `utf8mb4_0900_as_cs` collation.
 
 ```bash
 curl -X DELETE http://localhost:8080/api/auth/account \

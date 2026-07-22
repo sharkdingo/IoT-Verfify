@@ -233,17 +233,18 @@ public class RecommendScenarioTool extends AbstractAiTool {
                 result.put("inspectedCount", 0);
                 result.put("truncatedCount", 0);
                 result.put("scenarioName", "");
-                result.put("rationale", "");
                 Map<String, Object> scene = emptyScene();
                 result.put("scene", scene);
-                putVerificationReadiness(result, objectMapper.valueToTree(scene));
-                attachDraftStatus(
-                        result,
-                        language,
-                        chatSessionId == null || chatSessionId.isBlank()
-                                ? new AiScenarioDraftStore.DraftSaveResult(false, false)
-                                : draftStore.saveDraft(
-                                        userId, chatSessionId, "AI Scenario", objectMapper.valueToTree(scene)));
+                ScenarioVerificationReadiness.Status analysis = putScenarioAnalysis(
+                        result, objectMapper.valueToTree(scene), 0, language);
+                result.put("rationale", validatedRationale(language, 0, 0, 0, analysis.semanticWarnings().size()));
+                if (chatSessionId != null && !chatSessionId.isBlank()) {
+                    attachDraftStatus(
+                            result,
+                            language,
+                            draftStore.saveDraft(
+                                    userId, chatSessionId, "AI Scenario", objectMapper.valueToTree(scene)));
+                }
                 return objectMapper.writeValueAsString(result);
             }
 
@@ -255,7 +256,8 @@ public class RecommendScenarioTool extends AbstractAiTool {
             try {
                 result = parseAndValidate(aiResponse, templates, language, maxDevices, maxRules, maxSpecs);
             } catch (Exception e) {
-                log.warn("recommend_scenario received an unusable AI response", e);
+                log.warn("recommend_scenario received an unusable AI response: exception={}",
+                        e.getClass().getName());
                 String message = "zh-CN".equals(language)
                         ? "AI 返回的内容不是可解析的场景草案 JSON，请重试。"
                         : "The AI response was not a parseable scene-draft JSON object. Please try again.";
@@ -267,17 +269,15 @@ public class RecommendScenarioTool extends AbstractAiTool {
                                 "draftStored", false,
                                 "previousDraftRetained", previousDraftRetained));
             }
-            AiScenarioDraftStore.DraftSaveResult draftSaveResult =
-                    new AiScenarioDraftStore.DraftSaveResult(false, false);
             if (chatSessionId != null && !chatSessionId.isBlank()) {
                 JsonNode scene = objectMapper.valueToTree(result.get("scene"));
-                draftSaveResult = draftStore.saveDraft(
+                AiScenarioDraftStore.DraftSaveResult draftSaveResult = draftStore.saveDraft(
                         userId,
                         chatSessionId,
                         String.valueOf(result.getOrDefault("scenarioName", "AI Scenario")),
                         scene);
+                attachDraftStatus(result, language, draftSaveResult);
             }
-            attachDraftStatus(result, language, draftSaveResult);
             return objectMapper.writeValueAsString(result);
         } catch (ArgValidationException e) {
             return e.getErrorResponse();
@@ -408,16 +408,25 @@ public class RecommendScenarioTool extends AbstractAiTool {
         result.put("inspectedCount", stats.inspectedCount);
         result.put("truncatedCount", Math.max(0, stats.rawCandidateCount - stats.inspectedCount));
         result.put("scenarioName", text(root.path("scenarioName"), language.equals("zh-CN") ? "AI 推荐场景" : "AI Scenario"));
-        result.put("rationale", text(root.path("rationale"), ""));
         result.put("scene", scene);
-        putVerificationReadiness(result, objectMapper.valueToTree(scene));
+        ScenarioVerificationReadiness.Status analysis = putScenarioAnalysis(
+                result, objectMapper.valueToTree(scene), filteredItems.size(), language);
+        result.put("rationale", validatedRationale(
+                language, devices.size(), rules.size(), specs.size(), analysis.semanticWarnings().size()));
         return result;
     }
 
-    private void putVerificationReadiness(Map<String, Object> result, JsonNode scene) {
-        ScenarioVerificationReadiness.Status readiness = ScenarioVerificationReadiness.assess(scene);
-        result.put("verificationReady", readiness.verificationReady());
-        result.put("readinessIssues", readiness.readinessIssues());
+    private ScenarioVerificationReadiness.Status putScenarioAnalysis(
+            Map<String, Object> result,
+            JsonNode scene,
+            int filteredCount,
+            String language) {
+        ScenarioVerificationReadiness.Status analysis =
+                ScenarioVerificationReadiness.assess(scene, filteredCount, language);
+        result.put("verificationReady", analysis.verificationReady());
+        result.put("readinessIssues", analysis.readinessIssues());
+        result.put("semanticWarnings", analysis.semanticWarnings());
+        return analysis;
     }
 
     private List<Map<String, Object>> normalizeDevices(JsonNode devicesNode,
@@ -1810,6 +1819,28 @@ public class RecommendScenarioTool extends AbstractAiTool {
         return "zh-CN".equals(language)
                 ? String.format("已生成通过结构与设备能力校验的可导入场景草案：%d 个设备、%d 条规则、%d 条规约。尚未进行形式化验证，也未修改画布。", devices, rules, specs)
                 : String.format("Generated an importable scene draft that passed structure and capability checks: %d devices, %d rules, and %d specs. It has not been formally verified and has not changed the board.", devices, rules, specs);
+    }
+
+    private String validatedRationale(
+            String language,
+            int devices,
+            int rules,
+            int specs,
+            int semanticWarningCount) {
+        if ("zh-CN".equals(language)) {
+            String summary = String.format(
+                    "最终规范化草案包含 %d 个设备、%d 条自动化规则和 %d 条规约。此摘要只描述校验后保留的内容，不表示草案已满足用户需求或已通过形式化验证。",
+                    devices, rules, specs);
+            return semanticWarningCount == 0
+                    ? summary
+                    : summary + String.format(" 应用前请审阅 %d 条语义覆盖提示。", semanticWarningCount);
+        }
+        String summary = String.format(
+                "The final canonical draft contains %d device(s), %d automation rule(s), and %d specification(s). This summary describes only retained content; it does not claim that the draft satisfies the user requirement or has passed formal verification.",
+                devices, rules, specs);
+        return semanticWarningCount == 0
+                ? summary
+                : summary + String.format(" Review %d semantic coverage warning(s) before applying it.", semanticWarningCount);
     }
 
     private void attachDraftStatus(Map<String, Object> result,
