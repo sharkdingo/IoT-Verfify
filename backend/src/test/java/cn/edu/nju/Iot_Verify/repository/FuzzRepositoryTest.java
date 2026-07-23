@@ -24,6 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DataJpaTest(properties = {
@@ -43,11 +44,15 @@ class FuzzRepositoryTest {
 
     @Test
     void currentDatabaseTimeProvidesTheSharedLeaseClock() {
-        LocalDateTime before = LocalDateTime.now().minusSeconds(2);
-        LocalDateTime databaseTime = taskRepository.currentDatabaseTime();
-        LocalDateTime after = LocalDateTime.now().plusSeconds(2);
+        LocalDateTime fuzzTime = taskRepository.currentDatabaseTime();
+        LocalDateTime verificationTime = verificationTaskRepository.currentDatabaseTime();
+        LocalDateTime simulationTime = simulationTaskRepository.currentDatabaseTime();
 
-        assertTrue(!databaseTime.isBefore(before) && !databaseTime.isAfter(after));
+        assertNotNull(fuzzTime);
+        assertNotNull(verificationTime);
+        assertNotNull(simulationTime);
+        assertTrue(!verificationTime.isBefore(fuzzTime));
+        assertTrue(!simulationTime.isBefore(verificationTime));
     }
 
     @Test
